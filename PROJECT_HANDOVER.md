@@ -214,6 +214,19 @@
 - **触控零延迟 (Zero Touch Latency)**：
   - 规范配置 `touch-action: manipulation;` 与 `user-scalable=no`，彻底根除手机端浏览器默认的 300ms 点击延迟。
 
+### 18. 🔄 手机无缝覆盖更新与全自动发布引擎 (Seamless Update & One-Click Publish)
+- **手机覆盖升级技术底座 (Zero Data Loss)**：
+  - **固化根目录永久正式签名证书 (`release.keystore`)**：签名密钥永久锁定，彻底解决 Android 系统“签名冲突无法安装”的致命痛点，手机用户直接安装最新 APK 即可 1 秒覆盖升级，无需卸载，保留全部对局历史与自定义头像；
+  - **规范化版本递增体系**：`versionCode`（整数步进）与 `versionName`（`1.0.X`）由发布脚本智能解析递增；
+- **全平台一键极速发布流水线 (`publish.js`)**：
+  - 运行 `node publish.js`（或对 AI 说“更新/打包”）：
+    1. 自动递增版本号；
+    2. 自动构建纯单文件离线网页版；
+    3. 自动调用原生 SDK 进行持久化签名编译，生成 `五子棋.apk`；
+    4. 自动校验双端产物；
+    5. 自动执行 `git add .` 与发布版本 `git commit`；
+  - 整个流程仅需约 8 秒，极速省心！
+
 ---
 
 ## 四、⚠️ 最重要用户规则与绝对红线 (CRITICAL RULES)
@@ -266,6 +279,12 @@ node bundle_single_file.js
 ```bash
 node build_apk.js
 # 产物：五子棋.apk (约 1.06 MB，纯原生 SDK 编译签名)
+```
+
+### 4. 🚀 一键全自动全平台发布 (版本自增 + 双端打包 + 签名 + Git提交)
+```bash
+node publish.js
+# 8秒自动完成：版本号递增 -> 单文件版打包 -> 原生APK编译签名 -> 产物校验 -> Git自动提交！
 ```
 
 ---
