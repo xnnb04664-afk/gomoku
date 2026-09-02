@@ -152,6 +152,19 @@
   - 聊天框高度收敛至 38px/40px，按键内边距由 7px 压缩至 6px，卡牌槽位压缩至 2.5px，释放更多呼吸空间；
   - 施法目标指引条紧凑微型化，棋盘在手机屏幕上获得完美的上下视距与黄金比例，彻底告别局促！
 
+### 13. 🎨 原生 Android 应用专属 3D 治愈系 App 图标全分辨率配置
+- **告别系统默认绿色安卓机器人图标**：
+  - 由 AI 专门绘制了一套高辨识度、3D 粘土潮玩质感的萌系五子棋手游专属图标（晴空草坪、粉嫩肉垫黑白棋子、金色皇冠与浮动发光魔法卡牌）；
+  - **全套 Android 规格适配**：
+    - `mipmap-mdpi` (48×48)
+    - `mipmap-hdpi` (72×72)
+    - `mipmap-xhdpi` (96×96)
+    - `mipmap-xxhdpi` (144×144)
+    - `mipmap-xxxhdpi` (192×192)
+    - `drawable` (512×512)
+    - 网页版 `favicon.png` (192×192)
+  - `AndroidManifest.xml` 中配置 `android:icon="@mipmap/ic_launcher"` 与 `android:roundIcon="@mipmap/ic_launcher"`，安装在任何品牌手机桌面上均展现极高颜值的圆形/圆角矩形专属游戏图标！
+
 ---
 
 ## 四、⚠️ 最重要用户规则与绝对红线 (CRITICAL RULES)
