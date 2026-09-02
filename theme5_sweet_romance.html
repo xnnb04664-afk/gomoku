@@ -273,7 +273,11 @@
       width: 100%; max-width: 500px;
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
       z-index: 10; padding: 2px 4px; flex-shrink: 0;
-    }
+    
+      height: 52px;
+      min-height: 52px;
+      max-height: 52px;
+      box-sizing: border-box;}
     .card-slot {
       background: rgba(255, 255, 255, 0.12);
       backdrop-filter: blur(12px);
@@ -281,7 +285,11 @@
       border-radius: 14px; padding: 5px 3px;
       display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
       cursor: pointer; transition: all 0.15s; position: relative; overflow: hidden;
-    }
+    
+      height: 50px;
+      min-height: 50px;
+      max-height: 50px;
+      box-sizing: border-box;}
     .card-slot:hover {
       background: rgba(255, 117, 140, 0.25); border-color: #ff758c; transform: translateY(-2px);
     }
@@ -347,7 +355,7 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
       transition: all 0.1s; white-space: nowrap;
     }
-    .btn-ctrl:active { transform: translateY(2px); }
+    .btn-ctrl:active { filter: brightness(0.92); opacity: 0.95; transform: none !important; }
     .btn-ctrl.btn-primary { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
     .btn-ctrl.btn-chat { background: rgba(255, 255, 255, 0.2); }
     .btn-ctrl.btn-online { background: linear-gradient(135deg, #ff758c 0%, #ff8fa3 100%); border-color: #fff; }
@@ -4275,13 +4283,18 @@
 
     function resetBoardOnly() {
       board = Array.from({length: 15}, () => Array(15).fill(0));
-      turn = BLACK; history = []; isOver = false;
+      turn = BLACK; history = []; isOver = false; winningLine = null;
+      activeVFX = [];
+      if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelAnimationFrame(vfxRAF); vfxRAF = null; }
       drawRandomThreeCards();
-      draw(); updateUI();
+      playSkillSound('dice');
+      draw();
+      updateUI();
       persistGameState();
     }
 
-    document.getElementById('btnRestart').onclick = () => {
+    document.getElementById('btnRestart').onclick = (e) => {
+      if (e && e.currentTarget) e.currentTarget.blur();
       resetBoardOnly();
       if (gameMode === 'online' && conn && conn.open) conn.send({ type: 'restart' });
     };
@@ -4648,7 +4661,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.15';
+    const CURRENT_VERSION_TAG = 'v1.0.16';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
