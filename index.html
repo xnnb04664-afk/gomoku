@@ -302,9 +302,9 @@
       justify-content: flex-start;
       cursor: pointer;
       margin-top: 1px;
-      height: 46px;
-      min-height: 46px;
-      max-height: 46px;
+      height: 40px;
+      min-height: 40px;
+      max-height: 40px;
       overflow: hidden;
       box-sizing: border-box;
       transition: transform 0.1s;
@@ -314,7 +314,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      font-size: 11.5px;
+      font-size: 11px;
       font-weight: 900;
       color: #795548;
       border-bottom: 1px dashed rgba(90, 56, 24, 0.2);
@@ -322,17 +322,16 @@
       line-height: 1.1;
     }
     .main-chat-content {
-      height: 24px;
-      min-height: 24px;
-      max-height: 24px;
+      height: 20px;
+      min-height: 20px;
+      max-height: 20px;
       overflow: hidden;
       display: flex;
-      flex-direction: column;
-      justify-content: center;
-      padding-top: 1px;
+      align-items: center;
+      padding: 0;
     }
     .main-chat-line {
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 900;
       color: #2d3436;
       white-space: nowrap;
@@ -341,7 +340,8 @@
       display: flex;
       align-items: center;
       gap: 5px;
-      line-height: 1.25;
+      line-height: 20px;
+      width: 100%;
     }
     .chat-tag-me {
       background: #fed385; color: #4a2810; padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 900; flex-shrink: 0;
@@ -992,41 +992,57 @@
         padding: 2px 7px !important;
       }
       .main-chat-box {
-        height: 44px !important;
-        min-height: 44px !important;
-        max-height: 44px !important;
-        padding: 2px 6px !important;
+        height: 38px !important;
+        min-height: 38px !important;
+        max-height: 38px !important;
+        padding: 1px 6px !important;
         margin-top: 1px !important;
       }
+      .main-chat-header {
+        font-size: 11px !important;
+        line-height: 1 !important;
+        padding-bottom: 0 !important;
+      }
       .main-chat-content {
-        height: 22px !important;
-        min-height: 22px !important;
-        max-height: 22px !important;
+        height: 19px !important;
+        min-height: 19px !important;
+        max-height: 19px !important;
       }
       .main-chat-line {
-        font-size: 13.5px !important;
+        font-size: 12.5px !important;
+        line-height: 19px !important;
+      }
+      .skill-prompt-bar {
+        padding: 4px 8px !important;
+        font-size: 11.5px !important;
+        border-radius: 9px !important;
+        bottom: calc(100% + 2px) !important;
       }
       .card-slots-area {
         gap: 3px !important;
         padding: 1px 1px !important;
       }
       .card-slot {
-        padding: 3px 1px !important;
+        padding: 2.5px 1px !important;
+      }
+      .slot-icon {
+        font-size: 17px !important;
       }
       .slot-title {
-        font-size: 13px !important;
+        font-size: 12.5px !important;
       }
       .slot-sub {
-        font-size: 11px !important;
+        font-size: 10.5px !important;
       }
       .bottom-controls {
         gap: 3px !important;
-        padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important;
+        padding: 1px 1px env(safe-area-inset-bottom, 3px) 1px !important;
       }
       .btn-ctrl {
-        padding: 7px 0 !important;
-        font-size: 14px !important;
+        padding: 6px 0 !important;
+        font-size: 13.5px !important;
         letter-spacing: -0.2px !important;
+        border-radius: 11px !important;
       }
     }
   </style>
@@ -1637,13 +1653,21 @@
       box.scrollTop = box.scrollHeight;
 
       const mainContent = document.getElementById('mainChatContent');
-      const recent3 = chatHistory.slice(-3);
-      mainContent.innerHTML = recent3.map(m => `
-        <div class="main-chat-line">
-          <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
-          <span>${m.text}</span>
-        </div>
-      `).join('');
+      if (!chatHistory || chatHistory.length === 0) {
+        mainContent.innerHTML = `
+          <div class="main-chat-line" style="color:#8c7b75; font-size:12px; justify-content:center;">
+            <span>💬 暂无消息，点击即可畅聊~</span>
+          </div>
+        `;
+      } else {
+        const last = chatHistory[chatHistory.length - 1];
+        mainContent.innerHTML = `
+          <div class="main-chat-line">
+            <span class="${last.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${last.sender === 1 ? '我方' : '对方'}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:900;">${last.text}</span>
+          </div>
+        `;
+      }
     }
 
     function showBubble(player, text) {
@@ -3819,11 +3843,9 @@
         'luxury_glass': '现代奢华毛玻璃版 ✨',
         'clean_ios': 'Clean iOS 极简暖白手机版 📱'
       };
-      // 优雅微提示
-      const bubble = document.getElementById('turnBubble');
-      const oldText = bubble.textContent;
-      bubble.textContent = `✨ 已换装: ${names[key] || key}`;
-      setTimeout(() => { updateUI(); }, 2000);
+      // 优雅微提示 (使用果冻 HUD，不遮挡木牌)
+      showGameNotice(`✨ 已换装: ${names[key] || key}`, false);
+      updateUI();
     }
 
     // --- 1. 经典手绘晴空草坪棋盘 ---

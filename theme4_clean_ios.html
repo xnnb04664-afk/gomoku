@@ -136,7 +136,7 @@
       background: #ffffff; border: 1px solid var(--border-soft);
       border-radius: 14px; padding: 3px 8px;
       display: flex; flex-direction: column; justify-content: flex-start;
-      cursor: pointer; margin-top: 1px; height: 46px; min-height: 46px; max-height: 46px;
+      cursor: pointer; margin-top: 1px; height: 40px; min-height: 40px; max-height: 40px;
       overflow: hidden; box-sizing: border-box; transition: transform 0.1s;
       box-shadow: 0 2px 6px rgba(0,0,0,0.04);
     }
@@ -148,7 +148,7 @@
       line-height: 1.1;
     }
     .main-chat-content {
-      height: 24px; min-height: 24px; max-height: 24px;
+      height: 20px; min-height: 20px; max-height: 20px;
       overflow: hidden; display: flex; flex-direction: column; gap: 2px; padding-top: 2px;
     }
     .main-chat-line {
@@ -1037,13 +1037,21 @@
       box.scrollTop = box.scrollHeight;
 
       const mainContent = document.getElementById('mainChatContent');
-      const recent3 = chatHistory.slice(-3);
-      mainContent.innerHTML = recent3.map(m => `
-        <div class="main-chat-line">
-          <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
-          <span>${m.text}</span>
-        </div>
-      `).join('');
+      if (!chatHistory || chatHistory.length === 0) {
+        mainContent.innerHTML = `
+          <div class="main-chat-line" style="color:var(--text-muted, #888); font-size:12px; justify-content:center;">
+            <span>💬 暂无消息，点击即可畅聊~</span>
+          </div>
+        `;
+      } else {
+        const last = chatHistory[chatHistory.length - 1];
+        mainContent.innerHTML = `
+          <div class="main-chat-line">
+            <span class="${last.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${last.sender === 1 ? '我方' : '对方'}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${last.text}</span>
+          </div>
+        `;
+      }
     }
 
     function showBubble(player, text) {
