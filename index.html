@@ -358,12 +358,72 @@
       align-items: center;
       z-index: 5;
       padding: 0;
+      position: relative;
     }
     canvas {
       display: block;
       cursor: pointer;
       filter: drop-shadow(0 10px 24px rgba(18, 55, 95, 0.35));
       touch-action: none;
+    }
+
+    /* --- 🎴 炫酷干扰技能全屏特效横幅 & 棋盘震颤 --- */
+    .skill-vfx-banner {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) scale(0.65);
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 2px solid #f59e0b;
+      box-shadow: 0 0 35px rgba(245, 158, 11, 0.55), 0 10px 40px rgba(0,0,0,0.6);
+      border-radius: 20px;
+      padding: 12px 22px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      z-index: 100;
+      pointer-events: none;
+      opacity: 0;
+      transition: all 0.26s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .skill-vfx-banner.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1.05);
+    }
+    .skill-banner-icon {
+      font-size: 36px;
+      filter: drop-shadow(0 0 10px rgba(255,255,255,0.7));
+      animation: pulseIcon 0.8s ease-in-out infinite alternate;
+    }
+    @keyframes pulseIcon {
+      from { transform: scale(1); }
+      to { transform: scale(1.22); }
+    }
+    .skill-banner-title {
+      font-size: 15px;
+      font-weight: 900;
+      color: #fef08a;
+      text-shadow: 0 0 8px rgba(253, 224, 71, 0.6);
+      letter-spacing: 0.5px;
+      text-align: left;
+    }
+    .skill-banner-sub {
+      font-size: 11px;
+      color: #e2e8f0;
+      font-weight: 700;
+      margin-top: 2px;
+      text-align: left;
+    }
+    @keyframes boardShake {
+      0%, 100% { transform: translate(0, 0); }
+      20% { transform: translate(-4px, 3px) rotate(-0.5deg); }
+      40% { transform: translate(4px, -3px) rotate(0.5deg); }
+      60% { transform: translate(-3px, -2px); }
+      80% { transform: translate(3px, 2px); }
+    }
+    .board-shake {
+      animation: boardShake 0.32s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
     }
 
     /* 3 张干扰技能卡牌槽位与施法样式 */
@@ -789,6 +849,15 @@
   <!-- 手机全屏最大化棋盘容器 -->
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
+
+    <!-- 🎴 炫酷干扰技能全屏特效横幅 -->
+    <div id="skillBanner" class="skill-vfx-banner">
+      <div class="skill-banner-icon" id="skillBannerIcon">⚡</div>
+      <div>
+        <div class="skill-banner-title" id="skillBannerTitle">【双星连珠】发动！</div>
+        <div class="skill-banner-sub" id="skillBannerSub">神威连击，本回合可再落一子！</div>
+      </div>
+    </div>
   </div>
 
   <!-- 技能施法提示条 (处于选点模式时显示) -->
@@ -1128,6 +1197,38 @@
         sweetDesc: '蒙住宝贝眼睛！迷雾遮挡1回合~',
         needTarget: true,
         targetType: 'empty'
+      },
+      {
+        id: 'swap_color',
+        name: '偷天换日',
+        sweetName: '偏偏偏心 👑',
+        icon: '🪞',
+        sweetIcon: '👑',
+        desc: '策反对方1颗棋子化为己用',
+        sweetDesc: '这颗归我啦！偷换对方一颗棋子~',
+        needTarget: true,
+        targetType: 'enemy_stone'
+      },
+      {
+        id: 'swap_positions',
+        name: '移形换影',
+        sweetName: '灵魂互换 💫',
+        icon: '💫',
+        sweetIcon: '💫',
+        desc: '选己方1子与敌方1子互换位置',
+        sweetDesc: '大换位！选己方1子与对方1子互换~',
+        needTarget: true,
+        targetType: 'two_stones'
+      },
+      {
+        id: 'reforge_cards',
+        name: '天降神抽',
+        sweetName: '天降锦囊 🎲',
+        icon: '🎲',
+        sweetIcon: '🎲',
+        desc: '重铸未用手牌，抽取全新技能卡',
+        sweetDesc: '变变变！重新换两张全新惊喜卡~',
+        needTarget: false
       }
     ];
 
@@ -1532,6 +1633,29 @@
           fogArea = { r: data.r, c: data.c, expireStep: data.expireStep };
           draw();
           alert(`🌫️ 对方发动了【迷雾遮天】！3x3 区域视线受到阻碍！`);
+        } else if (data.type === 'skill_swap_color') {
+          board[data.r][data.c] = data.p;
+          const histItem = history.find(h => h.r === data.r && h.c === data.c);
+          if (histItem) histItem.p = data.p;
+          triggerSkillVFX('swap_color', data.r, data.c);
+          triggerBoardShake();
+          playSkillSound('magic');
+          showSkillBanner('🪞', `对方发动【偷天换日】！`, `您位于 (${data.r+1}, ${data.c+1}) 的棋子被策反！`);
+          draw();
+        } else if (data.type === 'skill_swap_positions') {
+          const p1 = board[data.r1][data.c1];
+          const p2 = board[data.r2][data.c2];
+          board[data.r1][data.c1] = p2;
+          board[data.r2][data.c2] = p1;
+          const h1 = history.find(h => h.r === data.r1 && h.c === data.c1);
+          const h2 = history.find(h => h.r === data.r2 && h.c === data.c2);
+          if (h1) { h1.r = data.r2; h1.c = data.c2; }
+          if (h2) { h2.r = data.r1; h2.c = data.c1; }
+          triggerSkillVFX('swap_positions', data.r2, data.c2, data.r1, data.c1);
+          triggerBoardShake();
+          playSkillSound('warp');
+          showSkillBanner('💫', `对方发动【移形换影】！`, `双方棋子位置发生了对调！`);
+          draw();
         }
       });
     }
@@ -1596,22 +1720,48 @@
       }
 
       const card = currentDrawnCards[idx];
+      const cardTitle = card.name;
       if (!card.needTarget) {
         if (card.id === 'rewind') {
           if (history.length === 0) return alert("棋盘上还没有棋子，无法倒流时间！");
           doUndo();
           markCardUsed(idx);
+          triggerSkillVFX('rewind');
+          playSkillSound('rewind');
+          showSkillBanner('⏳', `【${cardTitle}】发动！`, '时间倒流一步，战局重新书写！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
-          alert(`✨ 成功发动【${card.name}】！时间倒流一步~`);
         } else if (card.id === 'double_move') {
           hasExtraMove = true;
           markCardUsed(idx);
+          triggerSkillVFX('double_move');
+          triggerBoardShake();
+          playSkillSound('thunder');
+          showSkillBanner('⚡', `【${cardTitle}】发动！`, '神威连珠！本回合落子后可连续再落一子！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
-          alert(`⚡ 成功发动【${card.name}】！本回合落子后可额外再落一子！`);
+        } else if (card.id === 'reforge_cards') {
+          markCardUsed(idx);
+          const usedCardIds = new Set(currentDrawnCards.map(c => c.id));
+          const availableCards = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
+          const shuffledAvail = [...availableCards].sort(() => Math.random() - 0.5);
+          let pickIdx = 0;
+          for (let i = 0; i < 3; i++) {
+            if (i !== idx && !cardUsedStatus[i]) {
+              if (pickIdx < shuffledAvail.length) {
+                currentDrawnCards[i] = shuffledAvail[pickIdx++];
+              }
+            }
+          }
+          renderCardSlots();
+          triggerSkillVFX('reforge_cards');
+          playSkillSound('dice');
+          showSkillBanner('🎲', `【${cardTitle}】发动！`, '灵运爆发！未用手牌已全部重铸为全新神技！');
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
+          }
         }
       } else {
         activeSkill = { slotIdx: idx, skill: card, step: 1 };
@@ -1633,6 +1783,10 @@
         text.textContent = `🌟 第1步：点击己方一颗要平移的棋子`;
       } else if (card.id === 'fog_blind') {
         text.textContent = `🌫️ 请在棋盘上点击释放 3x3 迷雾的位置`;
+      } else if (card.id === 'swap_color') {
+        text.textContent = `🪞 请在棋盘上点击要策反的对方棋子`;
+      } else if (card.id === 'swap_positions') {
+        text.textContent = `💫 第1步：点击己方一颗要互换位置的棋子`;
       }
     }
 
@@ -1658,6 +1812,7 @@
       const { slotIdx, skill } = activeSkill;
       const myColor = (gameMode === 'online') ? myOnlineColor : turn;
       const enemyColor = myColor === BLACK ? WHITE : BLACK;
+      const skillName = skill.name;
 
       if (skill.id === 'freeze') {
         if (board[row][col] !== EMPTY) {
@@ -1665,10 +1820,12 @@
         }
         frozenPoint = { r: row, c: col, expireStep: history.length + 2 };
         markCardUsed(slotIdx);
+        triggerSkillVFX('freeze', row, col);
+        playSkillSound('ice');
+        showSkillBanner('❄️', `【${skillName}】发动！`, `封印 (${row+1}, ${col+1}) 空位，本回合双方禁下！`);
         if (gameMode === 'online' && conn && conn.open) {
           conn.send({ type: 'skill_freeze', r: row, c: col, expireStep: frozenPoint.expireStep });
         }
-        alert(`❄️ 封印成功！该点将在下一回合内禁止任何人落子！`);
       } else if (skill.id === 'remove_stone') {
         if (board[row][col] !== enemyColor) {
           return alert("💥 只能抹除对方的棋子！");
@@ -1676,10 +1833,13 @@
         board[row][col] = EMPTY;
         history = history.filter(h => !(h.r === row && h.c === col));
         markCardUsed(slotIdx);
+        triggerSkillVFX('remove_stone', row, col);
+        triggerBoardShake();
+        playSkillSound('boom');
+        showSkillBanner('💥', `【${skillName}】发动！`, `成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
         if (gameMode === 'online' && conn && conn.open) {
           conn.send({ type: 'skill_remove_stone', r: row, c: col });
         }
-        alert(`💥 成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
       } else if (skill.id === 'shift_stone') {
         if (activeSkill.step === 1) {
           if (board[row][col] !== myColor) {
@@ -1700,28 +1860,86 @@
           if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) {
             return alert("🌟 只能平移到相邻的 8 个方向空格之一！");
           }
-          board[activeSkill.srcR][activeSkill.srcC] = EMPTY;
-          board[row][col] = myColor;
-          const histItem = history.find(h => h.r === activeSkill.srcR && h.c === activeSkill.srcC);
-          if (histItem) { histItem.r = row; histItem.c = col; }
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
+          board[sR][sC] = EMPTY;
+          board[row][col] = myColor;
+          const histItem = history.find(h => h.r === sR && h.c === sC);
+          if (histItem) { histItem.r = row; histItem.c = col; }
           markCardUsed(slotIdx);
+          triggerSkillVFX('shift_stone', row, col, sR, sC);
+          playSkillSound('magic');
+          showSkillBanner('🌟', `【${skillName}】发动！`, `棋子平移至 (${row+1}, ${col+1})！`);
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_shift_stone', fromR: sR, fromC: sC, toR: row, toC: col, p: myColor });
           }
-          alert(`🌟 移星换斗成功！棋子平移至 (${row+1}, ${col+1})！`);
           if (checkWin(row, col, myColor)) {
             isOver = true;
-            alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`);
+            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
           }
         }
       } else if (skill.id === 'fog_blind') {
         fogArea = { r: row, c: col, expireStep: history.length + 2 };
         markCardUsed(slotIdx);
+        triggerSkillVFX('fog_blind', row, col);
+        playSkillSound('magic');
+        showSkillBanner('🌫️', `【${skillName}】发动！`, `3x3 区域迷雾弥漫，遮蔽对手视线！`);
         if (gameMode === 'online' && conn && conn.open) {
           conn.send({ type: 'skill_fog', r: row, c: col, expireStep: fogArea.expireStep });
         }
-        alert(`🌫️ 迷雾释出！以 (${row+1}, ${col+1}) 为中心的 3x3 区域进入迷雾！`);
+      } else if (skill.id === 'swap_color') {
+        if (board[row][col] !== enemyColor) {
+          return alert("🪞 偷天换日只能策反对方的棋子！");
+        }
+        board[row][col] = myColor;
+        const histItem = history.find(h => h.r === row && h.c === col);
+        if (histItem) histItem.p = myColor;
+        markCardUsed(slotIdx);
+        triggerSkillVFX('swap_color', row, col);
+        triggerBoardShake();
+        playSkillSound('magic');
+        showSkillBanner('🪞', `【${skillName}】发动！`, `成功策反对方位于 (${row+1}, ${col+1}) 的棋子！`);
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
+        }
+        if (checkWin(row, col, myColor)) {
+          isOver = true;
+          setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+        }
+      } else if (skill.id === 'swap_positions') {
+        if (activeSkill.step === 1) {
+          if (board[row][col] !== myColor) {
+            return alert("💫 请选择己方的棋子！");
+          }
+          activeSkill.step = 2;
+          activeSkill.srcR = row;
+          activeSkill.srcC = col;
+          const text = document.getElementById('skillPromptText');
+          if (text) text.textContent = `💫 第2步：请点击敌方一颗要互换位置的棋子`;
+          draw();
+        } else if (activeSkill.step === 2) {
+          if (board[row][col] !== enemyColor) {
+            return alert("💫 目标必须是对方的棋子！");
+          }
+          const sR = activeSkill.srcR, sC = activeSkill.srcC;
+          board[sR][sC] = enemyColor;
+          board[row][col] = myColor;
+          const h1 = history.find(h => h.r === sR && h.c === sC);
+          const h2 = history.find(h => h.r === row && h.c === col);
+          if (h1) { h1.r = row; h1.c = col; }
+          if (h2) { h2.r = sR; h2.c = sC; }
+          markCardUsed(slotIdx);
+          triggerSkillVFX('swap_positions', row, col, sR, sC);
+          triggerBoardShake();
+          playSkillSound('warp');
+          showSkillBanner('💫', `【${skillName}】发动！`, `双方棋子位置瞬间对调！`);
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_swap_positions', r1: sR, c1: sC, r2: row, c2: col });
+          }
+          if (checkWin(row, col, myColor)) {
+            isOver = true;
+            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+          }
+        }
       }
     }
 
@@ -1804,6 +2022,247 @@
       gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
       osc.connect(gain); gain.connect(actx.destination);
       osc.start(t); osc.stop(t + 0.1);
+    }
+
+    // 🔊 炫酷干扰技能专属合成音效
+    function playSkillSound(type) {
+      if (!soundEnabled) return;
+      try {
+        if (actx.state === 'suspended') actx.resume();
+        const t = actx.currentTime;
+        if (type === 'boom') {
+          const osc = actx.createOscillator(); const gain = actx.createGain();
+          osc.type = 'triangle'; osc.frequency.setValueAtTime(220, t);
+          osc.frequency.exponentialRampToValueAtTime(28, t + 0.35);
+          gain.gain.setValueAtTime(0.8, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.start(t); osc.stop(t + 0.4);
+        } else if (type === 'ice') {
+          const osc = actx.createOscillator(); const gain = actx.createGain();
+          osc.type = 'sine'; osc.frequency.setValueAtTime(750, t);
+          osc.frequency.exponentialRampToValueAtTime(2400, t + 0.2);
+          gain.gain.setValueAtTime(0.45, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.start(t); osc.stop(t + 0.35);
+        } else if (type === 'thunder') {
+          const osc = actx.createOscillator(); const gain = actx.createGain();
+          osc.type = 'sawtooth'; osc.frequency.setValueAtTime(580, t);
+          osc.frequency.linearRampToValueAtTime(140, t + 0.22);
+          gain.gain.setValueAtTime(0.6, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.start(t); osc.stop(t + 0.28);
+        } else if (type === 'warp') {
+          const osc = actx.createOscillator(); const gain = actx.createGain();
+          osc.type = 'sine'; osc.frequency.setValueAtTime(420, t);
+          osc.frequency.exponentialRampToValueAtTime(1200, t + 0.12);
+          osc.frequency.exponentialRampToValueAtTime(320, t + 0.32);
+          gain.gain.setValueAtTime(0.55, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.36);
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.start(t); osc.stop(t + 0.36);
+        } else if (type === 'dice') {
+          [1046, 1318, 1567].forEach((freq, i) => {
+            const osc = actx.createOscillator(); const gain = actx.createGain();
+            osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t + i * 0.07);
+            gain.gain.setValueAtTime(0.35, t + i * 0.07);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.16);
+            osc.connect(gain); gain.connect(actx.destination);
+            osc.start(t + i * 0.07); osc.stop(t + i * 0.07 + 0.17);
+          });
+        } else {
+          const osc = actx.createOscillator(); const gain = actx.createGain();
+          osc.type = 'sine'; osc.frequency.setValueAtTime(620, t);
+          osc.frequency.exponentialRampToValueAtTime(1600, t + 0.2);
+          gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.start(t); osc.stop(t + 0.3);
+        }
+      } catch(e) {}
+    }
+
+    // 🎴 炫酷技能全屏横幅与震屏控制器
+    let bannerTimer = null;
+    function showSkillBanner(icon, title, sub) {
+      const banner = document.getElementById('skillBanner');
+      const iconEl = document.getElementById('skillBannerIcon');
+      const titleEl = document.getElementById('skillBannerTitle');
+      const subEl = document.getElementById('skillBannerSub');
+      if (!banner) return;
+      if (iconEl) iconEl.textContent = icon;
+      if (titleEl) titleEl.textContent = title;
+      if (subEl) subEl.textContent = sub;
+      banner.classList.add('show');
+      if (bannerTimer) clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => {
+        banner.classList.remove('show');
+      }, 1600);
+    }
+
+    function triggerBoardShake() {
+      const wrapper = document.getElementById('islandWrapper');
+      if (!wrapper) return;
+      wrapper.classList.remove('board-shake');
+      void wrapper.offsetWidth;
+      wrapper.classList.add('board-shake');
+      setTimeout(() => wrapper.classList.remove('board-shake'), 400);
+    }
+
+    // 🎨 Canvas 实时高帧率粒子/特效渲染管线
+    let activeVFX = [];
+    let vfxRAF = null;
+
+    function triggerSkillVFX(type, targetR, targetC, srcR, srcC) {
+      const startTime = performance.now();
+      const tx = (targetR !== undefined) ? paddingX + (targetC + 0.5) * gridX : cWidth / 2;
+      const ty = (targetR !== undefined) ? paddingY + (targetR + 0.5) * gridY : cHeight / 2;
+      const sx = (srcR !== undefined) ? paddingX + (srcC + 0.5) * gridX : tx;
+      const sy = (srcR !== undefined) ? paddingY + (srcR + 0.5) * gridY : ty;
+
+      const particles = [];
+      if (type === 'remove_stone') {
+        for (let i = 0; i < 26; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 2 + Math.random() * 5.5;
+          particles.push({
+            x: tx, y: ty,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            size: 3.5 + Math.random() * 5,
+            color: ['#f97316', '#ef4444', '#facc15', '#ffffff'][Math.floor(Math.random() * 4)],
+            life: 550, birth: startTime
+          });
+        }
+      } else if (type === 'freeze') {
+        for (let i = 0; i < 22; i++) {
+          const angle = (i / 22) * Math.PI * 2;
+          particles.push({
+            x: tx, y: ty,
+            vx: Math.cos(angle) * (1.8 + Math.random() * 2.5),
+            vy: Math.sin(angle) * (1.8 + Math.random() * 2.5),
+            size: 3 + Math.random() * 4,
+            color: ['#38bdf8', '#bae6fd', '#ffffff', '#7dd3fc'][Math.floor(Math.random() * 4)],
+            life: 600, birth: startTime
+          });
+        }
+      } else if (type === 'double_move') {
+        for (let i = 0; i < 32; i++) {
+          particles.push({
+            x: paddingX + Math.random() * (cWidth - 2 * paddingX),
+            y: paddingY + Math.random() * (cHeight - 2 * paddingY),
+            vx: (Math.random() - 0.5) * 4, vy: (Math.random() - 0.5) * 4,
+            size: 3.5 + Math.random() * 4.5,
+            color: '#facc15', life: 480, birth: startTime
+          });
+        }
+      } else if (type === 'swap_color') {
+        for (let i = 0; i < 24; i++) {
+          const angle = (i / 24) * Math.PI * 2;
+          particles.push({
+            x: tx, y: ty, angle: angle,
+            dist: 6 + Math.random() * 22,
+            rotSpeed: (Math.random() > 0.5 ? 1 : -1) * (0.06 + Math.random() * 0.05),
+            size: 3 + Math.random() * 3.5,
+            color: i % 2 === 0 ? '#a855f7' : '#38bdf8',
+            life: 700, birth: startTime
+          });
+        }
+      } else if (type === 'swap_positions') {
+        for (let i = 0; i < 28; i++) {
+          const t = Math.random();
+          particles.push({
+            x: sx + (tx - sx) * t, y: sy + (ty - sy) * t,
+            vx: (Math.random() - 0.5) * 2.5, vy: (Math.random() - 0.5) * 2.5,
+            size: 3.5 + Math.random() * 4,
+            color: ['#ec4899', '#8b5cf6', '#60a5fa'][Math.floor(Math.random() * 3)],
+            life: 650, birth: startTime
+          });
+        }
+      } else {
+        for (let i = 0; i < 22; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 1.8 + Math.random() * 4.2;
+          particles.push({
+            x: tx, y: ty,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            size: 3 + Math.random() * 4,
+            color: ['#facc15', '#ec4899', '#38bdf8', '#a855f7'][Math.floor(Math.random() * 4)],
+            life: 580, birth: startTime
+          });
+        }
+      }
+
+      activeVFX.push({
+        type, tx, ty, sx, sy,
+        particles, startTime, duration: 750
+      });
+
+      if (!vfxRAF) {
+        vfxAnimLoop();
+      }
+    }
+
+    function vfxAnimLoop() {
+      const now = performance.now();
+      activeVFX = activeVFX.filter(vfx => now - vfx.startTime < vfx.duration);
+      draw();
+      if (activeVFX.length > 0) {
+        const raf = window.requestAnimationFrame || function(fn){ return setTimeout(fn, 16); };
+        vfxRAF = raf(vfxAnimLoop);
+      } else {
+        vfxRAF = null;
+        draw();
+      }
+    }
+
+    function renderActiveVFX(ctx) {
+      if (activeVFX.length === 0) return;
+      const now = performance.now();
+      ctx.save();
+      for (const vfx of activeVFX) {
+        const elapsed = now - vfx.startTime;
+        const progress = Math.min(1, elapsed / vfx.duration);
+
+        if (vfx.type === 'remove_stone' || vfx.type === 'freeze' || vfx.type === 'double_move') {
+          const ringRadius = radius * (1 + progress * 3.6);
+          ctx.beginPath();
+          ctx.arc(vfx.tx, vfx.ty, ringRadius, 0, Math.PI * 2);
+          ctx.strokeStyle = vfx.type === 'freeze' ? `rgba(56, 189, 248, ${1 - progress})` : (vfx.type === 'double_move' ? `rgba(250, 204, 21, ${1 - progress})` : `rgba(239, 68, 68, ${1 - progress})`);
+          ctx.lineWidth = 4 * (1 - progress);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'swap_positions') {
+          ctx.beginPath();
+          ctx.moveTo(vfx.sx, vfx.sy);
+          ctx.lineTo(vfx.tx, vfx.ty);
+          ctx.strokeStyle = `rgba(168, 85, 247, ${1 - progress * 0.7})`;
+          ctx.lineWidth = 5 * (1 - progress * 0.4);
+          ctx.shadowColor = '#d946ef';
+          ctx.shadowBlur = 15;
+          ctx.stroke();
+        }
+
+        for (const p of vfx.particles) {
+          const pAge = now - p.birth;
+          if (pAge < p.life) {
+            const pProgress = pAge / p.life;
+            const alpha = 1 - pProgress;
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = Math.max(0, alpha);
+            ctx.beginPath();
+            let px = p.x, py = p.y;
+            if (p.angle !== undefined) {
+              p.angle += p.rotSpeed;
+              px = vfx.tx + Math.cos(p.angle) * (p.dist + progress * 16);
+              py = vfx.ty + Math.sin(p.angle) * (p.dist + progress * 16);
+            } else {
+              px = p.x + p.vx * (pAge / 16);
+              py = p.y + p.vy * (pAge / 16);
+            }
+            ctx.arc(px, py, Math.max(1, p.size * (1 - pProgress * 0.6)), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      ctx.restore();
     }
 
     function updateUI() {
@@ -2256,13 +2715,16 @@
         }
       }
 
-      // 4. 绘制【移星换斗】第一步选中的己方棋子高亮光环
-      if (activeSkill && activeSkill.skill.id === 'shift_stone' && activeSkill.step === 2) {
+      // 4. 绘制【移星换斗】与【移形换影】选中的己方棋子高亮光环
+      if (activeSkill && (activeSkill.skill.id === 'shift_stone' || activeSkill.skill.id === 'swap_positions') && activeSkill.step === 2) {
         const sx = paddingX + (activeSkill.srcC + 0.5) * gridX;
         const sy = paddingY + (activeSkill.srcR + 0.5) * gridY;
         ctx.save();
-        ctx.beginPath(); ctx.arc(sx, sy, radius * 1.35, 0, Math.PI * 2);
-        ctx.strokeStyle = '#facc15'; ctx.lineWidth = 3; ctx.stroke();
+        ctx.beginPath(); ctx.arc(sx, sy, radius * 1.38, 0, Math.PI * 2);
+        ctx.strokeStyle = activeSkill.skill.id === 'swap_positions' ? '#d946ef' : '#facc15';
+        ctx.lineWidth = 3.5;
+        ctx.setLineDash([5, 3]);
+        ctx.stroke();
         ctx.restore();
       }
 
@@ -2304,6 +2766,9 @@
         ctx.fillText('🌫️ 迷雾遮挡', x1 + w/2, y1 + h/2);
         ctx.restore();
       }
+
+      // 7. 实时渲染全屏高能粒子与技能动画特效 (60fps Canvas 特效)
+      renderActiveVFX(ctx);
     }
 
     function checkWin(r, c, p) {
