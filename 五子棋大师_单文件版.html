@@ -318,9 +318,9 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       justify-content: flex-start;
       cursor: pointer;
       margin-top: 1px;
-      height: 40px;
-      min-height: 40px;
-      max-height: 40px;
+      height: 78px;
+      min-height: 78px;
+      max-height: 78px;
       overflow: hidden;
       box-sizing: border-box;
       transition: transform 0.1s;
@@ -336,18 +336,21 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       border-bottom: 1px dashed rgba(90, 56, 24, 0.2);
       padding-bottom: 1px;
       line-height: 1.1;
+      height: 14px;
     }
     .main-chat-content {
-      height: 20px;
-      min-height: 20px;
-      max-height: 20px;
+      height: 58px;
+      min-height: 58px;
+      max-height: 58px;
       overflow: hidden;
       display: flex;
-      align-items: center;
-      padding: 0;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 2px;
+      padding-top: 2px;
     }
     .main-chat-line {
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 900;
       color: #2d3436;
       white-space: nowrap;
@@ -356,14 +359,16 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       display: flex;
       align-items: center;
       gap: 5px;
-      line-height: 20px;
+      height: 17px;
+      min-height: 17px;
+      line-height: 17px;
       width: 100%;
     }
     .chat-tag-me {
-      background: #fed385; color: #4a2810; padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 900; flex-shrink: 0;
+      background: #fed385; color: #4a2810; padding: 0 4px; border-radius: 3px; font-size: 10.5px; font-weight: 900; flex-shrink: 0; line-height: 15px; height: 15px;
     }
     .chat-tag-other {
-      background: #e2e8f0; color: #334155; padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 900; flex-shrink: 0;
+      background: #e2e8f0; color: #334155; padding: 0 4px; border-radius: 3px; font-size: 10.5px; font-weight: 900; flex-shrink: 0; line-height: 15px; height: 15px;
     }
 
     /* 棋盘自适应最大化容器 */
@@ -1008,25 +1013,30 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
         padding: 2px 7px !important;
       }
       .main-chat-box {
-        height: 38px !important;
-        min-height: 38px !important;
-        max-height: 38px !important;
-        padding: 1px 6px !important;
+        height: 76px !important;
+        min-height: 76px !important;
+        max-height: 76px !important;
+        padding: 2px 6px 1px 6px !important;
         margin-top: 1px !important;
       }
       .main-chat-header {
-        font-size: 11px !important;
+        font-size: 10.5px !important;
         line-height: 1 !important;
-        padding-bottom: 0 !important;
+        padding-bottom: 1px !important;
+        height: 13px !important;
       }
       .main-chat-content {
-        height: 19px !important;
-        min-height: 19px !important;
-        max-height: 19px !important;
+        height: 56px !important;
+        min-height: 56px !important;
+        max-height: 56px !important;
+        gap: 1.5px !important;
+        padding-top: 1px !important;
       }
       .main-chat-line {
-        font-size: 12.5px !important;
-        line-height: 19px !important;
+        font-size: 12px !important;
+        height: 17px !important;
+        min-height: 17px !important;
+        line-height: 17px !important;
       }
       .skill-prompt-bar {
         padding: 4px 8px !important;
@@ -1668,21 +1678,22 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       `).join('');
       box.scrollTop = box.scrollHeight;
 
+      // 💬 常驻聊天框独占单行展示最新 3 条对局消息 (每条独占一行，绝不重叠挤压)
       const mainContent = document.getElementById('mainChatContent');
       if (!chatHistory || chatHistory.length === 0) {
         mainContent.innerHTML = `
-          <div class="main-chat-line" style="color:#8c7b75; font-size:12px; justify-content:center;">
-            <span>💬 暂无消息，点击即可畅聊~</span>
+          <div class="main-chat-line" style="color:#8c7b75; font-size:12px; justify-content:center; height:100%;">
+            <span>💬 暂无对局消息，点击即可畅聊~</span>
           </div>
         `;
       } else {
-        const last = chatHistory[chatHistory.length - 1];
-        mainContent.innerHTML = `
+        const recent3 = chatHistory.slice(-3);
+        mainContent.innerHTML = recent3.map(m => `
           <div class="main-chat-line">
-            <span class="${last.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${last.sender === 1 ? '我方' : '对方'}</span>
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:900;">${last.text}</span>
+            <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:900;">${m.text}</span>
           </div>
-        `;
+        `).join('');
       }
     }
 

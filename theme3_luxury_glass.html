@@ -140,7 +140,7 @@
       border: 1px solid var(--glass-border);
       border-radius: 14px; padding: 3px 8px;
       display: flex; flex-direction: column; justify-content: flex-start;
-      cursor: pointer; margin-top: 1px; height: 40px; min-height: 40px; max-height: 40px;
+      cursor: pointer; margin-top: 1px; height: 78px; min-height: 78px; max-height: 78px;
       overflow: hidden; box-sizing: border-box; transition: transform 0.1s;
     }
     .main-chat-box:active { transform: scale(0.985); }
@@ -151,28 +151,15 @@
       line-height: 1.1;
     }
     .main-chat-content {
-      height: 20px; min-height: 20px; max-height: 20px;
-      overflow: hidden; display: flex; flex-direction: column; gap: 2px; padding-top: 2px;
-    }
-    .main-chat-line {
-      font-size: 13px; font-weight: 700; color: #ffffff;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      display: flex; align-items: center; gap: 5px; line-height: 1.25;
-    }
-    .chat-tag-me {
-      background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99,102,241,0.4);
-      padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 800; flex-shrink: 0;
-    }
-    .chat-tag-other {
-      background: rgba(255, 255, 255, 0.05); color: #cbd5e1; border: 1px solid var(--glass-border);
-      padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 800; flex-shrink: 0;
-    }
-
-    /* 棋盘最大化容器 */
-    .island-wrapper {
-      flex: 1; width: 100%; max-width: 520px;
-      display: flex; justify-content: center; align-items: center;
-      z-index: 5; padding: 0;
+      height: 58px;
+      min-height: 58px;
+      max-height: 58px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 2px;
+      padding-top: 2px;
       position: relative;
     }
 
@@ -523,7 +510,11 @@
       .sign-status { font-size: 13px !important; }
       .turn-bubble { font-size: 13px !important; padding: 2px 7px !important; }
       .main-chat-box { height: 38px !important; min-height: 38px !important; max-height: 38px !important; padding: 2px 6px !important; margin-top: 1px !important; }
-      .main-chat-content { height: 19px !important; min-height: 19px !important; max-height: 19px !important; }
+      .main-chat-content { height: 56px !important;
+        min-height: 56px !important;
+        max-height: 56px !important;
+        gap: 1.5px !important;
+        padding-top: 1px !important; }
       .main-chat-line { font-size: 13.5px !important; }
       .card-slots-area { gap: 3px !important; padding: 1px 1px !important; }
       .card-slot { padding: 2.5px 1px !important; }
@@ -1115,21 +1106,22 @@
       `).join('');
       box.scrollTop = box.scrollHeight;
 
+      // 💬 常驻聊天框独占单行展示最新 3 条对局消息 (每条独占一行，绝不重叠挤压)
       const mainContent = document.getElementById('mainChatContent');
       if (!chatHistory || chatHistory.length === 0) {
         mainContent.innerHTML = `
-          <div class="main-chat-line" style="color:var(--text-muted, #888); font-size:12px; justify-content:center;">
-            <span>💬 暂无消息，点击即可畅聊~</span>
+          <div class="main-chat-line" style="color:var(--text-muted, #888); font-size:12px; justify-content:center; height:100%;">
+            <span>💬 暂无对局消息，点击即可畅聊~</span>
           </div>
         `;
       } else {
-        const last = chatHistory[chatHistory.length - 1];
-        mainContent.innerHTML = `
+        const recent3 = chatHistory.slice(-3);
+        mainContent.innerHTML = recent3.map(m => `
           <div class="main-chat-line">
-            <span class="${last.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${last.sender === 1 ? '我方' : '对方'}</span>
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${last.text}</span>
+            <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${m.text}</span>
           </div>
-        `;
+        `).join('');
       }
     }
 

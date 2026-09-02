@@ -136,7 +136,7 @@
       background: #ffffff; border: 1px solid var(--border-soft);
       border-radius: 14px; padding: 3px 8px;
       display: flex; flex-direction: column; justify-content: flex-start;
-      cursor: pointer; margin-top: 1px; height: 40px; min-height: 40px; max-height: 40px;
+      cursor: pointer; margin-top: 1px; height: 78px; min-height: 78px; max-height: 78px;
       overflow: hidden; box-sizing: border-box; transition: transform 0.1s;
       box-shadow: 0 2px 6px rgba(0,0,0,0.04);
     }
@@ -148,28 +148,15 @@
       line-height: 1.1;
     }
     .main-chat-content {
-      height: 20px; min-height: 20px; max-height: 20px;
-      overflow: hidden; display: flex; flex-direction: column; gap: 2px; padding-top: 2px;
-    }
-    .main-chat-line {
-      font-size: 13px; font-weight: 700; color: #1d1d1f;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      display: flex; align-items: center; gap: 5px; line-height: 1.25;
-    }
-    .chat-tag-me {
-      background: rgba(0, 113, 227, 0.1); color: var(--ios-accent);
-      padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 800; flex-shrink: 0;
-    }
-    .chat-tag-other {
-      background: #f2f2f6; color: #636366; border: 1px solid var(--border-soft);
-      padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 800; flex-shrink: 0;
-    }
-
-    /* 棋盘最大化容器 */
-    .island-wrapper {
-      flex: 1; width: 100%; max-width: 520px;
-      display: flex; justify-content: center; align-items: center;
-      z-index: 5; padding: 0;
+      height: 58px;
+      min-height: 58px;
+      max-height: 58px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 2px;
+      padding-top: 2px;
       position: relative;
     }
 
@@ -1036,21 +1023,22 @@
       `).join('');
       box.scrollTop = box.scrollHeight;
 
+      // 💬 常驻聊天框独占单行展示最新 3 条对局消息 (每条独占一行，绝不重叠挤压)
       const mainContent = document.getElementById('mainChatContent');
       if (!chatHistory || chatHistory.length === 0) {
         mainContent.innerHTML = `
-          <div class="main-chat-line" style="color:var(--text-muted, #888); font-size:12px; justify-content:center;">
-            <span>💬 暂无消息，点击即可畅聊~</span>
+          <div class="main-chat-line" style="color:var(--text-muted, #888); font-size:12px; justify-content:center; height:100%;">
+            <span>💬 暂无对局消息，点击即可畅聊~</span>
           </div>
         `;
       } else {
-        const last = chatHistory[chatHistory.length - 1];
-        mainContent.innerHTML = `
+        const recent3 = chatHistory.slice(-3);
+        mainContent.innerHTML = recent3.map(m => `
           <div class="main-chat-line">
-            <span class="${last.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${last.sender === 1 ? '我方' : '对方'}</span>
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${last.text}</span>
+            <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${m.text}</span>
           </div>
-        `;
+        `).join('');
       }
     }
 
