@@ -166,6 +166,13 @@
     - 网页版 `favicon.png` (192×192)
   - `AndroidManifest.xml` 中配置 `android:icon="@mipmap/ic_launcher"` 与 `android:roundIcon="@mipmap/ic_launcher"`，安装在任何品牌手机桌面上均展现极高颜值的圆形/圆角矩形专属游戏图标！
 
+### 14. 👫 专属唯美动漫二次元情侣头像 (Anime Couple Avatars)
+- **用户自选专属情侣头像库扩充**：
+  - 银发少年（优雅礼服）与银发少女（甜美眨眼）双角色二次元情头；
+  - 正方形居中高精裁切，生成 `img/avatar_boy.png` 与 `img/avatar_girl.png`，并转换持久化 `js/assets/anime_avatars.js`；
+  - 头像修改弹窗中开辟专属展示与选择区域，点击即刻高亮、动态更新大头像与双方顶栏展示；
+  - 单文件版与 Android APK 离线 100% 完备内联，无需网络即可随时随地换上专属动漫情头对弈！
+
 ---
 
 ## 四、⚠️ 最重要用户规则与绝对红线 (CRITICAL RULES)

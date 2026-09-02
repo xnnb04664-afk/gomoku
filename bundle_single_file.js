@@ -21,9 +21,16 @@ if (fs.existsSync(cherryAudioPath)) {
   cherryAudioContent = fs.readFileSync(cherryAudioPath, 'utf8');
 }
 
+const animeAvatarsPath = path.join(ROOT_DIR, 'js', 'assets', 'anime_avatars.js');
+let animeAvatarsContent = '';
+if (fs.existsSync(animeAvatarsPath)) {
+  animeAvatarsContent = fs.readFileSync(animeAvatarsPath, 'utf8');
+}
+
 // 替换外部脚本引用为完全内联脚本
 const peerRegex = /<!-- 引入 PeerJS 免服务器外网穿透联机库[\s\S]*?<script src="https:\/\/unpkg\.com\/peerjs[\s\S]*?<\/script>/i;
 const cherryRegex = /<script src="js\/assets\/cherry_bomb_audio\.js"><\/script>/i;
+const animeRegex = /<script src="js\/assets\/anime_avatars\.js"><\/script>/i;
 
 let inlinedHeadScripts = '';
 if (peerJsContent) {
@@ -32,10 +39,26 @@ if (peerJsContent) {
 if (cherryAudioContent) {
   inlinedHeadScripts += `  <!-- 内联 樱桃炸弹 MP3 原声 Base64 数据 -->\n  <script>\n${cherryAudioContent}\n  </script>\n`;
 }
+if (animeAvatarsContent) {
+  inlinedHeadScripts += `  <!-- 内联 专属二次元情侣动漫头像 Base64 数据 -->\n  <script>\n${animeAvatarsContent}\n  </script>\n`;
+}
 
 // 执行替换
 html = html.replace(peerRegex, inlinedHeadScripts.trim());
 html = html.replace(cherryRegex, '');
+html = html.replace(animeRegex, '');
+
+// 内联 img/avatar_boy.png 与 img/avatar_girl.png 的 src
+const boyImgPath = path.join(ROOT_DIR, 'img', 'avatar_boy.png');
+const girlImgPath = path.join(ROOT_DIR, 'img', 'avatar_girl.png');
+if (fs.existsSync(boyImgPath)) {
+  const boyB64 = 'data:image/png;base64,' + fs.readFileSync(boyImgPath).toString('base64');
+  html = html.replace(/src="img\/avatar_boy\.png"/g, `src="${boyB64}"`);
+}
+if (fs.existsSync(girlImgPath)) {
+  const girlB64 = 'data:image/png;base64,' + fs.readFileSync(girlImgPath).toString('base64');
+  html = html.replace(/src="img\/avatar_girl\.png"/g, `src="${girlB64}"`);
+}
 
 // 更新页面标题为单文件全功能旗舰版
 html = html.replace(/<title>.*?<\/title>/i, '<title>五子棋大师 · 单文件全功能旗舰版 🌐🎴💬🌿</title>');

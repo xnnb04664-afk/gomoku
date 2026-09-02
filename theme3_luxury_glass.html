@@ -7,6 +7,7 @@
   <!-- PeerJS 免服务器外网联机库 -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="js/assets/cherry_bomb_audio.js"></script>
+  <script src="js/assets/anime_avatars.js"></script>
   <style>
     :root {
       --bg-radial: radial-gradient(circle at 50% 20%, #1e1b4b 0%, #090a0f 60%, #030305 100%);
@@ -477,7 +478,20 @@
       font-size: 20px; padding: 5px 0; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border);
       border-radius: 10px; cursor: pointer;
     }
-    .avatar-opt.selected { border-color: var(--brand-indigo); background: rgba(99,102,241,0.25); }
+    .avatar-opt.selected { border-color: var(--brand-indigo); background: rgba(99,102,241,0.25); } 
+    .anime-avatar-card {
+      display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.8);
+      border: 2px solid var(--border-dark, #5a3818); border-radius: 12px; padding: 6px 8px;
+      cursor: pointer; box-shadow: 0 2px 0 var(--border-dark, #5a3818); transition: all 0.15s;
+    }
+    .anime-avatar-card:active { transform: scale(0.97); }
+    .anime-avatar-card.selected {
+      border-color: #ff4757 !important;
+      background: #fff3c4 !important;
+      box-shadow: 0 0 0 2.5px #ff4757, 0 3px 0 var(--border-dark, #5a3818) !important;
+      transform: scale(1.02);
+    }
+
     .name-input-box {
       width: 100%; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--glass-border);
       background: rgba(0,0,0,0.5); color: #fff; font-size: 14px; font-weight: 700; text-align: center; outline: none; margin-bottom: 8px;
@@ -1069,7 +1083,8 @@
     ];
 
     function renderAvatarElement(avatar) {
-      if (avatar.startsWith('data:image') || avatar.startsWith('http')) {
+      if (!avatar) return '👦';
+      if (avatar.startsWith('data:image') || avatar.startsWith('http') || avatar.startsWith('img/') || avatar.includes('.png') || avatar.includes('.webp') || avatar.includes('.jpg')) {
         return `<img src="${avatar}" alt="avatar">`;
       }
       return avatar;
@@ -1180,7 +1195,7 @@
 
           selectedAvatarData = compressedBase64;
           document.getElementById('bigAvatarPreview').innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
-          document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('selected'));
+          document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
           alert("🎉 照片上传成功！点击下方【保存并应用】即可生效！");
         };
         img.src = e.target.result;
@@ -1189,7 +1204,9 @@
     }
 
     function openProfileModal(player) {
-      if (gameMode === 'ai' && player === 2) return alert("🤖 大师AI 为智能电脑，无法修改档案哦~");
+      if (gameMode === 'ai' && player === 2) {
+        return alert("🤖 大师AI 为智能电脑，无法修改档案哦~");
+      }
       editingPlayer = player;
       const currentName = player === 1 ? p1Name : p2Name;
       selectedAvatarData = player === 1 ? p1Avatar : p2Avatar;
@@ -1199,16 +1216,30 @@
       document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(selectedAvatarData);
 
       const opts = document.querySelectorAll('.avatar-opt');
-      opts.forEach(el => el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData));
+      opts.forEach(el => {
+        el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData);
+      });
+
+      const boyCard = document.getElementById('animeCardBoy');
+      const girlCard = document.getElementById('animeCardGirl');
+      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_BOY || selectedAvatarData === 'img/avatar_boy.png');
+      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_GIRL || selectedAvatarData === 'img/avatar_girl.png');
 
       document.getElementById('profileModal').classList.add('show');
     }
 
     function selectAvatar(elem, char) {
       selectedAvatarData = char;
-      document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('selected'));
+      document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
       document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(char);
+    }
+
+    function selectImgAvatar(elem, dataUrl) {
+      selectedAvatarData = dataUrl;
+      document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
+      elem.classList.add('selected');
+      document.getElementById('bigAvatarPreview').innerHTML = `<img src="${dataUrl}" alt="avatar">`;
     }
 
     function saveProfile() {

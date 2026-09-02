@@ -75,6 +75,9 @@ fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets
 });
 copyRecursiveSync(path.join(ROOT_DIR, 'css'), path.join(TEMP_BUILD, 'assets', 'css'));
 copyRecursiveSync(path.join(ROOT_DIR, 'js'), path.join(TEMP_BUILD, 'assets', 'js'));
+if (fs.existsSync(path.join(ROOT_DIR, 'img'))) {
+  copyRecursiveSync(path.join(ROOT_DIR, 'img'), path.join(TEMP_BUILD, 'assets', 'img'));
+}
 
 console.log('>>> [3/7] 编译 Android 资源 (aapt2 compile & link)...');
 const resZip = path.join(TEMP_BUILD, 'resources.zip');
