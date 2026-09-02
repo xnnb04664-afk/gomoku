@@ -1249,8 +1249,12 @@
         } else if (data.type === 'chat') {
           addMessage(2, data.text);
         } else if (data.type === 'profile_sync') {
-          p2Name = data.name; p2Avatar = data.avatar;
+          p2Name = data.name || '好友';
+          p2Avatar = data.avatar || '👧';
           updatePlayerHeaderUI();
+          if (!data.isReply && conn && conn.open) {
+            conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar, isReply: true });
+          }
         } else if (data.type === 'undo_req') {
           undoDescText.textContent = "对方发起了悔棋申请，是否同意？";
           document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
@@ -1756,11 +1760,56 @@
       try {
         if (actx.state === 'suspended') actx.resume();
         const t = actx.currentTime;
-        if (type === 'bomb') {
-          // 💣 直接播放内嵌的樱桃炸弹爆炸音频
-          const audio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
-          audio.preload = 'auto';
-          audio.play().catch(e => console.warn('Explosion audio playback failed:', e));
+                if (type === 'bomb') {
+          // 💣 乾坤大乱：双通道混合爆破音效 (原生 Web Audio 物理轰鸣 + 原版樱桃炸弹音频，彻底解决 APK 静音)
+          try {
+            const subOsc = actx.createOscillator();
+            const subGain = actx.createGain();
+            subOsc.type = 'triangle';
+            subOsc.frequency.setValueAtTime(150, t);
+            subOsc.frequency.exponentialRampToValueAtTime(28, t + 0.65);
+            subGain.gain.setValueAtTime(0.75, t);
+            subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+            subOsc.connect(subGain);
+            subGain.connect(actx.destination);
+            subOsc.start(t);
+            subOsc.stop(t + 0.72);
+
+            const bufferSize = Math.floor(actx.sampleRate * 0.45);
+            const noiseBuffer = actx.createBuffer(1, bufferSize, actx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+            const whiteNoise = actx.createBufferSource();
+            whiteNoise.buffer = noiseBuffer;
+
+            const filter = actx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(850, t);
+            filter.frequency.linearRampToValueAtTime(110, t + 0.45);
+
+            const noiseGain = actx.createGain();
+            noiseGain.gain.setValueAtTime(0.65, t);
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+            whiteNoise.connect(filter);
+            filter.connect(noiseGain);
+            noiseGain.connect(actx.destination);
+            whiteNoise.start(t);
+            whiteNoise.stop(t + 0.52);
+          } catch(err) {
+            console.warn('Web Audio physical bomb error:', err);
+          }
+
+          if (window.CHERRY_BOMB_AUDIO_DATA) {
+            try {
+              if (!window._cherryBombAudio) {
+                window._cherryBombAudio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
+                window._cherryBombAudio.preload = 'auto';
+              }
+              window._cherryBombAudio.currentTime = 0;
+              window._cherryBombAudio.play().catch(() => {});
+            } catch(e) {}
+          }
           return;
         } else if (type === 'victory') {
           // 👑 连珠绝杀凯旋大和弦音阶 (C5 - E5 - G5 - C6)

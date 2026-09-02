@@ -1498,21 +1498,37 @@
     }
 
     function updatePlayerHeaderUI() {
-      document.getElementById('p1NameLabel').textContent = p1Name;
-      document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
-      
-      const p2Label = document.getElementById('p2NameLabel');
-      const p2Icon = document.getElementById('p2AvatarIcon');
+      let p1ColorTag = ' (●黑子)';
+      let p2ColorTag = ' (○白子)';
+      let p2DisplayName = p2Name;
+
       if (gameMode === 'ai') {
-        p2Label.textContent = '大师AI (白子)';
-        p2Icon.innerHTML = '🤖';
+        p1ColorTag = ' (●黑子)';
+        p2ColorTag = ' (○白子)';
+        p2DisplayName = '大师AI';
+        document.getElementById('p2AvatarIcon').innerHTML = '🤖';
       } else if (gameMode === 'online') {
-        p2Label.textContent = myOnlineColor === BLACK ? (p2Name + ' (白子)') : '房主 (黑子)';
-        p2Icon.innerHTML = renderAvatarElement(p2Avatar);
+        // 联机对战：黑白子明确展示，且绝不显示“房主”，双方直接呈现真实昵称！
+        if (myOnlineColor === BLACK) {
+          p1ColorTag = ' (●黑子)';
+          p2ColorTag = ' (○白子)';
+        } else {
+          p1ColorTag = ' (○白子)';
+          p2ColorTag = ' (●黑子)';
+        }
+        p2DisplayName = (p2Name && p2Name.trim()) ? p2Name : '好友';
+        document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       } else {
-        p2Label.textContent = p2Name;
-        p2Icon.innerHTML = renderAvatarElement(p2Avatar);
+        // 双人同屏 pvp
+        p1ColorTag = ' (●黑子)';
+        p2ColorTag = ' (○白子)';
+        p2DisplayName = p2Name;
+        document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
+
+      document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag;
+      document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
+      document.getElementById('p2NameLabel').textContent = p2DisplayName + p2ColorTag;
     }
 
     function renderChatHistory() {
@@ -1980,9 +1996,12 @@
         } else if (data.type === 'chat') {
           addMessage(2, data.text);
         } else if (data.type === 'profile_sync') {
-          p2Name = data.name;
-          p2Avatar = data.avatar;
+          p2Name = data.name || '好友';
+          p2Avatar = data.avatar || '👧';
           updatePlayerHeaderUI();
+          if (!data.isReply && conn && conn.open) {
+            conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar, isReply: true });
+          }
         } else if (data.type === 'undo_req') {
           undoDescText.textContent = "对方发起了悔棋申请，是否同意？";
           document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
@@ -3001,10 +3020,58 @@
         const t = actx.currentTime;
 
         if (type === 'bomb') {
-          // 💣 乾坤大乱：保持原有的樱桃炸弹爆炸音频，不动
-          const audio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
-          audio.preload = 'auto';
-          audio.play().catch(e => console.warn('Explosion audio playback failed:', e));
+          // 💣 乾坤大乱：双通道混合爆破音效 (原生 Web Audio 物理轰鸣 + 原版樱桃炸弹音频，彻底解决 APK 静音)
+          try {
+            // 通道 1：重低音空气震颤冲击波 (150Hz -> 30Hz 强力下潜)
+            const subOsc = actx.createOscillator();
+            const subGain = actx.createGain();
+            subOsc.type = 'triangle';
+            subOsc.frequency.setValueAtTime(150, t);
+            subOsc.frequency.exponentialRampToValueAtTime(28, t + 0.65);
+            subGain.gain.setValueAtTime(0.75, t);
+            subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+            subOsc.connect(subGain);
+            subGain.connect(actx.destination);
+            subOsc.start(t);
+            subOsc.stop(t + 0.72);
+
+            // 通道 2：炸药碎裂爆破白噪声
+            const bufferSize = Math.floor(actx.sampleRate * 0.45);
+            const noiseBuffer = actx.createBuffer(1, bufferSize, actx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+            const whiteNoise = actx.createBufferSource();
+            whiteNoise.buffer = noiseBuffer;
+
+            const filter = actx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(850, t);
+            filter.frequency.linearRampToValueAtTime(110, t + 0.45);
+
+            const noiseGain = actx.createGain();
+            noiseGain.gain.setValueAtTime(0.65, t);
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+            whiteNoise.connect(filter);
+            filter.connect(noiseGain);
+            noiseGain.connect(actx.destination);
+            whiteNoise.start(t);
+            whiteNoise.stop(t + 0.52);
+          } catch(err) {
+            console.warn('Web Audio physical bomb error:', err);
+          }
+
+          // 通道 3：同时唤醒持久化原版樱桃炸弹单例 (防 Android WebView GC 垃圾回收)
+          if (window.CHERRY_BOMB_AUDIO_DATA) {
+            try {
+              if (!window._cherryBombAudio) {
+                window._cherryBombAudio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
+                window._cherryBombAudio.preload = 'auto';
+              }
+              window._cherryBombAudio.currentTime = 0;
+              window._cherryBombAudio.play().catch(() => {});
+            } catch(e) {}
+          }
           return;
 
         } else if (type === 'victory') {
