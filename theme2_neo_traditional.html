@@ -2732,14 +2732,19 @@
         channel.on('data', data => {
           if (!data || data.type !== 'join_request' || hostHandshakeDone) return;
           hostHandshakeDone = true;
-          channel.send({ type: 'join_accepted', name: p1Name, avatar: p1Avatar });
+          const sendAccept = () => {
+            try { channel.send({ type: 'join_accepted', name: p1Name, avatar: p1Avatar }); } catch(_) {}
+          };
+          sendAccept();
+          setTimeout(sendAccept, 150);
+          setTimeout(sendAccept, 350);
           conn = channel;
           myOnlineColor = BLACK;
           lastActiveRoomCode = roomCode;
           p2Name = data.name || '好友';
           p2Avatar = data.avatar || '👧';
           updatePlayerHeaderUI();
-          showGameNotice('🎉 P2P 直连成功！您执黑先行~', false);
+          showGameNotice('🎉 P2P 房间直连成功！您执黑先行~', false);
           closeOnlineModal();
           setMode('online');
           conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
@@ -3972,12 +3977,21 @@
           }
         };
 
+        let joinReqInterval = setInterval(() => {
+          if (hasJoined) {
+            clearInterval(joinReqInterval);
+            return;
+          }
+          try { channel.send({ type: 'join_request', name: p1Name, avatar: p1Avatar }); } catch(_) {}
+        }, 500);
+
         channel.on('open', () => {
           channel.send({ type: 'join_request', name: p1Name, avatar: p1Avatar });
         });
         channel.on('data', data => {
           if (!data || data.type !== 'join_accepted' || hasJoined) return;
           hasJoined = true;
+          clearInterval(joinReqInterval);
           restoreBtn();
           conn = channel;
           lastActiveRoomCode = code;
@@ -3986,7 +4000,7 @@
           p2Name = data.name || '房主';
           p2Avatar = data.avatar || '👦';
           updatePlayerHeaderUI();
-          showGameNotice('🎉 P2P 直连成功！房主执黑先行，您执白~', false);
+          showGameNotice('🎉 P2P 房间直连成功！房主执黑先行，您执白~', false);
           closeOnlineModal();
           setMode('online');
           setupConn();
@@ -3994,16 +4008,13 @@
         });
 
         await channel.start();
-        if (!hasJoined) {
-          // start() 只代表 DataChannel 已建立，等待房主握手；超时由下方兜底计时器处理。
-          setTimeout(() => {
-            if (!hasJoined && p2pChannel === channel) {
-              try { channel.close(); } catch (_) {}
-              p2pChannel = null;
-              joinMqttRoom(code, btn);
-            }
-          }, 6000);
-        }
+        setTimeout(() => {
+          if (!hasJoined && p2pChannel === channel) {
+            clearInterval(joinReqInterval);
+            restoreBtn();
+            showGameNotice('⚠️ 连接房间超时，请确认房间号是否正确或房主是否在线', true);
+          }
+        }, 8000);
       } catch (error) {
         console.warn('[P2P join unavailable, fallback to MQTT]', error);
         p2pChannel = null;
@@ -5236,7 +5247,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.14';
+    const CURRENT_VERSION_TAG = 'v1.0.15';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
