@@ -22,8 +22,13 @@ function copyRecursiveSync(src, dest) {
   const stats = exists && fs.statSync(src);
   if (stats.isDirectory()) {
     if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-    fs.readdirSync(src).forEach(child => copyRecursiveSync(path.join(src, child), path.join(dest, child)));
+    fs.readdirSync(src).forEach(child => {
+      // 过滤非 ASCII 文件名以兼容 Windows 下 aapt2 编译
+      if (/[\u4e00-\u9fa5]/.test(child) && child.endsWith('.mp3')) return;
+      copyRecursiveSync(path.join(src, child), path.join(dest, child));
+    });
   } else {
+    if (/[\u4e00-\u9fa5]/.test(path.basename(src)) && src.endsWith('.mp3')) return;
     fs.copyFileSync(src, dest);
   }
 }
@@ -64,6 +69,10 @@ fs.copyFileSync(path.join(SRC_DIR, 'AndroidManifest.xml'), path.join(TEMP_BUILD,
 
 // 同步 HTML/CSS/JS 到 assets
 fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets', 'index.html'));
+['theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'].forEach(f => {
+  const p = path.join(ROOT_DIR, f);
+  if (fs.existsSync(p)) fs.copyFileSync(p, path.join(TEMP_BUILD, 'assets', f));
+});
 copyRecursiveSync(path.join(ROOT_DIR, 'css'), path.join(TEMP_BUILD, 'assets', 'css'));
 copyRecursiveSync(path.join(ROOT_DIR, 'js'), path.join(TEMP_BUILD, 'assets', 'js'));
 

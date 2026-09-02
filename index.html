@@ -4,8 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
-  <!-- 引入 PeerJS 免服务器外网穿透联机库 -->
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- 引入 PeerJS 免服务器外网穿透联机库 (优先本地极速离线加载，CDN优雅降级兜底) -->
+  <script src="js/peerjs.min.js"></script>
+  <script>if (typeof Peer === 'undefined') { document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>'); }</script>
+  <script src="js/assets/cherry_bomb_audio.js"></script>
   <style>
     :root {
       --primary: #ff6b81;
@@ -367,41 +369,64 @@
       touch-action: none;
     }
 
-    /* --- 🎴 炫酷干扰技能全屏特效横幅 & 棋盘震颤 --- */
+    /* --- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 --- */
     .skill-vfx-banner {
       position: absolute;
       top: 50%; left: 50%;
       transform: translate(-50%, -50%) scale(0.65);
-      background: rgba(15, 23, 42, 0.92);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      border: 2px solid #f59e0b;
-      box-shadow: 0 0 35px rgba(245, 158, 11, 0.55), 0 10px 40px rgba(0,0,0,0.6);
+      background: rgba(15, 23, 42, 0.95);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 2.5px solid #f59e0b;
+      box-shadow: 0 0 35px rgba(245, 158, 11, 0.6), 0 14px 40px rgba(0,0,0,0.7);
       border-radius: 20px;
-      padding: 12px 22px;
+      padding: 14px 18px;
       display: flex;
       align-items: center;
       gap: 12px;
-      z-index: 100;
+      z-index: 120;
       pointer-events: none;
       opacity: 0;
-      transition: all 0.26s cubic-bezier(0.34, 1.56, 0.64, 1);
+      transition: all 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+      width: calc(100% - 36px);
+      max-width: 440px;
+      box-sizing: border-box;
+      cursor: pointer;
     }
     .skill-vfx-banner.show {
       opacity: 1;
-      transform: translate(-50%, -50%) scale(1.05);
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    .btn-banner-confirm {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #fff;
+      border: 1.5px solid #a7f3d0;
+      border-radius: 999px;
+      padding: 7px 16px;
+      font-size: 13px;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.45);
+      flex-shrink: 0;
+      transition: transform 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+    .btn-banner-confirm:active {
+      transform: scale(0.92);
     }
     .skill-banner-icon {
-      font-size: 36px;
+      font-size: 38px;
       filter: drop-shadow(0 0 10px rgba(255,255,255,0.7));
       animation: pulseIcon 0.8s ease-in-out infinite alternate;
+      flex-shrink: 0;
     }
     @keyframes pulseIcon {
       from { transform: scale(1); }
       to { transform: scale(1.22); }
     }
     .skill-banner-title {
-      font-size: 15px;
+      font-size: 15.5px;
       font-weight: 900;
       color: #fef08a;
       text-shadow: 0 0 8px rgba(253, 224, 71, 0.6);
@@ -409,11 +434,12 @@
       text-align: left;
     }
     .skill-banner-sub {
-      font-size: 11px;
+      font-size: 12px;
       color: #e2e8f0;
       font-weight: 700;
-      margin-top: 2px;
+      margin-top: 3px;
       text-align: left;
+      line-height: 1.35;
     }
     @keyframes boardShake {
       0%, 100% { transform: translate(0, 0); }
@@ -424,6 +450,18 @@
     }
     .board-shake {
       animation: boardShake 0.32s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    }
+    @keyframes megaBoardShake {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      15% { transform: translate(-8px, 6px) rotate(-1.5deg) scale(1.02); }
+      30% { transform: translate(8px, -6px) rotate(1.5deg) scale(0.98); }
+      45% { transform: translate(-7px, -5px) rotate(-1deg) scale(1.01); }
+      60% { transform: translate(6px, 5px) rotate(1deg) scale(0.99); }
+      75% { transform: translate(-4px, 3px) scale(1); }
+      90% { transform: translate(3px, -2px) scale(1); }
+    }
+    .board-shake-mega {
+      animation: megaBoardShake 0.65s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
     }
 
     /* 3 张干扰技能卡牌槽位与施法样式 */
@@ -490,19 +528,109 @@
     .slot-title { font-size: 11px; font-weight: 900; color: #1e3a8a; }
     .slot-sub { font-size: 9px; font-weight: 700; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 95%; }
 
-    /* 技能施法目标指引条 */
+    /* 卡牌与施法指引外层恒定高度容器 (确保棋盘绝对不发生垂直跳动) */
+    .card-area-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex-shrink: 0;
+      z-index: 15;
+    }
+
+    /* 技能施法目标指引条 (绝对定位悬浮，完全不挤占垂直空间，棋盘绝不移位) */
     .skill-prompt-bar {
-      width: 95%; max-width: 480px; margin: 2px auto 4px auto;
-      background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(234, 88, 12, 0.95));
-      color: #fff; border-radius: 12px; padding: 6px 12px;
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: calc(100% - 10px);
+      max-width: 480px;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.96), rgba(234, 88, 12, 0.96));
+      color: #fff; border-radius: 13px; padding: 6px 12px;
       display: flex; align-items: center; justify-content: space-between;
       font-size: 12px; font-weight: 800;
-      box-shadow: 0 4px 15px rgba(245, 158, 11, 0.4);
-      z-index: 20;
+      box-shadow: 0 4px 16px rgba(234, 88, 12, 0.45), 0 2px 0 #9a3412;
+      border: 1.5px solid rgba(255, 255, 255, 0.8);
+      z-index: 25;
+      pointer-events: auto;
+      transition: transform 0.2s;
+    }
+    .skill-prompt-bar.shake {
+      animation: barWobble 0.4s ease-in-out;
+    }
+    @keyframes barWobble {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-8px); }
+      40% { transform: translateX(8px); }
+      60% { transform: translateX(-5px); }
+      80% { transform: translateX(5px); }
     }
     .btn-cancel-skill {
       background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.4);
       border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 800; cursor: pointer;
+    }
+
+    /* 🌟 游戏内治愈系果冻气泡 HUD 提示特效 (替代原生 alert) */
+    .game-notice-toast {
+      position: fixed;
+      top: 14%;
+      left: 50%;
+      transform: translate(-50%, -24px) scale(0.75);
+      background: linear-gradient(135deg, #fffdf8 0%, #fff6e4 50%, #feecc8 100%);
+      border: 3px solid var(--border-dark);
+      box-shadow: 0 12px 30px rgba(90, 56, 24, 0.32), 0 3.5px 0 var(--border-dark), 0 0 0 2px rgba(255,255,255,0.85) inset;
+      border-radius: 999px;
+      padding: 10px 22px 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 99999;
+      pointer-events: auto;
+      cursor: pointer;
+      opacity: 0;
+      visibility: hidden;
+      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease, visibility 0.25s;
+      max-width: 90vw;
+      box-sizing: border-box;
+      user-select: none;
+    }
+    .game-notice-toast.show {
+      opacity: 1;
+      visibility: visible;
+      transform: translate(-50%, 0) scale(1);
+    }
+    .game-notice-toast.shake {
+      animation: noticeWobble 0.45s ease-in-out;
+    }
+    @keyframes noticeWobble {
+      0%, 100% { transform: translate(-50%, 0) scale(1); }
+      20% { transform: translate(calc(-50% - 8px), 0) scale(1.05); }
+      40% { transform: translate(calc(-50% + 8px), 0) scale(1.05); }
+      60% { transform: translate(calc(-50% - 5px), 0) scale(1.02); }
+      80% { transform: translate(calc(-50% + 5px), 0) scale(1.01); }
+    }
+    .notice-icon-box {
+      font-size: 24px;
+      line-height: 1;
+      filter: drop-shadow(0 2px 4px rgba(90,56,24,0.2));
+      animation: noticeIconBounce 0.9s infinite alternate ease-in-out;
+    }
+    @keyframes noticeIconBounce {
+      from { transform: scale(1); }
+      to { transform: scale(1.22); }
+    }
+    .notice-text-box {
+      font-size: 14.5px;
+      font-weight: 900;
+      color: var(--border-dark);
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.7);
     }
 
     /* 底部直接平铺按键区 (第4个固定为【🌐 联机】，1秒直接打开开房弹窗) */
@@ -846,28 +974,38 @@
     </div>
   </div>
 
+  <!-- 🌟 游戏内治愈系果冻气泡 HUD 提示特效 (替代丑陋的原生 alert) -->
+  <div id="gameNoticeToast" class="game-notice-toast" onclick="hideGameNotice()">
+    <div class="notice-icon-box" id="noticeIconBox">🌟</div>
+    <div class="notice-text-box" id="noticeTextBox">请选择己方的棋子进行平移！</div>
+  </div>
+
   <!-- 手机全屏最大化棋盘容器 -->
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
 
-    <!-- 🎴 炫酷干扰技能全屏特效横幅 -->
-    <div id="skillBanner" class="skill-vfx-banner">
+    <!-- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 -->
+    <div id="skillBanner" class="skill-vfx-banner" onclick="closeSkillBanner()">
       <div class="skill-banner-icon" id="skillBannerIcon">⚡</div>
-      <div>
+      <div style="flex: 1; min-width: 0;">
         <div class="skill-banner-title" id="skillBannerTitle">【双星连珠】发动！</div>
         <div class="skill-banner-sub" id="skillBannerSub">神威连击，本回合可再落一子！</div>
       </div>
+      <button class="btn-banner-confirm" id="btnBannerConfirm" onclick="event.stopPropagation(); closeSkillBanner();">知道了 ✔</button>
     </div>
   </div>
 
-  <!-- 技能施法提示条 (处于选点模式时显示) -->
-  <div class="skill-prompt-bar" id="skillPromptBar" style="display:none;">
-    <span id="skillPromptText">🔮 请在棋盘上选择施法目标</span>
-    <button class="btn-cancel-skill" onclick="cancelActiveSkill()">取消</button>
-  </div>
+  <!-- 卡牌区与施法悬浮指引容器 (恒定高度，零挤压) -->
+  <div class="card-area-wrapper">
+    <!-- 技能施法提示条 (处于选点模式时绝对定位悬浮显示，绝不挤压棋盘) -->
+    <div class="skill-prompt-bar" id="skillPromptBar" style="display:none;">
+      <span id="skillPromptText">🔮 请在棋盘上选择施法目标</span>
+      <button class="btn-cancel-skill" onclick="cancelActiveSkill()">取消</button>
+    </div>
 
-  <!-- 随机抽取的 3 张干扰技能卡牌槽位 -->
-  <div class="card-slots-area" id="cardSlotsArea"></div>
+    <!-- 随机抽取的 3 张干扰技能卡牌槽位 -->
+    <div class="card-slots-area" id="cardSlotsArea"></div>
+  </div>
 
   <!-- 底部平铺按键区 (第4个固定为【🌐 联机】，1秒直接打开开房弹窗，无需多点) -->
   <div class="bottom-controls">
@@ -993,9 +1131,12 @@
 
       <div id="viewCreateRoom">
         <div style="font-size:12.5px; font-weight:700; color:#555;">将房间号发给好友，好友加入即可开局：</div>
-        <div class="room-code-display" id="myRoomCodeDisplay">生成中...</div>
-        <div style="font-size:11px; color:#888; margin-bottom:8px;">💡 支持跨外网/手机/电脑互联</div>
-        <button class="online-action-btn" onclick="copyRoomCode()">📋 复制房间码</button>
+        <div class="room-code-display" id="myRoomCodeDisplay" onclick="copyRoomCode()" style="cursor:pointer;" title="点击即可快速复制">------</div>
+        <div style="display:flex; justify-content:center; align-items:center; gap:10px; margin:-4px 0 10px 0;">
+          <span style="font-size:11px; color:#10b981; font-weight:800;">🟢 房间码已秒级就绪</span>
+          <span style="font-size:11px; color:#3b82f6; font-weight:800; cursor:pointer; text-decoration:underline;" onclick="refreshNewRoomCode()">🔄 换个房间码</span>
+        </div>
+        <button class="online-action-btn" onclick="copyRoomCode()">📋 一键复制房间码</button>
       </div>
 
       <div id="viewJoinRoom" style="display:none;">
@@ -1135,25 +1276,24 @@
     // ==========================================
     const SKILL_CARD_POOL = [
       {
-        id: 'rewind',
-        name: '时空倒流',
-        sweetName: '撒娇耍赖 🥺',
-        icon: '⏳',
-        sweetIcon: '🥺',
-        desc: '强行撤回上一手落子',
-        sweetDesc: '刚才不算数嘛！强行悔棋一步~',
+        id: 'destiny_dice',
+        name: '命运神抽',
+        sweetName: '心跳大轮盘 🎲',
+        icon: '🎲',
+        sweetIcon: '🎲',
+        desc: '掷骰子！根据1~6点数随机爆发惊天离谱效果',
+        sweetDesc: '摇出你的命运！大凶空军还是天命掀桌？~',
         needTarget: false
       },
       {
-        id: 'freeze',
-        name: '寒冰封禁',
-        sweetName: '冷静一下 🧊',
-        icon: '❄️',
-        sweetIcon: '🧊',
-        desc: '封印空位1回合双方禁下',
-        sweetDesc: '封印空位1回合，宝贝不能下这里~',
-        needTarget: true,
-        targetType: 'empty'
+        id: 'identity_swap',
+        name: '身份互换',
+        sweetName: '你变我我变你 🔄',
+        icon: '🔄',
+        sweetIcon: '🔄',
+        desc: '将场上所有棋子颜色互换，黑变白、白变黑',
+        sweetDesc: '你的变我的，我的变你的！全盘颜色大互换~',
+        needTarget: false
       },
       {
         id: 'double_move',
@@ -1188,13 +1328,13 @@
         targetType: 'shift'
       },
       {
-        id: 'fog_blind',
-        name: '迷雾遮天',
-        sweetName: '蒙上双眼 🙈',
-        icon: '🌫️',
-        sweetIcon: '🙈',
-        desc: '释放3x3迷雾遮挡对手视线1回合',
-        sweetDesc: '蒙住宝贝眼睛！迷雾遮挡1回合~',
+        id: 'prophecy_block',
+        name: '预言封锁',
+        sweetName: '我猜我猜猜猜 🔮',
+        icon: '🔮',
+        sweetIcon: '🔮',
+        desc: '预言对手下一步落点，命中则撤销该落子并返还对手回合',
+        sweetDesc: '宝贝，我早就猜到啦！命中就帮你悔一步哦~',
         needTarget: true,
         targetType: 'empty'
       },
@@ -1223,11 +1363,21 @@
       {
         id: 'reforge_cards',
         name: '天降神抽',
-        sweetName: '天降锦囊 🎲',
-        icon: '🎲',
-        sweetIcon: '🎲',
+        sweetName: '天降锦囊 🃏',
+        icon: '🃏',
+        sweetIcon: '🃏',
         desc: '重铸未用手牌，抽取全新技能卡',
         sweetDesc: '变变变！重新换两张全新惊喜卡~',
+        needTarget: false
+      },
+      {
+        id: 'mega_bomb',
+        name: '乾坤大乱 💣',
+        sweetName: '掀翻棋盘 💣',
+        icon: '💣',
+        sweetIcon: '💣',
+        desc: '引爆大炸弹！将场上所有棋子全部随机打乱重排',
+        sweetDesc: '大招掀桌！把场上所有棋子全部随机洗牌打乱~',
         needTarget: false
       }
     ];
@@ -1235,9 +1385,10 @@
     let currentDrawnCards = []; // [card, card, card]
     let cardUsedStatus = [false, false, false];
     let activeSkill = null; // { slotIdx, skill, step, srcR, srcC }
-    let frozenPoint = null; // { r, c, expireStep }
-    let fogArea = null; // { r, c, expireStep }
+    let prophecyPoint = null; // { r, c } 预言封锁目标点（对手下一步命中则撤销）
     let hasExtraMove = false; // 双星连珠额外落子状态
+    let consecutiveMovesLeft = 0; // 连击落子计数器 (命运神抽狂暴连击等)
+    let opponentFreeMove = false; // 命运神抽点数1: 对手免费补落一子状态
 
     const cvs = document.getElementById('cvs');
     const ctx = cvs.getContext('2d');
@@ -1561,29 +1712,109 @@
     }
 
     // ==========================================
-    // 🌐 WebRTC P2P 房间联机核心逻辑 (1步直达开房)
+    // 🌐 WebRTC P2P 房间联机核心逻辑 (0ms极速出码 + 多节点高可用)
     // ==========================================
-    function initPeer() {
-      if (peer) return;
-      const randomCode = Math.floor(100000 + Math.random() * 900000);
-      myRoomId = `GOMOKU-${randomCode}`;
-      peer = new Peer(myRoomId);
+    const ONLINE_SERVERS = [
+      { host: '0.peerjs.com', port: 443, path: '/', secure: true },
+      { host: 'peerjs.92k.de', port: 443, path: '/', secure: true }
+    ];
+    const ICE_CONFIG = {
+      iceServers: [
+        { urls: 'stun:stun.qq.com:3478' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:stun.syncthing.net:3478' }
+      ]
+    };
+
+    let currentServerIdx = 0;
+    let peerConnectTimer = null;
+    let currentRoomCode = '';
+
+    function generateFastRoomCode() {
+      return String(Math.floor(100000 + Math.random() * 900000));
+    }
+
+    function initPeer(customCode = null, serverIdx = 0) {
+      // 🚀 核心优化 1：打开即秒级出码，0 毫秒呈现给玩家！
+      if (!currentRoomCode || customCode) {
+        currentRoomCode = customCode || generateFastRoomCode();
+      }
+      myRoomId = `GOMOKU-${currentRoomCode}`;
+
+      const displayEl = document.getElementById('myRoomCodeDisplay');
+      if (displayEl) {
+        displayEl.textContent = currentRoomCode;
+      }
+
+      if (peer && !peer.destroyed && peer.open && peer.id === myRoomId) {
+        return;
+      }
+      if (peer) {
+        try { peer.destroy(); } catch(e) {}
+        peer = null;
+      }
+
+      currentServerIdx = serverIdx % ONLINE_SERVERS.length;
+      const srv = ONLINE_SERVERS[currentServerIdx];
+
+      try {
+        peer = new Peer(myRoomId, {
+          host: srv.host,
+          port: srv.port,
+          path: srv.path,
+          secure: srv.secure,
+          config: ICE_CONFIG,
+          debug: 0
+        });
+      } catch(e) {
+        peer = new Peer(myRoomId, { config: ICE_CONFIG, debug: 0 });
+      }
+
+      // 4秒超时自动切换备用信令节点，永不卡死
+      if (peerConnectTimer) clearTimeout(peerConnectTimer);
+      peerConnectTimer = setTimeout(() => {
+        if (peer && !peer.open && !conn) {
+          console.warn(`[Peer] 连接节点 ${srv.host} 超时，正在自动切换备用节点...`);
+          initPeer(currentRoomCode, serverIdx + 1);
+        }
+      }, 4000);
 
       peer.on('open', (id) => {
-        document.getElementById('myRoomCodeDisplay').textContent = randomCode;
+        if (peerConnectTimer) clearTimeout(peerConnectTimer);
+        const codeText = id.replace('GOMOKU-', '');
+        currentRoomCode = codeText;
+        if (displayEl) displayEl.textContent = codeText;
+      });
+
+      peer.on('error', (err) => {
+        console.warn('[Peer error]', err);
+        if (peerConnectTimer) clearTimeout(peerConnectTimer);
+        if (err.type === 'unavailable-id') {
+          // 房间号偶发冲突，秒换新号重试
+          currentRoomCode = generateFastRoomCode();
+          initPeer(currentRoomCode, serverIdx);
+        } else if (!peer.open && !conn) {
+          setTimeout(() => initPeer(currentRoomCode, serverIdx + 1), 600);
+        }
       });
 
       peer.on('connection', (c) => {
         conn = c;
         setupConn();
         myOnlineColor = BLACK;
-        alert("🎉 好友已成功加入房间！您执黑先行~");
+        showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
         closeOnlineModal();
         setMode('online');
         conn.on('open', () => {
           conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
         });
       });
+    }
+
+    function refreshNewRoomCode() {
+      currentRoomCode = generateFastRoomCode();
+      initPeer(currentRoomCode, currentServerIdx);
+      showGameNotice("🔄 已刷新生成全新房间码！", false);
     }
 
     function setupConn() {
@@ -1613,10 +1844,21 @@
           alert("🔄 对方重新开启了新对局！");
         } else if (data.type === 'skill_use') {
           alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
-        } else if (data.type === 'skill_freeze') {
-          frozenPoint = { r: data.r, c: data.c, expireStep: data.expireStep };
+        } else if (data.type === 'skill_identity_swap') {
+          // 身份互换：全盘棋子颜色对调
+          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+            if (board[r][c] === BLACK) board[r][c] = WHITE;
+            else if (board[r][c] === WHITE) board[r][c] = BLACK;
+          }
+          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          triggerBoardShake();
+          playSkillSound('warp');
+          showSkillBanner('🔄', '对方发动【身份互换】！', '全场棋子黑白颠倒！');
           draw();
-          alert(`❄️ 对方发动了【寒冰封禁】！位于 (${data.r+1}, ${data.c+1}) 的点本回合禁止落子！`);
+        } else if (data.type === 'skill_prophecy') {
+          prophecyPoint = { r: data.r, c: data.c };
+          draw();
+          alert(`🔮 对方发动了【预言封锁】！预言你的下一步落点是 (${data.r+1}, ${data.c+1})，命中则撤销！`);
         } else if (data.type === 'skill_remove_stone') {
           board[data.r][data.c] = EMPTY;
           history = history.filter(h => !(h.r === data.r && h.c === data.c));
@@ -1629,10 +1871,6 @@
           if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
           draw();
           alert(`🌟 对方发动了【移星换斗】！将其棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
-        } else if (data.type === 'skill_fog') {
-          fogArea = { r: data.r, c: data.c, expireStep: data.expireStep };
-          draw();
-          alert(`🌫️ 对方发动了【迷雾遮天】！3x3 区域视线受到阻碍！`);
         } else if (data.type === 'skill_swap_color') {
           board[data.r][data.c] = data.p;
           const histItem = history.find(h => h.r === data.r && h.c === data.c);
@@ -1656,6 +1894,56 @@
           playSkillSound('warp');
           showSkillBanner('💫', `对方发动【移形换影】！`, `双方棋子位置发生了对调！`);
           draw();
+        } else if (data.type === 'skill_mega_bomb') {
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
+          }
+          history = data.stones;
+          for (const s of history) {
+            board[s.r][s.c] = s.p;
+          }
+          triggerSkillVFX('mega_bomb');
+          triggerBoardShake(true);
+          playSkillSound('bomb');
+          showSkillBanner('💣', `对方发动【乾坤大乱/大炸弹】！`, `天翻地覆！全盘所有棋子已被随机打乱！`);
+          winningLine = null;
+          for (const s of history) {
+            if (checkWin(s.r, s.c, s.p)) { isOver = true; triggerVictoryVFX(); break; }
+          }
+        } else if (data.type === 'destiny_point_1') {
+          opponentFreeMove = true;
+          turn = myOnlineColor;
+          updateUI();
+          showSkillBanner('💀', '对方掷出【大凶·空军】！', '对方本回合直接空过！您获得免费补下 1 子！');
+        } else if (data.type === 'destiny_point_2') {
+          board[data.fromR][data.fromC] = EMPTY;
+          board[data.toR][data.toC] = (myOnlineColor === BLACK ? WHITE : BLACK);
+          const histItem = history.find(h => h.r === data.fromR && h.c === data.fromC);
+          if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
+          triggerSkillVFX('shift_stone', data.toR, data.toC, data.fromR, data.fromC);
+          playSkillSound('magic');
+          showSkillBanner('🙈', '对方触发【偷梁换柱】！', `盲选将其位于 (${data.fromR+1}, ${data.fromC+1}) 的棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
+          draw(); updateUI(); persistGameState();
+        } else if (data.type === 'destiny_wipe_danger') {
+          data.stones.forEach(pos => {
+            board[pos.r][pos.c] = EMPTY;
+            triggerSkillVFX('remove_stone', pos.r, pos.c);
+          });
+          history = history.filter(h => !data.stones.some(d => d.r === h.r && d.c === h.c));
+          triggerBoardShake(true);
+          playSkillSound('boom');
+          showSkillBanner('👑', '对方发动【天命掀桌】！', `我方 ${data.stones.length} 颗杀机连线已被强行作废抹除！`);
+          draw(); updateUI(); persistGameState();
+        } else if (data.type === 'destiny_place_2x2') {
+          data.cells.forEach(pos => {
+            board[pos.r][pos.c] = data.p;
+            history.push({ r: pos.r, c: pos.c, p: data.p });
+            triggerStoneDropVFX(pos.r, pos.c, data.p);
+          });
+          triggerBoardShake();
+          playSkillSound('victory');
+          showSkillBanner('👑', '对方发动【天命降临】！', '2×2 区域瞬间天降 4 颗连星！');
+          draw(); updateUI(); persistGameState();
         }
       });
     }
@@ -1663,12 +1951,8 @@
     // ==========================================
     // 🎴 干扰技能卡执行与棋盘交互核心逻辑
     // ==========================================
-    function isPointFrozen(r, c) {
-      return frozenPoint && frozenPoint.r === r && frozenPoint.c === c && history.length < frozenPoint.expireStep;
-    }
-
-    function isFogActive() {
-      return fogArea && history.length < fogArea.expireStep;
+    function isProphecied(r, c) {
+      return prophecyPoint && prophecyPoint.r === r && prophecyPoint.c === c;
     }
 
     function drawRandomThreeCards() {
@@ -1676,9 +1960,10 @@
       currentDrawnCards = shuffled.slice(0, 3);
       cardUsedStatus = [false, false, false];
       activeSkill = null;
-      frozenPoint = null;
-      fogArea = null;
+      prophecyPoint = null;
       hasExtraMove = false;
+      consecutiveMovesLeft = 0;
+      opponentFreeMove = false;
       cancelActiveSkill();
       renderCardSlots();
     }
@@ -1704,6 +1989,212 @@
       }).join('');
     }
 
+    // 🔍 智能检测对方场上是否有三连（活三/眠三）或四连（活四/冲四）
+    function findEnemyThreeOrFour(enemyColor) {
+      const dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (board[r][c] !== enemyColor) continue;
+          for (const [dr, dc] of dirs) {
+            const pr = r - dr, pc = c - dc;
+            if (pr >= 0 && pr < 15 && pc >= 0 && pc < 15 && board[pr][pc] === enemyColor) continue;
+            const stones = [{ r, c }];
+            let nr = r + dr, nc = c + dc;
+            while (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] === enemyColor) {
+              stones.push({ r: nr, c: nc });
+              nr += dr; nc += dc;
+            }
+            if (stones.length >= 3) {
+              return stones;
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    // 🎲 命运神抽：掷骰子动画与结算
+    function executeDestinyDice(slotIdx, card) {
+      markCardUsed(slotIdx);
+      playSkillSound('dice');
+
+      const diceIcons = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+      let rollCount = 0;
+      const rollTimer = setInterval(() => {
+        const tempPoint = Math.floor(Math.random() * 6) + 1;
+        showSkillBanner(diceIcons[tempPoint - 1], '🎲 命运神抽摇骰中...', `命运指针正在疯狂旋转... 点数 [${tempPoint}]`, true);
+        rollCount++;
+        if (rollCount > 8) {
+          clearInterval(rollTimer);
+          finalizeDestinyRoll(slotIdx, card);
+        }
+      }, 110);
+    }
+
+    function finalizeDestinyRoll(slotIdx, card) {
+      const point = Math.floor(Math.random() * 6) + 1;
+      const myColor = (gameMode === 'online') ? myOnlineColor : turn;
+      const enemyColor = myColor === BLACK ? WHITE : BLACK;
+
+      if (point === 1) {
+        // 💀 掷出 1（大凶·空军）：这回合直接空过，不仅不能下子，还必须让对手在任意空格免费补下 1 子
+        showSkillBanner('💀', `🎲 投出点数 1：【大凶·空军】！`, '本回合直接空过！对手获得免费补下 1 子！');
+        triggerBoardShake();
+        playSkillSound('boom');
+
+        if (gameMode === 'ai') {
+          // 电脑白子立刻免费补下一子并接管正常回合
+          setTimeout(() => {
+            const empties = [];
+            for (let i = 0; i < 15; i++) for (let j = 0; j < 15; j++) if (board[i][j] === EMPTY) empties.push({ r: i, c: j });
+            if (empties.length > 0) {
+              // 优先选中央或靠近已有棋子的空位
+              const pick = empties[Math.floor(Math.random() * empties.length)];
+              board[pick.r][pick.c] = WHITE;
+              history.push({ r: pick.r, c: pick.c, p: WHITE });
+              triggerStoneDropVFX(pick.r, pick.c, WHITE);
+              playPopSound();
+              draw();
+              showGameNotice("🤖 大师AI 免费补子成功！继续执行正常回合！", true);
+              if (checkWin(pick.r, pick.c, WHITE)) {
+                isOver = true;
+                triggerVictoryVFX();
+                playSkillSound('victory');
+                setTimeout(() => alert("🎉 大师AI 五子连珠获胜！"), 350);
+                return;
+              }
+              turn = WHITE;
+              updateUI();
+              setTimeout(smartAiMove, 650);
+            }
+          }, 850);
+        } else if (gameMode === 'pvp') {
+          opponentFreeMove = true;
+          turn = enemyColor;
+          updateUI();
+          showGameNotice(`💀 空过生效！轮到对手【${turn === BLACK ? p1Name : p2Name}】免费补子并接管回合！`, true);
+        } else if (gameMode === 'online') {
+          turn = enemyColor;
+          updateUI();
+          if (conn && conn.open) {
+            conn.send({ type: 'destiny_point_1' });
+          }
+        }
+      } else if (point === 2) {
+        // 🙈 掷出 2（偷梁换柱）：闭上眼，让对手替你盲选棋盘上你的 1 颗子，移到最近的空格里
+        const myStones = [];
+        for (let r = 0; r < 15; r++) {
+          for (let c = 0; c < 15; c++) {
+            if (board[r][c] === myColor) myStones.push({ r, c });
+          }
+        }
+        if (myStones.length === 0) {
+          showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, '棋盘尚无己方棋子，偷梁换柱落空~');
+          return;
+        }
+        const pick = myStones[Math.floor(Math.random() * myStones.length)];
+        const sR = pick.r, sC = pick.c;
+
+        let bestDist = Infinity;
+        let bestTarget = null;
+        for (let r = 0; r < 15; r++) {
+          for (let c = 0; c < 15; c++) {
+            if (board[r][c] === EMPTY) {
+              const dist = (r - sR) * (r - sR) + (c - sC) * (c - sC);
+              if (dist < bestDist) {
+                bestDist = dist;
+                bestTarget = { r, c };
+              }
+            }
+          }
+        }
+
+        if (bestTarget) {
+          board[sR][sC] = EMPTY;
+          board[bestTarget.r][bestTarget.c] = myColor;
+          const histItem = history.find(h => h.r === sR && h.c === sC);
+          if (histItem) { histItem.r = bestTarget.r; histItem.c = bestTarget.c; }
+          triggerSkillVFX('shift_stone', bestTarget.r, bestTarget.c, sR, sC);
+          playSkillSound('magic');
+          showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, `对手盲选了位于 (${sR+1},${sC+1}) 的棋子，平移至 (${bestTarget.r+1},${bestTarget.c+1})！`);
+          draw(); updateUI(); persistGameState();
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'destiny_point_2', fromR: sR, fromC: sC, toR: bestTarget.r, toC: bestTarget.c });
+          }
+          if (checkWin(bestTarget.r, bestTarget.c, myColor)) {
+            isOver = true;
+            triggerVictoryVFX();
+            playSkillSound('victory');
+            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 200);
+          }
+        }
+      } else if (point === 3) {
+        // 💥 掷出 3（精准爆破）：直接拿掉对方场上任意 1 颗棋子
+        let enemyCount = 0;
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
+        if (enemyCount === 0) {
+          showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '对方场上暂无棋子，精准爆破落空~');
+          return;
+        }
+        showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '请在棋盘上点击对方任意 1 颗棋子将其抹除！');
+        activeSkill = { slotIdx: -1, skill: { id: 'destiny_remove', name: '精准爆破' }, step: 1 };
+        const bar = document.getElementById('skillPromptBar');
+        const text = document.getElementById('skillPromptText');
+        if (bar && text) {
+          bar.style.display = 'flex';
+          text.textContent = `💥【精准爆破】请点击对方场上任意 1 颗棋子！`;
+        }
+      } else if (point === 4) {
+        // 🪞 掷出 4（绝地倒戈）：把对方场上任意 1 颗棋子，直接翻成你的颜色
+        let enemyCount = 0;
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
+        if (enemyCount === 0) {
+          showSkillBanner('🪞', `🎲 投出点数 4：【绝地倒戈】！`, '对方场上暂无棋子，绝地倒戈落空~');
+          return;
+        }
+        showSkillBanner('🪞', `🎲 投出点数 4：【绝地倒戈】！`, '请在棋盘上点击对方任意 1 颗棋子翻为己用！');
+        activeSkill = { slotIdx: -1, skill: { id: 'destiny_convert', name: '绝地倒戈' }, step: 1 };
+        const bar = document.getElementById('skillPromptBar');
+        const text = document.getElementById('skillPromptText');
+        if (bar && text) {
+          bar.style.display = 'flex';
+          text.textContent = `🪞【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
+        }
+      } else if (point === 5) {
+        // ⚡ 掷出 5（疯狂暴击）：本回合允许你连续下 3 颗子！
+        consecutiveMovesLeft = 2; // 当前子落完后还可连下 2 颗，一共 3 颗！
+        showSkillBanner('⚡', `🎲 投出点数 5：【疯狂暴击】！`, '狂暴连击！本回合允许你连续落 3 颗子！');
+        triggerBoardShake();
+        playSkillSound('thunder');
+      } else if (point === 6) {
+        // 👑 掷出 6（天命降临·掀桌）：如果对方此时有“活三”或“成四”，直接全部作废移除；如果没有，你在棋盘上任意选一个未占用的 2×2 区域，全填上你的棋子
+        const dangerLine = findEnemyThreeOrFour(enemyColor);
+        if (dangerLine && dangerLine.length >= 3) {
+          dangerLine.forEach(pos => {
+            board[pos.r][pos.c] = EMPTY;
+            triggerSkillVFX('remove_stone', pos.r, pos.c);
+          });
+          history = history.filter(h => !dangerLine.some(d => d.r === h.r && d.c === h.c));
+          draw(); updateUI(); persistGameState();
+          triggerBoardShake(true);
+          playSkillSound('boom');
+          showSkillBanner('👑', `🎲 投出点数 6：【天命掀桌】！`, `掀翻杀机！对方 ${dangerLine.length} 颗杀线棋子已被全部作废抹除！`);
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'destiny_wipe_danger', stones: dangerLine });
+          }
+        } else {
+          showSkillBanner('👑', `🎲 投出点数 6：【天命降临】！`, '对方无险情！请在棋盘上选一个未占用的 2×2 区域全填满！');
+          activeSkill = { slotIdx: -1, skill: { id: 'destiny_2x2', name: '天命2×2' }, step: 1 };
+          const bar = document.getElementById('skillPromptBar');
+          const text = document.getElementById('skillPromptText');
+          if (bar && text) {
+            bar.style.display = 'flex';
+            text.textContent = `👑【天命降临】请点击未占用的 2×2 区域左上角！`;
+          }
+        }
+      }
+    }
+
     function handleCardClick(idx) {
       if (isOver) return;
       if (cardUsedStatus[idx]) return;
@@ -1722,16 +2213,8 @@
       const card = currentDrawnCards[idx];
       const cardTitle = card.name;
       if (!card.needTarget) {
-        if (card.id === 'rewind') {
-          if (history.length === 0) return alert("棋盘上还没有棋子，无法倒流时间！");
-          doUndo();
-          markCardUsed(idx);
-          triggerSkillVFX('rewind');
-          playSkillSound('rewind');
-          showSkillBanner('⏳', `【${cardTitle}】发动！`, '时间倒流一步，战局重新书写！');
-          if (gameMode === 'online' && conn && conn.open) {
-            conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
-          }
+        if (card.id === 'destiny_dice') {
+          executeDestinyDice(idx, card);
         } else if (card.id === 'double_move') {
           hasExtraMove = true;
           markCardUsed(idx);
@@ -1758,10 +2241,88 @@
           renderCardSlots();
           triggerSkillVFX('reforge_cards');
           playSkillSound('dice');
-          showSkillBanner('🎲', `【${cardTitle}】发动！`, '灵运爆发！未用手牌已全部重铸为全新神技！');
+          showSkillBanner('🃏', `【${cardTitle}】发动！`, '灵运爆发！未用手牌已全部重铸为全新神技！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
+        } else if (card.id === 'identity_swap') {
+          if (history.length === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
+          // 全盘颜色互换
+          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+            if (board[r][c] === BLACK) board[r][c] = WHITE;
+            else if (board[r][c] === WHITE) board[r][c] = BLACK;
+          }
+          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          markCardUsed(idx);
+          triggerBoardShake();
+          playSkillSound('warp');
+          showSkillBanner('🔄', `【${cardTitle}】发动！`, '黑白颠倒！全场棋子身份互换！');
+          draw();
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_identity_swap' });
+          }
+          // 检查互换后是否有人赢棋
+          winningLine = null;
+          for (const s of history) {
+            if (checkWin(s.r, s.c, s.p)) { isOver = true; triggerVictoryVFX(); break; }
+          }
+          updateUI(); persistGameState();
+        } else if (card.id === 'mega_bomb') {
+          if (history.length < 2) {
+            return alert("💣 棋盘上棋子太少，无法引爆大炸弹！至少需要 2 颗棋子~");
+          }
+          markCardUsed(idx);
+
+          // 收集全部棋子颜色并打乱全盘坐标
+          const stones = history.map(h => h.p);
+          const allCoords = [];
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              allCoords.push({ r, c });
+            }
+          }
+          for (let i = allCoords.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [allCoords[i], allCoords[j]] = [allCoords[j], allCoords[i]];
+          }
+
+          // 清空并重新分配
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
+          }
+          history = [];
+          for (let i = 0; i < stones.length; i++) {
+            const pos = allCoords[i];
+            board[pos.r][pos.c] = stones[i];
+            history.push({ r: pos.r, c: pos.c, p: stones[i] });
+          }
+
+          triggerSkillVFX('mega_bomb');
+          triggerBoardShake(true);
+          playSkillSound('bomb');
+          showSkillBanner('💣', `【${cardTitle}】引爆全场！`, '天翻地覆！棋盘上所有棋子被彻底随机打乱洗牌！');
+
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_mega_bomb', stones: history });
+          }
+
+          // 检查洗牌后是否有玩家连珠获胜
+          winningLine = null;
+          let bombWinColor = null;
+          for (const stone of history) {
+            if (checkWin(stone.r, stone.c, stone.p)) {
+              bombWinColor = stone.p;
+              break;
+            }
+          }
+          if (bombWinColor) {
+            isOver = true;
+            triggerVictoryVFX();
+            playSkillSound('victory');
+            setTimeout(() => alert(`🎉 炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`), 350);
+          }
+
+          draw(); updateUI(); persistGameState();
         }
       } else {
         activeSkill = { slotIdx: idx, skill: card, step: 1 };
@@ -1775,18 +2336,30 @@
       const text = document.getElementById('skillPromptText');
       if (!bar || !text) return;
       bar.style.display = 'flex';
-      if (card.id === 'freeze') {
-        text.textContent = `❄️ 请在棋盘上点击选择要封印的空位 (1回合禁下)`;
+      if (card.id === 'prophecy_block') {
+        text.textContent = `🔮 请在棋盘上点击一个空位，预言对手下一步将在此落子`;
+        showSkillBanner('🔮', '【预言封锁】使用说明', '点击棋盘任意空格预言对手落点！若对手下一步落在该格，落子将被撤销且回合返还！');
       } else if (card.id === 'remove_stone') {
         text.textContent = `💥 请在棋盘上点击要抹除的对方孤子`;
+        showSkillBanner('💥', '【虚空陨石】使用说明', '点击对方场上任意 1 颗孤子！将其从棋盘上彻底抹除蒸发！');
       } else if (card.id === 'shift_stone') {
         text.textContent = `🌟 第1步：点击己方一颗要平移的棋子`;
-      } else if (card.id === 'fog_blind') {
-        text.textContent = `🌫️ 请在棋盘上点击释放 3x3 迷雾的位置`;
+        showSkillBanner('🌟', '【移星换斗】使用说明', '第1步选择己方1颗棋子，第2步点击相邻8方向空格即可平移！');
       } else if (card.id === 'swap_color') {
         text.textContent = `🪞 请在棋盘上点击要策反的对方棋子`;
+        showSkillBanner('🪞', '【偷天换日】使用说明', '点击对方场上任意 1 颗棋子！直接策反翻成你的颜色！');
       } else if (card.id === 'swap_positions') {
         text.textContent = `💫 第1步：点击己方一颗要互换位置的棋子`;
+        showSkillBanner('💫', '【移形换影】使用说明', '第1步选己方1颗棋子，第2步选对方1颗棋子，双方位置瞬间对调！');
+      } else if (card.id === 'destiny_remove') {
+        text.textContent = `💥【精准爆破】请点击对方场上任意 1 颗棋子将其抹除！`;
+        showSkillBanner('💥', '【精准爆破】使用说明', '点击对方场上任意 1 颗棋子将其直接抹除！');
+      } else if (card.id === 'destiny_convert') {
+        text.textContent = `🪞【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
+        showSkillBanner('🪞', '【绝地倒戈】使用说明', '点击对方场上任意 1 颗棋子，直接翻成你的颜色！');
+      } else if (card.id === 'destiny_2x2') {
+        text.textContent = `👑【天命降临】请点击未占用的 2×2 区域左上角！`;
+        showSkillBanner('👑', '【天命降临】使用说明', '点击任意未占用的 2×2 区域左上角，瞬间全填满你的 4 颗棋子！');
       }
     }
 
@@ -1794,6 +2367,8 @@
       activeSkill = null;
       const bar = document.getElementById('skillPromptBar');
       if (bar) bar.style.display = 'none';
+      const banner = document.getElementById('skillBanner');
+      if (banner) banner.classList.remove('show');
       renderCardSlots();
       draw();
     }
@@ -1807,6 +2382,13 @@
       draw();
     }
 
+    function invalidAction(msg, row, col) {
+      if (row !== undefined && col !== undefined) {
+        triggerSkillVFX('invalid_click', row, col);
+      }
+      showGameNotice(msg, true);
+    }
+
     function handleSkillClick(row, col) {
       if (!activeSkill) return;
       const { slotIdx, skill } = activeSkill;
@@ -1814,21 +2396,21 @@
       const enemyColor = myColor === BLACK ? WHITE : BLACK;
       const skillName = skill.name;
 
-      if (skill.id === 'freeze') {
+      if (skill.id === 'prophecy_block') {
         if (board[row][col] !== EMPTY) {
-          return alert("❄️ 寒冰封禁只能施加在空白交叉点上！");
+          return invalidAction('🔮 预言封锁只能指向空白格子！', row, col);
         }
-        frozenPoint = { r: row, c: col, expireStep: history.length + 2 };
+        prophecyPoint = { r: row, c: col };
         markCardUsed(slotIdx);
-        triggerSkillVFX('freeze', row, col);
-        playSkillSound('ice');
-        showSkillBanner('❄️', `【${skillName}】发动！`, `封印 (${row+1}, ${col+1}) 空位，本回合双方禁下！`);
+        triggerSkillVFX('freeze', row, col); // 复用冰花特效做视觉标记
+        playSkillSound('magic');
+        showSkillBanner('🔮', `【${skillName}】发动！`, `已预言 (${row+1}, ${col+1})，若对手落此处则撤销！`);
         if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_freeze', r: row, c: col, expireStep: frozenPoint.expireStep });
+          conn.send({ type: 'skill_prophecy', r: row, c: col });
         }
       } else if (skill.id === 'remove_stone') {
         if (board[row][col] !== enemyColor) {
-          return alert("💥 只能抹除对方的棋子！");
+          return invalidAction("💥 只能抹除对方的棋子！", row, col);
         }
         board[row][col] = EMPTY;
         history = history.filter(h => !(h.r === row && h.c === col));
@@ -1843,7 +2425,7 @@
       } else if (skill.id === 'shift_stone') {
         if (activeSkill.step === 1) {
           if (board[row][col] !== myColor) {
-            return alert("🌟 请选择己方的棋子进行平移！");
+            return invalidAction("🌟 请选择己方的棋子进行平移！", row, col);
           }
           activeSkill.step = 2;
           activeSkill.srcR = row;
@@ -1853,12 +2435,12 @@
           draw();
         } else if (activeSkill.step === 2) {
           if (board[row][col] !== EMPTY) {
-            return alert("🌟 目标点必须是空白位置！");
+            return invalidAction("🌟 目标点必须是空白位置！", row, col);
           }
           const dr = Math.abs(row - activeSkill.srcR);
           const dc = Math.abs(col - activeSkill.srcC);
           if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) {
-            return alert("🌟 只能平移到相邻的 8 个方向空格之一！");
+            return invalidAction("🌟 只能平移到相邻的 8 个方向空格之一！", row, col);
           }
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = EMPTY;
@@ -1877,18 +2459,9 @@
             setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
           }
         }
-      } else if (skill.id === 'fog_blind') {
-        fogArea = { r: row, c: col, expireStep: history.length + 2 };
-        markCardUsed(slotIdx);
-        triggerSkillVFX('fog_blind', row, col);
-        playSkillSound('magic');
-        showSkillBanner('🌫️', `【${skillName}】发动！`, `3x3 区域迷雾弥漫，遮蔽对手视线！`);
-        if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_fog', r: row, c: col, expireStep: fogArea.expireStep });
-        }
       } else if (skill.id === 'swap_color') {
         if (board[row][col] !== enemyColor) {
-          return alert("🪞 偷天换日只能策反对方的棋子！");
+          return invalidAction("🪞 偷天换日只能策反对方的棋子！", row, col);
         }
         board[row][col] = myColor;
         const histItem = history.find(h => h.r === row && h.c === col);
@@ -1908,7 +2481,7 @@
       } else if (skill.id === 'swap_positions') {
         if (activeSkill.step === 1) {
           if (board[row][col] !== myColor) {
-            return alert("💫 请选择己方的棋子！");
+            return invalidAction("💫 请选择己方的棋子！", row, col);
           }
           activeSkill.step = 2;
           activeSkill.srcR = row;
@@ -1918,7 +2491,7 @@
           draw();
         } else if (activeSkill.step === 2) {
           if (board[row][col] !== enemyColor) {
-            return alert("💫 目标必须是对方的棋子！");
+            return invalidAction("💫 目标必须是对方的棋子！", row, col);
           }
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = enemyColor;
@@ -1940,23 +2513,140 @@
             setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
           }
         }
+      } else if (skill.id === 'destiny_remove') {
+        if (board[row][col] !== enemyColor) {
+          return invalidAction('💥 请点击对方的一颗棋子！', row, col);
+        }
+        board[row][col] = EMPTY;
+        history = history.filter(h => !(h.r === row && h.c === col));
+        cancelActiveSkill();
+        triggerSkillVFX('remove_stone', row, col);
+        playSkillSound('boom');
+        triggerBoardShake();
+        showSkillBanner('💥', '【精准爆破】发动！', `成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
+        draw(); updateUI(); persistGameState();
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_remove_stone', r: row, c: col });
+        }
+      } else if (skill.id === 'destiny_convert') {
+        if (board[row][col] !== enemyColor) {
+          return invalidAction('🪞 请点击对方的一颗棋子！', row, col);
+        }
+        board[row][col] = myColor;
+        const histItem = history.find(h => h.r === row && h.c === col);
+        if (histItem) histItem.p = myColor;
+        cancelActiveSkill();
+        triggerSkillVFX('swap_color', row, col);
+        playSkillSound('magic');
+        triggerBoardShake();
+        showSkillBanner('🪞', '【绝地倒戈】发动！', `成功将对方位于 (${row+1}, ${col+1}) 的棋子翻为己用！`);
+        draw(); updateUI(); persistGameState();
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
+        }
+        if (checkWin(row, col, myColor)) {
+          isOver = true;
+          triggerVictoryVFX();
+          playSkillSound('victory');
+          setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 200);
+        }
+      } else if (skill.id === 'destiny_2x2') {
+        if (row >= 14 || col >= 14) {
+          return invalidAction('👑 2×2 区域超出棋盘边界，请往内部选点！', row, col);
+        }
+        const cells = [
+          { r: row, c: col },
+          { r: row + 1, c: col },
+          { r: row, c: col + 1 },
+          { r: row + 1, c: col + 1 }
+        ];
+        if (cells.some(pos => board[pos.r][pos.c] !== EMPTY)) {
+          return invalidAction('👑 2×2 区域必须 4 个格子全为空！', row, col);
+        }
+        cancelActiveSkill();
+        cells.forEach(pos => {
+          board[pos.r][pos.c] = myColor;
+          history.push({ r: pos.r, c: pos.c, p: myColor });
+          triggerStoneDropVFX(pos.r, pos.c, myColor);
+        });
+        triggerBoardShake();
+        playSkillSound('victory');
+        showSkillBanner('👑', '【天命降临】神域展开！', `2×2 区域瞬间天降 4 颗连星！`);
+        draw(); updateUI(); persistGameState();
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'destiny_place_2x2', cells, p: myColor });
+        }
+        winningLine = null;
+        for (const pos of cells) {
+          if (checkWin(pos.r, pos.c, myColor)) {
+            isOver = true;
+            triggerVictoryVFX();
+            setTimeout(() => alert(`🎉 天命神域助力【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 250);
+            break;
+          }
+        }
       }
     }
 
     function joinOnlineRoom() {
-      const code = document.getElementById('inputJoinCode').value.trim();
-      if (!code) return alert("请输入 6 位房间码！");
-      initPeer();
+      const codeInput = document.getElementById('inputJoinCode');
+      const code = codeInput ? codeInput.value.trim() : '';
+      if (!code) return showGameNotice("请输入 6 位房间码！", true);
+
+      const btn = document.getElementById('btnConnectRoom');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 正在极速连接中...';
+      }
+
+      if (!peer || peer.destroyed) {
+        initPeer();
+      }
+
       const targetId = `GOMOKU-${code}`;
-      conn = peer.connect(targetId);
-      conn.on('open', () => {
-        setupConn();
-        myOnlineColor = WHITE;
-        alert("🎉 成功连入房间！房主执黑先行，您执白~");
-        closeOnlineModal();
-        setMode('online');
-        conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
-      });
+      const executeConnect = () => {
+        conn = peer.connect(targetId, { reliable: true });
+
+        let joinTimer = setTimeout(() => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即连接开局';
+          }
+          showGameNotice("⚠️ 连接超时，请确认好友房间是否已打开！", true);
+        }, 6500);
+
+        conn.on('open', () => {
+          clearTimeout(joinTimer);
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即连接开局';
+          }
+          setupConn();
+          myOnlineColor = WHITE;
+          showGameNotice("🎉 成功连入房间！房主执黑先行，您执白~", false);
+          closeOnlineModal();
+          setMode('online');
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+        });
+
+        conn.on('error', () => {
+          clearTimeout(joinTimer);
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即连接开局';
+          }
+          showGameNotice("❌ 连接失败，请检查房间码或让好友刷新重开！", true);
+        });
+      };
+
+      if (peer.open) {
+        executeConnect();
+      } else {
+        peer.once('open', executeConnect);
+        setTimeout(() => {
+          if (!conn || !conn.open) executeConnect();
+        }, 1200);
+      }
     }
 
     function switchOnlineTab(tab) {
@@ -1964,11 +2654,19 @@
       document.getElementById('tabJoinRoom').classList.toggle('active', tab === 'join');
       document.getElementById('viewCreateRoom').style.display = tab === 'create' ? 'block' : 'none';
       document.getElementById('viewJoinRoom').style.display = tab === 'join' ? 'block' : 'none';
+      if (tab === 'create') {
+        initPeer();
+      }
     }
 
     function copyRoomCode() {
-      const code = document.getElementById('myRoomCodeDisplay').textContent;
-      navigator.clipboard ? navigator.clipboard.writeText(code).then(() => alert(`📋 房间码【${code}】已复制！快发给好友吧~`)) : alert(`房间码: ${code}`);
+      const codeEl = document.getElementById('myRoomCodeDisplay');
+      const code = codeEl ? codeEl.textContent.trim() : '';
+      if (!code || code === '------') {
+        initPeer();
+        return;
+      }
+      navigator.clipboard ? navigator.clipboard.writeText(code).then(() => showGameNotice(`📋 房间码【${code}】已复制！快发给好友吧~`, false)) : showGameNotice(`📋 房间码: ${code}`, false);
     }
 
     function openOnlineModal() {
@@ -2011,6 +2709,11 @@
     }
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
+    window.addEventListener('pointerdown', () => {
+      if (actx && actx.state === 'suspended') {
+        actx.resume().catch(() => {});
+      }
+    }, { once: true });
     function playPopSound() {
       if (!soundEnabled) return;
       if (actx.state === 'suspended') actx.resume();
@@ -2024,51 +2727,246 @@
       osc.start(t); osc.stop(t + 0.1);
     }
 
-    // 🔊 炫酷干扰技能专属合成音效
+    // 🔔 治愈系 Q 弹提示音效 (水滴双音升调)
+    function playNoticeSound() {
+      if (!soundEnabled) return;
+      try {
+        if (actx.state === 'suspended') actx.resume();
+        const t = actx.currentTime;
+        const osc = actx.createOscillator(); const gain = actx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(620, t);
+        osc.frequency.exponentialRampToValueAtTime(1180, t + 0.06);
+        osc.frequency.exponentialRampToValueAtTime(840, t + 0.12);
+        gain.gain.setValueAtTime(0.35, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        osc.connect(gain); gain.connect(actx.destination);
+        osc.start(t); osc.stop(t + 0.16);
+      } catch (e) {}
+    }
+
+    // 🌟 游戏内治愈果冻气泡 HUD 提示控制器 (彻底替代浏览器原生 alert)
+    let noticeTimer = null;
+    function showGameNotice(message, isWarning = true) {
+      const toast = document.getElementById('gameNoticeToast');
+      const iconEl = document.getElementById('noticeIconBox');
+      const textEl = document.getElementById('noticeTextBox');
+      if (!toast || !textEl) return;
+
+      let raw = String(message || '').trim();
+      let icon = '🌟';
+      
+      // 智能识别前导 emoji，单独作为高亮弹性图标
+      const emojiMatch = raw.match(/^(\p{Extended_Pictographic}|\p{Emoji}|[\uD800-\uDBFF][\uDC00-\uDFFF])/u);
+      if (emojiMatch) {
+        icon = emojiMatch[0];
+        raw = raw.slice(emojiMatch[0].length).trim();
+      } else {
+        if (raw.includes('胜利') || raw.includes('恭喜') || raw.includes('成功') || raw.includes('已')) {
+          icon = '🎉';
+        } else if (raw.includes('请') || raw.includes('只能') || raw.includes('无法') || raw.includes('还没') || raw.includes('禁止')) {
+          icon = '💡';
+        }
+      }
+
+      if (iconEl) iconEl.textContent = icon;
+      textEl.textContent = raw;
+
+      // 播放清脆治愈提示音
+      playNoticeSound();
+
+      // 如果施法指引条存在，给予联动抖动反馈
+      const promptBar = document.getElementById('skillPromptBar');
+      if (promptBar && promptBar.style.display !== 'none') {
+        promptBar.classList.remove('shake');
+        void promptBar.offsetWidth;
+        promptBar.classList.add('shake');
+        setTimeout(() => promptBar.classList.remove('shake'), 450);
+      }
+
+      // 弹出并摇晃气泡
+      toast.classList.remove('show', 'shake');
+      void toast.offsetWidth;
+      toast.classList.add('show');
+      if (isWarning) {
+        toast.classList.add('shake');
+      }
+
+      if (noticeTimer) clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => {
+        hideGameNotice();
+      }, 2200);
+    }
+
+    function hideGameNotice() {
+      const toast = document.getElementById('gameNoticeToast');
+      if (toast) {
+        toast.classList.remove('show', 'shake');
+      }
+      if (noticeTimer) {
+        clearTimeout(noticeTimer);
+        noticeTimer = null;
+      }
+    }
+
+    // 🚀 全局拦截并替换 window.alert，再无系统丑陋白色阻塞弹窗！
+    window.alert = function(msg) {
+      showGameNotice(msg);
+    };
+
+    // 🔊 干扰技能专属音效合成器（每张卡独立设计，乾坤大乱保持原爆炸音频）
     function playSkillSound(type) {
       if (!soundEnabled) return;
       try {
         if (actx.state === 'suspended') actx.resume();
         const t = actx.currentTime;
-        if (type === 'boom') {
+
+        if (type === 'bomb') {
+          // 💣 乾坤大乱：保持原有的樱桃炸弹爆炸音频，不动
+          const audio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
+          audio.preload = 'auto';
+          audio.play().catch(e => console.warn('Explosion audio playback failed:', e));
+          return;
+
+        } else if (type === 'victory') {
+          // 👑 胜利：大调上行和弦（C5→E5→G5→C6），明亮欢庆
+          [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+            const osc = actx.createOscillator(); const gain = actx.createGain();
+            osc.type = 'triangle'; osc.frequency.setValueAtTime(freq, t + idx * 0.09);
+            gain.gain.setValueAtTime(0.38, t + idx * 0.09);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + idx * 0.09 + 0.4);
+            osc.connect(gain); gain.connect(actx.destination);
+            osc.start(t + idx * 0.09); osc.stop(t + idx * 0.09 + 0.42);
+          });
+
+        } else if (type === 'rewind') {
+          // ⏳ 时空倒流：正弦波快速从高音降到低音，像磁带倒带/时光倒转
           const osc = actx.createOscillator(); const gain = actx.createGain();
-          osc.type = 'triangle'; osc.frequency.setValueAtTime(220, t);
-          osc.frequency.exponentialRampToValueAtTime(28, t + 0.35);
-          gain.gain.setValueAtTime(0.8, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(1800, t);
+          osc.frequency.exponentialRampToValueAtTime(280, t + 0.45);
+          gain.gain.setValueAtTime(0.0, t);
+          gain.gain.linearRampToValueAtTime(0.5, t + 0.04);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
           osc.connect(gain); gain.connect(actx.destination);
-          osc.start(t); osc.stop(t + 0.4);
+          osc.start(t); osc.stop(t + 0.52);
+          // 叠加颤音感（LFO 效果）
+          const lfo = actx.createOscillator(); const lfoGain = actx.createGain();
+          lfo.type = 'sine'; lfo.frequency.setValueAtTime(18, t);
+          lfoGain.gain.setValueAtTime(60, t);
+          lfoGain.gain.exponentialRampToValueAtTime(1, t + 0.45);
+          lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+          lfo.start(t); lfo.stop(t + 0.52);
+
         } else if (type === 'ice') {
+          // ❄️ 寒冰封禁：高频正弦上扫 + 多个短促冰晶碎裂音
           const osc = actx.createOscillator(); const gain = actx.createGain();
-          osc.type = 'sine'; osc.frequency.setValueAtTime(750, t);
-          osc.frequency.exponentialRampToValueAtTime(2400, t + 0.2);
-          gain.gain.setValueAtTime(0.45, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(600, t);
+          osc.frequency.exponentialRampToValueAtTime(3200, t + 0.18);
+          gain.gain.setValueAtTime(0.35, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
           osc.connect(gain); gain.connect(actx.destination);
-          osc.start(t); osc.stop(t + 0.35);
+          osc.start(t); osc.stop(t + 0.24);
+          // 冰晶碎裂：3个高频短脉冲
+          [0.08, 0.15, 0.22].forEach((dt, i) => {
+            const c = actx.createOscillator(); const g = actx.createGain();
+            c.type = 'triangle';
+            c.frequency.setValueAtTime(2800 + i * 400, t + dt);
+            g.gain.setValueAtTime(0.22, t + dt);
+            g.gain.exponentialRampToValueAtTime(0.001, t + dt + 0.06);
+            c.connect(g); g.connect(actx.destination);
+            c.start(t + dt); c.stop(t + dt + 0.07);
+          });
+
         } else if (type === 'thunder') {
+          // ⚡ 双星连珠：充能爆发感——先快速低音上升积蓄，再一声清脆爆发
+          // 积蓄音（低频锯齿上升）
+          const charge = actx.createOscillator(); const cGain = actx.createGain();
+          charge.type = 'sawtooth';
+          charge.frequency.setValueAtTime(80, t);
+          charge.frequency.exponentialRampToValueAtTime(520, t + 0.18);
+          cGain.gain.setValueAtTime(0.3, t);
+          cGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+          charge.connect(cGain); cGain.connect(actx.destination);
+          charge.start(t); charge.stop(t + 0.21);
+          // 爆发音（高频三角波短促清响）
+          const burst = actx.createOscillator(); const bGain = actx.createGain();
+          burst.type = 'triangle';
+          burst.frequency.setValueAtTime(1400, t + 0.18);
+          burst.frequency.exponentialRampToValueAtTime(600, t + 0.42);
+          bGain.gain.setValueAtTime(0.55, t + 0.18);
+          bGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+          burst.connect(bGain); bGain.connect(actx.destination);
+          burst.start(t + 0.18); burst.stop(t + 0.46);
+
+        } else if (type === 'boom') {
+          // 💥 虚空陨石：重低音撞击+噪声冲击波，模拟陨石砸落
+          // 撞击低频
           const osc = actx.createOscillator(); const gain = actx.createGain();
-          osc.type = 'sawtooth'; osc.frequency.setValueAtTime(580, t);
-          osc.frequency.linearRampToValueAtTime(140, t + 0.22);
-          gain.gain.setValueAtTime(0.6, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
-          osc.connect(gain); gain.connect(actx.destination);
-          osc.start(t); osc.stop(t + 0.28);
-        } else if (type === 'warp') {
-          const osc = actx.createOscillator(); const gain = actx.createGain();
-          osc.type = 'sine'; osc.frequency.setValueAtTime(420, t);
-          osc.frequency.exponentialRampToValueAtTime(1200, t + 0.12);
-          osc.frequency.exponentialRampToValueAtTime(320, t + 0.32);
-          gain.gain.setValueAtTime(0.55, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.36);
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(180, t);
+          osc.frequency.exponentialRampToValueAtTime(35, t + 0.3);
+          gain.gain.setValueAtTime(0.85, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
           osc.connect(gain); gain.connect(actx.destination);
           osc.start(t); osc.stop(t + 0.36);
-        } else if (type === 'dice') {
-          [1046, 1318, 1567].forEach((freq, i) => {
+          // 噪声冲击（用白噪声模拟）
+          const bufSize = actx.sampleRate * 0.25;
+          const buf = actx.createBuffer(1, bufSize, actx.sampleRate);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1);
+          const noise = actx.createBufferSource(); noise.buffer = buf;
+          const nGain = actx.createGain();
+          nGain.gain.setValueAtTime(0.4, t);
+          nGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+          noise.connect(nGain); nGain.connect(actx.destination);
+          noise.start(t); noise.stop(t + 0.26);
+
+        } else if (type === 'magic') {
+          // ✨ 移星换斗 / 迷雾遮天 / 偷天换日：魔法闪烁感
+          // 三颗星星依次闪烁（不同频率的短促正弦音）
+          [880, 1108, 1320].forEach((freq, i) => {
             const osc = actx.createOscillator(); const gain = actx.createGain();
-            osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t + i * 0.07);
-            gain.gain.setValueAtTime(0.35, t + i * 0.07);
-            gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.16);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, t + i * 0.08);
+            osc.frequency.exponentialRampToValueAtTime(freq * 1.3, t + i * 0.08 + 0.1);
+            gain.gain.setValueAtTime(0.28, t + i * 0.08);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.18);
             osc.connect(gain); gain.connect(actx.destination);
-            osc.start(t + i * 0.07); osc.stop(t + i * 0.07 + 0.17);
+            osc.start(t + i * 0.08); osc.stop(t + i * 0.08 + 0.2);
           });
+
+        } else if (type === 'warp') {
+          // 💫 移形换影：瞬移空间扭曲音——先快速上旋，瞬间切断，再从另一极出现
+          const osc = actx.createOscillator(); const gain = actx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(300, t);
+          osc.frequency.exponentialRampToValueAtTime(2200, t + 0.1);
+          osc.frequency.setValueAtTime(180, t + 0.11); // 瞬间切断再出现
+          osc.frequency.exponentialRampToValueAtTime(800, t + 0.32);
+          gain.gain.setValueAtTime(0.5, t);
+          gain.gain.setValueAtTime(0.5, t + 0.1);
+          gain.gain.setValueAtTime(0.0, t + 0.11); // 瞬断
+          gain.gain.linearRampToValueAtTime(0.45, t + 0.14);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.start(t); osc.stop(t + 0.4);
+
+        } else if (type === 'dice') {
+          // 🎲 天降神抽：洗牌/卡片翻飞感——快速连打5个短促音像洗牌声 + 最后一个长音
+          [660, 784, 880, 1046, 1318].forEach((freq, i) => {
+            const osc = actx.createOscillator(); const gain = actx.createGain();
+            osc.type = i < 4 ? 'triangle' : 'sine';
+            osc.frequency.setValueAtTime(freq, t + i * 0.055);
+            gain.gain.setValueAtTime(0.3, t + i * 0.055);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.055 + (i < 4 ? 0.08 : 0.3));
+            osc.connect(gain); gain.connect(actx.destination);
+            osc.start(t + i * 0.055); osc.stop(t + i * 0.055 + (i < 4 ? 0.09 : 0.32));
+          });
+
         } else {
+          // 兜底通用音效（上滑魔法音）
           const osc = actx.createOscillator(); const gain = actx.createGain();
           osc.type = 'sine'; osc.frequency.setValueAtTime(620, t);
           osc.frequency.exponentialRampToValueAtTime(1600, t + 0.2);
@@ -2079,36 +2977,159 @@
       } catch(e) {}
     }
 
-    // 🎴 炫酷技能全屏横幅与震屏控制器
+    // 🎴 炫酷干扰技能提示卡与震屏控制器 (等用户确认之后才消失！)
     let bannerTimer = null;
-    function showSkillBanner(icon, title, sub) {
+    function showSkillBanner(icon, title, sub, autoClose = false) {
       const banner = document.getElementById('skillBanner');
       const iconEl = document.getElementById('skillBannerIcon');
       const titleEl = document.getElementById('skillBannerTitle');
       const subEl = document.getElementById('skillBannerSub');
+      const confirmBtn = document.getElementById('btnBannerConfirm');
       if (!banner) return;
       if (iconEl) iconEl.textContent = icon;
       if (titleEl) titleEl.textContent = title;
       if (subEl) subEl.textContent = sub;
-      banner.classList.add('show');
-      if (bannerTimer) clearTimeout(bannerTimer);
-      bannerTimer = setTimeout(() => {
-        banner.classList.remove('show');
-      }, 1600);
+
+      if (bannerTimer) {
+        clearTimeout(bannerTimer);
+        bannerTimer = null;
+      }
+
+      if (autoClose) {
+        if (confirmBtn) confirmBtn.style.display = 'none';
+        banner.classList.add('show');
+        bannerTimer = setTimeout(() => {
+          banner.classList.remove('show');
+        }, 800);
+      } else {
+        // 🔥 等用户确认之后才消失！绝不自动关闭
+        if (confirmBtn) confirmBtn.style.display = 'inline-block';
+        banner.classList.add('show');
+      }
     }
 
-    function triggerBoardShake() {
+    function closeSkillBanner() {
+      const banner = document.getElementById('skillBanner');
+      if (banner) {
+        banner.classList.remove('show');
+      }
+      if (bannerTimer) {
+        clearTimeout(bannerTimer);
+        bannerTimer = null;
+      }
+      playPopSound();
+    }
+
+    function triggerBoardShake(isMega = false) {
       const wrapper = document.getElementById('islandWrapper');
       if (!wrapper) return;
-      wrapper.classList.remove('board-shake');
+      wrapper.classList.remove('board-shake', 'board-shake-mega');
       void wrapper.offsetWidth;
-      wrapper.classList.add('board-shake');
-      setTimeout(() => wrapper.classList.remove('board-shake'), 400);
+      if (isMega) {
+        wrapper.classList.add('board-shake-mega');
+        setTimeout(() => wrapper.classList.remove('board-shake-mega'), 700);
+      } else {
+        wrapper.classList.add('board-shake');
+        setTimeout(() => wrapper.classList.remove('board-shake'), 400);
+      }
     }
 
     // 🎨 Canvas 实时高帧率粒子/特效渲染管线
     let activeVFX = [];
     let vfxRAF = null;
+
+    function triggerStoneDropVFX(r, c, p) {
+      const startTime = performance.now();
+      const tx = paddingX + (c + 0.5) * gridX;
+      const ty = paddingY + (r + 0.5) * gridY;
+      const particles = [];
+      for (let i = 0; i < 7; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 3 + Math.random() * 8;
+        particles.push({
+          x: tx + Math.cos(angle) * dist,
+          y: ty + Math.sin(angle) * dist,
+          vx: Math.cos(angle) * (0.4 + Math.random() * 0.8),
+          vy: Math.sin(angle) * (0.4 + Math.random() * 0.8),
+          size: 2.2 + Math.random() * 2.8,
+          color: p === BLACK ? '#60a5fa' : '#fef08a',
+          life: 380, birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'stone_drop', tx, ty, p, particles, startTime, duration: 420
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
+
+    function triggerVictoryVFX() {
+      const startTime = performance.now();
+      const particles = [];
+      const colors = ['#f59e0b', '#ef4444', '#10b981', '#3b82f6', '#ec4899', '#8b5cf6', '#facc15'];
+      for (let i = 0; i < 75; i++) {
+        particles.push({
+          x: paddingX + Math.random() * (cWidth - 2 * paddingX),
+          y: paddingY - 10 - Math.random() * 60,
+          vx: (Math.random() - 0.5) * 3,
+          vy: 1.8 + Math.random() * 3.6,
+          rot: Math.random() * Math.PI * 2,
+          rotSpeed: (Math.random() - 0.5) * 0.12,
+          sizeW: 6 + Math.random() * 7,
+          sizeH: 4 + Math.random() * 5,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          life: 1400 + Math.random() * 600,
+          birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'victory_confetti', particles, startTime, duration: 2000
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
+
+    function triggerUndoVFX(r, c) {
+      const startTime = performance.now();
+      const tx = paddingX + (c + 0.5) * gridX;
+      const ty = paddingY + (r + 0.5) * gridY;
+      const particles = [];
+      for (let i = 0; i < 14; i++) {
+        const angle = (i / 14) * Math.PI * 2;
+        particles.push({
+          x: tx, y: ty,
+          dist: radius * 1.8,
+          angle: angle,
+          rotSpeed: -0.09,
+          size: 2.8,
+          color: '#a855f7',
+          life: 450, birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'undo_vortex', tx, ty, particles, startTime, duration: 480
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
+
+    function triggerRestartVFX() {
+      const startTime = performance.now();
+      const tx = cWidth / 2, ty = cHeight / 2;
+      const particles = [];
+      for (let i = 0; i < 28; i++) {
+        const angle = (i / 28) * Math.PI * 2;
+        const speed = 2.5 + Math.random() * 3.5;
+        particles.push({
+          x: tx, y: ty,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          size: 3 + Math.random() * 3.5,
+          color: ['#facc15', '#60a5fa', '#34d399', '#f472b6'][Math.floor(Math.random() * 4)],
+          life: 620, birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'restart_wave', tx, ty, particles, startTime, duration: 680
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
 
     function triggerSkillVFX(type, targetR, targetC, srcR, srcC) {
       const startTime = performance.now();
@@ -2118,7 +3139,20 @@
       const sy = (srcR !== undefined) ? paddingY + (srcR + 0.5) * gridY : ty;
 
       const particles = [];
-      if (type === 'remove_stone') {
+      if (type === 'mega_bomb') {
+        const cx = cWidth / 2, cy = cHeight / 2;
+        for (let i = 0; i < 65; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 3.5 + Math.random() * 8.5;
+          particles.push({
+            x: cx, y: cy,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            size: 4 + Math.random() * 7,
+            color: ['#ff4500', '#ff8c00', '#ffd700', '#ffffff', '#dc2626'][Math.floor(Math.random() * 5)],
+            life: 850 + Math.random() * 200, birth: startTime
+          });
+        }
+      } else if (type === 'remove_stone') {
         for (let i = 0; i < 26; i++) {
           const angle = Math.random() * Math.PI * 2;
           const speed = 2 + Math.random() * 5.5;
@@ -2175,6 +3209,18 @@
             life: 650, birth: startTime
           });
         }
+      } else if (type === 'invalid_click') {
+        for (let i = 0; i < 12; i++) {
+          const angle = (i / 12) * Math.PI * 2;
+          const speed = 1.2 + Math.random() * 2.2;
+          particles.push({
+            x: tx, y: ty,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            size: 3 + Math.random() * 2.5,
+            color: ['#f43f5e', '#fb7185', '#fda4af'][Math.floor(Math.random() * 3)],
+            life: 380, birth: startTime
+          });
+        }
       } else {
         for (let i = 0; i < 22; i++) {
           const angle = Math.random() * Math.PI * 2;
@@ -2191,7 +3237,7 @@
 
       activeVFX.push({
         type, tx, ty, sx, sy,
-        particles, startTime, duration: 750
+        particles, startTime, duration: type === 'mega_bomb' ? 1000 : (type === 'invalid_click' ? 400 : 750)
       });
 
       if (!vfxRAF) {
@@ -2219,6 +3265,73 @@
       for (const vfx of activeVFX) {
         const elapsed = now - vfx.startTime;
         const progress = Math.min(1, elapsed / vfx.duration);
+
+        if (vfx.type === 'mega_bomb') {
+          const cx = cWidth / 2, cy = cHeight / 2;
+          const ringR = Math.min(cWidth, cHeight) * 0.7 * progress;
+          ctx.beginPath(); ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255, 87, 34, ${1 - progress})`;
+          ctx.lineWidth = 14 * (1 - progress);
+          ctx.stroke();
+
+          if (progress < 0.35) {
+            const flashAlpha = (1 - progress / 0.35) * 0.75;
+            ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+            ctx.fillRect(0, 0, cWidth, cHeight);
+          }
+        }
+
+        if (vfx.type === 'stone_drop') {
+          const rippleR = radius * (0.8 + progress * 1.1);
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, rippleR, 0, Math.PI * 2);
+          ctx.strokeStyle = vfx.p === BLACK ? `rgba(96, 165, 250, ${1 - progress})` : `rgba(244, 114, 182, ${1 - progress})`;
+          ctx.lineWidth = 2.5 * (1 - progress);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'restart_wave') {
+          const waveR = Math.min(cWidth, cHeight) * 0.75 * progress;
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(250, 204, 21, ${1 - progress})`;
+          ctx.lineWidth = 4 * (1 - progress);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'undo_vortex') {
+          const vortexR = radius * (1.8 * (1 - progress));
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, Math.max(1, vortexR), 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(168, 85, 247, ${1 - progress})`;
+          ctx.lineWidth = 3; ctx.setLineDash([4, 3]);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'invalid_click') {
+          const r = radius * (0.6 + progress * 0.9);
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, r, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(244, 63, 94, ${1 - progress})`;
+          ctx.lineWidth = 3.5 * (1 - progress);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'victory_confetti') {
+          for (const p of vfx.particles) {
+            const pAge = now - p.birth;
+            if (pAge < p.life) {
+              const pProgress = pAge / p.life;
+              p.y += p.vy * (16 / 16);
+              p.x += Math.sin(pAge / 80) * 1.2;
+              p.rot += p.rotSpeed;
+              ctx.save();
+              ctx.translate(p.x, p.y);
+              ctx.rotate(p.rot);
+              ctx.fillStyle = p.color;
+              ctx.globalAlpha = Math.max(0, 1 - pProgress);
+              ctx.fillRect(-p.sizeW / 2, -p.sizeH / 2, p.sizeW, p.sizeH);
+              ctx.restore();
+            }
+          }
+          continue;
+        }
 
         if (vfx.type === 'remove_stone' || vfx.type === 'freeze' || vfx.type === 'double_move') {
           const ringRadius = radius * (1 + progress * 3.6);
@@ -2728,62 +3841,72 @@
         ctx.restore();
       }
 
-      // 5. 绘制【寒冰封禁】冰花特效
-      if (frozenPoint && isPointFrozen(frozenPoint.r, frozenPoint.c)) {
-        const fx = paddingX + (frozenPoint.c + 0.5) * gridX;
-        const fy = paddingY + (frozenPoint.r + 0.5) * gridY;
+      // 5. 绘制【预言封锁】水晶球标记（在预言的空格上显示 🔮 标记）
+      if (prophecyPoint) {
+        const fx = paddingX + (prophecyPoint.c + 0.5) * gridX;
+        const fy = paddingY + (prophecyPoint.r + 0.5) * gridY;
         ctx.save();
         ctx.beginPath(); ctx.arc(fx, fy, radius * 0.9, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(186, 230, 253, 0.5)'; ctx.fill();
-        ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2.5; ctx.setLineDash([4, 3]); ctx.stroke();
+        ctx.fillStyle = 'rgba(167, 139, 250, 0.35)'; ctx.fill();
+        ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = 2.5; ctx.setLineDash([4, 3]); ctx.stroke();
         ctx.font = `${Math.floor(radius * 1.1)}px sans-serif`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('❄️', fx, fy + 1);
+        ctx.fillText('🔮', fx, fy + 1);
         ctx.restore();
       }
 
-      // 6. 绘制【迷雾遮蔽】3x3 区域遮罩
-      if (fogArea && isFogActive()) {
-        const minR = Math.max(0, fogArea.r - 1);
-        const maxR = Math.min(14, fogArea.r + 1);
-        const minC = Math.max(0, fogArea.c - 1);
-        const maxC = Math.min(14, fogArea.c + 1);
-        const x1 = paddingX + minC * gridX;
-        const y1 = paddingY + minR * gridY;
-        const w = (maxC - minC + 1) * gridX;
-        const h = (maxR - minR + 1) * gridY;
-
+      // 7. 绘制【五子连珠】连线金光激光与胜利光环
+      if (winningLine && winningLine.length >= 5) {
         ctx.save();
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(x1, y1, w, h, 16);
-        else ctx.rect(x1, y1, w, h);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'; ctx.lineWidth = 2; ctx.stroke();
-        ctx.font = `bold ${Math.floor(gridX * 0.5)}px sans-serif`;
-        ctx.fillStyle = '#64748b';
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('🌫️ 迷雾遮挡', x1 + w/2, y1 + h/2);
+        const p0 = winningLine[0];
+        ctx.moveTo(paddingX + (p0.c + 0.5) * gridX, paddingY + (p0.r + 0.5) * gridY);
+        for (let i = 1; i < winningLine.length; i++) {
+          const pt = winningLine[i];
+          ctx.lineTo(paddingX + (pt.c + 0.5) * gridX, paddingY + (pt.r + 0.5) * gridY);
+        }
+        const pulse = (Math.sin(performance.now() / 140) + 1) / 2;
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 4.5 + pulse * 2.5;
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 18 + pulse * 10;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        for (const pt of winningLine) {
+          const wx = paddingX + (pt.c + 0.5) * gridX;
+          const wy = paddingY + (pt.r + 0.5) * gridY;
+          ctx.beginPath();
+          ctx.arc(wx, wy, radius * (1.3 + pulse * 0.15), 0, Math.PI * 2);
+          ctx.strokeStyle = '#fef08a';
+          ctx.lineWidth = 3;
+          ctx.shadowBlur = 14;
+          ctx.stroke();
+        }
         ctx.restore();
       }
 
-      // 7. 实时渲染全屏高能粒子与技能动画特效 (60fps Canvas 特效)
+      // 8. 实时渲染全屏高能粒子与技能动画特效 (60fps Canvas 特效)
       renderActiveVFX(ctx);
     }
 
+    let winningLine = null;
     function checkWin(r, c, p) {
       const dirs = [[0,1],[1,0],[1,1],[1,-1]];
       for (const [dr,dc] of dirs) {
-        let cnt = 1;
+        let line = [{r, c}];
         for (let s=1; s<=4; s++) {
           const nr=r+s*dr, nc=c+s*dc;
-          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) cnt++; else break;
+          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) line.push({r: nr, c: nc}); else break;
         }
         for (let s=1; s<=4; s++) {
           const nr=r-s*dr, nc=c-s*dc;
-          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) cnt++; else break;
+          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) line.unshift({r: nr, c: nc}); else break;
         }
-        if (cnt >= 5) return true;
+        if (line.length >= 5) {
+          winningLine = line;
+          return true;
+        }
       }
       return false;
     }
@@ -2791,15 +3914,20 @@
     function makeMove(r, c, p, fromRemote = false) {
       if (board[r][c] !== EMPTY || isOver) return;
 
-      // 检查是否被寒冰封印
-      if (isPointFrozen(r, c)) {
-        alert("❄️ 该位置已被寒冰封印，本回合禁止任何人落子！");
-        return;
+      // 检查是否命中对方的预言封锁
+      if (isProphecied(r, c)) {
+        prophecyPoint = null; // 预言消耗掉
+        alert(`🔮 预言封锁命中！对手预言了此处，你的落子被撤销，继续思考~`);
+        draw();
+        return; // 不落子，不切回合（对手的回合仍在等待）
       }
+      // 落子后清除预言（对手落在其他地方，预言失效）
+      prophecyPoint = null;
 
       board[r][c] = p;
       history.push({r, c, p});
       playPopSound();
+      triggerStoneDropVFX(r, c, p); // 💫 落子波纹与微光微粒反馈
       draw();
 
       if (gameMode === 'online' && !fromRemote && conn && conn.open) {
@@ -2808,15 +3936,28 @@
 
       if (checkWin(r, c, p)) {
         isOver = true;
+        triggerVictoryVFX();
+        playSkillSound('victory');
+        showSkillBanner('👑', '【五子连珠】绝杀获胜！', `恭喜【${p === BLACK ? p1Name : (gameMode === 'ai' ? '大师AI' : p2Name)}】达成五连珠，获得最终胜利！`);
         const winner = p === BLACK ? (p1Name + ' (黑子)') : (gameMode === 'ai' ? '大师AI (白子)' : p2Name + ' (白子)');
-        setTimeout(() => alert(`🎉 恭喜【${winner}】达成五连珠获胜！`), 120);
+        setTimeout(() => alert(`🎉 恭喜【${winner}】达成五连珠获胜！`), 350);
+        draw();
         return;
       }
 
-      // 双星连珠技能：若激活则本回合可额外再落一子，不切换turn
-      if (hasExtraMove) {
+      // 连击处理 (双星连珠 或 命运神抽疯狂暴击 / 大凶补子)
+      if (opponentFreeMove) {
+        opponentFreeMove = false;
+        showGameNotice("💀 免费补子已完成！继续执行正常落子回合！", false);
+        // 不切换 turn，继续落正常子
+      } else if (consecutiveMovesLeft > 0) {
+        consecutiveMovesLeft--;
+        showGameNotice(`⚡ 疯狂暴击生效中！还可连续再落 ${consecutiveMovesLeft + 1} 颗子！`, false);
+        // 不切换 turn
+      } else if (hasExtraMove) {
         hasExtraMove = false;
-        alert("⚡【双星连珠】神威生效！本回合可连续再落一子！");
+        showGameNotice("⚡【双星连珠】神威生效！本回合可连续再落一子！", false);
+        // 不切换 turn
       } else {
         turn = p === BLACK ? WHITE : BLACK;
       }
@@ -2871,8 +4012,10 @@
 
     function resetBoardOnly() {
       board = Array.from({length: 15}, () => Array(15).fill(0));
-      turn = BLACK; history = []; isOver = false;
+      turn = BLACK; history = []; isOver = false; winningLine = null;
       drawRandomThreeCards();
+      triggerRestartVFX();
+      playSkillSound('dice');
       draw(); updateUI();
       persistGameState();
     }
@@ -2884,13 +4027,19 @@
 
     function doUndo() {
       if (history.length === 0 || isOver) return;
+      winningLine = null;
       if (gameMode === 'ai' && history.length >= 2) {
         const a = history.pop(); const b = history.pop();
         board[a.r][a.c] = EMPTY; board[b.r][b.c] = EMPTY;
+        triggerUndoVFX(a.r, a.c);
+        triggerUndoVFX(b.r, b.c);
+        playSkillSound('rewind');
         turn = BLACK;
       } else {
         const last = history.pop();
         board[last.r][last.c] = EMPTY;
+        triggerUndoVFX(last.r, last.c);
+        playSkillSound('rewind');
         turn = last.p;
       }
       draw(); updateUI();

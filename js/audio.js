@@ -207,6 +207,33 @@ class SoundEffects {
     osc.start(t);
     osc.stop(t + 0.18);
   }
-}
+  /**
+   * 爆炸音效：直接播放内嵌的樱桃炸弹音频
+   */
+  playExplosionSound() {
+    if (!this.enabled) return;
+    if (!window.CHERRY_BOMB_AUDIO_DATA) {
+      console.warn('Embedded explosion audio is unavailable.');
+      return;
+    }
+    const audio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
+    audio.preload = 'auto';
+    audio.play().catch(err => console.warn('Audio playback failed:', err));
+  }
 
+}
 window.soundEffects = new SoundEffects();
+
+// Global helper to play skill sounds
+function playSkillSound(name) {
+  switch(name) {
+    case 'bomb':
+      window.soundEffects.playExplosionSound();
+      break;
+    case 'magic':
+      window.soundEffects.playAlertSound();
+      break;
+    default:
+      console.warn('Unknown skill sound:', name);
+  }
+}

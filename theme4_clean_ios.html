@@ -6,6 +6,7 @@
   <title>五子棋 · 【Clean iOS 极简暖白版】Zen Gomoku iOS</title>
   <!-- PeerJS 免服务器外网联机库 -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="js/assets/cherry_bomb_audio.js"></script>
   <style>
     :root {
       --ios-bg: #f2f2f6;
@@ -229,6 +230,20 @@
       80% { transform: translate(3px, 2px); }
     }
     .board-shake {
+      animation: boardShake 0.32s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    }
+    @keyframes megaBoardShake {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      15% { transform: translate(-8px, 6px) rotate(-1.5deg) scale(1.02); }
+      30% { transform: translate(8px, -6px) rotate(1.5deg) scale(0.98); }
+      45% { transform: translate(-7px, -5px) rotate(-1deg) scale(1.01); }
+      60% { transform: translate(6px, 5px) rotate(1deg) scale(0.99); }
+      75% { transform: translate(-4px, 3px) scale(1); }
+      90% { transform: translate(3px, -2px) scale(1); }
+    }
+    .board-shake-mega {
+      animation: megaBoardShake 0.65s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+    }
       animation: boardShake 0.32s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
     }
     canvas {
@@ -894,6 +909,16 @@
         desc: '重铸未用手牌，抽取全新技能卡',
         sweetDesc: '变变变！重新换两张全新惊喜卡~',
         needTarget: false
+      },
+      {
+        id: 'mega_bomb',
+        name: '乾坤大乱 💣',
+        sweetName: '掀翻棋盘 💣',
+        icon: '💣',
+        sweetIcon: '💣',
+        desc: '引爆大炸弹！将场上所有棋子全部随机打乱重排',
+        sweetDesc: '大招掀桌！把场上所有棋子全部随机洗牌打乱~',
+        needTarget: false
       }
     ];
 
@@ -1266,8 +1291,25 @@
           triggerSkillVFX('swap_positions', data.r2, data.c2, data.r1, data.c1);
           triggerBoardShake();
           playSkillSound('warp');
-          showSkillBanner('💫', `对方发动【移形换影】！`, `双方棋子位置发生了对调！`);
+          showSkillBanner('💫', '对方发动【移形换影】！', '双方棋子位置发生了对调！');
           draw();
+        } else if (data.type === 'skill_mega_bomb') {
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
+          }
+          history = data.stones;
+          for (const s of history) {
+            board[s.r][s.c] = s.p;
+          }
+          triggerSkillVFX('mega_bomb');
+          triggerBoardShake(true);
+          playSkillSound('bomb');
+          showSkillBanner('💣', '对方发动【乾坤大乱/大炸弹】！', '天翻地覆！全盘所有棋子已被随机打乱！');
+          winningLine = null;
+          for (const s of history) {
+            if (checkWin(s.r, s.c, s.p)) { isOver = true; triggerVictoryVFX(); break; }
+          }
+          draw(); updateUI(); persistGameState();
         }
       });
     }
@@ -1375,6 +1417,59 @@
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
+        } else if (card.id === 'mega_bomb') {
+          if (history.length < 2) {
+            return alert("💣 棋盘上棋子太少，无法引爆大炸弹！至少需要 2 颗棋子~");
+          }
+          markCardUsed(idx);
+
+          const stones = history.map(h => h.p);
+          const allCoords = [];
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              allCoords.push({ r, c });
+            }
+          }
+          for (let i = allCoords.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [allCoords[i], allCoords[j]] = [allCoords[j], allCoords[i]];
+          }
+
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
+          }
+          history = [];
+          for (let i = 0; i < stones.length; i++) {
+            const pos = allCoords[i];
+            board[pos.r][pos.c] = stones[i];
+            history.push({ r: pos.r, c: pos.c, p: stones[i] });
+          }
+
+          triggerSkillVFX('mega_bomb');
+          triggerBoardShake(true);
+          playSkillSound('bomb');
+          showSkillBanner('💣', `【${cardTitle}】引爆全场！`, '天翻地覆！棋盘上所有棋子被彻底随机打乱洗牌！');
+
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_mega_bomb', stones: history });
+          }
+
+          winningLine = null;
+          let bombWinColor = null;
+          for (const stone of history) {
+            if (checkWin(stone.r, stone.c, stone.p)) {
+              bombWinColor = stone.p;
+              break;
+            }
+          }
+          if (bombWinColor) {
+            isOver = true;
+            triggerVictoryVFX();
+            playSkillSound('victory');
+            setTimeout(() => alert(`🎉 炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`), 350);
+          }
+
+          draw(); updateUI(); persistGameState();
         }
       } else {
         activeSkill = { slotIdx: idx, skill: card, step: 1 };
@@ -1630,13 +1725,29 @@
     }
 
     
-    // 🔊 炫酷干扰技能专属合成音效
+    // 🔊 炫酷干扰技能与全局音效专属合成器
     function playSkillSound(type) {
       if (!soundEnabled) return;
       try {
         if (actx.state === 'suspended') actx.resume();
         const t = actx.currentTime;
-        if (type === 'boom') {
+        if (type === 'bomb') {
+          // 💣 直接播放内嵌的樱桃炸弹爆炸音频
+          const audio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
+          audio.preload = 'auto';
+          audio.play().catch(e => console.warn('Explosion audio playback failed:', e));
+          return;
+        } else if (type === 'victory') {
+          // 👑 连珠绝杀凯旋大和弦音阶 (C5 - E5 - G5 - C6)
+          [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+            const osc = actx.createOscillator(); const gain = actx.createGain();
+            osc.type = 'triangle'; osc.frequency.setValueAtTime(freq, t + idx * 0.09);
+            gain.gain.setValueAtTime(0.38, t + idx * 0.09);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + idx * 0.09 + 0.4);
+            osc.connect(gain); gain.connect(actx.destination);
+            osc.start(t + idx * 0.09); osc.stop(t + idx * 0.09 + 0.42);
+          });
+        } else if (type === 'boom') {
           const osc = actx.createOscillator(); const gain = actx.createGain();
           osc.type = 'triangle'; osc.frequency.setValueAtTime(220, t);
           osc.frequency.exponentialRampToValueAtTime(28, t + 0.35);
@@ -1703,18 +1814,116 @@
       }, 1600);
     }
 
-    function triggerBoardShake() {
+    function triggerBoardShake(isMega = false) {
       const wrapper = document.getElementById('islandWrapper');
       if (!wrapper) return;
-      wrapper.classList.remove('board-shake');
+      wrapper.classList.remove('board-shake', 'board-shake-mega');
       void wrapper.offsetWidth;
-      wrapper.classList.add('board-shake');
-      setTimeout(() => wrapper.classList.remove('board-shake'), 400);
+      if (isMega) {
+        wrapper.classList.add('board-shake-mega');
+        setTimeout(() => wrapper.classList.remove('board-shake-mega'), 700);
+      } else {
+        wrapper.classList.add('board-shake');
+        setTimeout(() => wrapper.classList.remove('board-shake'), 400);
+      }
     }
 
     // 🎨 Canvas 实时高帧率粒子/特效渲染管线
     let activeVFX = [];
     let vfxRAF = null;
+
+    function triggerStoneDropVFX(r, c, p) {
+      const startTime = performance.now();
+      const tx = paddingX + (c + 0.5) * gridX;
+      const ty = paddingY + (r + 0.5) * gridY;
+      const particles = [];
+      for (let i = 0; i < 7; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 3 + Math.random() * 8;
+        particles.push({
+          x: tx + Math.cos(angle) * dist,
+          y: ty + Math.sin(angle) * dist,
+          vx: Math.cos(angle) * (0.4 + Math.random() * 0.8),
+          vy: Math.sin(angle) * (0.4 + Math.random() * 0.8),
+          size: 2.2 + Math.random() * 2.8,
+          color: p === BLACK ? '#60a5fa' : '#fef08a',
+          life: 380, birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'stone_drop', tx, ty, p, particles, startTime, duration: 420
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
+
+    function triggerVictoryVFX() {
+      const startTime = performance.now();
+      const particles = [];
+      const colors = ['#f59e0b', '#ef4444', '#10b981', '#3b82f6', '#ec4899', '#8b5cf6', '#facc15'];
+      for (let i = 0; i < 75; i++) {
+        particles.push({
+          x: paddingX + Math.random() * (cWidth - 2 * paddingX),
+          y: paddingY - 10 - Math.random() * 60,
+          vx: (Math.random() - 0.5) * 3,
+          vy: 1.8 + Math.random() * 3.6,
+          rot: Math.random() * Math.PI * 2,
+          rotSpeed: (Math.random() - 0.5) * 0.12,
+          sizeW: 6 + Math.random() * 7,
+          sizeH: 4 + Math.random() * 5,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          life: 1400 + Math.random() * 600,
+          birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'victory_confetti', particles, startTime, duration: 2000
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
+
+    function triggerUndoVFX(r, c) {
+      const startTime = performance.now();
+      const tx = paddingX + (c + 0.5) * gridX;
+      const ty = paddingY + (r + 0.5) * gridY;
+      const particles = [];
+      for (let i = 0; i < 14; i++) {
+        const angle = (i / 14) * Math.PI * 2;
+        particles.push({
+          x: tx, y: ty,
+          dist: radius * 1.8,
+          angle: angle,
+          rotSpeed: -0.09,
+          size: 2.8,
+          color: '#a855f7',
+          life: 450, birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'undo_vortex', tx, ty, particles, startTime, duration: 480
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
+
+    function triggerRestartVFX() {
+      const startTime = performance.now();
+      const tx = cWidth / 2, ty = cHeight / 2;
+      const particles = [];
+      for (let i = 0; i < 28; i++) {
+        const angle = (i / 28) * Math.PI * 2;
+        const speed = 2.5 + Math.random() * 3.5;
+        particles.push({
+          x: tx, y: ty,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          size: 3 + Math.random() * 3.5,
+          color: ['#facc15', '#60a5fa', '#34d399', '#f472b6'][Math.floor(Math.random() * 4)],
+          life: 620, birth: startTime
+        });
+      }
+      activeVFX.push({
+        type: 'restart_wave', tx, ty, particles, startTime, duration: 680
+      });
+      if (!vfxRAF) vfxAnimLoop();
+    }
 
     function triggerSkillVFX(type, targetR, targetC, srcR, srcC) {
       const startTime = performance.now();
@@ -1724,7 +1933,20 @@
       const sy = (srcR !== undefined) ? paddingY + (srcR + 0.5) * gridY : ty;
 
       const particles = [];
-      if (type === 'remove_stone') {
+      if (type === 'mega_bomb') {
+        const cx = cWidth / 2, cy = cHeight / 2;
+        for (let i = 0; i < 65; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 3.5 + Math.random() * 8.5;
+          particles.push({
+            x: cx, y: cy,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            size: 4 + Math.random() * 7,
+            color: ['#ff4500', '#ff8c00', '#ffd700', '#ffffff', '#dc2626'][Math.floor(Math.random() * 5)],
+            life: 850 + Math.random() * 200, birth: startTime
+          });
+        }
+      } else if (type === 'remove_stone') {
         for (let i = 0; i < 26; i++) {
           const angle = Math.random() * Math.PI * 2;
           const speed = 2 + Math.random() * 5.5;
@@ -1797,7 +2019,7 @@
 
       activeVFX.push({
         type, tx, ty, sx, sy,
-        particles, startTime, duration: 750
+        particles, startTime, duration: type === 'mega_bomb' ? 1000 : 750
       });
 
       if (!vfxRAF) {
@@ -1826,11 +2048,70 @@
         const elapsed = now - vfx.startTime;
         const progress = Math.min(1, elapsed / vfx.duration);
 
+        if (vfx.type === 'mega_bomb') {
+          const cx = cWidth / 2, cy = cHeight / 2;
+          const ringR = Math.min(cWidth, cHeight) * 0.7 * progress;
+          ctx.beginPath(); ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255, 87, 34, ${1 - progress})`;
+          ctx.lineWidth = 14 * (1 - progress);
+          ctx.stroke();
+
+          if (progress < 0.35) {
+            const flashAlpha = (1 - progress / 0.35) * 0.75;
+            ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+            ctx.fillRect(0, 0, cWidth, cHeight);
+          }
+        }
+
+        if (vfx.type === 'stone_drop') {
+          const rippleR = radius * (0.8 + progress * 1.1);
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, rippleR, 0, Math.PI * 2);
+          ctx.strokeStyle = vfx.p === BLACK ? `rgba(96, 165, 250, ${1 - progress})` : `rgba(244, 114, 182, ${1 - progress})`;
+          ctx.lineWidth = 2.5 * (1 - progress);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'restart_wave') {
+          const waveR = Math.min(cWidth, cHeight) * 0.75 * progress;
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(250, 204, 21, ${1 - progress})`;
+          ctx.lineWidth = 4 * (1 - progress);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'undo_vortex') {
+          const vortexR = radius * (1.8 * (1 - progress));
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, Math.max(1, vortexR), 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(168, 85, 247, ${1 - progress})`;
+          ctx.lineWidth = 3; ctx.setLineDash([4, 3]);
+          ctx.stroke();
+        }
+
+        if (vfx.type === 'victory_confetti') {
+          for (const p of vfx.particles) {
+            const pAge = now - p.birth;
+            if (pAge < p.life) {
+              const pProgress = pAge / p.life;
+              p.y += p.vy * (16 / 16);
+              p.x += Math.sin(pAge / 80) * 1.2;
+              p.rot += p.rotSpeed;
+              ctx.save();
+              ctx.translate(p.x, p.y);
+              ctx.rotate(p.rot);
+              ctx.fillStyle = p.color;
+              ctx.globalAlpha = Math.max(0, 1 - pProgress);
+              ctx.fillRect(-p.sizeW / 2, -p.sizeH / 2, p.sizeW, p.sizeH);
+              ctx.restore();
+            }
+          }
+          continue;
+        }
+
         if (vfx.type === 'remove_stone' || vfx.type === 'freeze' || vfx.type === 'double_move') {
           const ringRadius = radius * (1 + progress * 3.6);
           ctx.beginPath();
           ctx.arc(vfx.tx, vfx.ty, ringRadius, 0, Math.PI * 2);
-          ctx.strokeStyle = vfx.type === 'freeze' ? ('rgba(56, 189, 248, ' + (1 - progress) + ')') : (vfx.type === 'double_move' ? ('rgba(250, 204, 21, ' + (1 - progress) + ')') : ('rgba(239, 68, 68, ' + (1 - progress) + ')'));
+          ctx.strokeStyle = vfx.type === 'freeze' ? `rgba(56, 189, 248, ${1 - progress})` : (vfx.type === 'double_move' ? `rgba(250, 204, 21, ${1 - progress})` : `rgba(239, 68, 68, ${1 - progress})`);
           ctx.lineWidth = 4 * (1 - progress);
           ctx.stroke();
         }
@@ -1839,7 +2120,7 @@
           ctx.beginPath();
           ctx.moveTo(vfx.sx, vfx.sy);
           ctx.lineTo(vfx.tx, vfx.ty);
-          ctx.strokeStyle = 'rgba(168, 85, 247, ' + (1 - progress * 0.7) + ')';
+          ctx.strokeStyle = `rgba(168, 85, 247, ${1 - progress * 0.7})`;
           ctx.lineWidth = 5 * (1 - progress * 0.4);
           ctx.shadowColor = '#d946ef';
           ctx.shadowBlur = 15;
@@ -2031,23 +2312,58 @@
         ctx.restore();
       }
     
-      // 7. 实时渲染全屏高能粒子与技能动画特效 (60fps Canvas 特效)
+      // 7. 绘制【五子连珠】连线金光激光与胜利光环
+      if (winningLine && winningLine.length >= 5) {
+        ctx.save();
+        ctx.beginPath();
+        const p0 = winningLine[0];
+        ctx.moveTo(paddingX + (p0.c + 0.5) * gridX, paddingY + (p0.r + 0.5) * gridY);
+        for (let i = 1; i < winningLine.length; i++) {
+          const pt = winningLine[i];
+          ctx.lineTo(paddingX + (pt.c + 0.5) * gridX, paddingY + (pt.r + 0.5) * gridY);
+        }
+        const pulse = (Math.sin(performance.now() / 140) + 1) / 2;
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 4.5 + pulse * 2.5;
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 18 + pulse * 10;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        for (const pt of winningLine) {
+          const wx = paddingX + (pt.c + 0.5) * gridX;
+          const wy = paddingY + (pt.r + 0.5) * gridY;
+          ctx.beginPath();
+          ctx.arc(wx, wy, radius * (1.3 + pulse * 0.15), 0, Math.PI * 2);
+          ctx.strokeStyle = '#fef08a';
+          ctx.lineWidth = 3;
+          ctx.shadowBlur = 14;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 8. 实时渲染全屏高能粒子与技能动画特效 (60fps Canvas 特效)
       renderActiveVFX(ctx);
     }
 
+    let winningLine = null;
     function checkWin(r, c, p) {
       const dirs = [[0,1],[1,0],[1,1],[1,-1]];
       for (const [dr,dc] of dirs) {
-        let cnt = 1;
+        let line = [{r, c}];
         for (let s=1; s<=4; s++) {
           const nr=r+s*dr, nc=c+s*dc;
-          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) cnt++; else break;
+          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) line.push({r: nr, c: nc}); else break;
         }
         for (let s=1; s<=4; s++) {
           const nr=r-s*dr, nc=c-s*dc;
-          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) cnt++; else break;
+          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) line.unshift({r: nr, c: nc}); else break;
         }
-        if (cnt >= 5) return true;
+        if (line.length >= 5) {
+          winningLine = line;
+          return true;
+        }
       }
       return false;
     }
