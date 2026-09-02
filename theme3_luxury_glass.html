@@ -1432,16 +1432,20 @@
     // ==========================================
     const MQTT_BROKER_URLS = [
       'wss://broker.emqx.io:8084/mqtt',
-      'wss://broker.hivemq.com:8884/mqtt'
+      'wss://broker.hivemq.com:8884/mqtt',
+      'wss://mqtt.eclipseprojects.io:443/mqtt',
+      'wss://test.mosquitto.org:8081/mqtt'
     ];
 
     let mqttClient = null;
     let mqttClientPromise = null;
+    let mqttBrokerIndex = -1;
 
     function getOrCreateMqttClient() {
       if (mqttClient && mqttClient.connected) return Promise.resolve(mqttClient);
       if (mqttClientPromise) return mqttClientPromise;
 
+      mqttClient = null;
       mqttClientPromise = new Promise((resolve, reject) => {
         if (typeof mqtt === 'undefined' && typeof window !== 'undefined' && typeof window.mqtt !== 'undefined') {
           window.mqtt = window.mqtt;
@@ -1452,31 +1456,68 @@
           return reject(new Error("联机网络组件加载中，请稍后重试"));
         }
 
-        const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
-        const client = m.connect(MQTT_BROKER_URLS[0], {
-          clientId: clientId,
-          connectTimeout: 8000,
-          keepalive: 20,
-          clean: true,
-          reconnectPeriod: 2000
-        });
-
-        const timer = setTimeout(() => {
-          if (!client.connected) {
-            client.end(true);
+        const tryBroker = (index) => {
+          const brokerUrl = MQTT_BROKER_URLS[index];
+          if (!brokerUrl) {
             mqttClientPromise = null;
-            reject(new Error("网络连接超时"));
+            return reject(new Error("信令网络连接失败，请检查网络后重试"));
           }
-        }, 9000);
 
-        client.on('connect', () => {
-          clearTimeout(timer);
-          mqttClient = client;
-          mqttClientPromise = null;
-          resolve(client);
-        });
+          const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+          let settled = false;
+          let timer = null;
+          let client = null;
+          const retry = (reason) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            try { if (client) client.end(true); } catch (_) {}
+            console.warn(`[MQTT] 节点 ${brokerUrl} 不可用，准备切换下一个节点`, reason || '');
+            if (index + 1 < MQTT_BROKER_URLS.length) {
+              setTimeout(() => tryBroker(index + 1), 80);
+            } else {
+              mqttClientPromise = null;
+              reject(new Error("所有信令节点均连接失败，请检查网络后重试"));
+            }
+          };
 
-        client.on('error', (err) => console.warn('[MQTT Client Error]', err));
+          try {
+            client = m.connect(brokerUrl, {
+              clientId,
+              connectTimeout: 8000,
+              keepalive: 20,
+              clean: true,
+              reconnectPeriod: 0
+            });
+          } catch (err) {
+            retry(err);
+            return;
+          }
+
+          timer = setTimeout(() => {
+            if (!client.connected) retry(new Error('连接超时'));
+          }, 9000);
+
+          client.once('connect', () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            mqttClient = client;
+            mqttBrokerIndex = index;
+            mqttClientPromise = null;
+            console.info(`[MQTT] 已连接信令节点 ${index + 1}/${MQTT_BROKER_URLS.length}`);
+            resolve(client);
+          });
+
+          client.once('error', (err) => {
+            console.warn('[MQTT Client Error]', err);
+            retry(err);
+          });
+
+          client.once('close', () => retry(new Error('连接关闭')));
+        };
+
+        tryBroker(0);
       });
 
       return mqttClientPromise;
@@ -3356,7 +3397,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.5';
+    const CURRENT_VERSION_TAG = 'v1.0.6';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -3431,6 +3472,26 @@
 
       // 对比本地版本
       if (compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0) {
+        // ✨ 优先尝试应用内无感静默热更新
+        if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile) {
+          try {
+            showGameNotice('🚀 检测到新版本，正在为您无感自动更新...', false);
+            const updateUrl = `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@master/index.html?_t=${Date.now()}`;
+            const res = await fetch(updateUrl);
+            if (res.ok) {
+              const htmlText = await res.text();
+              if (htmlText && htmlText.length > 50000) {
+                AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
+                showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
+                setTimeout(() => { location.reload(); }, 1200);
+                return;
+              }
+            }
+          } catch(err) {
+            console.warn('[Auto HotUpdate fallback]', err);
+          }
+        }
+
         const updateModal = document.getElementById('appUpdateModal');
         if (updateModal) {
           document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}`;
@@ -3439,10 +3500,32 @@
           const fastLink = versionData.fastUrl || `https://ghproxy.net/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
           const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
 
-          document.getElementById('btnFastDownload').href = fastLink;
-          document.getElementById('btnOfficialDownload').href = officialLink;
+          const btnFast = document.getElementById('btnFastDownload');
+          if (btnFast) {
+            btnFast.href = fastLink;
+            btnFast.onclick = (e) => {
+              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
+                e.preventDefault();
+                AndroidNativeApp.downloadAndInstallApk(fastLink);
+                closeUpdateModal();
+              }
+            };
+          }
+
+          const btnOfficial = document.getElementById('btnOfficialDownload');
+          if (btnOfficial) {
+            btnOfficial.href = officialLink;
+            btnOfficial.onclick = (e) => {
+              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
+                e.preventDefault();
+                AndroidNativeApp.downloadAndInstallApk(officialLink);
+                closeUpdateModal();
+              }
+            };
+          }
           updateModal.style.display = 'flex';
         }
+      }
       } else {
         if (isManual) {
           showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);

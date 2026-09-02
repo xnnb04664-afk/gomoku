@@ -1,11 +1,16 @@
 package com.gomoku.master;
 
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -18,6 +23,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import java.io.File;
+import java.io.FileOutputStream;
 
 public class MainActivity extends Activity {
 
@@ -57,7 +64,9 @@ public class MainActivity extends Activity {
         // 4. 启动内嵌 HTTP 服务器（localhost:8080）
         //    目的：让 WebView 从 http://localhost 加载，彻底解除 file:// 协议
         //    对 WebSocket/WebRTC DataChannel 的各类安全限制，使联机与网页版行为完全一致。
-        mLocalServer = new LocalWebServer(getAssets());
+        File updateDir = new File(getFilesDir(), "hot_update");
+        if (!updateDir.exists()) updateDir.mkdirs();
+        mLocalServer = new LocalWebServer(getAssets(), updateDir);
         boolean serverReady = mLocalServer.startAndWait();
 
         if (serverReady) {
@@ -128,15 +137,55 @@ public class MainActivity extends Activity {
             settings.setAllowUniversalAccessFromFileURLs(true);
         }
 
-        // 页面导航保持在 WebView 内部
+        // 注入原生交互接口：支持无感热更新文件写入 + 原生 APK 自动下载安装
+        mWebView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public boolean isNativeApp() {
+                return true;
+            }
+
+            @android.webkit.JavascriptInterface
+            public boolean saveHotUpdateFile(String fileName, String content) {
+                try {
+                    File dir = new File(getFilesDir(), "hot_update");
+                    if (!dir.exists()) dir.mkdirs();
+                    File target = new File(dir, fileName);
+                    FileOutputStream fos = new FileOutputStream(target);
+                    fos.write(content.getBytes("UTF-8"));
+                    fos.close();
+                    return true;
+                } catch (Exception e) {
+                    android.util.Log.e("MainActivity", "Hot update save failed: " + e.getMessage());
+                    return false;
+                }
+            }
+
+            @android.webkit.JavascriptInterface
+            public void downloadAndInstallApk(String apkUrl) {
+                startApkDownload(apkUrl);
+            }
+        }, "AndroidNativeApp");
+
+        // 页面导航保持在 WebView 内部；外链 APK 自动下载安装
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                // localhost 内的跳转保持在 WebView；外链交给系统浏览器
+                // localhost 内的跳转保持在 WebView
                 if (url.startsWith("http://localhost") || url.startsWith("file://")) {
                     view.loadUrl(url);
                     return true;
                 }
+                // APK 链接自动由原生 DownloadManager 接管并弹出安装
+                if (url.endsWith(".apk") || url.contains("/download/") || url.contains("releases/latest/download")) {
+                    startApkDownload(url);
+                    return true;
+                }
+                // 其他外链交给系统浏览器
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    startActivity(intent);
+                    return true;
+                } catch (Exception ignored) {}
                 return false;
             }
         });
@@ -219,6 +268,61 @@ public class MainActivity extends Activity {
             mWebView.onPause();
             mWebView.pauseTimers();
         }
+    }
+
+    public void startApkDownload(final String apkUrl) {
+        runOnUiThread(() -> {
+            try {
+                Toast.makeText(MainActivity.this, "🚀 正在后台自动下载最新安装包，完成后将自动呼起安装...", Toast.LENGTH_LONG).show();
+
+                final DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(apkUrl));
+                req.setMimeType("application/vnd.android.package-archive");
+                req.setTitle("五子棋 最新版更新");
+                req.setDescription("正在极速下载安装包...");
+                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+
+                File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (destDir != null && !destDir.exists()) destDir.mkdirs();
+                File destFile = new File(destDir, "gomoku_latest.apk");
+                if (destFile.exists()) destFile.delete();
+                req.setDestinationUri(Uri.fromFile(destFile));
+
+                final long downloadId = dm.enqueue(req);
+
+                registerReceiver(new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                        if (id == downloadId) {
+                            try {
+                                unregisterReceiver(this);
+                            } catch (Exception ignored) {}
+
+                            Uri downloadUri = dm.getUriForDownloadedFile(downloadId);
+                            if (downloadUri != null) {
+                                Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                                installIntent.setDataAndType(downloadUri, "application/vnd.android.package-archive");
+                                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                try {
+                                    startActivity(installIntent);
+                                } catch (Exception e) {
+                                    Toast.makeText(context, "自动呼起安装失败，请在手机【下载管理】中点击安装", Toast.LENGTH_LONG).show();
+                                }
+                            }
+                        }
+                    }
+                }, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+
+            } catch (Exception e) {
+                Toast.makeText(MainActivity.this, "启动下载失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl));
+                    startActivity(intent);
+                } catch (Exception ignored) {}
+            }
+        });
     }
 
     @Override

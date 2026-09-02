@@ -19,6 +19,7 @@ public class LocalWebServer extends Thread {
     private static final String TAG     = "LocalWebServer";
 
     private final AssetManager  assets;
+    private final File          updateDir;
     private       ServerSocket  serverSocket;
     private volatile boolean    running  = false;
 
@@ -47,8 +48,9 @@ public class LocalWebServer extends Thread {
         MIME.put("otf",   "font/otf");
     }
 
-    public LocalWebServer(AssetManager assets) {
+    public LocalWebServer(AssetManager assets, File updateDir) {
         this.assets = assets;
+        this.updateDir = updateDir;
         setDaemon(true);  // JVM 退出时自动终止，无需手动管理
         setName("LocalWebServer");
     }
@@ -143,7 +145,18 @@ public class LocalWebServer extends Thread {
             String mime = MIME.getOrDefault(ext, "application/octet-stream");
 
             try {
-                InputStream assetIn = assets.open(path);
+                InputStream assetIn = null;
+                if (updateDir != null && updateDir.exists()) {
+                    File localFile = new File(updateDir, path);
+                    if (localFile.exists() && localFile.isFile() && localFile.length() > 0) {
+                        try {
+                            assetIn = new FileInputStream(localFile);
+                        } catch (Exception ignored) {}
+                    }
+                }
+                if (assetIn == null) {
+                    assetIn = assets.open(path);
+                }
                 byte[] body = readFully(assetIn);
                 assetIn.close();
 

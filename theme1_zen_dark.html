@@ -3437,7 +3437,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.5';
+    const CURRENT_VERSION_TAG = 'v1.0.6';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -3512,6 +3512,26 @@
 
       // 对比本地版本
       if (compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0) {
+        // ✨ 优先尝试应用内无感静默热更新
+        if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile) {
+          try {
+            showGameNotice('🚀 检测到新版本，正在为您无感自动更新...', false);
+            const updateUrl = `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@master/index.html?_t=${Date.now()}`;
+            const res = await fetch(updateUrl);
+            if (res.ok) {
+              const htmlText = await res.text();
+              if (htmlText && htmlText.length > 50000) {
+                AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
+                showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
+                setTimeout(() => { location.reload(); }, 1200);
+                return;
+              }
+            }
+          } catch(err) {
+            console.warn('[Auto HotUpdate fallback]', err);
+          }
+        }
+
         const updateModal = document.getElementById('appUpdateModal');
         if (updateModal) {
           document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}`;
@@ -3520,10 +3540,32 @@
           const fastLink = versionData.fastUrl || `https://ghproxy.net/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
           const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
 
-          document.getElementById('btnFastDownload').href = fastLink;
-          document.getElementById('btnOfficialDownload').href = officialLink;
+          const btnFast = document.getElementById('btnFastDownload');
+          if (btnFast) {
+            btnFast.href = fastLink;
+            btnFast.onclick = (e) => {
+              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
+                e.preventDefault();
+                AndroidNativeApp.downloadAndInstallApk(fastLink);
+                closeUpdateModal();
+              }
+            };
+          }
+
+          const btnOfficial = document.getElementById('btnOfficialDownload');
+          if (btnOfficial) {
+            btnOfficial.href = officialLink;
+            btnOfficial.onclick = (e) => {
+              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
+                e.preventDefault();
+                AndroidNativeApp.downloadAndInstallApk(officialLink);
+                closeUpdateModal();
+              }
+            };
+          }
           updateModal.style.display = 'flex';
         }
+      }
       } else {
         if (isManual) {
           showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);
