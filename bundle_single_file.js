@@ -27,14 +27,23 @@ if (fs.existsSync(animeAvatarsPath)) {
   animeAvatarsContent = fs.readFileSync(animeAvatarsPath, 'utf8');
 }
 
+const mqttJsPath = path.join(ROOT_DIR, 'js', 'mqtt.min.js');
+let mqttJsContent = '';
+if (fs.existsSync(mqttJsPath)) {
+  mqttJsContent = fs.readFileSync(mqttJsPath, 'utf8');
+}
+
 // 替换外部脚本引用为完全内联脚本
-const peerRegex = /<!-- 引入 PeerJS 免服务器外网穿透联机库[\s\S]*?<script src="https:\/\/unpkg\.com\/peerjs[\s\S]*?<\/script>/i;
+const peerRegex = /<!-- 引入 PeerJS 免服务器外网穿透联机库[\s\S]*?<script src="https:\/\/fastly\.jsdelivr\.net\/npm\/mqtt[\s\S]*?<\/script>/i;
 const cherryRegex = /<script src="js\/assets\/cherry_bomb_audio\.js"><\/script>/i;
 const animeRegex = /<script src="js\/assets\/anime_avatars\.js"><\/script>/i;
 
 let inlinedHeadScripts = '';
 if (peerJsContent) {
   inlinedHeadScripts += `\n  <!-- 内联 PeerJS 1.5.4 完整生产库 (零外网依赖，离线秒开) -->\n  <script>\n${peerJsContent}\n  </script>\n`;
+}
+if (mqttJsContent) {
+  inlinedHeadScripts += `  <!-- 内联 MQTT 极速联机引擎 (国内直连，秒级穿透) -->\n  <script>\n${mqttJsContent}\n  </script>\n`;
 }
 if (cherryAudioContent) {
   inlinedHeadScripts += `  <!-- 内联 樱桃炸弹 MP3 原声 Base64 数据 -->\n  <script>\n${cherryAudioContent}\n  </script>\n`;

@@ -4,8 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>五子棋 · 【极简禅意暗黑版】Zen Dark Gomoku</title>
-  <!-- PeerJS 免服务器外网联机库 -->
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="js/peerjs.min.js"></script>
+  <script>if (typeof Peer === 'undefined') { document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>'); }</script>
+  <script src="js/mqtt.min.js"></script>
+  <script>if (typeof mqtt === 'undefined') { document.write('<script src="https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"><\/script>'); }</script>
   <script src="js/assets/cherry_bomb_audio.js"></script>
   <script src="js/assets/anime_avatars.js"></script>
   <style>
@@ -1407,54 +1409,175 @@
     // ==========================================
     // 🌐 WebRTC P2P 联机 (高穿透+强制安全WSS)
     // ==========================================
-    const ICE_CONFIG = {
-      iceServers: [
-        // 🇨🇳 国内一线大厂极速 STUN 节点 (移动/联通/电信大内网高穿透打洞)
-        { urls: 'stun:stun.miwifi.com:3478' },
-        { urls: 'stun:stun.chat.bilibili.com:3478' },
-        { urls: 'stun:stun.qq.com:3478' },
-        // 🌐 全球 Anycast 骨干节点 (Cloudflare 极速跨网零丢包)
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:stun.syncthing.net:3478' },
-        // 🔄 开放 WebRTC TURN 中继服务器 (跨运营商对称 NAT/4G/5G 移动蜂窝中继保障)
-        {
-          urls: [
-            'turn:openrelay.metered.ca:80',
-            'turn:openrelay.metered.ca:443',
-            'turn:openrelay.metered.ca:443?transport=tcp'
-          ],
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
+    // ==========================================
+    // 🌐 极速秒开房间联机核心引擎 (全网络穿透·中国极速直连)
+    // ==========================================
+    const MQTT_BROKER_URLS = [
+      'wss://broker.emqx.io:8084/mqtt',
+      'wss://broker.hivemq.com:8884/mqtt'
+    ];
+
+    let mqttClient = null;
+    let mqttClientPromise = null;
+
+    function getOrCreateMqttClient() {
+      if (mqttClient && mqttClient.connected) return Promise.resolve(mqttClient);
+      if (mqttClientPromise) return mqttClientPromise;
+
+      mqttClientPromise = new Promise((resolve, reject) => {
+        if (typeof mqtt === 'undefined' && typeof window !== 'undefined' && typeof window.mqtt !== 'undefined') {
+          window.mqtt = window.mqtt;
         }
-      ],
-      iceCandidatePoolSize: 10
-    };
+        const m = (typeof mqtt !== 'undefined') ? mqtt : (typeof window !== 'undefined' ? window.mqtt : null);
+        if (!m || !m.connect) {
+          mqttClientPromise = null;
+          return reject(new Error("联机网络组件加载中，请稍后重试"));
+        }
 
-    function initPeer() {
-      if (peer) return;
-      const randomCode = Math.floor(100000 + Math.random() * 900000);
-      myRoomId = `GOMOKU-${randomCode}`;
-      peer = new Peer(myRoomId, {
-        secure: true,
-        config: ICE_CONFIG,
-        debug: 1
-      });
-
-      peer.on('open', (id) => {
-        document.getElementById('myRoomCodeDisplay').textContent = randomCode;
-      });
-
-      peer.on('connection', (c) => {
-        conn = c;
-        setupConn();
-        myOnlineColor = BLACK;
-        alert("🎉 好友已成功加入房间！您执黑先行~");
-        closeOnlineModal();
-        setMode('online');
-        conn.on('open', () => {
-          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+        const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+        const client = m.connect(MQTT_BROKER_URLS[0], {
+          clientId: clientId,
+          connectTimeout: 8000,
+          keepalive: 20,
+          clean: true,
+          reconnectPeriod: 2000
         });
+
+        const timer = setTimeout(() => {
+          if (!client.connected) {
+            client.end(true);
+            mqttClientPromise = null;
+            reject(new Error("网络连接超时"));
+          }
+        }, 9000);
+
+        client.on('connect', () => {
+          clearTimeout(timer);
+          mqttClient = client;
+          mqttClientPromise = null;
+          resolve(client);
+        });
+
+        client.on('error', (err) => console.warn('[MQTT Client Error]', err));
       });
+
+      return mqttClientPromise;
+    }
+
+    class MqttRoomConnection {
+      constructor(client, roomCode, role) {
+        this.client = client;
+        this.roomCode = roomCode;
+        this.role = role;
+        this.open = true;
+        this.listeners = { data: [], close: [], error: [], open: [] };
+
+        this.pubTopic = role === 'host' ? `gomoku/v3/${roomCode}/h2c` : `gomoku/v3/${roomCode}/c2h`;
+        this.subTopic = role === 'host' ? `gomoku/v3/${roomCode}/c2h` : `gomoku/v3/${roomCode}/h2c`;
+
+        this.messageHandler = (topic, payload) => {
+          if (topic !== this.subTopic) return;
+          try {
+            const data = JSON.parse(payload.toString());
+            this.emit('data', data);
+          } catch(e) {}
+        };
+
+        this.client.on('message', this.messageHandler);
+      }
+
+      send(data) {
+        if (!this.open || !this.client || !this.client.connected) return;
+        try {
+          this.client.publish(this.pubTopic, JSON.stringify(data), { qos: 0 });
+        } catch(e) {}
+      }
+
+      on(event, fn) {
+        if (this.listeners[event]) this.listeners[event].push(fn);
+        return this;
+      }
+
+      off(event, fn) {
+        if (this.listeners[event]) {
+          this.listeners[event] = this.listeners[event].filter(h => h !== fn);
+        }
+        return this;
+      }
+
+      emit(event, ...args) {
+        if (this.listeners[event]) {
+          this.listeners[event].forEach(fn => {
+            try { fn(...args); } catch(err) {}
+          });
+        }
+      }
+
+      close() {
+        this.open = false;
+        if (this.client) {
+          try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
+        }
+        this.emit('close');
+      }
+    }
+
+    let currentRoomCode = '';
+
+    function generateFastRoomCode() {
+      return String(Math.floor(100000 + Math.random() * 900000));
+    }
+
+    async function initPeer() {
+      if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
+      const displayEl = document.getElementById('myRoomCodeDisplay');
+      if (displayEl) displayEl.textContent = currentRoomCode;
+
+      if (conn) {
+        try { conn.close(); } catch(e) {}
+        conn = null;
+      }
+
+      const roomCode = currentRoomCode;
+      try {
+        const client = await getOrCreateMqttClient();
+        const c2hTopic = `gomoku/v3/${roomCode}/c2h`;
+        const h2cTopic = `gomoku/v3/${roomCode}/h2c`;
+
+        client.subscribe(c2hTopic, { qos: 0 });
+
+        const onHostInvite = (topic, payload) => {
+          if (topic !== c2hTopic) return;
+          try {
+            const data = JSON.parse(payload.toString());
+            if (data.type === 'join_request') {
+              client.removeListener('message', onHostInvite);
+
+              client.publish(h2cTopic, JSON.stringify({
+                type: 'join_accepted',
+                name: p1Name,
+                avatar: p1Avatar
+              }), { qos: 0 });
+
+              conn = new MqttRoomConnection(client, roomCode, 'host');
+              myOnlineColor = BLACK;
+              p2Name = data.name || '好友';
+              p2Avatar = data.avatar || '👧';
+              updatePlayerHeaderUI();
+
+              alert("🎉 好友已成功加入房间！您执黑先行~");
+              closeOnlineModal();
+              setMode('online');
+              conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+              setupConn();
+            }
+          } catch(e) {}
+        };
+
+        client.on('message', onHostInvite);
+      } catch(err) {
+        console.error('[initPeer error]', err);
+      }
     }
 
     function setupConn() {
@@ -1892,25 +2015,104 @@
       }
     }
 
-    function joinOnlineRoom() {
-      const code = document.getElementById('inputJoinCode').value.trim();
+    async function joinOnlineRoom() {
+      const codeInput = document.getElementById('inputJoinCode');
+      const code = codeInput ? codeInput.value.trim() : '';
       if (!code) return alert("请输入 6 位房间码！");
-      initPeer();
-      const targetId = `GOMOKU-${code}`;
-      const doConnect = () => {
-        conn = peer.connect(targetId, { reliable: true });
-        conn.on('open', () => {
-          setupConn();
-          myOnlineColor = WHITE;
-          alert("🎉 成功连入房间！房主执黑先行，您执白~");
-          closeOnlineModal();
-          setMode('online');
-          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+
+      const btn = document.getElementById('btnConnectRoom');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 正在连接好友房间...';
+      }
+
+      if (conn) {
+        try { conn.close(); } catch(e) {}
+        conn = null;
+      }
+
+      try {
+        const client = await getOrCreateMqttClient();
+        const c2hTopic = `gomoku/v3/${code}/c2h`;
+        const h2cTopic = `gomoku/v3/${code}/h2c`;
+
+        let hasJoined = false;
+        let joinInterval = null;
+        let joinTimeout = null;
+
+        const restoreBtn = () => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即连接开局';
+          }
+        };
+
+        const onClientInvite = (topic, payload) => {
+          if (topic !== h2cTopic) return;
+          try {
+            const data = JSON.parse(payload.toString());
+            if (data.type === 'join_accepted' && !hasJoined) {
+              hasJoined = true;
+              clearInterval(joinInterval);
+              clearTimeout(joinTimeout);
+              client.removeListener('message', onClientInvite);
+
+              restoreBtn();
+
+              conn = new MqttRoomConnection(client, code, 'client');
+              currentRoomCode = code;
+              myOnlineColor = WHITE;
+              p2Name = data.name || '房主';
+              p2Avatar = data.avatar || '👦';
+              updatePlayerHeaderUI();
+
+              alert("🎉 成功连入房间！房主执黑先行，您执白~");
+              closeOnlineModal();
+              setMode('online');
+              setupConn();
+              conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+            }
+          } catch(e) {}
+        };
+
+        client.on('message', onClientInvite);
+
+        client.subscribe(h2cTopic, { qos: 0 }, (err) => {
+          if (err) {
+            restoreBtn();
+            client.removeListener('message', onClientInvite);
+            return alert("❌ 订阅房间信道失败，请检查网络！");
+          }
+
+          const sendReq = () => {
+            if (hasJoined) return;
+            client.publish(c2hTopic, JSON.stringify({
+              type: 'join_request',
+              name: p1Name,
+              avatar: p1Avatar
+            }), { qos: 0 });
+          };
+
+          sendReq();
+          joinInterval = setInterval(sendReq, 1200);
+
+          joinTimeout = setTimeout(() => {
+            if (!hasJoined) {
+              clearInterval(joinInterval);
+              client.removeListener('message', onClientInvite);
+              restoreBtn();
+              alert("❌ 未找到该房间，请确认房间码正确，并让好友先开启房间！");
+            }
+          }, 15000);
         });
-        conn.on('error', () => alert("❌ 连接失败，请检查房间码！"));
-      };
-      if (peer && peer.open) doConnect();
-      else if (peer) peer.once('open', doConnect);
+
+      } catch(err) {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '🚀 立即连接开局';
+        }
+        alert("❌ 连接服务器失败：" + (err.message || '网络异常'));
+      }
     }
 
     function switchOnlineTab(tab) {
@@ -3132,7 +3334,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.3';
+    const CURRENT_VERSION_TAG = 'v1.0.4';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {

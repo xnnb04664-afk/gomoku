@@ -1,7 +1,9 @@
 package com.gomoku.master;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -10,6 +12,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -21,6 +24,8 @@ public class MainActivity extends Activity {
     private WebView       mWebView;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
+    private ValueCallback<Uri[]> mFilePathCallback;
+    private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -136,7 +141,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        // WebRTC 权限自动授予
+        // WebRTC 权限自动授予 + 相册照片上传支持
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
@@ -144,8 +149,48 @@ public class MainActivity extends Activity {
                     runOnUiThread(() -> request.grant(request.getResources()));
                 }
             }
+
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (mFilePathCallback != null) {
+                    mFilePathCallback.onReceiveValue(null);
+                }
+                mFilePathCallback = filePathCallback;
+
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("image/*");
+                try {
+                    startActivityForResult(Intent.createChooser(intent, "选择头像照片"), FILE_CHOOSER_REQUEST_CODE);
+                    return true;
+                } catch (Exception e) {
+                    mFilePathCallback = null;
+                    return false;
+                }
+            }
         });
     }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+            if (mFilePathCallback != null) {
+                Uri[] results = null;
+                if (resultCode == RESULT_OK && data != null) {
+                    Uri dataUri = data.getData();
+                    if (dataUri != null) {
+                        results = new Uri[]{ dataUri };
+                    } else if (data.getClipData() != null && data.getClipData().getItemCount() > 0) {
+                        results = new Uri[]{ data.getClipData().getItemAt(0).getUri() };
+                    }
+                }
+                mFilePathCallback.onReceiveValue(results);
+                mFilePathCallback = null;
+            }
+        }
+    }
+
 
     @Override
     public void onBackPressed() {
@@ -178,6 +223,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (mFilePathCallback != null) {
+            mFilePathCallback.onReceiveValue(null);
+            mFilePathCallback = null;
+        }
         // 停止本地服务器
         if (mLocalServer != null) {
             mLocalServer.stopServer();
