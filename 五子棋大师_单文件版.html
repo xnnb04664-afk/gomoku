@@ -1298,6 +1298,15 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
         <div class="avatar-opt" onclick="selectAvatar(this, '🦄')">🦄</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🌸')">🌸</div>
       </div>
+ 
+      <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
+      <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
+        <div style="text-align:left; line-height:1.2;">
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.1</span></div>
+          <div style="font-size:9.5px; color:#636e72;">GitHub 免服务器云端发版</div>
+        </div>
+        <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
+      </div>
 
       <div class="undo-btn-row">
         <button class="btn-undo-action btn-undo-agree" onclick="saveProfile()">💾 保存并应用</button>
@@ -1470,6 +1479,28 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       <div style="display: flex; gap: 8px; justify-content: center;">
         <button class="btn-confirm-ok" id="btnManualReconnect" onclick="manualTriggerReconnect()" style="padding: 6px 14px; font-size: 12.5px;">🔄 立即重试</button>
         <button class="btn-confirm-cancel" onclick="fallbackToAiGame()" style="padding: 6px 14px; font-size: 12.5px;">🤖 转为人机</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 🚀 GitHub 自动检查更新模态弹窗 -->
+  <div class="custom-confirm-backdrop" id="appUpdateModal" style="display:none; z-index: 100003;" onclick="if(event.target===this)closeUpdateModal()">
+    <div class="custom-confirm-card" style="max-width:330px; text-align:left;">
+      <div style="text-align:center; font-size:36px; margin-bottom:4px;">🚀</div>
+      <div style="text-align:center; font-size:16px; font-weight:900; color:#2d3436; margin-bottom:4px;" id="updateModalTitle">发现新版本！</div>
+      <div style="text-align:center; margin-bottom:8px;">
+        <span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:10px; font-size:11.5px; font-weight:900;" id="updateTagText">v1.0.1 ➔ v1.0.2</span>
+      </div>
+      <div style="font-size:11px; font-weight:800; color:#64748b; margin-bottom:4px;">更新内容说明：</div>
+      <div id="updateNotesContent" style="max-height:120px; overflow-y:auto; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:10px; padding:8px; font-size:11px; color:#334155; line-height:1.5; white-space:pre-wrap; margin-bottom:12px;"></div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <a id="btnFastDownload" href="#" target="_blank" class="btn-confirm-ok" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; padding:9px 0; border-radius:10px; font-weight:900; font-size:12.5px; background:#10b981; border-color:#059669; box-shadow:0 3px 0 #047857; color:#fff;">
+          <span>⚡ 国内极速下载更新 (推荐)</span>
+        </a>
+        <a id="btnOfficialDownload" href="#" target="_blank" class="btn-confirm-cancel" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; padding:7px 0; border-radius:10px; font-weight:800; font-size:11.5px; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">
+          <span>🌐 GitHub 官方原源下载</span>
+        </a>
+        <button type="button" class="btn-confirm-cancel" onclick="closeUpdateModal()" style="padding:6px 0; border-radius:10px; font-size:11.5px; background:#f1f5f9; color:#64748b; border:none;">稍后再说</button>
       </div>
     </div>
   </div>
@@ -5154,6 +5185,74 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     // 启用水平拖拽滑动
     enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));
     enableHorizontalDrag(document.querySelector('.emoji-row'));
+
+    // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
+    const CURRENT_VERSION_TAG = 'v1.0.1';
+    const GITHUB_REPO = 'xnnb04664-afk/gomoku';
+
+    function compareVersions(v1, v2) {
+      const clean1 = (v1 || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+      const clean2 = (v2 || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(clean1.length, clean2.length); i++) {
+        const num1 = clean1[i] || 0;
+        const num2 = clean2[i] || 0;
+        if (num1 > num2) return 1;
+        if (num1 < num2) return -1;
+      }
+      return 0;
+    }
+
+    async function checkAppUpdate(isManual = false) {
+      if (isManual) {
+        showGameNotice('🔍 正在连接 GitHub 检测最新版本...');
+      }
+      try {
+        const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+        const res = await fetch(apiUrl, { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const latestTag = data.tag_name || '';
+
+        if (latestTag && compareVersions(latestTag, CURRENT_VERSION_TAG) > 0) {
+          const updateModal = document.getElementById('appUpdateModal');
+          if (updateModal) {
+            document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${latestTag}`;
+            document.getElementById('updateNotesContent').textContent = data.body || '五子棋全新优化与新玩法升级，推荐更新！';
+
+            let rawDownloadUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+            if (data.assets && data.assets.length > 0) {
+              const apkAsset = data.assets.find(a => a.name && a.name.endsWith('.apk'));
+              if (apkAsset && apkAsset.browser_download_url) {
+                rawDownloadUrl = apkAsset.browser_download_url;
+              }
+            }
+
+            const fastDownloadUrl = `https://ghproxy.net/${rawDownloadUrl}`;
+            document.getElementById('btnFastDownload').href = fastDownloadUrl;
+            document.getElementById('btnOfficialDownload').href = rawDownloadUrl;
+            updateModal.style.display = 'flex';
+          }
+        } else {
+          if (isManual) {
+            showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);
+          }
+        }
+      } catch(err) {
+        if (isManual) {
+          showGameNotice('⚠️ 检查更新网络较慢，可稍后再试');
+        }
+      }
+    }
+
+    function closeUpdateModal() {
+      const el = document.getElementById('appUpdateModal');
+      if (el) el.style.display = 'none';
+    }
+
+    // 页面加载 3 秒后静默检查更新 (不打扰玩家，有新版才弹窗)
+    setTimeout(() => {
+      checkAppUpdate(false);
+    }, 3000);
   </script>
 </body>
 </html>

@@ -214,18 +214,26 @@
 - **触控零延迟 (Zero Touch Latency)**：
   - 规范配置 `touch-action: manipulation;` 与 `user-scalable=no`，彻底根除手机端浏览器默认的 300ms 点击延迟。
 
-### 18. 🔄 手机无缝覆盖更新与全自动发布引擎 (Seamless Update & One-Click Publish)
+### 18. 🔄 手机无缝覆盖更新与 GitHub Releases 免服务器云发版体系
+- **GitHub 官方公开仓库**：[`xnnb04664-afk/gomoku`](https://github.com/xnnb04664-afk/gomoku)
+- **永久最新版下载直链**：
+  - 官方通道：`https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
+  - ⚡ 国内高速免翻墙镜像：`https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
+- **游戏内免服务器智能检查更新系统**：
+  - 在【个人资料】中常驻版本显示 `v1.0.1` 与【🚀 检查更新】按钮；
+  - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出精美果冻卡片与更新日志；
+  - 提供国内高速与官方原源双下载通道，点击直连下载最新 APK；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
   - **固化根目录永久正式签名证书 (`release.keystore`)**：签名密钥永久锁定，彻底解决 Android 系统“签名冲突无法安装”的致命痛点，手机用户直接安装最新 APK 即可 1 秒覆盖升级，无需卸载，保留全部对局历史与自定义头像；
-  - **规范化版本递增体系**：`versionCode`（整数步进）与 `versionName`（`1.0.X`）由发布脚本智能解析递增；
 - **全平台一键极速发布流水线 (`publish.js`)**：
   - 运行 `node publish.js`（或对 AI 说“更新/打包”）：
-    1. 自动递增版本号；
-    2. 自动构建纯单文件离线网页版；
-    3. 自动调用原生 SDK 进行持久化签名编译，生成 `五子棋.apk`；
-    4. 自动校验双端产物；
-    5. 自动执行 `git add .` 与发布版本 `git commit`；
-  - 整个流程仅需约 8 秒，极速省心！
+    1. 自动自增版本号（`1.0.X`）；
+    2. 自动同步更新 6 大主题与单文件版；
+    3. 自动使用永久正式密钥编译签署原生 `五子棋.apk`；
+    4. 自动执行 `git add .` 与 `git commit`；
+    5. 自动推送到 GitHub (`git push origin master`)；
+    6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk`；
+  - 整个流程全自动完成，0 维护负担！
 
 ---
 

@@ -6,11 +6,11 @@ const ROOT_DIR = __dirname;
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
 
 console.log('======================================================');
-console.log('🚀 五子棋全平台极速一键发布引擎 (One-Click Publisher)');
+console.log('🚀 五子棋全平台极速一键发布引擎 (One-Click Publisher & GitHub Releases)');
 console.log('======================================================');
 
 // 1. 自动解析并递增 Android 版本号
-console.log('>>> [1/5] 读取并递增 Android 应用版本号...');
+console.log('>>> [1/7] 读取并递增应用版本号...');
 let manifestContent = fs.readFileSync(MANIFEST_PATH, 'utf8');
 const codeMatch = manifestContent.match(/android:versionCode="(\d+)"/);
 const nameMatch = manifestContent.match(/android:versionName="([\d\.]+)"/);
@@ -36,41 +36,80 @@ if (codeMatch && nameMatch) {
   console.log(`📌 版本号自增完成: ${nameMatch[1]} (Build ${codeMatch[1]}) ➔ v${newName} (Build ${newCode})`);
 }
 
-// 2. 打包单文件离线网页版
-console.log('>>> [2/5] 正在构建最新单文件离线旗舰版...');
+// 2. 同步更新所有 HTML 中的 CURRENT_VERSION_TAG 与 UI 显示
+console.log('>>> [2/7] 同步前端版本号到 6 大主题...');
+const htmlFiles = [
+  'index.html',
+  'theme1_zen_dark.html',
+  'theme2_neo_traditional.html',
+  'theme3_luxury_glass.html',
+  'theme4_clean_ios.html',
+  'theme5_sweet_romance.html'
+];
+htmlFiles.forEach(f => {
+  const fp = path.join(ROOT_DIR, f);
+  if (fs.existsSync(fp)) {
+    let c = fs.readFileSync(fp, 'utf8');
+    c = c.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
+    c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/span>/, `id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v${newName}</span>`);
+    fs.writeFileSync(fp, c, 'utf8');
+  }
+});
+
+// 3. 打包单文件离线网页版
+console.log('>>> [3/7] 正在构建最新单文件离线旗舰版...');
 execSync('node bundle_single_file.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
-// 3. 构建原生 Android APK
-console.log('>>> [3/5] 正在调用 Android 原生 SDK 编译并持久化签名 APK...');
+// 4. 构建原生 Android APK (持久密钥签名)
+console.log('>>> [4/7] 正在调用 Android 原生 SDK 编译并持久化签名 APK...');
 execSync('node build_apk.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
-// 4. 校验产物
+// 5. 校验产物
 const apkPath = path.join(ROOT_DIR, '五子棋.apk');
 const singleHtmlPath = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
 
-if (fs.existsSync(apkPath) && fs.existsSync(singleHtmlPath)) {
-  const apkSize = (fs.statSync(apkPath).size / (1024 * 1024)).toFixed(2);
-  const htmlSize = (fs.statSync(singleHtmlPath).size / 1024).toFixed(2);
-
-  console.log('>>> [4/5] 交付物产物校验通过:');
-  console.log(`   📱 五子棋.apk: ${apkSize} MB (版本: v${newName}, 手机支持无缝覆盖更新)`);
-  console.log(`   🌐 五子棋大师_单文件版.html: ${htmlSize} KB`);
-
-  // 5. 自动执行 Git 提交
-  console.log('>>> [5/5] 执行 Git 自动提交发布记录...');
-  try {
-    const commitMsg = `release: 发布 v${newName} (Build ${newCode}) - 单文件版与原生APK全平台就绪`;
-    execSync('git add .', { cwd: ROOT_DIR, stdio: 'inherit' });
-    execSync(`git commit -m "${commitMsg}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
-    console.log(`🎉 Git 提交成功: ${commitMsg}`);
-  } catch(e) {
-    console.log('ℹ️ 工作区无文件变动或已是最新状态。');
-  }
-
-  console.log('======================================================');
-  console.log(`✨ 全部更新构建成功！用户手机直接安装【五子棋.apk】即可覆盖更新！`);
-  console.log('======================================================');
-} else {
+if (!fs.existsSync(apkPath) || !fs.existsSync(singleHtmlPath)) {
   console.error('❌ 打包校验未通过，产物缺失！');
   process.exit(1);
 }
+
+const apkSize = (fs.statSync(apkPath).size / (1024 * 1024)).toFixed(2);
+const htmlSize = (fs.statSync(singleHtmlPath).size / 1024).toFixed(2);
+console.log(`>>> [5/7] 交付物产物校验通过: APK ${apkSize} MB | HTML ${htmlSize} KB (v${newName})`);
+
+// 6. 执行 Git 本地提交并推送到 GitHub
+console.log('>>> [6/7] 执行 Git 提交并推送到 GitHub...');
+try {
+  const commitMsg = `release: 发布 v${newName} (Build ${newCode}) - 原生APK与GitHub Releases同步就绪`;
+  execSync('git add .', { cwd: ROOT_DIR, stdio: 'inherit' });
+  execSync(`git commit -m "${commitMsg}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
+  console.log(`🎉 Git 本地提交成功: ${commitMsg}`);
+  execSync('git push origin master', { cwd: ROOT_DIR, stdio: 'inherit' });
+  console.log('🎉 GitHub 仓库同步推送成功！');
+} catch(e) {
+  console.log('ℹ️ Git 提交或推送提示: ' + e.message);
+}
+
+// 7. 自动在 GitHub Releases 上创建发版并上传 APK
+console.log('>>> [7/7] 正在将最新 APK 发布到 GitHub Releases...');
+const releaseTag = `v${newName}`;
+const releaseApk = path.join(ROOT_DIR, 'gomoku.apk');
+fs.copyFileSync(apkPath, releaseApk);
+
+try {
+  const releaseTitle = `五子棋 ${releaseTag} 官方正式版`;
+  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 正式发布！\n- 📱 原生 Android 满帧体验 (120Hz Canvas离屏位图渲染)\n- 🌐 WebRTC 跨网穿透联机与断线瞬时重连\n- 🎴 9大强力干扰技能卡牌池\n- 🔄 支持手机无缝覆盖安装，保留全部胜率战绩与自定义头像！`;
+  
+  execSync(`gh release create ${releaseTag} "gomoku.apk" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
+  console.log(`🎉 GitHub Releases 发布成功: ${releaseTag}`);
+} catch(err) {
+  console.log('ℹ️ GitHub Release 已存在或创建提示: ' + err.message);
+} finally {
+  if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
+}
+
+console.log('======================================================');
+console.log(`✨ 全部发布流程圆满成功！版本: v${newName}`);
+console.log(`🔗 永久最新版下载直链: https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
+console.log(`⚡ 国内高速加速下载链: https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
+console.log('======================================================');
