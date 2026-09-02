@@ -132,6 +132,7 @@ try {
   execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@master/version.json"`, { timeout: 4000 });
   execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@latest/version.json"`, { timeout: 4000 });
   execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@master/index.html"`, { timeout: 4000 });
+  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@latest/index.html"`, { timeout: 4000 });
 } catch(ignored) {}
 
 console.log('======================================================');

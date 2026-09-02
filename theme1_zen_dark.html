@@ -5240,7 +5240,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.12';
+    const CURRENT_VERSION_TAG = 'v1.0.13';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -5262,35 +5262,44 @@
 
       let versionData = null;
 
-      // 1. 国内极速直连镜像源 (优先无缓存的 raw 镜像，次选 jsDelivr @latest)
+      // 1. 多通道并发极速直连镜像源 (多源竞速并发，自动取全网最高/最新版本，杜绝单一镜像缓存滞后)
       const mirrorUrls = [
-        `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`,
         `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
+        `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
         `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
-        `https://testingcf.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`
+        `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`
       ];
 
-      for (const cdnUrl of mirrorUrls) {
+      const fetchPromises = mirrorUrls.map(async (cdnUrl) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
         try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3500);
           const res = await fetch(cdnUrl, { signal: controller.signal });
           clearTimeout(timeoutId);
           if (res.ok) {
             const json = await res.json();
             if (json && (json.versionName || json.releaseTag)) {
-              versionData = {
+              return {
                 tag: json.releaseTag || ('v' + json.versionName),
                 notes: json.updateLog || '五子棋全新功能与性能调优，推荐更新！',
                 fastUrl: (json.download && json.download.fastUrl) || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
                 backupUrl: (json.download && json.download.backupFastUrl) || `https://ghps.cc/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
                 officialUrl: (json.download && json.download.officialUrl) || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
               };
-              break;
             }
           }
         } catch(e) {}
-      }
+        return null;
+      });
+
+      try {
+        const results = await Promise.all(fetchPromises);
+        const valid = results.filter(Boolean);
+        if (valid.length > 0) {
+          valid.sort((a, b) => compareVersions(b.tag, a.tag));
+          versionData = valid[0];
+        }
+      } catch(e) {}
 
       // 2. 备用通道：GitHub 官方 REST API
       if (!versionData) {
