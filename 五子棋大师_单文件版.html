@@ -1476,10 +1476,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       
       <!-- 头像预览与相册上传按钮 -->
       <div class="profile-header-preview">
-        <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">
-          👦
-          <span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>
-        </div>
+        <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">👦</div>
         <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 从手机相册选真实照片</button>
       </div>
 
@@ -1526,7 +1523,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.11</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.12</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -2078,7 +2075,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
           if (prevEl) {
-            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
           }
           document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
           _applyAvatarChange(compressedBase64);
@@ -2123,7 +2120,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       if (inputEl) inputEl.value = currentName;
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = renderAvatarElement(selectedAvatarData) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+        prevEl.innerHTML = renderAvatarElement(selectedAvatarData);
       }
 
       const opts = document.querySelectorAll('.avatar-opt');
@@ -2163,7 +2160,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = renderAvatarElement(char) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+        prevEl.innerHTML = renderAvatarElement(char);
       }
       _applyAvatarChange(char);
       showGameNotice('✨ 头像已更换！');
@@ -2177,7 +2174,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar">`;
       }
       _applyAvatarChange(dataUrl);
       showGameNotice('✨ 头像已更换！');
@@ -5984,7 +5981,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.11';
+    const CURRENT_VERSION_TAG = 'v1.0.12';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {

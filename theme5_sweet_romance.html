@@ -789,10 +789,7 @@
     <div class="modal-card">
       <div class="modal-title" id="profileModalTitle">👤 自定义情侣昵称与头像</div>
       
-      <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">
-          👦
-          <span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>
-        </div>
+      <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">👦</div>
       <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 上传真实情侣照片</button>
 
       <div style="font-size:12px; font-weight:700; color:#fbcfe8; margin:10px 0 4px 0;">自定义昵称：</div>
@@ -1344,7 +1341,7 @@
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
           if (prevEl) {
-            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
           }
           document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
           _applyAvatarChange(compressedBase64);
@@ -1386,7 +1383,7 @@
       if (inputEl) inputEl.value = currentName;
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = renderAvatarElement(selectedAvatarData) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+        prevEl.innerHTML = renderAvatarElement(selectedAvatarData);
       }
 
       const opts = document.querySelectorAll('.avatar-opt');
@@ -1424,7 +1421,7 @@
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = renderAvatarElement(char) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+        prevEl.innerHTML = renderAvatarElement(char);
       }
       _applyAvatarChange(char);
       showGameNotice('✨ 头像已更换！');
@@ -1437,7 +1434,7 @@
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar">`;
       }
       _applyAvatarChange(dataUrl);
       showGameNotice('✨ 头像已更换！');
@@ -4640,7 +4637,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.11';
+    const CURRENT_VERSION_TAG = 'v1.0.12';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
