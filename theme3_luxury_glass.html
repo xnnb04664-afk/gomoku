@@ -1367,55 +1367,272 @@
     function closeThemeModal() { document.getElementById('themeModal').classList.remove('show'); }
 
     // ==========================================
-    // 🧠 大师级高智商 AI 算法
     // ==========================================
-    function smartAiMove() {
-      if (isOver) return;
-      let bestMove = null, maxScore = -1;
+    // 🧠 五子棋终极算力·九段大师级 God-Tier AI 引擎
+    // ==========================================
+    // 特性：
+    // 1. 全方位 4 维窗口棋形识别（连五、活四、冲四、活三、眠三、跳四、跳三、嵌五）
+    // 2. 双杀判定：双冲四、四三杀、双活三等必胜形态秒级洞察
+    // 3. 攻防合一权值：攻击与绝对防御无缝动态切换，坚决封堵对手一切杀着
+    // 4. VCF (连续冲四必杀引擎)：多步连冲穷尽推演，攻防两端全面算杀
+    // 5. 2-Ply 深度前瞻反击推演 + 棋盘中央控制势能加权
 
-      const evalDir = (r, c, dr, dc, p) => {
-        let count = 1, openEnds = 0;
-        let nr = r + dr, nc = c + dc;
-        while (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) { count++; nr+=dr; nc+=dc; }
-        if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===EMPTY) openEnds++;
+    const POS_WEIGHT = [
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+      [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
+      [0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 5, 5, 5, 5, 5, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 5, 6, 6, 6, 5, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 5, 6, 8, 6, 5, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 5, 6, 6, 6, 5, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 5, 5, 5, 5, 5, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 3, 2, 1, 0],
+      [0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 1, 0],
+      [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
+      [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    ];
 
-        nr = r - dr; nc = c - dc;
-        while (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) { count++; nr-=dr; nc-=dc; }
-        if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===EMPTY) openEnds++;
+    function countPointPatterns(boardState, r, c, color) {
+      const dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+      let five = 0, flex4 = 0, block4 = 0, flex3 = 0, block3 = 0, flex2 = 0, block2 = 0;
 
-        if (count >= 5) return 100000;
-        if (count === 4) return openEnds === 2 ? 10000 : 2500;
-        if (count === 3) return openEnds === 2 ? 2000 : 200;
-        if (count === 2) return openEnds === 2 ? 100 : 10;
-        return 0;
-      };
+      for (let d = 0; d < 4; d++) {
+        const dr = dirs[d][0], dc = dirs[d][1];
+        let line = [];
+        for (let i = -4; i <= 4; i++) {
+          const nr = r + i * dr, nc = c + i * dc;
+          if (nr < 0 || nr >= 15 || nc < 0 || nc >= 15) {
+            line.push(3);
+          } else if (i === 0) {
+            line.push(color);
+          } else {
+            line.push(boardState[nr][nc]);
+          }
+        }
 
+        let s = "";
+        for (let i = 0; i < line.length; i++) {
+          if (line[i] === color) s += "1";
+          else if (line[i] === EMPTY) s += "0";
+          else s += "2";
+        }
+
+        if (s.includes("11111")) { five++; continue; }
+        if (s.includes("011110")) { flex4++; continue; }
+        if (
+          s.includes("211110") || s.includes("011112") ||
+          s.includes("10111") || s.includes("11011") || s.includes("11101")
+        ) { block4++; continue; }
+        if (
+          s.includes("01110") || s.includes("010110") || s.includes("011010")
+        ) { flex3++; continue; }
+        if (
+          s.includes("211100") || s.includes("001112") ||
+          s.includes("210110") || s.includes("011012") ||
+          s.includes("211010") || s.includes("010112") ||
+          s.includes("10011") || s.includes("11001") || s.includes("10101") ||
+          s.includes("2011102")
+        ) { block3++; continue; }
+        if (
+          s.includes("001100") || s.includes("010100") || s.includes("001010") ||
+          s.includes("010010")
+        ) { flex2++; continue; }
+        if (
+          s.includes("211000") || s.includes("000112") ||
+          s.includes("210100") || s.includes("001012") ||
+          s.includes("201010") || s.includes("010102") ||
+          s.includes("10001")
+        ) { block2++; continue; }
+      }
+
+      return { five, flex4, block4, flex3, block3, flex2, block2 };
+    }
+
+    function evaluateMoveScore(pat) {
+      if (pat.five > 0) return 10000000;
+      if (pat.flex4 > 0) return 2000000;
+      if (pat.block4 >= 2) return 1500000;
+      if (pat.block4 > 0 && pat.flex3 > 0) return 1300000;
+      if (pat.flex3 >= 2) return 900000;
+      
+      let score = 0;
+      if (pat.block4 > 0) score += 120000 * pat.block4;
+      if (pat.flex3 > 0) score += 70000 * pat.flex3;
+      if (pat.block3 > 0 && pat.flex2 > 0) score += 25000;
+      if (pat.block3 > 0) score += 6000 * pat.block3;
+      if (pat.flex2 >= 2) score += 10000;
+      if (pat.flex2 > 0) score += 3000 * pat.flex2;
+      if (pat.block2 > 0) score += 300 * pat.block2;
+      return score;
+    }
+
+    function getPointScore(boardState, r, c, aiColor) {
+      const oppColor = aiColor === BLACK ? WHITE : BLACK;
+      
+      const myPat = countPointPatterns(boardState, r, c, aiColor);
+      const myScore = evaluateMoveScore(myPat);
+      
+      const oppPat = countPointPatterns(boardState, r, c, oppColor);
+      const oppScore = evaluateMoveScore(oppPat);
+
+      if (myPat.five > 0) return 20000000;
+      if (oppPat.five > 0) return 18000000;
+      if (myPat.flex4 > 0) return 15000000;
+      if (oppPat.flex4 > 0) return 13000000;
+      if ((myPat.block4 >= 2) || (myPat.block4 > 0 && myPat.flex3 > 0)) return 11000000;
+      if ((oppPat.block4 >= 2) || (oppPat.block4 > 0 && oppPat.flex3 > 0)) return 9500000;
+      if (myPat.flex3 >= 2) return 8000000;
+      if (oppPat.flex3 >= 2) return 7000000;
+      if (myPat.block4 > 0) return 5000000 + myScore;
+      if (oppPat.block4 > 0) return 4500000 + oppScore;
+      if (myPat.flex3 > 0) return 3000000 + myScore;
+      if (oppPat.flex3 > 0) return 2500000 + oppScore * 1.2;
+
+      const posVal = POS_WEIGHT[r][c] * 12;
+      return myScore * 1.15 + oppScore * 1.0 + posVal;
+    }
+
+    function getCandidateMoves(boardState, aiColor, maxCandidates = 15) {
+      const list = [];
       for (let r = 0; r < 15; r++) {
         for (let c = 0; c < 15; c++) {
-          if (board[r][c] === EMPTY) {
-            let hasNeighbor = false;
-            for (let dr=-2; dr<=2&&!hasNeighbor; dr++) {
-              for (let dc=-2; dc<=2&&!hasNeighbor; dc++) {
-                const nr=r+dr, nc=c+dc;
-                if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]!==EMPTY) hasNeighbor = true;
+          if (boardState[r][c] !== EMPTY) continue;
+          
+          let near = false;
+          for (let dr = -2; dr <= 2 && !near; dr++) {
+            for (let dc = -2; dc <= 2 && !near; dc++) {
+              const nr = r + dr, nc = c + dc;
+              if (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && boardState[nr][nc] !== EMPTY) {
+                near = true;
               }
             }
-            if (!hasNeighbor && history.length > 0) continue;
+          }
+          if (!near) continue;
 
-            board[r][c] = WHITE;
-            let atk = 0;
-            for (const [dr,dc] of [[0,1],[1,0],[1,1],[1,-1]]) atk += evalDir(r, c, dr, dc, WHITE);
-            board[r][c] = EMPTY;
+          const score = getPointScore(boardState, r, c, aiColor);
+          list.push({ r, c, score });
+        }
+      }
 
-            board[r][c] = BLACK;
-            let def = 0;
-            for (const [dr,dc] of [[0,1],[1,0],[1,1],[1,-1]]) def += evalDir(r, c, dr, dc, BLACK);
-            board[r][c] = EMPTY;
+      list.sort((a, b) => b.score - a.score);
+      return list.slice(0, maxCandidates);
+    }
 
-            const dist = Math.abs(r - 7) + Math.abs(c - 7);
-            const score = atk * 1.15 + def * 1.0 + (14 - dist);
+    function searchVCF(boardState, color, depth = 3) {
+      if (depth <= 0) return null;
+      const opp = color === BLACK ? WHITE : BLACK;
+      
+      const attackMoves = [];
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (boardState[r][c] !== EMPTY) continue;
+          const pat = countPointPatterns(boardState, r, c, color);
+          if (pat.five > 0) return { r, c };
+          if (pat.flex4 > 0 || pat.block4 > 0) {
+            attackMoves.push({ r, c, flex: pat.flex4 > 0 });
+          }
+        }
+      }
 
-            if (score > maxScore) { maxScore = score; bestMove = {r, c}; }
+      for (let m of attackMoves) {
+        if (m.flex) return { r: m.r, c: m.c };
+
+        boardState[m.r][m.c] = color;
+        let defenseMove = null;
+        for (let dr = 0; dr < 15; dr++) {
+          for (let dc = 0; dc < 15; dc++) {
+            if (boardState[dr][dc] === EMPTY) {
+              const checkPat = countPointPatterns(boardState, dr, dc, color);
+              if (checkPat.five > 0) {
+                defenseMove = { r: dr, c: dc };
+                break;
+              }
+            }
+          }
+          if (defenseMove) break;
+        }
+
+        let win = false;
+        if (defenseMove) {
+          boardState[defenseMove.r][defenseMove.c] = opp;
+          const sub = searchVCF(boardState, color, depth - 1);
+          boardState[defenseMove.r][defenseMove.c] = EMPTY;
+          if (sub) win = true;
+        }
+
+        boardState[m.r][m.c] = EMPTY;
+        if (win) return { r: m.r, c: m.c };
+      }
+
+      return null;
+    }
+
+    function smartAiMove(forbiddenPoints = []) {
+      if (isOver) return;
+
+      let totalStones = 0;
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (board[r][c] !== EMPTY) totalStones++;
+        }
+      }
+
+      let bestMove = null;
+
+      // 1. 开局库
+      if (totalStones === 0) {
+        bestMove = { r: 7, c: 7 };
+      } else if (totalStones === 1 && board[7][7] === EMPTY) {
+        bestMove = { r: 7, c: 7 };
+      } else if (totalStones === 1 && board[7][7] !== EMPTY) {
+        const options = [{r:6, c:6}, {r:6, c:7}, {r:6, c:8}, {r:7, c:6}, {r:7, c:8}, {r:8, c:6}, {r:8, c:7}, {r:8, c:8}];
+        bestMove = options[Math.floor(Math.random() * options.length)];
+      }
+
+      // 2. 候选步提取
+      if (!bestMove) {
+        let candidates = getCandidateMoves(board, WHITE, 16);
+        if (forbiddenPoints && forbiddenPoints.length > 0) {
+          candidates = candidates.filter(m => !forbiddenPoints.some(f => f.r === m.r && f.c === m.c));
+        }
+
+        if (candidates.length === 0) {
+          bestMove = { r: 7, c: 7 };
+        } else if (candidates[0].score >= 7000000) {
+          // 必胜 / 必防首要截断（绝杀、活四、四三、双三封堵）
+          bestMove = { r: candidates[0].r, c: candidates[0].c };
+        } else {
+          // 3. VCF 连续冲四绝杀
+          const vcf = searchVCF(board, WHITE, 3);
+          if (vcf && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vcf.r && f.c === vcf.c))) {
+            bestMove = vcf;
+          } else {
+            // 4. 对手 VCF 绝杀反制
+            const oppVcf = searchVCF(board, BLACK, 3);
+            if (oppVcf && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === oppVcf.r && f.c === oppVcf.c))) {
+              bestMove = oppVcf;
+            } else {
+              // 5. 2-Ply 深度前瞻反击推演
+              bestMove = candidates[0];
+              let bestNetScore = -Infinity;
+
+              for (let i = 0; i < Math.min(candidates.length, 6); i++) {
+                const move = candidates[i];
+                board[move.r][move.c] = WHITE;
+                const oppResponses = getCandidateMoves(board, BLACK, 3);
+                const worstOppThreat = oppResponses.length > 0 ? oppResponses[0].score : 0;
+                board[move.r][move.c] = EMPTY;
+
+                const netScore = move.score - worstOppThreat * 0.85;
+                if (netScore > bestNetScore) {
+                  bestNetScore = netScore;
+                  bestMove = move;
+                }
+              }
+            }
           }
         }
       }
@@ -3397,7 +3614,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.6';
+    const CURRENT_VERSION_TAG = 'v1.0.7';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
