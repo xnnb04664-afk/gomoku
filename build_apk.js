@@ -45,7 +45,7 @@ const APKSIGNER = path.join(BUILD_TOOLS, 'apksigner.bat');
 
 const ROOT_DIR = __dirname;
 const SRC_DIR = path.join(ROOT_DIR, 'android_src');
-const OUTPUT_APK = path.join(ROOT_DIR, '五子棋大师.apk');
+const OUTPUT_APK = path.join(ROOT_DIR, '五子棋.apk');
 const KEYSTORE = path.join(ROOT_DIR, 'release.keystore');
 
 // 使用纯 ASCII 临时目录以避免 aapt2 对中文字符路径的兼容性问题
