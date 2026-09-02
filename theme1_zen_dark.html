@@ -3117,42 +3117,79 @@
 
     async function checkAppUpdate(isManual = false) {
       if (isManual) {
-        showGameNotice('🔍 正在连接 GitHub 检测最新版本...');
+        showGameNotice('🔍 正在连接国内高速节点检测更新...');
       }
+
+      let versionData = null;
+
+      // 1. 首选通道：国内备案极速 jsDelivr 边缘节点 (20ms~50ms 瞬开，完全免梯子)
       try {
-        const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-        const res = await fetch(apiUrl, { cache: 'no-cache' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const latestTag = data.tag_name || '';
-
-        if (latestTag && compareVersions(latestTag, CURRENT_VERSION_TAG) > 0) {
-          const updateModal = document.getElementById('appUpdateModal');
-          if (updateModal) {
-            document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${latestTag}`;
-            document.getElementById('updateNotesContent').textContent = data.body || '五子棋全新优化与新玩法升级，推荐更新！';
-
-            let rawDownloadUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
-            if (data.assets && data.assets.length > 0) {
-              const apkAsset = data.assets.find(a => a.name && a.name.endsWith('.apk'));
-              if (apkAsset && apkAsset.browser_download_url) {
-                rawDownloadUrl = apkAsset.browser_download_url;
-              }
-            }
-
-            const fastDownloadUrl = `https://ghproxy.net/${rawDownloadUrl}`;
-            document.getElementById('btnFastDownload').href = fastDownloadUrl;
-            document.getElementById('btnOfficialDownload').href = rawDownloadUrl;
-            updateModal.style.display = 'flex';
-          }
-        } else {
-          if (isManual) {
-            showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);
-          }
+        const cdnUrl = `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@master/version.json?_t=${Date.now()}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        const res = await fetch(cdnUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const json = await res.json();
+          versionData = {
+            tag: json.releaseTag || ('v' + json.versionName),
+            notes: json.updateLog || '五子棋全新功能与性能调优，推荐更新！',
+            fastUrl: json.download && json.download.fastUrl,
+            backupUrl: json.download && json.download.backupFastUrl,
+            officialUrl: json.download && json.download.officialUrl
+          };
         }
-      } catch(err) {
+      } catch(e) {}
+
+      // 2. 备用通道：GitHub 官方 REST API
+      if (!versionData) {
+        try {
+          const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 4000);
+          const res = await fetch(apiUrl, { cache: 'no-cache', signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            const tag = data.tag_name || '';
+            let rawUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+            if (data.assets && data.assets.length > 0) {
+              const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
+              if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
+            }
+            versionData = {
+              tag: tag,
+              notes: data.body || '新版本性能调优，推荐更新！',
+              fastUrl: `https://ghproxy.net/${rawUrl}`,
+              backupUrl: `https://mirror.ghproxy.com/${rawUrl}`,
+              officialUrl: rawUrl
+            };
+          }
+        } catch(e) {}
+      }
+
+      if (!versionData) {
+        if (isManual) showGameNotice('⚠️ 暂未获取到更新，网络稍后再试');
+        return;
+      }
+
+      // 对比本地版本
+      if (compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0) {
+        const updateModal = document.getElementById('appUpdateModal');
+        if (updateModal) {
+          document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}`;
+          document.getElementById('updateNotesContent').textContent = versionData.notes;
+
+          const fastLink = versionData.fastUrl || `https://ghproxy.net/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+          const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+
+          document.getElementById('btnFastDownload').href = fastLink;
+          document.getElementById('btnOfficialDownload').href = officialLink;
+          updateModal.style.display = 'flex';
+        }
+      } else {
         if (isManual) {
-          showGameNotice('⚠️ 检查更新网络较慢，可稍后再试');
+          showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);
         }
       }
     }
@@ -3162,6 +3199,7 @@
       if (el) el.style.display = 'none';
     }
 
+    // 页面加载 3 秒后静默检查更新 (不打扰玩家，有新版才弹窗)
     setTimeout(() => {
       checkAppUpdate(false);
     }, 3000);

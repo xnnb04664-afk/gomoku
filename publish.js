@@ -56,6 +56,24 @@ htmlFiles.forEach(f => {
   }
 });
 
+// 同步更新 version.json (供 jsDelivr 国内极速 CDN 毫秒级分发检测)
+const versionJsonPath = path.join(ROOT_DIR, 'version.json');
+const todayStr = new Date().toISOString().split('T')[0];
+const vJson = {
+  versionName: newName,
+  versionCode: newCode,
+  releaseTag: `v${newName}`,
+  publishTime: todayStr,
+  updateLog: `五子棋 v${newName} 官方正式版更新发布！\n1. 支持国内网络极速更新与覆盖安装\n2. 120Hz极速性能调优\n3. 9大干扰卡牌池与断线自动重连`,
+  download: {
+    fastUrl: `https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
+    backupFastUrl: `https://mirror.ghproxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
+    officialUrl: `https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
+  }
+};
+fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
+console.log('📌 已同步更新 version.json (国内极速 CDN 数据源)');
+
 // 3. 打包单文件离线网页版
 console.log('>>> [3/7] 正在构建最新单文件离线旗舰版...');
 execSync('node bundle_single_file.js', { cwd: ROOT_DIR, stdio: 'inherit' });
