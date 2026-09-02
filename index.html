@@ -1908,7 +1908,10 @@
           showSkillBanner('💣', `对方发动【乾坤大乱/大炸弹】！`, `天翻地覆！全盘所有棋子已被随机打乱！`);
           winningLine = null;
           for (const s of history) {
-            if (checkWin(s.r, s.c, s.p)) { isOver = true; triggerVictoryVFX(); break; }
+            if (checkWin(s.r, s.c, s.p)) {
+              triggerGameEnd(s.p, `对方引爆炸弹洗牌后，【${s.p === BLACK ? p1Name : p2Name}】达成五子连珠！`);
+              break;
+            }
           }
         } else if (data.type === 'destiny_point_1') {
           opponentFreeMove = true;
@@ -2057,10 +2060,7 @@
               draw();
               showGameNotice("🤖 大师AI 免费补子成功！继续执行正常回合！", true);
               if (checkWin(pick.r, pick.c, WHITE)) {
-                isOver = true;
-                triggerVictoryVFX();
-                playSkillSound('victory');
-                setTimeout(() => alert("🎉 大师AI 五子连珠获胜！"), 350);
+                triggerGameEnd(WHITE, '大师AI 免费补下 1 子，达成五子连珠绝杀！');
                 return;
               }
               turn = WHITE;
@@ -2122,10 +2122,7 @@
             conn.send({ type: 'destiny_point_2', fromR: sR, fromC: sC, toR: bestTarget.r, toC: bestTarget.c });
           }
           if (checkWin(bestTarget.r, bestTarget.c, myColor)) {
-            isOver = true;
-            triggerVictoryVFX();
-            playSkillSound('victory');
-            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 200);
+            triggerGameEnd(myColor);
           }
         }
       } else if (point === 3) {
@@ -2264,7 +2261,10 @@
           // 检查互换后是否有人赢棋
           winningLine = null;
           for (const s of history) {
-            if (checkWin(s.r, s.c, s.p)) { isOver = true; triggerVictoryVFX(); break; }
+            if (checkWin(s.r, s.c, s.p)) {
+              triggerGameEnd(s.p, `身份互换后，【${s.p === BLACK ? p1Name : p2Name}】直接达成五子连珠获胜！`);
+              break;
+            }
           }
           updateUI(); persistGameState();
         } else if (card.id === 'mega_bomb') {
@@ -2316,10 +2316,7 @@
             }
           }
           if (bombWinColor) {
-            isOver = true;
-            triggerVictoryVFX();
-            playSkillSound('victory');
-            setTimeout(() => alert(`🎉 炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`), 350);
+            triggerGameEnd(bombWinColor, `炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`);
           }
 
           draw(); updateUI(); persistGameState();
@@ -2455,8 +2452,7 @@
             conn.send({ type: 'skill_shift_stone', fromR: sR, fromC: sC, toR: row, toC: col, p: myColor });
           }
           if (checkWin(row, col, myColor)) {
-            isOver = true;
-            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+            triggerGameEnd(myColor);
           }
         }
       } else if (skill.id === 'swap_color') {
@@ -2475,8 +2471,7 @@
           conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
         }
         if (checkWin(row, col, myColor)) {
-          isOver = true;
-          setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+          triggerGameEnd(myColor);
         }
       } else if (skill.id === 'swap_positions') {
         if (activeSkill.step === 1) {
@@ -2509,8 +2504,7 @@
             conn.send({ type: 'skill_swap_positions', r1: sR, c1: sC, r2: row, c2: col });
           }
           if (checkWin(row, col, myColor)) {
-            isOver = true;
-            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+            triggerGameEnd(myColor);
           }
         }
       } else if (skill.id === 'destiny_remove') {
@@ -2545,10 +2539,7 @@
           conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
         }
         if (checkWin(row, col, myColor)) {
-          isOver = true;
-          triggerVictoryVFX();
-          playSkillSound('victory');
-          setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 200);
+          triggerGameEnd(myColor);
         }
       } else if (skill.id === 'destiny_2x2') {
         if (row >= 14 || col >= 14) {
@@ -2579,9 +2570,7 @@
         winningLine = null;
         for (const pos of cells) {
           if (checkWin(pos.r, pos.c, myColor)) {
-            isOver = true;
-            triggerVictoryVFX();
-            setTimeout(() => alert(`🎉 天命神域助力【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 250);
+            triggerGameEnd(myColor, `天命神域助力【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`);
             break;
           }
         }
@@ -2829,7 +2818,7 @@
           return;
 
         } else if (type === 'victory') {
-          // 👑 胜利：大调上行和弦（C5→E5→G5→C6），明亮欢庆
+          // 👑 胜利方音效：大调上行和弦（C5→E5→G5→C6），明亮欢庆，凯旋感十足
           [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
             const osc = actx.createOscillator(); const gain = actx.createGain();
             osc.type = 'triangle'; osc.frequency.setValueAtTime(freq, t + idx * 0.09);
@@ -2838,6 +2827,32 @@
             osc.connect(gain); gain.connect(actx.destination);
             osc.start(t + idx * 0.09); osc.stop(t + idx * 0.09 + 0.42);
           });
+
+        } else if (type === 'defeat') {
+          // 💔 失败方音效：小调下行哀叹和弦 (Eb4→D4→Db4→C4) + 幽默叹息滑音 (260Hz→85Hz)
+          const notes = [
+            { freq: 311.13, time: 0.00, dur: 0.13 },
+            { freq: 293.66, time: 0.12, dur: 0.13 },
+            { freq: 277.18, time: 0.24, dur: 0.15 },
+            { freq: 261.63, time: 0.38, dur: 0.22 }
+          ];
+          notes.forEach(({ freq, time, dur }) => {
+            const osc = actx.createOscillator(); const gain = actx.createGain();
+            osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t + time);
+            gain.gain.setValueAtTime(0.35, t + time);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + time + dur);
+            osc.connect(gain); gain.connect(actx.destination);
+            osc.start(t + time); osc.stop(t + time + dur + 0.02);
+          });
+          const slideOsc = actx.createOscillator(); const slideGain = actx.createGain();
+          slideOsc.type = 'triangle';
+          slideOsc.frequency.setValueAtTime(260, t + 0.55);
+          slideOsc.frequency.exponentialRampToValueAtTime(85, t + 1.15);
+          slideGain.gain.setValueAtTime(0.001, t + 0.55);
+          slideGain.gain.linearRampToValueAtTime(0.32, t + 0.62);
+          slideGain.gain.exponentialRampToValueAtTime(0.001, t + 1.18);
+          slideOsc.connect(slideGain); slideGain.connect(actx.destination);
+          slideOsc.start(t + 0.55); slideOsc.stop(t + 1.2);
 
         } else if (type === 'rewind') {
           // ⏳ 时空倒流：正弦波快速从高音降到低音，像磁带倒带/时光倒转
@@ -2975,6 +2990,33 @@
           osc.start(t); osc.stop(t + 0.3);
         }
       } catch(e) {}
+    }
+
+    // 🏆 胜负终局统一结算与音效调度器 (严格区分胜利方与失败方的专属音效)
+    function triggerGameEnd(winnerColor, customWinReason = '') {
+      isOver = true;
+      const isPlayerWin = (gameMode === 'ai')
+        ? (winnerColor === BLACK)
+        : (gameMode === 'online' ? (winnerColor === myOnlineColor) : true);
+
+      const winnerName = winnerColor === BLACK
+        ? (p1Name + ' (黑子)')
+        : (gameMode === 'ai' ? '大师AI (白子)' : p2Name + ' (白子)');
+
+      if (isPlayerWin) {
+        // 🎉 胜利方视角：大调凯旋专属胜利音效 + 金色五彩烟花
+        triggerVictoryVFX();
+        playSkillSound('victory');
+        showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
+        setTimeout(() => alert(`🎉 恭喜【${winnerName}】达成五连珠获胜！`), 350);
+      } else {
+        // 💔 失败方视角：小调幽默哀叹专属失败音效 + 局势震颤
+        triggerBoardShake(false);
+        playSkillSound('defeat');
+        showSkillBanner('💔', '【棋局惜败】胜败乃兵家常事！', customWinReason || `【${winnerName}】达成五连珠！胜不骄败不馁，再战一局必定逆袭！`);
+        setTimeout(() => alert(`💔 棋局惜败！【${winnerName}】达成五连珠，不要气馁，再接再厉！`), 350);
+      }
+      draw();
     }
 
     // 🎴 炫酷干扰技能提示卡与震屏控制器 (等用户确认之后才消失！)
@@ -3935,13 +3977,7 @@
       }
 
       if (checkWin(r, c, p)) {
-        isOver = true;
-        triggerVictoryVFX();
-        playSkillSound('victory');
-        showSkillBanner('👑', '【五子连珠】绝杀获胜！', `恭喜【${p === BLACK ? p1Name : (gameMode === 'ai' ? '大师AI' : p2Name)}】达成五连珠，获得最终胜利！`);
-        const winner = p === BLACK ? (p1Name + ' (黑子)') : (gameMode === 'ai' ? '大师AI (白子)' : p2Name + ' (白子)');
-        setTimeout(() => alert(`🎉 恭喜【${winner}】达成五连珠获胜！`), 350);
-        draw();
+        triggerGameEnd(p);
         return;
       }
 

@@ -1748,6 +1748,30 @@
             osc.connect(gain); gain.connect(actx.destination);
             osc.start(t + idx * 0.09); osc.stop(t + idx * 0.09 + 0.42);
           });
+        } else if (type === 'defeat') {
+          // 💔 失败：小调下行哀叹和弦 (Eb4→D4→Db4→C4) + 叹息滑音 (260Hz→85Hz)
+          const notes = [
+            { freq: 311.13, time: 0.00, dur: 0.13 },
+            { freq: 293.66, time: 0.12, dur: 0.13 },
+            { freq: 277.18, time: 0.24, dur: 0.15 },
+            { freq: 261.63, time: 0.38, dur: 0.22 }
+          ];
+          notes.forEach(({ freq, time, dur }) => {
+            const osc = actx.createOscillator(); const gain = actx.createGain();
+            osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t + time);
+            gain.gain.setValueAtTime(0.35, t + time);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + time + dur);
+            osc.connect(gain); gain.connect(actx.destination);
+            osc.start(t + time); osc.stop(t + time + dur + 0.02);
+          });
+          const slideOsc = actx.createOscillator(); const slideGain = actx.createGain();
+          slideOsc.type = 'triangle'; slideOsc.frequency.setValueAtTime(260, t + 0.55);
+          slideOsc.frequency.exponentialRampToValueAtTime(85, t + 1.15);
+          slideGain.gain.setValueAtTime(0.001, t + 0.55);
+          slideGain.gain.linearRampToValueAtTime(0.32, t + 0.62);
+          slideGain.gain.exponentialRampToValueAtTime(0.001, t + 1.18);
+          slideOsc.connect(slideGain); slideGain.connect(actx.destination);
+          slideOsc.start(t + 0.55); slideOsc.stop(t + 1.2);
         } else if (type === 'boom') {
           const osc = actx.createOscillator(); const gain = actx.createGain();
           osc.type = 'triangle'; osc.frequency.setValueAtTime(220, t);
@@ -2379,6 +2403,12 @@
 
       if (checkWin(r, c, p)) {
         isOver = true;
+        const isPlayerWin = (gameMode === 'ai') ? (p === BLACK) : (gameMode === 'online' ? (p === myOnlineColor) : true);
+        if (isPlayerWin) {
+          playSkillSound('victory');
+        } else {
+          playSkillSound('defeat');
+        }
         const winner = p === BLACK ? (p1Name + ' (黑子)') : (gameMode === 'ai' ? '大师AI (白子)' : p2Name + ' (白子)');
         setTimeout(() => alert(`🎉 恭喜【${winner}】达成五连珠获胜！`), 120);
         return;
