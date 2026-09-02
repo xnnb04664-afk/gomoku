@@ -4636,94 +4636,135 @@
     enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
-    // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.13';
+    // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
+    const CURRENT_VERSION_TAG = 'v1.0.14';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
-      const clean1 = (v1 || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
-      const clean2 = (v2 || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
-      for (let i = 0; i < Math.max(clean1.length, clean2.length); i++) {
-        const num1 = clean1[i] || 0;
-        const num2 = clean2[i] || 0;
+      const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+      const p2 = (v2 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+        const num1 = p1[i] || 0;
+        const num2 = p2[i] || 0;
         if (num1 > num2) return 1;
         if (num1 < num2) return -1;
       }
       return 0;
     }
 
+    let isCheckingAppUpdate = false;
+    let isAppDownloading = false;
+
+    // 原生下载进度实时通知
+    window.onApkDownloadProgress = function(percent, status) {
+      const btn = document.getElementById('btnFastDownload');
+      if (!btn) return;
+      if (status === 'done' || percent >= 100) {
+        isAppDownloading = false;
+        btn.innerHTML = '<span>✅ 下载完成，请在手机弹窗点击【安装】</span>';
+        setTimeout(() => closeUpdateModal(), 2000);
+      } else if (percent > 0) {
+        isAppDownloading = true;
+        btn.innerHTML = `<span>⚡ 正在全自动下载 ${percent}%...</span>`;
+      }
+    };
+
     async function checkAppUpdate(isManual = false) {
+      if (isAppDownloading) {
+        if (isManual) showGameNotice('🚀 正在全自动下载最新安装包中，请稍候...');
+        return;
+      }
+      if (isCheckingAppUpdate) return;
+      isCheckingAppUpdate = true;
+
       if (isManual) {
-        showGameNotice('🔍 正在连接国内高速镜像检测更新...');
+        showGameNotice('🔍 正在连接 GitHub 官方与国内高速通道...');
       }
 
       let versionData = null;
 
-      // 1. 多通道并发极速直连镜像源 (多源竞速并发，自动取全网最高/最新版本，杜绝单一镜像缓存滞后)
-      const mirrorUrls = [
-        `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
-        `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
-        `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
-        `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`
+      // 1. 优先访问 GitHub 官方权威源 + 并发国内高速镜像
+      // 杜绝任何中间镜像单点缓存滞后，取所有成功响应中的最高/最新版本！
+      const checkEndpoints = [
+        // A. GitHub 官方 REST API (零延迟权威发布)
+        {
+          url: `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+          isGhApi: true
+        },
+        // B. GitHub 官方 Raw 原文件
+        {
+          url: `https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`,
+          isGhApi: false
+        },
+        // C. jsDelivr 全球加速 CDN (@latest 已自动做全量边缘 Purge)
+        {
+          url: `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
+          isGhApi: false
+        },
+        {
+          url: `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
+          isGhApi: false
+        },
+        // D. 国内高速镜像通道
+        {
+          url: `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`,
+          isGhApi: false
+        }
       ];
 
-      const fetchPromises = mirrorUrls.map(async (cdnUrl) => {
+      const fetchTasks = checkEndpoints.map(async (ep) => {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
         try {
-          const res = await fetch(cdnUrl, { signal: controller.signal });
+          const res = await fetch(ep.url, {
+            cache: 'no-cache',
+            headers: ep.isGhApi ? { 'Accept': 'application/vnd.github.v3+json' } : {},
+            signal: controller.signal
+          });
           clearTimeout(timeoutId);
           if (res.ok) {
-            const json = await res.json();
-            if (json && (json.versionName || json.releaseTag)) {
+            const data = await res.json();
+            if (ep.isGhApi) {
+              const tag = data.tag_name || '';
+              if (tag) {
+                let rawUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+                if (data.assets && data.assets.length > 0) {
+                  const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
+                  if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
+                }
+                return {
+                  tag: tag,
+                  notes: data.body || '五子棋全新功能与性能调优，推荐更新！',
+                  fastUrl: `https://gh-proxy.com/${rawUrl}`,
+                  backupUrl: `https://ghps.cc/${rawUrl}`,
+                  officialUrl: rawUrl
+                };
+              }
+            } else if (data && (data.versionName || data.releaseTag)) {
               return {
-                tag: json.releaseTag || ('v' + json.versionName),
-                notes: json.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-                fastUrl: (json.download && json.download.fastUrl) || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
-                backupUrl: (json.download && json.download.backupFastUrl) || `https://ghps.cc/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
-                officialUrl: (json.download && json.download.officialUrl) || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
+                tag: data.releaseTag || ('v' + data.versionName),
+                notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
+                fastUrl: (data.download && data.download.fastUrl) || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+                backupUrl: (data.download && data.download.backupFastUrl) || `https://ghps.cc/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+                officialUrl: (data.download && data.download.officialUrl) || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
               };
             }
           }
-        } catch(e) {}
+        } catch(_) {}
         return null;
       });
 
       try {
-        const results = await Promise.all(fetchPromises);
-        const valid = results.filter(Boolean);
-        if (valid.length > 0) {
-          valid.sort((a, b) => compareVersions(b.tag, a.tag));
-          versionData = valid[0];
+        const results = await Promise.all(fetchTasks);
+        const candidates = results.filter(Boolean);
+        if (candidates.length > 0) {
+          // 升序排列，取版本号最高的一项
+          candidates.sort((a, b) => compareVersions(b.tag, a.tag));
+          versionData = candidates[0];
         }
-      } catch(e) {}
+      } catch(_) {}
 
-      // 2. 备用通道：GitHub 官方 REST API
-      if (!versionData) {
-        try {
-          const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 4000);
-          const res = await fetch(apiUrl, { cache: 'no-cache', signal: controller.signal });
-          clearTimeout(timeoutId);
-          if (res.ok) {
-            const data = await res.json();
-            const tag = data.tag_name || '';
-            let rawUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
-            if (data.assets && data.assets.length > 0) {
-              const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
-              if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
-            }
-            versionData = {
-              tag: tag,
-              notes: data.body || '新版本性能调优，推荐更新！',
-              fastUrl: `https://gh-proxy.com/${rawUrl}`,
-              backupUrl: `https://ghps.cc/${rawUrl}`,
-              officialUrl: rawUrl
-            };
-          }
-        } catch(e) {}
-      }
+      isCheckingAppUpdate = false;
 
       if (!versionData) {
         if (isManual) showGameNotice('⚠️ 暂未获取到更新，请稍后再试');
@@ -4740,9 +4781,9 @@
           // A. 优先尝试秒级无感 HTML 热更新
           if (AndroidNativeApp.saveHotUpdateFile) {
             const updateHtmlUrls = [
-              `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`,
+              `https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`,
               `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
-              `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`
+              `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`
             ];
 
             for (const uUrl of updateHtmlUrls) {
@@ -4760,14 +4801,13 @@
                     return;
                   }
                 }
-              } catch(err) {
-                console.warn('[Auto HotUpdate fallback]', err);
-              }
+              } catch(err) {}
             }
           }
 
-          // B. 若无感热更新未命中，全自动在后台拉取并弹出安装（无需用户手动点击任何链接）
-          if (AndroidNativeApp.downloadAndInstallApk) {
+          // B. 原生 APK 全自动下载与安装（防重入，下载完成自动弹出安装）
+          if (AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
+            isAppDownloading = true;
             const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
             AndroidNativeApp.downloadAndInstallApk(fastLink);
             showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
@@ -4785,7 +4825,7 @@
           const btnFast = document.getElementById('btnFastDownload');
           if (btnFast) {
             btnFast.href = fastLink;
-            btnFast.textContent = '🚀 正在自动更新 (点击可重新下载)';
+            btnFast.innerHTML = '<span>⚡ 正在全自动高速下载中...</span>';
             btnFast.onclick = (e) => {
               if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
                 e.preventDefault();
@@ -4819,17 +4859,10 @@
       if (el) el.style.display = 'none';
     }
 
-    // 页面加载 1.5 秒后静默全自动检查更新
+    // 仅在进入游戏 2.5 秒后静默全自动检查一次（杜绝频繁切后台反复触发重复下载）
     setTimeout(() => {
       checkAppUpdate(false);
-    }, 1500);
-
-    // 当用户切回游戏时，自动静默检测更新
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        checkAppUpdate(false);
-      }
-    });
+    }, 2500);
 
     initAnimeThumbnails();
   </script>

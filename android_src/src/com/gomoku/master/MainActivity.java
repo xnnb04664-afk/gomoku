@@ -270,6 +270,14 @@ public class MainActivity extends Activity {
             mWebView.onResume();
             mWebView.resumeTimers();
         }
+        // 如果是从系统授权页面返回且已获得安装权限，立即呼起安装已下载好的安装包
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sLastDownloadedFile != null && sLastDownloadedFile.exists()) {
+            if (getPackageManager().canRequestPackageInstalls()) {
+                File toInstall = sLastDownloadedFile;
+                sLastDownloadedFile = null;
+                installDownloadedApk(toInstall);
+            }
+        }
     }
 
     @Override
@@ -281,17 +289,44 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static volatile boolean sIsDownloading = false;
+    private static File sLastDownloadedFile = null;
+
+    private void notifyWebProgress(final int percent, final String status) {
+        runOnUiThread(() -> {
+            if (mWebView != null) {
+                mWebView.evaluateJavascript("if (window.onApkDownloadProgress) window.onApkDownloadProgress(" + percent + ", '" + status + "');", null);
+            }
+        });
+    }
+
     public void startApkDownload(final String apkUrl) {
+        File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (destDir == null) destDir = getFilesDir();
+        if (!destDir.exists()) destDir.mkdirs();
+        final File destFile = new File(destDir, "gomoku_latest.apk");
+
+        // 若 10 分钟内已下载过完整安装包 (>1MB)，直接呼起安装，绝不重复下载
+        if (destFile.exists() && destFile.length() > 1000000 && (System.currentTimeMillis() - destFile.lastModified() < 600000)) {
+            notifyWebProgress(100, "done");
+            runOnUiThread(() -> installDownloadedApk(destFile));
+            return;
+        }
+
+        // 防重入锁：已有后台下载正在进行时，杜绝重复并发下载导致文件冲突
+        if (sIsDownloading) {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
+            return;
+        }
+        sIsDownloading = true;
+
         runOnUiThread(() -> {
             Toast.makeText(MainActivity.this, "🚀 正在全自动下载最新版，完成后将自动弹出安装...", Toast.LENGTH_LONG).show();
+            notifyWebProgress(5, "downloading");
         });
 
         new Thread(() -> {
             try {
-                File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-                if (destDir == null) destDir = getFilesDir();
-                if (!destDir.exists()) destDir.mkdirs();
-                File destFile = new File(destDir, "gomoku_latest.apk");
                 if (destFile.exists()) destFile.delete();
 
                 // 优先使用极速流式 HTTP 下载（支持自动跟随重定向并校验安装包完整性）
@@ -318,12 +353,24 @@ public class MainActivity extends Activity {
                 }
 
                 if (responseCode >= 200 && responseCode < 300) {
+                    int totalSize = conn.getContentLength();
                     InputStream in = conn.getInputStream();
                     FileOutputStream fos = new FileOutputStream(destFile);
                     byte[] buf = new byte[8192];
                     int len;
+                    int downloaded = 0;
+                    int lastPercent = 5;
+
                     while ((len = in.read(buf)) != -1) {
                         fos.write(buf, 0, len);
+                        downloaded += len;
+                        if (totalSize > 0) {
+                            int percent = (int) ((downloaded * 100L) / totalSize);
+                            if (percent - lastPercent >= 5) {
+                                lastPercent = percent;
+                                notifyWebProgress(percent, "downloading");
+                            }
+                        }
                     }
                     fos.flush();
                     fos.close();
@@ -331,6 +378,8 @@ public class MainActivity extends Activity {
                     conn.disconnect();
 
                     if (destFile.exists() && destFile.length() > 500000) {
+                        sIsDownloading = false;
+                        notifyWebProgress(100, "done");
                         runOnUiThread(() -> installDownloadedApk(destFile));
                         return;
                     }
@@ -339,6 +388,8 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 android.util.Log.e("MainActivity", "Direct download error, falling back to DownloadManager: " + e.getMessage());
                 fallbackDownloadManager(apkUrl);
+            } finally {
+                sIsDownloading = false;
             }
         }).start();
     }
@@ -348,8 +399,10 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!getPackageManager().canRequestPackageInstalls()) {
                     Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋安装应用，以完成全自动更新", Toast.LENGTH_LONG).show();
+                    sLastDownloadedFile = apkFile;
                     Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
                     startActivity(permIntent);
+                    return;
                 }
             }
 
@@ -358,7 +411,7 @@ public class MainActivity extends Activity {
             installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(installIntent);
-            Toast.makeText(MainActivity.this, "🎉 下载完成，请点击【安装/更新】即可完成更新！", Toast.LENGTH_LONG).show();
+            Toast.makeText(MainActivity.this, "🎉 下载完成，请在手机弹窗点击【安装/更新】！", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             try {
@@ -380,7 +433,7 @@ public class MainActivity extends Activity {
 
                 File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
                 if (destDir != null && !destDir.exists()) destDir.mkdirs();
-                File destFile = new File(destDir, "gomoku_latest.apk");
+                final File destFile = new File(destDir, "gomoku_latest.apk");
                 if (destFile.exists()) destFile.delete();
                 req.setDestinationUri(Uri.fromFile(destFile));
 
@@ -392,6 +445,8 @@ public class MainActivity extends Activity {
                         long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
                         if (id == downloadId) {
                             try { unregisterReceiver(this); } catch (Exception ignored) {}
+                            sIsDownloading = false;
+                            notifyWebProgress(100, "done");
                             if (destFile.exists() && destFile.length() > 500000) {
                                 installDownloadedApk(destFile);
                             } else {
@@ -409,6 +464,7 @@ public class MainActivity extends Activity {
                 }, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
 
             } catch (Exception e) {
+                sIsDownloading = false;
                 Toast.makeText(MainActivity.this, "启动下载失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 try {
                     Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl));
