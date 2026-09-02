@@ -1,12 +1,12 @@
 {
-  "versionName": "1.0.8",
-  "versionCode": 9,
-  "releaseTag": "v1.0.8",
+  "versionName": "1.0.9",
+  "versionCode": 10,
+  "releaseTag": "v1.0.9",
   "publishTime": "2026-09-02",
-  "updateLog": "五子棋 v1.0.8 官方正式版更新发布！\n1. 支持国内网络极速更新与覆盖安装\n2. 120Hz极速性能调优\n3. 9大干扰卡牌池与断线自动重连",
+  "updateLog": "五子棋 v1.0.9 官方正式版更新发布！\n1. 支持国内网络极速更新与覆盖安装\n2. 120Hz极速性能调优\n3. 9大干扰卡牌池与断线自动重连",
   "download": {
-    "fastUrl": "https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
-    "backupFastUrl": "https://mirror.ghproxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
+    "fastUrl": "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
+    "backupFastUrl": "https://ghps.cc/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
     "officialUrl": "https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk"
   }
 }

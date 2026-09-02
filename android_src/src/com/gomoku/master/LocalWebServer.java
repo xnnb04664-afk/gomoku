@@ -155,7 +155,19 @@ public class LocalWebServer extends Thread {
                     }
                 }
                 if (assetIn == null) {
-                    assetIn = assets.open(path);
+                    try {
+                        assetIn = assets.open(path);
+                    } catch (IOException e1) {
+                        try {
+                            assetIn = assets.open(path.replace('/', '\\'));
+                        } catch (IOException e2) {
+                            try {
+                                assetIn = assets.open(path.replace('\\', '/'));
+                            } catch (IOException e3) {
+                                throw e1;
+                            }
+                        }
+                    }
                 }
                 byte[] body = readFully(assetIn);
                 assetIn.close();

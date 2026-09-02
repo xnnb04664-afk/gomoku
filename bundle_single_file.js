@@ -15,6 +15,12 @@ if (fs.existsSync(peerJsPath)) {
   peerJsContent = fs.readFileSync(peerJsPath, 'utf8');
 }
 
+const p2pNetworkPath = path.join(ROOT_DIR, 'js', 'p2p-network.js');
+let p2pNetworkContent = '';
+if (fs.existsSync(p2pNetworkPath)) {
+  p2pNetworkContent = fs.readFileSync(p2pNetworkPath, 'utf8');
+}
+
 const cherryAudioPath = path.join(ROOT_DIR, 'js', 'assets', 'cherry_bomb_audio.js');
 let cherryAudioContent = '';
 if (fs.existsSync(cherryAudioPath)) {
@@ -26,6 +32,9 @@ let animeAvatarsContent = '';
 if (fs.existsSync(animeAvatarsPath)) {
   animeAvatarsContent = fs.readFileSync(animeAvatarsPath, 'utf8');
 }
+
+// 压缩库可能包含 </script> 字符串；内联时必须转义，否则浏览器会提前结束脚本标签。
+const escapeInlineScript = content => content.replace(/<\/script/gi, '<\\/script');
 
 const mqttJsPath = path.join(ROOT_DIR, 'js', 'mqtt.min.js');
 let mqttJsContent = '';
@@ -40,16 +49,19 @@ const animeRegex = /<script src="js\/assets\/anime_avatars\.js"><\/script>/i;
 
 let inlinedHeadScripts = '';
 if (peerJsContent) {
-  inlinedHeadScripts += `\n  <!-- 内联 PeerJS 1.5.4 完整生产库 (零外网依赖，离线秒开) -->\n  <script>\n${peerJsContent}\n  </script>\n`;
+  inlinedHeadScripts += `\n  <!-- 内联 PeerJS 1.5.4 完整生产库 (零外网依赖，离线秒开) -->\n  <script>\n${escapeInlineScript(peerJsContent)}\n  </script>\n`;
+}
+if (p2pNetworkContent) {
+  inlinedHeadScripts += `  <!-- 内联 P2P 优先联机兼容层 -->\n  <script>\n${escapeInlineScript(p2pNetworkContent)}\n  </script>\n`;
 }
 if (mqttJsContent) {
-  inlinedHeadScripts += `  <!-- 内联 MQTT 极速联机引擎 (国内直连，秒级穿透) -->\n  <script>\n${mqttJsContent}\n  </script>\n`;
+  inlinedHeadScripts += `  <!-- 内联 MQTT 极速联机引擎 (国内直连，秒级穿透) -->\n  <script>\n${escapeInlineScript(mqttJsContent)}\n  </script>\n`;
 }
 if (cherryAudioContent) {
-  inlinedHeadScripts += `  <!-- 内联 樱桃炸弹 MP3 原声 Base64 数据 -->\n  <script>\n${cherryAudioContent}\n  </script>\n`;
+  inlinedHeadScripts += `  <!-- 内联 樱桃炸弹 MP3 原声 Base64 数据 -->\n  <script>\n${escapeInlineScript(cherryAudioContent)}\n  </script>\n`;
 }
 if (animeAvatarsContent) {
-  inlinedHeadScripts += `  <!-- 内联 专属二次元情侣动漫头像 Base64 数据 -->\n  <script>\n${animeAvatarsContent}\n  </script>\n`;
+  inlinedHeadScripts += `  <!-- 内联 专属二次元情侣动漫头像 Base64 数据 -->\n  <script>\n${escapeInlineScript(animeAvatarsContent)}\n  </script>\n`;
 }
 
 // 执行替换

@@ -66,13 +66,13 @@ const vJson = {
   publishTime: todayStr,
   updateLog: `五子棋 v${newName} 官方正式版更新发布！\n1. 支持国内网络极速更新与覆盖安装\n2. 120Hz极速性能调优\n3. 9大干扰卡牌池与断线自动重连`,
   download: {
-    fastUrl: `https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
-    backupFastUrl: `https://mirror.ghproxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
+    fastUrl: `https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
+    backupFastUrl: `https://ghps.cc/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
     officialUrl: `https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
   }
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
-console.log('📌 已同步更新 version.json (国内极速 CDN 数据源)');
+console.log('📌 已同步更新 version.json (国内极速直连数据源)');
 
 // 3. 打包单文件离线网页版
 console.log('>>> [3/7] 正在构建最新单文件离线旗舰版...');
@@ -126,8 +126,16 @@ try {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
 }
 
+// 刷新 jsDelivr 全球边缘缓存
+console.log('>>> 正在刷新 CDN 缓存，确保全球毫秒级获取最新版本...');
+try {
+  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@master/version.json"`, { timeout: 4000 });
+  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@latest/version.json"`, { timeout: 4000 });
+  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@master/index.html"`, { timeout: 4000 });
+} catch(ignored) {}
+
 console.log('======================================================');
 console.log(`✨ 全部发布流程圆满成功！版本: v${newName}`);
 console.log(`🔗 永久最新版下载直链: https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
-console.log(`⚡ 国内高速加速下载链: https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
+console.log(`⚡ 国内高速加速下载链: https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
 console.log('======================================================');

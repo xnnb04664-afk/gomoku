@@ -4,8 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>五子棋 · 【现代奢华毛玻璃版】Gomoku Prestige Glass</title>
-    <script src="js/peerjs.min.js"></script>
+  <script src="js/peerjs.min.js"></script>
   <script>if (typeof Peer === 'undefined') { document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>'); }</script>
+  <script src="js/p2p-network.js"></script>
   <script src="js/mqtt.min.js"></script>
   <script>if (typeof mqtt === 'undefined') { document.write('<script src="https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"><\/script>'); }</script>
   <script src="js/assets/cherry_bomb_audio.js"></script>
@@ -1247,8 +1248,8 @@
         el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData);
       });
 
-      const boyVal = (typeof ANIME_AVATAR_BOY !== 'undefined') ? ANIME_AVATAR_BOY : 'img/avatar_boy.png';
-      const girlVal = (typeof ANIME_AVATAR_GIRL !== 'undefined') ? ANIME_AVATAR_GIRL : 'img/avatar_girl.png';
+      const boyVal = window.ANIME_AVATAR_BOY;
+      const girlVal = window.ANIME_AVATAR_GIRL;
       const boyCard = document.getElementById('animeCardBoy');
       const girlCard = document.getElementById('animeCardGirl');
       if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === boyVal || selectedAvatarData === 'img/avatar_boy.png');
@@ -1284,7 +1285,7 @@
     }
 
     function selectImgAvatar(elem, dataUrl) {
-      if (!dataUrl) dataUrl = 'img/avatar_boy.png';
+      if (!dataUrl) dataUrl = (elem && elem.id === 'animeCardGirl') ? window.ANIME_AVATAR_GIRL : window.ANIME_AVATAR_BOY;
       selectedAvatarData = dataUrl;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
@@ -1678,6 +1679,8 @@
     // ==========================================
     // 🌐 极速秒开房间联机核心引擎 (全网络穿透·中国极速直连)
     // ==========================================
+    // 采用 EMQX 香港 Anycast 节点（国内平均延迟 30~60ms，免翻墙无超时），
+    // 结合 WSS 全双工通信，彻底解决移动 4G/5G 运营商大内网对称 NAT 穿透超时失败问题！
     const MQTT_BROKER_URLS = [
       'wss://broker.emqx.io:8084/mqtt',
       'wss://broker.hivemq.com:8884/mqtt',
@@ -1687,10 +1690,11 @@
 
     let mqttClient = null;
     let mqttClientPromise = null;
-    let mqttBrokerIndex = -1;
 
     function getOrCreateMqttClient() {
-      if (mqttClient && mqttClient.connected) return Promise.resolve(mqttClient);
+      if (mqttClient && mqttClient.connected) {
+        return Promise.resolve(mqttClient);
+      }
       if (mqttClientPromise) return mqttClientPromise;
 
       mqttClient = null;
@@ -1704,6 +1708,7 @@
           return reject(new Error("联机网络组件加载中，请稍后重试"));
         }
 
+        // 逐个尝试节点。旧代码虽然声明了多个节点，但实际永远只连接第一个。
         const tryBroker = (index) => {
           const brokerUrl = MQTT_BROKER_URLS[index];
           if (!brokerUrl) {
@@ -1715,6 +1720,7 @@
           let settled = false;
           let timer = null;
           let client = null;
+
           const retry = (reason) => {
             if (settled) return;
             settled = true;
@@ -1751,7 +1757,6 @@
             settled = true;
             clearTimeout(timer);
             mqttClient = client;
-            mqttBrokerIndex = index;
             mqttClientPromise = null;
             console.info(`[MQTT] 已连接信令节点 ${index + 1}/${MQTT_BROKER_URLS.length}`);
             resolve(client);
@@ -1762,7 +1767,9 @@
             retry(err);
           });
 
-          client.once('close', () => retry(new Error('连接关闭')));
+          client.once('close', () => {
+            retry(new Error('连接关闭'));
+          });
         };
 
         tryBroker(0);
@@ -1787,7 +1794,9 @@
           try {
             const data = JSON.parse(payload.toString());
             this.emit('data', data);
-          } catch(e) {}
+          } catch(e) {
+            console.warn('[MqttRoom parse error]', e);
+          }
         };
 
         this.client.on('message', this.messageHandler);
@@ -1797,7 +1806,9 @@
         if (!this.open || !this.client || !this.client.connected) return;
         try {
           this.client.publish(this.pubTopic, JSON.stringify(data), { qos: 0 });
-        } catch(e) {}
+        } catch(e) {
+          console.warn('[MqttRoom send error]', e);
+        }
       }
 
       on(event, fn) {
@@ -1815,7 +1826,7 @@
       emit(event, ...args) {
         if (this.listeners[event]) {
           this.listeners[event].forEach(fn => {
-            try { fn(...args); } catch(err) {}
+            try { fn(...args); } catch(err) { console.error(`[MqttRoom ${event} error]`, err); }
           });
         }
       }
@@ -1830,15 +1841,110 @@
     }
 
     let currentRoomCode = '';
+    let isHostConnecting = false;
+    let p2pChannel = null;
 
     function generateFastRoomCode() {
       return String(Math.floor(100000 + Math.random() * 900000));
     }
 
-    async function initPeer() {
+    // P2P 优先：PeerJS 建立 WebRTC DataChannel；信令或直连失败时才回退 MQTT。
+    async function initHostPeer(targetCode = null, forceNew = false) {
+      if (targetCode) currentRoomCode = targetCode;
       if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
+
       const displayEl = document.getElementById('myRoomCodeDisplay');
+      const badgeEl = document.getElementById('roomStatusBadge');
       if (displayEl) displayEl.textContent = currentRoomCode;
+
+      if (!forceNew && p2pChannel && p2pChannel.open && currentRoomCode === lastActiveRoomCode) {
+        if (badgeEl) {
+          badgeEl.innerHTML = '🟢 P2P 直连房间已就绪，等待好友加入...';
+          badgeEl.style.color = '#10b981';
+        }
+        return;
+      }
+
+      if (p2pChannel) {
+        try { p2pChannel.close(); } catch (_) {}
+        p2pChannel = null;
+      }
+      if (conn) {
+        try { conn.close(); } catch (_) {}
+        conn = null;
+      }
+      if (badgeEl) {
+        badgeEl.innerHTML = '🟡 正在建立 P2P 直连...';
+        badgeEl.style.color = '#f59e0b';
+      }
+
+      const roomCode = currentRoomCode;
+      try {
+        const channel = new GomokuP2PChannel(roomCode, 'host');
+        p2pChannel = channel;
+        let hostHandshakeDone = false;
+
+        channel.on('data', data => {
+          if (!data || data.type !== 'join_request' || hostHandshakeDone) return;
+          hostHandshakeDone = true;
+          channel.send({ type: 'join_accepted', name: p1Name, avatar: p1Avatar });
+          conn = channel;
+          myOnlineColor = BLACK;
+          lastActiveRoomCode = roomCode;
+          p2Name = data.name || '好友';
+          p2Avatar = data.avatar || '👧';
+          updatePlayerHeaderUI();
+          showGameNotice('🎉 P2P 直连成功！您执黑先行~', false);
+          closeOnlineModal();
+          setMode('online');
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+          setupConn();
+        });
+
+        channel.on('open', () => {
+          if (badgeEl) {
+            badgeEl.innerHTML = '🟢 P2P 直连房间已就绪，等待好友加入...';
+            badgeEl.style.color = '#10b981';
+          }
+        });
+        channel.on('close', () => {
+          if (!hostHandshakeDone && badgeEl) {
+            badgeEl.innerHTML = '⚠️ P2P 房间已断开，正在切换中继...';
+          }
+        });
+
+        await channel.start();
+        if (badgeEl) {
+          badgeEl.innerHTML = '🟢 P2P 直连房间已就绪，等待好友加入...';
+          badgeEl.style.color = '#10b981';
+        }
+      } catch (error) {
+        console.warn('[P2P host unavailable, fallback to MQTT]', error);
+        p2pChannel = null;
+        await initHostMqttPeer(roomCode, forceNew);
+      }
+    }
+
+    async function initHostMqttPeer(targetCode = null, forceNew = false) {
+      if (targetCode) currentRoomCode = targetCode;
+      if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
+
+      const displayEl = document.getElementById('myRoomCodeDisplay');
+      const badgeEl = document.getElementById('roomStatusBadge');
+      if (displayEl) displayEl.textContent = currentRoomCode;
+
+      if (!forceNew && conn && conn.open && currentRoomCode === lastActiveRoomCode) {
+        if (badgeEl) {
+          badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
+          badgeEl.style.color = '#10b981';
+        }
+        return;
+      }
+
+      if (badgeEl) {
+        badgeEl.innerHTML = '🟡 正在连入极速联机网络...';
+        badgeEl.style.color = '#f59e0b';
+      }
 
       if (conn) {
         try { conn.close(); } catch(e) {}
@@ -1846,49 +1952,291 @@
       }
 
       const roomCode = currentRoomCode;
+
       try {
         const client = await getOrCreateMqttClient();
         const c2hTopic = `gomoku/v3/${roomCode}/c2h`;
         const h2cTopic = `gomoku/v3/${roomCode}/h2c`;
 
-        client.subscribe(c2hTopic, { qos: 0 });
+        client.subscribe(c2hTopic, { qos: 0 }, (err) => {
+          if (err) {
+            if (badgeEl) {
+              badgeEl.innerHTML = '⚠️ 连入失败 <span style="cursor:pointer;color:#3b82f6;text-decoration:underline;" onclick="initHostPeer(null, true)">[重试]</span>';
+              badgeEl.style.color = '#ef4444';
+            }
+            return;
+          }
+          if (badgeEl) {
+            badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
+            badgeEl.style.color = '#10b981';
+          }
+        });
 
+        // 房主监听客方加入握手（多波段防丢包应答）
+        let hostHandshakeDone = false;
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
             const data = JSON.parse(payload.toString());
             if (data.type === 'join_request') {
-              client.removeListener('message', onHostInvite);
+              // 连续回送 join_accepted（0ms, 150ms, 350ms），确保 4G/5G 弱网下对方必能收到
+              const sendAccept = () => {
+                try {
+                  client.publish(h2cTopic, JSON.stringify({
+                    type: 'join_accepted',
+                    name: p1Name,
+                    avatar: p1Avatar
+                  }), { qos: 0 });
+                } catch(_) {}
+              };
+              sendAccept();
+              setTimeout(sendAccept, 150);
+              setTimeout(sendAccept, 350);
 
-              client.publish(h2cTopic, JSON.stringify({
-                type: 'join_accepted',
-                name: p1Name,
-                avatar: p1Avatar
-              }), { qos: 0 });
+              if (!hostHandshakeDone) {
+                hostHandshakeDone = true;
+                setTimeout(() => {
+                  try { client.removeListener('message', onHostInvite); } catch(_) {}
+                }, 1500);
 
-              conn = new MqttRoomConnection(client, roomCode, 'host');
-              myOnlineColor = BLACK;
-              p2Name = data.name || '好友';
-              p2Avatar = data.avatar || '👧';
-              updatePlayerHeaderUI();
+                conn = new MqttRoomConnection(client, roomCode, 'host');
+                myOnlineColor = BLACK;
+                lastActiveRoomCode = roomCode;
+                p2Name = data.name || '好友';
+                p2Avatar = data.avatar || '👧';
+                updatePlayerHeaderUI();
 
-              alert("🎉 好友已成功加入房间！您执黑先行~");
-              closeOnlineModal();
-              setMode('online');
-              conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
-              setupConn();
+                if (isReconnecting) {
+                  onReconnectSuccess();
+                } else {
+                  showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
+                  closeOnlineModal();
+                  setMode('online');
+                  conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+                }
+                setupConn();
+              }
             }
-          } catch(e) {}
+          } catch(e) {
+            console.warn('[onHostInvite error]', e);
+          }
         };
 
         client.on('message', onHostInvite);
+
       } catch(err) {
-        console.error('[initPeer error]', err);
+        console.error('[initHostPeer error]', err);
+        if (badgeEl) {
+          badgeEl.innerHTML = `⚠️ 极速网络连接受阻 <span style="cursor:pointer;color:#3b82f6;text-decoration:underline;" onclick="initHostPeer(null, true)">[点击重试]</span>`;
+          badgeEl.style.color = '#ef4444';
+        }
       }
     }
 
+    function initPeer(customCode = null) {
+      initHostPeer(customCode, false);
+    }
+
+    function refreshNewRoomCode() {
+      currentRoomCode = generateFastRoomCode();
+      initHostPeer(currentRoomCode, true);
+      showGameNotice("🔄 正在刷新全新房间码...", false);
+    }
+
+    // --- 🛰️ 联机断线自动重连与对局状态瞬时同步系统 ---
+    let isReconnecting = false;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    let reconnectTimer = null;
+    let lastActiveRoomCode = '';
+
+    function showReconnectOverlay(show, text = '') {
+      const modal = document.getElementById('onlineReconnectModal');
+      if (!modal) return;
+      if (show) {
+        modal.classList.add('show');
+        if (text) document.getElementById('reconnectStatusText').innerHTML = text;
+      } else {
+        modal.classList.remove('show');
+      }
+    }
+
+    function triggerOnlineReconnect(reason = '网络波动') {
+      if (gameMode !== 'online' || isOver) return;
+      if (isReconnecting) return;
+
+      if (!currentRoomCode && lastActiveRoomCode) {
+        currentRoomCode = lastActiveRoomCode;
+      }
+      if (!currentRoomCode) {
+        showGameNotice("⚠️ 联机已断开！", true);
+        return;
+      }
+
+      lastActiveRoomCode = currentRoomCode;
+      isReconnecting = true;
+      reconnectAttempts = 0;
+      showReconnectOverlay(true, `⚠️ ${reason}，正在尝试自动重连 (第 1/${MAX_RECONNECT_ATTEMPTS} 次)...<br><span style="font-size:11px; color:#92400e; font-weight:normal;">棋盘进度已完整保全，恢复后自动接续</span>`);
+
+      if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+      doAutoReconnect();
+    }
+
+    async function doAutoReconnect() {
+      if (!isReconnecting || isOver || gameMode !== 'online') return;
+
+      reconnectAttempts++;
+      const statusText = `⚠️ 正在尝试重新建立连接 (第 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} 次)...<br><span style="font-size:11px; color:#92400e; font-weight:normal;">棋盘进度已完整保全，连接恢复后自动接续</span>`;
+      const txtEl = document.getElementById('reconnectStatusText');
+      if (txtEl) txtEl.innerHTML = statusText;
+
+      try {
+        const client = await getOrCreateMqttClient();
+        if (conn && conn.open) {
+          onReconnectSuccess();
+          return;
+        }
+
+        if (myOnlineColor === WHITE) {
+          conn = new MqttRoomConnection(client, currentRoomCode, 'client');
+          conn.send({ type: 'reconnect_handshake', role: 'client', stepCount: history.length });
+          onReconnectSuccess();
+        } else {
+          conn = new MqttRoomConnection(client, currentRoomCode, 'host');
+          sendFullStateSnapshot();
+          onReconnectSuccess();
+        }
+      } catch(e) {
+        console.warn('[doAutoReconnect error]', e);
+        scheduleNextReconnect();
+      }
+    }
+
+    function scheduleNextReconnect(delay = 2500) {
+      if (!isReconnecting) return;
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        document.getElementById('reconnectTitle').textContent = '⚠️ 重连未成功';
+        document.getElementById('reconnectStatusText').innerHTML = '对方可能已断网或退出游戏。<br>您可以选择手动再次重试，或转为单人人机继续对局！';
+        return;
+      }
+      reconnectTimer = setTimeout(doAutoReconnect, delay);
+    }
+
+    function manualTriggerReconnect() {
+      reconnectAttempts = 0;
+      document.getElementById('reconnectTitle').textContent = '联机中断重连中...';
+      doAutoReconnect();
+    }
+
+    function onReconnectSuccess() {
+      isReconnecting = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      showReconnectOverlay(false);
+      setupConn();
+
+      if (myOnlineColor === WHITE) {
+        conn.send({ type: 'reconnect_handshake', role: 'client', stepCount: history.length });
+      } else {
+        sendFullStateSnapshot();
+      }
+
+      playPopSound();
+      showGameNotice("🎉 联机重连成功！棋局已完好恢复，继续对弈~", false);
+    }
+
+    function sendFullStateSnapshot() {
+      if (!conn || !conn.open) return;
+      conn.send({
+        type: 'state_snapshot',
+        board: board,
+        history: history,
+        turn: turn,
+        isOver: isOver,
+        p1Name: p1Name,
+        p1Avatar: p1Avatar,
+        p2Name: p2Name,
+        p2Avatar: p2Avatar,
+        currentDrawnCards: currentDrawnCards,
+        cardUsedStatus: cardUsedStatus
+      });
+    }
+
+    function fallbackToAiGame() {
+      isReconnecting = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      showReconnectOverlay(false);
+      if (conn) { try { conn.close(); } catch(e) {} conn = null; }
+      
+      gameMode = 'ai';
+      p2Name = '大师AI';
+      p2Avatar = '🤖';
+      updatePlayerHeaderUI();
+      showGameNotice("🤖 已成功转为单人人机对弈模式，局势已完整继承！", false);
+      if (turn === WHITE && !isOver) {
+        setTimeout(smartAiMove, 500);
+      }
+    }
+
+    let onlineHeartbeatTimer = null;
     function setupConn() {
+      if (!conn) return;
+      if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+      
+      let missedPings = 0;
+      onlineHeartbeatTimer = setInterval(() => {
+        if (conn && conn.open) {
+          missedPings++;
+          if (missedPings > 2) {
+            triggerOnlineReconnect("心跳无响应");
+            return;
+          }
+          try { conn.send({ type: 'ping' }); } catch(e) {}
+        }
+      }, 5000);
+
+      conn.on('close', () => {
+        if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+        triggerOnlineReconnect("连接断开");
+      });
+
+      conn.on('error', (err) => {
+        console.warn('[conn error]', err);
+        if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+        triggerOnlineReconnect("网络异常");
+      });
+
       conn.on('data', (data) => {
+        if (data.type === 'ping') {
+          try { conn.send({ type: 'pong' }); } catch(e) {}
+          return;
+        }
+        if (data.type === 'pong') {
+          missedPings = 0;
+          return;
+        }
+        if (data.type === 'reconnect_handshake') {
+          // 房主收到客方重连，回传最新棋局快照
+          sendFullStateSnapshot();
+          onReconnectSuccess();
+          return;
+        }
+        if (data.type === 'state_snapshot') {
+          // 客方收到全量快照，瞬间恢复局势
+          board = data.board;
+          history = data.history;
+          turn = data.turn;
+          isOver = data.isOver;
+          p2Name = data.p1Name;
+          p2Avatar = data.p1Avatar;
+          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards;
+          if (data.cardUsedStatus) cardUsedStatus = data.cardUsedStatus;
+          updatePlayerHeaderUI();
+          draw();
+          updateUI();
+          persistGameState();
+          onReconnectSuccess();
+          return;
+        }
         if (data.type === 'move') {
           makeMove(data.r, data.c, data.p, true);
         } else if (data.type === 'chat') {
@@ -1906,16 +2254,32 @@
           document.getElementById('btnUndoRefuse').style.display = "block";
           undoModal.classList.add('show');
         } else if (data.type === 'undo_res') {
-          if (data.agree) { doUndo(); alert("✅ 对方同意了您的悔棋申请！"); }
-          else alert("❌ 对方拒绝了您的悔棋申请！");
+          if (data.agree) {
+            doUndo();
+            alert("✅ 对方同意了您的悔棋申请！");
+          } else {
+            alert("❌ 对方拒绝了您的悔棋申请！");
+          }
         } else if (data.type === 'restart') {
-          resetBoardOnly(); alert("🔄 对方重新开启了新对局！");
+          resetBoardOnly();
+          alert("🔄 对方重新开启了新对局！");
         } else if (data.type === 'skill_use') {
           alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
-        } else if (data.type === 'skill_freeze') {
-          frozenPoint = { r: data.r, c: data.c, expireStep: data.expireStep };
+        } else if (data.type === 'skill_identity_swap') {
+          // 身份互换：全盘棋子颜色对调
+          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+            if (board[r][c] === BLACK) board[r][c] = WHITE;
+            else if (board[r][c] === WHITE) board[r][c] = BLACK;
+          }
+          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          triggerBoardShake();
+          playSkillSound('warp');
+          showSkillBanner('🔄', '对方发动【身份互换】！', '全场棋子黑白颠倒！');
           draw();
-          alert(`❄️ 对方发动了【寒冰封禁】！位于 (${data.r+1}, ${data.c+1}) 的点本回合禁止落子！`);
+        } else if (data.type === 'skill_prophecy') {
+          prophecyPoint = { r: data.r, c: data.c, by: data.by };
+          draw();
+          showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
         } else if (data.type === 'skill_remove_stone') {
           board[data.r][data.c] = EMPTY;
           history = history.filter(h => !(h.r === data.r && h.c === data.c));
@@ -1928,10 +2292,6 @@
           if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
           draw();
           alert(`🌟 对方发动了【移星换斗】！将其棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
-        } else if (data.type === 'skill_fog') {
-          fogArea = { r: data.r, c: data.c, expireStep: data.expireStep };
-          draw();
-          alert(`🌫️ 对方发动了【迷雾遮天】！3x3 区域视线受到阻碍！`);
         } else if (data.type === 'skill_swap_color') {
           board[data.r][data.c] = data.p;
           const histItem = history.find(h => h.r === data.r && h.c === data.c);
@@ -1953,7 +2313,7 @@
           triggerSkillVFX('swap_positions', data.r2, data.c2, data.r1, data.c1);
           triggerBoardShake();
           playSkillSound('warp');
-          showSkillBanner('💫', '对方发动【移形换影】！', '双方棋子位置发生了对调！');
+          showSkillBanner('💫', `对方发动【移形换影】！`, `双方棋子位置发生了对调！`);
           draw();
         } else if (data.type === 'skill_mega_bomb') {
           for (let r = 0; r < 15; r++) {
@@ -1966,26 +2326,60 @@
           triggerSkillVFX('mega_bomb');
           triggerBoardShake(true);
           playSkillSound('bomb');
-          showSkillBanner('💣', '对方发动【乾坤大乱/大炸弹】！', '天翻地覆！全盘所有棋子已被随机打乱！');
+          showSkillBanner('💣', `对方发动【乾坤大乱/大炸弹】！`, `天翻地覆！全盘所有棋子已被随机打乱！`);
           winningLine = null;
           for (const s of history) {
-            if (checkWin(s.r, s.c, s.p)) { isOver = true; triggerVictoryVFX(); break; }
+            if (checkWin(s.r, s.c, s.p)) {
+              triggerGameEnd(s.p, `对方引爆炸弹洗牌后，【${s.p === BLACK ? p1Name : p2Name}】达成五子连珠！`);
+              break;
+            }
           }
+        } else if (data.type === 'destiny_point_1') {
+          opponentFreeMove = true;
+          turn = myOnlineColor;
+          updateUI();
+          showSkillBanner('💀', '对方掷出【大凶·空军】！', '对方本回合直接空过！您获得免费补下 1 子！');
+        } else if (data.type === 'destiny_point_2') {
+          board[data.fromR][data.fromC] = EMPTY;
+          board[data.toR][data.toC] = (myOnlineColor === BLACK ? WHITE : BLACK);
+          const histItem = history.find(h => h.r === data.fromR && h.c === data.fromC);
+          if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
+          triggerSkillVFX('shift_stone', data.toR, data.toC, data.fromR, data.fromC);
+          playSkillSound('magic');
+          showSkillBanner('🙈', '对方触发【偷梁换柱】！', `盲选将其位于 (${data.fromR+1}, ${data.fromC+1}) 的棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
+          draw(); updateUI(); persistGameState();
+        } else if (data.type === 'destiny_wipe_danger') {
+          data.stones.forEach(pos => {
+            board[pos.r][pos.c] = EMPTY;
+            triggerSkillVFX('remove_stone', pos.r, pos.c);
+          });
+          history = history.filter(h => !data.stones.some(d => d.r === h.r && d.c === h.c));
+          triggerBoardShake(true);
+          playSkillSound('boom');
+          showSkillBanner('👑', '对方发动【天命掀桌】！', `我方 ${data.stones.length} 颗杀机连线已被强行作废抹除！`);
+          draw(); updateUI(); persistGameState();
+        } else if (data.type === 'destiny_place_2x2') {
+          data.cells.forEach(pos => {
+            board[pos.r][pos.c] = data.p;
+            history.push({ r: pos.r, c: pos.c, p: data.p });
+            triggerStoneDropVFX(pos.r, pos.c, data.p);
+          });
+          triggerBoardShake();
+          playSkillSound('victory');
+          showSkillBanner('👑', '对方发动【天命降临】！', '2×2 区域瞬间天降 4 颗连星！');
           draw(); updateUI(); persistGameState();
         }
       });
     }
 
-    
     // ==========================================
     // 🎴 干扰技能卡执行与棋盘交互核心逻辑
     // ==========================================
-    function isPointFrozen(r, c) {
-      return frozenPoint && frozenPoint.r === r && frozenPoint.c === c && history.length < frozenPoint.expireStep;
-    }
-
-    function isFogActive() {
-      return fogArea && history.length < fogArea.expireStep;
+    function isProphecied(r, c, p) {
+      if (!prophecyPoint) return false;
+      // 施法者本人落子时，绝对不触发封锁拦截
+      if (prophecyPoint.by && p === prophecyPoint.by) return false;
+      return prophecyPoint.r === r && prophecyPoint.c === c;
     }
 
     function drawRandomThreeCards() {
@@ -1993,9 +2387,10 @@
       currentDrawnCards = shuffled.slice(0, 3);
       cardUsedStatus = [false, false, false];
       activeSkill = null;
-      frozenPoint = null;
-      fogArea = null;
+      prophecyPoint = null;
       hasExtraMove = false;
+      consecutiveMovesLeft = 0;
+      opponentFreeMove = false;
       cancelActiveSkill();
       renderCardSlots();
     }
@@ -2021,7 +2416,207 @@
       }).join('');
     }
 
-        function handleCardClick(idx) {
+    // 🔍 智能检测对方场上是否有三连（活三/眠三）或四连（活四/冲四）
+    function findEnemyThreeOrFour(enemyColor) {
+      const dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (board[r][c] !== enemyColor) continue;
+          for (const [dr, dc] of dirs) {
+            const pr = r - dr, pc = c - dc;
+            if (pr >= 0 && pr < 15 && pc >= 0 && pc < 15 && board[pr][pc] === enemyColor) continue;
+            const stones = [{ r, c }];
+            let nr = r + dr, nc = c + dc;
+            while (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] === enemyColor) {
+              stones.push({ r: nr, c: nc });
+              nr += dr; nc += dc;
+            }
+            if (stones.length >= 3) {
+              return stones;
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    // 🎲 命运神抽：掷骰子动画与结算
+    function executeDestinyDice(slotIdx, card) {
+      markCardUsed(slotIdx);
+      playSkillSound('dice');
+
+      const diceIcons = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+      let rollCount = 0;
+      const rollTimer = setInterval(() => {
+        const tempPoint = Math.floor(Math.random() * 6) + 1;
+        showSkillBanner(diceIcons[tempPoint - 1], '🎲 命运神抽摇骰中...', `命运指针正在疯狂旋转... 点数 [${tempPoint}]`, true);
+        rollCount++;
+        if (rollCount > 8) {
+          clearInterval(rollTimer);
+          finalizeDestinyRoll(slotIdx, card);
+        }
+      }, 110);
+    }
+
+    function finalizeDestinyRoll(slotIdx, card) {
+      const point = Math.floor(Math.random() * 6) + 1;
+      const myColor = (gameMode === 'online') ? myOnlineColor : turn;
+      const enemyColor = myColor === BLACK ? WHITE : BLACK;
+
+      if (point === 1) {
+        // 💀 掷出 1（大凶·空军）：这回合直接空过，不仅不能下子，还必须让对手在任意空格免费补下 1 子
+        showSkillBanner('💀', `🎲 投出点数 1：【大凶·空军】！`, '本回合直接空过！对手获得免费补下 1 子！');
+        triggerBoardShake();
+        playSkillSound('boom');
+
+        if (gameMode === 'ai') {
+          // 电脑白子立刻免费补下一子并接管正常回合
+          setTimeout(() => {
+            const empties = [];
+            for (let i = 0; i < 15; i++) for (let j = 0; j < 15; j++) if (board[i][j] === EMPTY) empties.push({ r: i, c: j });
+            if (empties.length > 0) {
+              // 优先选中央或靠近已有棋子的空位
+              const pick = empties[Math.floor(Math.random() * empties.length)];
+              board[pick.r][pick.c] = WHITE;
+              history.push({ r: pick.r, c: pick.c, p: WHITE });
+              triggerStoneDropVFX(pick.r, pick.c, WHITE);
+              playPopSound();
+              draw();
+              showGameNotice("🤖 大师AI 免费补子成功！继续执行正常回合！", true);
+              if (checkWin(pick.r, pick.c, WHITE)) {
+                triggerGameEnd(WHITE, '大师AI 免费补下 1 子，达成五子连珠绝杀！');
+                return;
+              }
+              turn = WHITE;
+              updateUI();
+              setTimeout(smartAiMove, 650);
+            }
+          }, 850);
+        } else if (gameMode === 'pvp') {
+          opponentFreeMove = true;
+          turn = enemyColor;
+          updateUI();
+          showGameNotice(`💀 空过生效！轮到对手【${turn === BLACK ? p1Name : p2Name}】免费补子并接管回合！`, true);
+        } else if (gameMode === 'online') {
+          turn = enemyColor;
+          updateUI();
+          if (conn && conn.open) {
+            conn.send({ type: 'destiny_point_1' });
+          }
+        }
+      } else if (point === 2) {
+        // 🙈 掷出 2（偷梁换柱）：闭上眼，让对手替你盲选棋盘上你的 1 颗子，移到最近的空格里
+        const myStones = [];
+        for (let r = 0; r < 15; r++) {
+          for (let c = 0; c < 15; c++) {
+            if (board[r][c] === myColor) myStones.push({ r, c });
+          }
+        }
+        if (myStones.length === 0) {
+          showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, '棋盘尚无己方棋子，偷梁换柱落空~');
+          return;
+        }
+        const pick = myStones[Math.floor(Math.random() * myStones.length)];
+        const sR = pick.r, sC = pick.c;
+
+        let bestDist = Infinity;
+        let bestTarget = null;
+        for (let r = 0; r < 15; r++) {
+          for (let c = 0; c < 15; c++) {
+            if (board[r][c] === EMPTY) {
+              const dist = (r - sR) * (r - sR) + (c - sC) * (c - sC);
+              if (dist < bestDist) {
+                bestDist = dist;
+                bestTarget = { r, c };
+              }
+            }
+          }
+        }
+
+        if (bestTarget) {
+          board[sR][sC] = EMPTY;
+          board[bestTarget.r][bestTarget.c] = myColor;
+          const histItem = history.find(h => h.r === sR && h.c === sC);
+          if (histItem) { histItem.r = bestTarget.r; histItem.c = bestTarget.c; }
+          triggerSkillVFX('shift_stone', bestTarget.r, bestTarget.c, sR, sC);
+          playSkillSound('magic');
+          showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, `对手盲选了位于 (${sR+1},${sC+1}) 的棋子，平移至 (${bestTarget.r+1},${bestTarget.c+1})！`);
+          draw(); updateUI(); persistGameState();
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'destiny_point_2', fromR: sR, fromC: sC, toR: bestTarget.r, toC: bestTarget.c });
+          }
+          if (checkWin(bestTarget.r, bestTarget.c, myColor)) {
+            triggerGameEnd(myColor);
+          }
+        }
+      } else if (point === 3) {
+        // 💥 掷出 3（精准爆破）：直接拿掉对方场上任意 1 颗棋子
+        let enemyCount = 0;
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
+        if (enemyCount === 0) {
+          showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '对方场上暂无棋子，精准爆破落空~');
+          return;
+        }
+        showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '请在棋盘上点击对方任意 1 颗棋子将其抹除！');
+        activeSkill = { slotIdx: -1, skill: { id: 'destiny_remove', name: '精准爆破' }, step: 1 };
+        const bar = document.getElementById('skillPromptBar');
+        const text = document.getElementById('skillPromptText');
+        if (bar && text) {
+          bar.style.display = 'flex';
+          text.textContent = `💥【精准爆破】请点击对方场上任意 1 颗棋子！`;
+        }
+      } else if (point === 4) {
+        // 🪞 掷出 4（绝地倒戈）：把对方场上任意 1 颗棋子，直接翻成你的颜色
+        let enemyCount = 0;
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
+        if (enemyCount === 0) {
+          showSkillBanner('🪞', `🎲 投出点数 4：【绝地倒戈】！`, '对方场上暂无棋子，绝地倒戈落空~');
+          return;
+        }
+        showSkillBanner('🪞', `🎲 投出点数 4：【绝地倒戈】！`, '请在棋盘上点击对方任意 1 颗棋子翻为己用！');
+        activeSkill = { slotIdx: -1, skill: { id: 'destiny_convert', name: '绝地倒戈' }, step: 1 };
+        const bar = document.getElementById('skillPromptBar');
+        const text = document.getElementById('skillPromptText');
+        if (bar && text) {
+          bar.style.display = 'flex';
+          text.textContent = `🪞【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
+        }
+      } else if (point === 5) {
+        // ⚡ 掷出 5（疯狂暴击）：本回合允许你连续下 3 颗子！
+        consecutiveMovesLeft = 2; // 当前子落完后还可连下 2 颗，一共 3 颗！
+        showSkillBanner('⚡', `🎲 投出点数 5：【疯狂暴击】！`, '狂暴连击！本回合允许你连续落 3 颗子！');
+        triggerBoardShake();
+        playSkillSound('thunder');
+      } else if (point === 6) {
+        // 👑 掷出 6（天命降临·掀桌）：如果对方此时有“活三”或“成四”，直接全部作废移除；如果没有，你在棋盘上任意选一个未占用的 2×2 区域，全填上你的棋子
+        const dangerLine = findEnemyThreeOrFour(enemyColor);
+        if (dangerLine && dangerLine.length >= 3) {
+          dangerLine.forEach(pos => {
+            board[pos.r][pos.c] = EMPTY;
+            triggerSkillVFX('remove_stone', pos.r, pos.c);
+          });
+          history = history.filter(h => !dangerLine.some(d => d.r === h.r && d.c === h.c));
+          draw(); updateUI(); persistGameState();
+          triggerBoardShake(true);
+          playSkillSound('boom');
+          showSkillBanner('👑', `🎲 投出点数 6：【天命掀桌】！`, `掀翻杀机！对方 ${dangerLine.length} 颗杀线棋子已被全部作废抹除！`);
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'destiny_wipe_danger', stones: dangerLine });
+          }
+        } else {
+          showSkillBanner('👑', `🎲 投出点数 6：【天命降临】！`, '对方无险情！请在棋盘上选一个未占用的 2×2 区域全填满！');
+          activeSkill = { slotIdx: -1, skill: { id: 'destiny_2x2', name: '天命2×2' }, step: 1 };
+          const bar = document.getElementById('skillPromptBar');
+          const text = document.getElementById('skillPromptText');
+          if (bar && text) {
+            bar.style.display = 'flex';
+            text.textContent = `👑【天命降临】请点击未占用的 2×2 区域左上角！`;
+          }
+        }
+      }
+    }
+
+    function handleCardClick(idx) {
       if (isOver) return;
       if (cardUsedStatus[idx]) return;
       if (gameMode === 'online' && turn !== myOnlineColor) {
@@ -2039,16 +2634,8 @@
       const card = currentDrawnCards[idx];
       const cardTitle = card.name;
       if (!card.needTarget) {
-        if (card.id === 'rewind') {
-          if (history.length === 0) return alert("棋盘上还没有棋子，无法倒流时间！");
-          doUndo();
-          markCardUsed(idx);
-          triggerSkillVFX('rewind');
-          playSkillSound('rewind');
-          showSkillBanner('⏳', `【${cardTitle}】发动！`, '时间倒流一步，战局重新书写！');
-          if (gameMode === 'online' && conn && conn.open) {
-            conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
-          }
+        if (card.id === 'destiny_dice') {
+          executeDestinyDice(idx, card);
         } else if (card.id === 'double_move') {
           hasExtraMove = true;
           markCardUsed(idx);
@@ -2060,38 +2647,55 @@
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
         } else if (card.id === 'reforge_cards') {
-          const usedCardIds = new Set();
-          currentDrawnCards.forEach((c, i) => {
-            if (i !== idx && cardUsedStatus[i]) usedCardIds.add(c.id);
-          });
-          usedCardIds.add('reforge_cards');
-
-          let pool = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
-          if (pool.length < 3) pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
+          // 排除天降神抽自身，从其他8大技能中随机洗牌抽出3张全新神技牌
+          const pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
           const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
 
-          let pickIdx = 0;
+          // 核心机制：全场 3 个卡牌槽位（包括之前已使用变灰的干扰牌和自身）全部满血重铸并复活！
           for (let i = 0; i < 3; i++) {
-            if (i === idx || !cardUsedStatus[i]) {
-              if (pickIdx < shuffledPool.length) {
-                currentDrawnCards[i] = shuffledPool[pickIdx++];
-                cardUsedStatus[i] = false;
-              }
-            }
+            currentDrawnCards[i] = shuffledPool[i];
+            cardUsedStatus[i] = false; // 刷新出来的全部神技牌立即可用！
           }
           renderCardSlots();
           triggerSkillVFX('reforge_cards');
           playSkillSound('dice');
-          showSkillBanner('🃏', `【${cardTitle}】发动！`, '灵运爆发！自身与未用手牌已全部蜕变重铸为全新神技！');
+          showSkillBanner('🃏', `【${cardTitle}】发动！`, '神迹降临！全场所有手牌（包含已使用的干扰牌）全部满血复活换新！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
+          persistGameState();
+        } else if (card.id === 'identity_swap') {
+          if (history.length === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
+          // 全盘颜色互换
+          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+            if (board[r][c] === BLACK) board[r][c] = WHITE;
+            else if (board[r][c] === WHITE) board[r][c] = BLACK;
+          }
+          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          markCardUsed(idx);
+          triggerBoardShake();
+          playSkillSound('warp');
+          showSkillBanner('🔄', `【${cardTitle}】发动！`, '黑白颠倒！全场棋子身份互换！');
+          draw();
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_identity_swap' });
+          }
+          // 检查互换后是否有人赢棋
+          winningLine = null;
+          for (const s of history) {
+            if (checkWin(s.r, s.c, s.p)) {
+              triggerGameEnd(s.p, `身份互换后，【${s.p === BLACK ? p1Name : p2Name}】直接达成五子连珠获胜！`);
+              break;
+            }
+          }
+          updateUI(); persistGameState();
         } else if (card.id === 'mega_bomb') {
           if (history.length < 2) {
             return alert("💣 棋盘上棋子太少，无法引爆大炸弹！至少需要 2 颗棋子~");
           }
           markCardUsed(idx);
 
+          // 收集全部棋子颜色并打乱全盘坐标
           const stones = history.map(h => h.p);
           const allCoords = [];
           for (let r = 0; r < 15; r++) {
@@ -2104,6 +2708,7 @@
             [allCoords[i], allCoords[j]] = [allCoords[j], allCoords[i]];
           }
 
+          // 清空并重新分配
           for (let r = 0; r < 15; r++) {
             for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
           }
@@ -2123,6 +2728,7 @@
             conn.send({ type: 'skill_mega_bomb', stones: history });
           }
 
+          // 检查洗牌后是否有玩家连珠获胜
           winningLine = null;
           let bombWinColor = null;
           for (const stone of history) {
@@ -2132,10 +2738,7 @@
             }
           }
           if (bombWinColor) {
-            isOver = true;
-            triggerVictoryVFX();
-            playSkillSound('victory');
-            setTimeout(() => alert(`🎉 炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`), 350);
+            triggerGameEnd(bombWinColor, `炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`);
           }
 
           draw(); updateUI(); persistGameState();
@@ -2152,18 +2755,30 @@
       const text = document.getElementById('skillPromptText');
       if (!bar || !text) return;
       bar.style.display = 'flex';
-      if (card.id === 'freeze') {
-        text.textContent = `❄️ 请在棋盘上点击选择要封印的空位 (1回合禁下)`;
+      if (card.id === 'prophecy_block') {
+        text.textContent = `🔮 请在棋盘上点击一个空位，预言对手下一步将在此落子`;
+        showSkillBanner('🔮', '【预言封锁】使用说明', '点击棋盘任意空格预言对手落点！若对手下一步落在该格，落子将被撤销且回合返还！');
       } else if (card.id === 'remove_stone') {
         text.textContent = `💥 请在棋盘上点击要抹除的对方孤子`;
+        showSkillBanner('💥', '【虚空陨石】使用说明', '点击对方场上任意 1 颗孤子！将其从棋盘上彻底抹除蒸发！');
       } else if (card.id === 'shift_stone') {
         text.textContent = `🌟 第1步：点击己方一颗要平移的棋子`;
-      } else if (card.id === 'fog_blind') {
-        text.textContent = `🌫️ 请在棋盘上点击释放 3x3 迷雾的位置`;
+        showSkillBanner('🌟', '【移星换斗】使用说明', '第1步选择己方1颗棋子，第2步点击相邻8方向空格即可平移！');
       } else if (card.id === 'swap_color') {
         text.textContent = `🪞 请在棋盘上点击要策反的对方棋子`;
+        showSkillBanner('🪞', '【偷天换日】使用说明', '点击对方场上任意 1 颗棋子！直接策反翻成你的颜色！');
       } else if (card.id === 'swap_positions') {
         text.textContent = `💫 第1步：点击己方一颗要互换位置的棋子`;
+        showSkillBanner('💫', '【移形换影】使用说明', '第1步选己方1颗棋子，第2步选对方1颗棋子，双方位置瞬间对调！');
+      } else if (card.id === 'destiny_remove') {
+        text.textContent = `💥【精准爆破】请点击对方场上任意 1 颗棋子将其抹除！`;
+        showSkillBanner('💥', '【精准爆破】使用说明', '点击对方场上任意 1 颗棋子将其直接抹除！');
+      } else if (card.id === 'destiny_convert') {
+        text.textContent = `🪞【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
+        showSkillBanner('🪞', '【绝地倒戈】使用说明', '点击对方场上任意 1 颗棋子，直接翻成你的颜色！');
+      } else if (card.id === 'destiny_2x2') {
+        text.textContent = `👑【天命降临】请点击未占用的 2×2 区域左上角！`;
+        showSkillBanner('👑', '【天命降临】使用说明', '点击任意未占用的 2×2 区域左上角，瞬间全填满你的 4 颗棋子！');
       }
     }
 
@@ -2171,6 +2786,8 @@
       activeSkill = null;
       const bar = document.getElementById('skillPromptBar');
       if (bar) bar.style.display = 'none';
+      const banner = document.getElementById('skillBanner');
+      if (banner) banner.classList.remove('show');
       renderCardSlots();
       draw();
     }
@@ -2184,6 +2801,13 @@
       draw();
     }
 
+    function invalidAction(msg, row, col) {
+      if (row !== undefined && col !== undefined) {
+        triggerSkillVFX('invalid_click', row, col);
+      }
+      showGameNotice(msg, true);
+    }
+
     function handleSkillClick(row, col) {
       if (!activeSkill) return;
       const { slotIdx, skill } = activeSkill;
@@ -2191,21 +2815,21 @@
       const enemyColor = myColor === BLACK ? WHITE : BLACK;
       const skillName = skill.name;
 
-      if (skill.id === 'freeze') {
+      if (skill.id === 'prophecy_block') {
         if (board[row][col] !== EMPTY) {
-          return alert("❄️ 寒冰封禁只能施加在空白交叉点上！");
+          return invalidAction('🔮 预言封锁只能指向空白格子！', row, col);
         }
-        frozenPoint = { r: row, c: col, expireStep: history.length + 2 };
+        prophecyPoint = { r: row, c: col, by: myColor };
         markCardUsed(slotIdx);
-        triggerSkillVFX('freeze', row, col);
-        playSkillSound('ice');
-        showSkillBanner('❄️', `【${skillName}】发动！`, `封印 (${row+1}, ${col+1}) 空位，本回合双方禁下！`);
+        triggerSkillVFX('freeze', row, col); // 复用冰花特效做视觉标记
+        playSkillSound('magic');
+        showSkillBanner('🔮', `【${skillName}】发动！`, `已预言 (${row+1}, ${col+1})，若对手落此处将当场抹杀撤销！`);
         if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_freeze', r: row, c: col, expireStep: frozenPoint.expireStep });
+          conn.send({ type: 'skill_prophecy', r: row, c: col, by: myColor });
         }
       } else if (skill.id === 'remove_stone') {
         if (board[row][col] !== enemyColor) {
-          return alert("💥 只能抹除对方的棋子！");
+          return invalidAction("💥 只能抹除对方的棋子！", row, col);
         }
         board[row][col] = EMPTY;
         history = history.filter(h => !(h.r === row && h.c === col));
@@ -2220,7 +2844,7 @@
       } else if (skill.id === 'shift_stone') {
         if (activeSkill.step === 1) {
           if (board[row][col] !== myColor) {
-            return alert("🌟 请选择己方的棋子进行平移！");
+            return invalidAction("🌟 请选择己方的棋子进行平移！", row, col);
           }
           activeSkill.step = 2;
           activeSkill.srcR = row;
@@ -2230,12 +2854,12 @@
           draw();
         } else if (activeSkill.step === 2) {
           if (board[row][col] !== EMPTY) {
-            return alert("🌟 目标点必须是空白位置！");
+            return invalidAction("🌟 目标点必须是空白位置！", row, col);
           }
           const dr = Math.abs(row - activeSkill.srcR);
           const dc = Math.abs(col - activeSkill.srcC);
           if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) {
-            return alert("🌟 只能平移到相邻的 8 个方向空格之一！");
+            return invalidAction("🌟 只能平移到相邻的 8 个方向空格之一！", row, col);
           }
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = EMPTY;
@@ -2250,22 +2874,12 @@
             conn.send({ type: 'skill_shift_stone', fromR: sR, fromC: sC, toR: row, toC: col, p: myColor });
           }
           if (checkWin(row, col, myColor)) {
-            isOver = true;
-            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+            triggerGameEnd(myColor);
           }
-        }
-      } else if (skill.id === 'fog_blind') {
-        fogArea = { r: row, c: col, expireStep: history.length + 2 };
-        markCardUsed(slotIdx);
-        triggerSkillVFX('fog_blind', row, col);
-        playSkillSound('magic');
-        showSkillBanner('🌫️', `【${skillName}】发动！`, `3x3 区域迷雾弥漫，遮蔽对手视线！`);
-        if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_fog', r: row, c: col, expireStep: fogArea.expireStep });
         }
       } else if (skill.id === 'swap_color') {
         if (board[row][col] !== enemyColor) {
-          return alert("🪞 偷天换日只能策反对方的棋子！");
+          return invalidAction("🪞 偷天换日只能策反对方的棋子！", row, col);
         }
         board[row][col] = myColor;
         const histItem = history.find(h => h.r === row && h.c === col);
@@ -2279,13 +2893,12 @@
           conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
         }
         if (checkWin(row, col, myColor)) {
-          isOver = true;
-          setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+          triggerGameEnd(myColor);
         }
       } else if (skill.id === 'swap_positions') {
         if (activeSkill.step === 1) {
           if (board[row][col] !== myColor) {
-            return alert("💫 请选择己方的棋子！");
+            return invalidAction("💫 请选择己方的棋子！", row, col);
           }
           activeSkill.step = 2;
           activeSkill.srcR = row;
@@ -2295,7 +2908,7 @@
           draw();
         } else if (activeSkill.step === 2) {
           if (board[row][col] !== enemyColor) {
-            return alert("💫 目标必须是对方的棋子！");
+            return invalidAction("💫 目标必须是对方的棋子！", row, col);
           }
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = enemyColor;
@@ -2313,19 +2926,82 @@
             conn.send({ type: 'skill_swap_positions', r1: sR, c1: sC, r2: row, c2: col });
           }
           if (checkWin(row, col, myColor)) {
-            isOver = true;
-            setTimeout(() => alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`), 180);
+            triggerGameEnd(myColor);
+          }
+        }
+      } else if (skill.id === 'destiny_remove') {
+        if (board[row][col] !== enemyColor) {
+          return invalidAction('💥 请点击对方的一颗棋子！', row, col);
+        }
+        board[row][col] = EMPTY;
+        history = history.filter(h => !(h.r === row && h.c === col));
+        cancelActiveSkill();
+        triggerSkillVFX('remove_stone', row, col);
+        playSkillSound('boom');
+        triggerBoardShake();
+        showSkillBanner('💥', '【精准爆破】发动！', `成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
+        draw(); updateUI(); persistGameState();
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_remove_stone', r: row, c: col });
+        }
+      } else if (skill.id === 'destiny_convert') {
+        if (board[row][col] !== enemyColor) {
+          return invalidAction('🪞 请点击对方的一颗棋子！', row, col);
+        }
+        board[row][col] = myColor;
+        const histItem = history.find(h => h.r === row && h.c === col);
+        if (histItem) histItem.p = myColor;
+        cancelActiveSkill();
+        triggerSkillVFX('swap_color', row, col);
+        playSkillSound('magic');
+        triggerBoardShake();
+        showSkillBanner('🪞', '【绝地倒戈】发动！', `成功将对方位于 (${row+1}, ${col+1}) 的棋子翻为己用！`);
+        draw(); updateUI(); persistGameState();
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
+        }
+        if (checkWin(row, col, myColor)) {
+          triggerGameEnd(myColor);
+        }
+      } else if (skill.id === 'destiny_2x2') {
+        if (row >= 14 || col >= 14) {
+          return invalidAction('👑 2×2 区域超出棋盘边界，请往内部选点！', row, col);
+        }
+        const cells = [
+          { r: row, c: col },
+          { r: row + 1, c: col },
+          { r: row, c: col + 1 },
+          { r: row + 1, c: col + 1 }
+        ];
+        if (cells.some(pos => board[pos.r][pos.c] !== EMPTY)) {
+          return invalidAction('👑 2×2 区域必须 4 个格子全为空！', row, col);
+        }
+        cancelActiveSkill();
+        cells.forEach(pos => {
+          board[pos.r][pos.c] = myColor;
+          history.push({ r: pos.r, c: pos.c, p: myColor });
+          triggerStoneDropVFX(pos.r, pos.c, myColor);
+        });
+        triggerBoardShake();
+        playSkillSound('victory');
+        showSkillBanner('👑', '【天命降临】神域展开！', `2×2 区域瞬间天降 4 颗连星！`);
+        draw(); updateUI(); persistGameState();
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'destiny_place_2x2', cells, p: myColor });
+        }
+        winningLine = null;
+        for (const pos of cells) {
+          if (checkWin(pos.r, pos.c, myColor)) {
+            triggerGameEnd(myColor, `天命神域助力【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`);
+            break;
           }
         }
       }
     }
 
-    async function joinOnlineRoom() {
-      const codeInput = document.getElementById('inputJoinCode');
-      const code = codeInput ? codeInput.value.trim() : '';
-      if (!code) return alert("请输入 6 位房间码！");
+    async function joinMqttRoom(code, btn) {
+      if (!code) return showGameNotice("请输入 6 位房间码！", true);
 
-      const btn = document.getElementById('btnConnectRoom');
       if (btn) {
         btn.disabled = true;
         btn.textContent = '⏳ 正在连接好友房间...';
@@ -2361,32 +3037,32 @@
               clearInterval(joinInterval);
               clearTimeout(joinTimeout);
               client.removeListener('message', onClientInvite);
-
               restoreBtn();
 
               conn = new MqttRoomConnection(client, code, 'client');
+              lastActiveRoomCode = code;
               currentRoomCode = code;
               myOnlineColor = WHITE;
               p2Name = data.name || '房主';
               p2Avatar = data.avatar || '👦';
               updatePlayerHeaderUI();
-
-              alert("🎉 成功连入房间！房主执黑先行，您执白~");
+              showGameNotice('🎉 已切换 MQTT 中继并成功连入！您执白~', false);
               closeOnlineModal();
               setMode('online');
               setupConn();
               conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
             }
-          } catch(e) {}
+          } catch(e) {
+            console.warn('[onClientInvite error]', e);
+          }
         };
 
         client.on('message', onClientInvite);
-
         client.subscribe(h2cTopic, { qos: 0 }, (err) => {
           if (err) {
             restoreBtn();
             client.removeListener('message', onClientInvite);
-            return alert("❌ 订阅房间信道失败，请检查网络！");
+            return showGameNotice('❌ 订阅房间信道失败，请检查网络！', true);
           }
 
           const sendReq = () => {
@@ -2399,26 +3075,97 @@
           };
 
           sendReq();
-          joinInterval = setInterval(sendReq, 1200);
-
+          joinInterval = setInterval(sendReq, 450);
           joinTimeout = setTimeout(() => {
             if (!hasJoined) {
               clearInterval(joinInterval);
               client.removeListener('message', onClientInvite);
               restoreBtn();
-              alert("❌ 未找到该房间，请确认房间码正确，并让好友先开启房间！");
+              showGameNotice('❌ 未找到该房间，请确认房间码正确，并让好友先开启房间！', true);
             }
           }, 15000);
         });
-
       } catch(err) {
         if (btn) {
           btn.disabled = false;
           btn.textContent = '🚀 立即连接开局';
         }
-        alert("❌ 连接服务器失败：" + (err.message || '网络异常'));
+        showGameNotice('❌ 连接服务器失败：' + (err.message || '网络异常'), true);
       }
     }
+
+    async function joinOnlineRoom() {
+      const codeInput = document.getElementById('inputJoinCode');
+      const code = codeInput ? codeInput.value.trim() : '';
+      if (!code) return showGameNotice("请输入 6 位房间码！", true);
+
+      const btn = document.getElementById('btnConnectRoom');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 正在连接好友房间...';
+      }
+
+      if (conn) {
+        try { conn.close(); } catch(e) {}
+        conn = null;
+      }
+
+      // 先尝试 WebRTC P2P，信令或 ICE 失败后再使用原有 MQTT 中继。
+      try {
+        if (p2pChannel) {
+          try { p2pChannel.close(); } catch (_) {}
+          p2pChannel = null;
+        }
+        const channel = new GomokuP2PChannel(code, 'client');
+        p2pChannel = channel;
+        let hasJoined = false;
+
+        const restoreBtn = () => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即连接开局';
+          }
+        };
+
+        channel.on('open', () => {
+          channel.send({ type: 'join_request', name: p1Name, avatar: p1Avatar });
+        });
+        channel.on('data', data => {
+          if (!data || data.type !== 'join_accepted' || hasJoined) return;
+          hasJoined = true;
+          restoreBtn();
+          conn = channel;
+          lastActiveRoomCode = code;
+          currentRoomCode = code;
+          myOnlineColor = WHITE;
+          p2Name = data.name || '房主';
+          p2Avatar = data.avatar || '👦';
+          updatePlayerHeaderUI();
+          showGameNotice('🎉 P2P 直连成功！房主执黑先行，您执白~', false);
+          closeOnlineModal();
+          setMode('online');
+          setupConn();
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+        });
+
+        await channel.start();
+        if (!hasJoined) {
+          // start() 只代表 DataChannel 已建立，等待房主握手；超时由下方兜底计时器处理。
+          setTimeout(() => {
+            if (!hasJoined && p2pChannel === channel) {
+              try { channel.close(); } catch (_) {}
+              p2pChannel = null;
+              joinMqttRoom(code, btn);
+            }
+          }, 6000);
+        }
+      } catch (error) {
+        console.warn('[P2P join unavailable, fallback to MQTT]', error);
+        p2pChannel = null;
+        await joinMqttRoom(code, btn);
+      }
+    }
+
 
     function switchOnlineTab(tab) {
       document.getElementById('tabCreateRoom').style.background = tab === 'create' ? 'var(--brand-indigo)' : 'rgba(255,255,255,0.08)';
@@ -3645,7 +4392,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.8';
+    const CURRENT_VERSION_TAG = 'v1.0.9';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -3662,29 +4409,40 @@
 
     async function checkAppUpdate(isManual = false) {
       if (isManual) {
-        showGameNotice('🔍 正在连接国内高速节点检测更新...');
+        showGameNotice('🔍 正在连接国内高速镜像检测更新...');
       }
 
       let versionData = null;
 
-      // 1. 首选通道：国内备案极速 jsDelivr 边缘节点 (20ms~50ms 瞬开，完全免梯子)
-      try {
-        const cdnUrl = `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@master/version.json?_t=${Date.now()}`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch(cdnUrl, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-          const json = await res.json();
-          versionData = {
-            tag: json.releaseTag || ('v' + json.versionName),
-            notes: json.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-            fastUrl: json.download && json.download.fastUrl,
-            backupUrl: json.download && json.download.backupFastUrl,
-            officialUrl: json.download && json.download.officialUrl
-          };
-        }
-      } catch(e) {}
+      // 1. 国内极速直连镜像源 (优先无缓存的 raw 镜像，次选 jsDelivr @latest)
+      const mirrorUrls = [
+        `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`,
+        `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
+        `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
+        `https://testingcf.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`
+      ];
+
+      for (const cdnUrl of mirrorUrls) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500);
+          const res = await fetch(cdnUrl, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const json = await res.json();
+            if (json && (json.versionName || json.releaseTag)) {
+              versionData = {
+                tag: json.releaseTag || ('v' + json.versionName),
+                notes: json.updateLog || '五子棋全新功能与性能调优，推荐更新！',
+                fastUrl: (json.download && json.download.fastUrl) || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+                backupUrl: (json.download && json.download.backupFastUrl) || `https://ghps.cc/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+                officialUrl: (json.download && json.download.officialUrl) || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
+              };
+              break;
+            }
+          }
+        } catch(e) {}
+      }
 
       // 2. 备用通道：GitHub 官方 REST API
       if (!versionData) {
@@ -3705,8 +4463,8 @@
             versionData = {
               tag: tag,
               notes: data.body || '新版本性能调优，推荐更新！',
-              fastUrl: `https://ghproxy.net/${rawUrl}`,
-              backupUrl: `https://mirror.ghproxy.com/${rawUrl}`,
+              fastUrl: `https://gh-proxy.com/${rawUrl}`,
+              backupUrl: `https://ghps.cc/${rawUrl}`,
               officialUrl: rawUrl
             };
           }
@@ -3714,29 +4472,39 @@
       }
 
       if (!versionData) {
-        if (isManual) showGameNotice('⚠️ 暂未获取到更新，网络稍后再试');
+        if (isManual) showGameNotice('⚠️ 暂未获取到更新，请稍后再试');
         return;
       }
 
       // 对比本地版本
       if (compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0) {
-        // ✨ 优先尝试应用内无感静默热更新
+        // ✨ 优先尝试应用内无感静默热更新（直接拉取最新页面并刷新生效）
         if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile) {
-          try {
-            showGameNotice('🚀 检测到新版本，正在为您无感自动更新...', false);
-            const updateUrl = `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@master/index.html?_t=${Date.now()}`;
-            const res = await fetch(updateUrl);
-            if (res.ok) {
-              const htmlText = await res.text();
-              if (htmlText && htmlText.length > 50000) {
-                AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
-                showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
-                setTimeout(() => { location.reload(); }, 1200);
-                return;
+          const updateHtmlUrls = [
+            `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`,
+            `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
+            `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`
+          ];
+
+          for (const uUrl of updateHtmlUrls) {
+            try {
+              showGameNotice('🚀 检测到新版本，正在为您无感自动更新...', false);
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 6000);
+              const res = await fetch(uUrl, { signal: controller.signal });
+              clearTimeout(timeoutId);
+              if (res.ok) {
+                const htmlText = await res.text();
+                if (htmlText && htmlText.length > 50000) {
+                  AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
+                  showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
+                  setTimeout(() => { location.reload(); }, 1200);
+                  return;
+                }
               }
+            } catch(err) {
+              console.warn('[Auto HotUpdate fallback]', err);
             }
-          } catch(err) {
-            console.warn('[Auto HotUpdate fallback]', err);
           }
         }
 
@@ -3745,7 +4513,7 @@
           document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}`;
           document.getElementById('updateNotesContent').textContent = versionData.notes;
 
-          const fastLink = versionData.fastUrl || `https://ghproxy.net/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+          const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
           const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
 
           const btnFast = document.getElementById('btnFastDownload');
@@ -3773,7 +4541,6 @@
           }
           updateModal.style.display = 'flex';
         }
-      }
       } else {
         if (isManual) {
           showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);
