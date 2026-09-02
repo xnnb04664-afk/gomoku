@@ -1377,12 +1377,25 @@
     // ==========================================
     const ICE_CONFIG = {
       iceServers: [
+        // 🇨🇳 国内一线大厂极速 STUN 节点 (移动/联通/电信大内网高穿透打洞)
+        { urls: 'stun:stun.miwifi.com:3478' },
+        { urls: 'stun:stun.chat.bilibili.com:3478' },
         { urls: 'stun:stun.qq.com:3478' },
+        // 🌐 全球 Anycast 骨干节点 (Cloudflare 极速跨网零丢包)
         { urls: 'stun:stun.cloudflare.com:3478' },
         { urls: 'stun:stun.syncthing.net:3478' },
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
+        // 🔄 开放 WebRTC TURN 中继服务器 (跨运营商对称 NAT/4G/5G 移动蜂窝中继保障)
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp'
+          ],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+      iceCandidatePoolSize: 10
     };
 
     function initPeer() {

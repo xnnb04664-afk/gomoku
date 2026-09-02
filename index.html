@@ -1437,6 +1437,21 @@
     </div>
   </div>
 
+  <!-- 🔄 联机断线自动重连遮罩模态框 -->
+  <div class="custom-confirm-backdrop" id="onlineReconnectModal" style="z-index: 100002;">
+    <div class="custom-confirm-card" style="max-width: 320px; text-align: center;">
+      <div style="font-size: 38px; margin-bottom: 6px; animation: bounceBubble 1.2s infinite alternate ease-in-out;">🛰️</div>
+      <div style="font-size: 16px; font-weight: 900; color: #4a2810; margin-bottom: 6px;" id="reconnectTitle">联机中断重连中...</div>
+      <div style="font-size: 12.5px; font-weight: 800; color: #78350f; line-height: 1.4; margin-bottom: 12px;" id="reconnectStatusText">
+        正在尝试重新连入房间 (第 1/5 次)...<br><span style="font-size: 11px; color: #92400e; font-weight: normal;">棋盘进度已完整保全，恢复后自动接续</span>
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: center;">
+        <button class="btn-confirm-ok" id="btnManualReconnect" onclick="manualTriggerReconnect()" style="padding: 6px 14px; font-size: 12.5px;">🔄 立即重试</button>
+        <button class="btn-confirm-cancel" onclick="fallbackToAiGame()" style="padding: 6px 14px; font-size: 12.5px;">🤖 转为人机</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     function openThemeModal() {
       document.getElementById('themeModal').classList.add('show');
@@ -1988,12 +2003,25 @@
     // ==========================================
     const ICE_CONFIG = {
       iceServers: [
+        // 🇨🇳 国内一线大厂极速 STUN 节点 (移动/联通/电信大内网高穿透打洞)
+        { urls: 'stun:stun.miwifi.com:3478' },
+        { urls: 'stun:stun.chat.bilibili.com:3478' },
         { urls: 'stun:stun.qq.com:3478' },
+        // 🌐 全球 Anycast 骨干节点 (Cloudflare 极速跨网零丢包)
         { urls: 'stun:stun.cloudflare.com:3478' },
         { urls: 'stun:stun.syncthing.net:3478' },
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
+        // 🔄 开放 WebRTC TURN 中继服务器 (跨运营商对称 NAT/4G/5G 移动蜂窝中继保障)
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp'
+          ],
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ],
+      iceCandidatePoolSize: 10
     };
 
     let currentRoomCode = '';
@@ -2092,12 +2120,17 @@
         conn = c;
         setupConn();
         myOnlineColor = BLACK;
-        showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
-        closeOnlineModal();
-        setMode('online');
-        conn.on('open', () => {
-          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
-        });
+        lastActiveRoomCode = currentRoomCode;
+        if (isReconnecting) {
+          onReconnectSuccess();
+        } else {
+          showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
+          closeOnlineModal();
+          setMode('online');
+          conn.on('open', () => {
+            conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+          });
+        }
       });
 
       currentActivePeer.on('error', (err) => {
@@ -2143,19 +2176,191 @@
       showGameNotice("🔄 正在刷新全新房间码...", false);
     }
 
+    // --- 🛰️ 联机断线自动重连与对局状态瞬时同步系统 ---
+    let isReconnecting = false;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    let reconnectTimer = null;
+    let lastActiveRoomCode = '';
+
+    function showReconnectOverlay(show, text = '') {
+      const modal = document.getElementById('onlineReconnectModal');
+      if (!modal) return;
+      if (show) {
+        modal.classList.add('show');
+        if (text) document.getElementById('reconnectStatusText').innerHTML = text;
+      } else {
+        modal.classList.remove('show');
+      }
+    }
+
+    function triggerOnlineReconnect(reason = '网络波动') {
+      if (gameMode !== 'online' || isOver) return;
+      if (isReconnecting) return;
+
+      if (!currentRoomCode && lastActiveRoomCode) {
+        currentRoomCode = lastActiveRoomCode;
+      }
+      if (!currentRoomCode) {
+        showGameNotice("⚠️ 联机已断开！", true);
+        return;
+      }
+
+      lastActiveRoomCode = currentRoomCode;
+      isReconnecting = true;
+      reconnectAttempts = 0;
+      showReconnectOverlay(true, `⚠️ ${reason}，正在尝试自动重连 (第 1/${MAX_RECONNECT_ATTEMPTS} 次)...<br><span style="font-size:11px; color:#92400e; font-weight:normal;">棋盘进度已完整保全，恢复后自动接续</span>`);
+
+      if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+      doAutoReconnect();
+    }
+
+    function doAutoReconnect() {
+      if (!isReconnecting || isOver || gameMode !== 'online') return;
+
+      reconnectAttempts++;
+      const statusText = `⚠️ 正在尝试重新建立连接 (第 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} 次)...<br><span style="font-size:11px; color:#92400e; font-weight:normal;">棋盘进度已完整保全，连接恢复后自动接续</span>`;
+      document.getElementById('reconnectStatusText').innerHTML = statusText;
+
+      const targetId = `GOMOKU-${currentRoomCode}`;
+
+      if (myOnlineColor === WHITE) {
+        // 客方主动向房主发起重连
+        if (!clientPeer || clientPeer.destroyed) {
+          clientPeer = new Peer({ secure: true, config: ICE_CONFIG, debug: 0 });
+        }
+        
+        const tryConnect = () => {
+          try {
+            if (conn) { conn.close(); conn = null; }
+            conn = clientPeer.connect(targetId, { reliable: true });
+          } catch(e) {
+            console.error('[Reconnect error]', e);
+          }
+
+          if (!conn) return scheduleNextReconnect();
+
+          let timeoutId = setTimeout(() => {
+            scheduleNextReconnect();
+          }, 3500);
+
+          conn.on('open', () => {
+            clearTimeout(timeoutId);
+            onReconnectSuccess();
+          });
+
+          conn.on('error', () => {
+            clearTimeout(timeoutId);
+            scheduleNextReconnect();
+          });
+        };
+
+        if (clientPeer.open) {
+          tryConnect();
+        } else {
+          clientPeer.once('open', tryConnect);
+          clientPeer.once('error', scheduleNextReconnect);
+        }
+      } else {
+        // 房主端：检查信令是否正常，若断开则重连信令，保持监听
+        if (hostPeer && hostPeer.disconnected) {
+          hostPeer.reconnect();
+        }
+        scheduleNextReconnect(3000);
+      }
+    }
+
+    function scheduleNextReconnect(delay = 2500) {
+      if (!isReconnecting) return;
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        document.getElementById('reconnectTitle').textContent = '⚠️ 重连未成功';
+        document.getElementById('reconnectStatusText').innerHTML = '对方可能已断网或退出游戏。<br>您可以选择手动再次重试，或转为单人人机继续对局！';
+        return;
+      }
+      reconnectTimer = setTimeout(doAutoReconnect, delay);
+    }
+
+    function manualTriggerReconnect() {
+      reconnectAttempts = 0;
+      document.getElementById('reconnectTitle').textContent = '联机中断重连中...';
+      doAutoReconnect();
+    }
+
+    function onReconnectSuccess() {
+      isReconnecting = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      showReconnectOverlay(false);
+      setupConn();
+
+      if (myOnlineColor === WHITE) {
+        conn.send({ type: 'reconnect_handshake', role: 'client', stepCount: history.length });
+      } else {
+        sendFullStateSnapshot();
+      }
+
+      playPopSound();
+      showGameNotice("🎉 联机重连成功！棋局已完好恢复，继续对弈~", false);
+    }
+
+    function sendFullStateSnapshot() {
+      if (!conn || !conn.open) return;
+      conn.send({
+        type: 'state_snapshot',
+        board: board,
+        history: history,
+        turn: turn,
+        isOver: isOver,
+        p1Name: p1Name,
+        p1Avatar: p1Avatar,
+        p2Name: p2Name,
+        p2Avatar: p2Avatar,
+        currentDrawnCards: currentDrawnCards,
+        cardUsedStatus: cardUsedStatus
+      });
+    }
+
+    function fallbackToAiGame() {
+      isReconnecting = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      showReconnectOverlay(false);
+      if (conn) { try { conn.close(); } catch(e) {} conn = null; }
+      
+      gameMode = 'ai';
+      p2Name = '大师AI';
+      p2Avatar = '🤖';
+      updatePlayerHeaderUI();
+      showGameNotice("🤖 已成功转为单人人机对弈模式，局势已完整继承！", false);
+      if (turn === WHITE && !isOver) {
+        setTimeout(smartAiMove, 500);
+      }
+    }
+
     let onlineHeartbeatTimer = null;
     function setupConn() {
       if (!conn) return;
       if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+      
+      let missedPings = 0;
       onlineHeartbeatTimer = setInterval(() => {
         if (conn && conn.open) {
+          missedPings++;
+          if (missedPings > 2) {
+            triggerOnlineReconnect("心跳无响应");
+            return;
+          }
           try { conn.send({ type: 'ping' }); } catch(e) {}
         }
-      }, 6000);
+      }, 5000);
 
       conn.on('close', () => {
         if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
-        showGameNotice("⚠️ 联机连接已断开！", true);
+        triggerOnlineReconnect("连接断开");
+      });
+
+      conn.on('error', (err) => {
+        console.warn('[conn error]', err);
+        if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+        triggerOnlineReconnect("网络异常");
       });
 
       conn.on('data', (data) => {
@@ -2164,6 +2369,30 @@
           return;
         }
         if (data.type === 'pong') {
+          missedPings = 0;
+          return;
+        }
+        if (data.type === 'reconnect_handshake') {
+          // 房主收到客方重连，回传最新棋局快照
+          sendFullStateSnapshot();
+          onReconnectSuccess();
+          return;
+        }
+        if (data.type === 'state_snapshot') {
+          // 客方收到全量快照，瞬间恢复局势
+          board = data.board;
+          history = data.history;
+          turn = data.turn;
+          isOver = data.isOver;
+          p2Name = data.p1Name;
+          p2Avatar = data.p1Avatar;
+          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards;
+          if (data.cardUsedStatus) cardUsedStatus = data.cardUsedStatus;
+          updatePlayerHeaderUI();
+          draw();
+          updateUI();
+          persistGameState();
+          onReconnectSuccess();
           return;
         }
         if (data.type === 'move') {
@@ -2979,8 +3208,8 @@
             btn.disabled = false;
             btn.textContent = '🚀 立即连接开局';
           }
-          showGameNotice("⚠️ 连接超时，请确认房主处于【创建房间】界面且房间号输入正确！", true);
-        }, 12000);
+          showGameNotice("⚠️ 连接超时，正在通过全球中继节点穿透重试中，请确保房间码正确！", true);
+        }, 25000);
 
         if (!conn) return;
 
@@ -2990,6 +3219,8 @@
             btn.disabled = false;
             btn.textContent = '🚀 立即连接开局';
           }
+          lastActiveRoomCode = code;
+          currentRoomCode = code;
           setupConn();
           myOnlineColor = WHITE;
           showGameNotice("🎉 成功连入房间！房主执黑先行，您执白~", false);
