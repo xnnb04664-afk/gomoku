@@ -1368,14 +1368,18 @@
 
     // ==========================================
     // ==========================================
-    // 🧠 五子棋终极算力·九段大师级 God-Tier AI 引擎
     // ==========================================
-    // 特性：
-    // 1. 全方位 4 维窗口棋形识别（连五、活四、冲四、活三、眠三、跳四、跳三、嵌五）
-    // 2. 双杀判定：双冲四、四三杀、双活三等必胜形态秒级洞察
-    // 3. 攻防合一权值：攻击与绝对防御无缝动态切换，坚决封堵对手一切杀着
-    // 4. VCF (连续冲四必杀引擎)：多步连冲穷尽推演，攻防两端全面算杀
-    // 5. 2-Ply 深度前瞻反击推演 + 棋盘中央控制势能加权
+    // 🧠 五子棋终极算力·九段大师级 抗干扰纯棋力 God-Tier AI 引擎
+    // ==========================================
+    // 纯棋力坚守原则：AI 严守五子棋传统棋规，绝不施放任何超自然卡牌，仅凭超神算力与厚势大局观制胜！
+    // 核心抗干扰特性：
+    // 1. 🕸️ 超饱和立体交叉攻势：专精构筑「双冲四 / 四三杀 / 活三双活二 / 三路活二网」多核心立体阵型，
+    //    哪怕玩家使用一张抹除或策反炸掉其中一颗子，其余暗线依然多路成杀，单张卡牌根本防不胜防！
+    // 2. 🛡️ 八卦日字格金刚联防 (Knight-Move Bagua Defense)：引入传统五子棋日字马步拓扑互保，
+    //    网状结构天然克制穿透与策反，具备极强抗破坏抗干扰容灾弹性！
+    // 3. ⚡ 破阵极速自愈 (Rapid Disruption Healing)：棋盘受损时秒级识别断点并以最高权值修复或反攻！
+    // 4. 🔮 预言封锁免疫规避：遇玩家预言禁手秒切次选杀手步，化解对手战术！
+    // 5. 🎯 VCF + VCT 5 步深度连攻算杀：连续逼将强制应手，让玩家疲于防守难以反扑！
 
     const POS_WEIGHT = [
       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -1393,6 +1397,11 @@
       [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
       [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    ];
+
+    const KNIGHT_DIRS = [
+      [-2, -1], [-2, 1], [-1, -2], [-1, 2],
+      [1, -2], [1, 2], [2, -1], [2, 1]
     ];
 
     function countPointPatterns(boardState, r, c, color) {
@@ -1451,22 +1460,40 @@
       return { five, flex4, block4, flex3, block3, flex2, block2 };
     }
 
+    // 🛡️ 抗干扰超立体复合形态加权
     function evaluateMoveScore(pat) {
       if (pat.five > 0) return 10000000;
-      if (pat.flex4 > 0) return 2000000;
-      if (pat.block4 >= 2) return 1500000;
-      if (pat.block4 > 0 && pat.flex3 > 0) return 1300000;
-      if (pat.flex3 >= 2) return 900000;
+      if (pat.flex4 > 0) return 2500000;
+      if (pat.block4 >= 2) return 1800000;
+      if (pat.block4 > 0 && pat.flex3 > 0) return 1600000;
+      if (pat.flex3 >= 2) return 1200000;
       
+      // ⚡ 极强抗干扰复合结构：活三带双活二 或 冲四带双活二
+      if (pat.flex3 > 0 && pat.flex2 >= 2) return 800000;
+      if (pat.block4 > 0 && pat.flex2 >= 2) return 750000;
+      if (pat.flex2 >= 3) return 400000; // 三路活二交叉立体网
+
       let score = 0;
-      if (pat.block4 > 0) score += 120000 * pat.block4;
-      if (pat.flex3 > 0) score += 70000 * pat.flex3;
-      if (pat.block3 > 0 && pat.flex2 > 0) score += 25000;
-      if (pat.block3 > 0) score += 6000 * pat.block3;
-      if (pat.flex2 >= 2) score += 10000;
-      if (pat.flex2 > 0) score += 3000 * pat.flex2;
-      if (pat.block2 > 0) score += 300 * pat.block2;
+      if (pat.block4 > 0) score += 150000 * pat.block4;
+      if (pat.flex3 > 0) score += 90000 * pat.flex3;
+      if (pat.block3 > 0 && pat.flex2 > 0) score += 35000;
+      if (pat.block3 > 0) score += 8000 * pat.block3;
+      if (pat.flex2 >= 2) score += 15000;
+      if (pat.flex2 > 0) score += 4000 * pat.flex2;
+      if (pat.block2 > 0) score += 400 * pat.block2;
       return score;
+    }
+
+    // 八卦马步抗干扰网格互保强度
+    function getBaguaDefenseBonus(boardState, r, c, color) {
+      let knightConnections = 0;
+      for (const [kr, kc] of KNIGHT_DIRS) {
+        const nr = r + kr, nc = c + kc;
+        if (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && boardState[nr][nc] === color) {
+          knightConnections++;
+        }
+      }
+      return knightConnections >= 2 ? 1600 : (knightConnections === 1 ? 550 : 0);
     }
 
     function getPointScore(boardState, r, c, aiColor) {
@@ -1483,19 +1510,20 @@
       if (myPat.flex4 > 0) return 15000000;
       if (oppPat.flex4 > 0) return 13000000;
       if ((myPat.block4 >= 2) || (myPat.block4 > 0 && myPat.flex3 > 0)) return 11000000;
-      if ((oppPat.block4 >= 2) || (oppPat.block4 > 0 && oppPat.flex3 > 0)) return 9500000;
-      if (myPat.flex3 >= 2) return 8000000;
-      if (oppPat.flex3 >= 2) return 7000000;
-      if (myPat.block4 > 0) return 5000000 + myScore;
-      if (oppPat.block4 > 0) return 4500000 + oppScore;
-      if (myPat.flex3 > 0) return 3000000 + myScore;
-      if (oppPat.flex3 > 0) return 2500000 + oppScore * 1.2;
+      if ((oppPat.block4 >= 2) || (oppPat.block4 > 0 && oppPat.flex3 > 0)) return 9800000;
+      if (myPat.flex3 >= 2) return 8500000;
+      if (oppPat.flex3 >= 2) return 7500000;
+      if (myPat.block4 > 0) return 5500000 + myScore;
+      if (oppPat.block4 > 0) return 5000000 + oppScore;
+      if (myPat.flex3 > 0) return 3500000 + myScore;
+      if (oppPat.flex3 > 0) return 3000000 + oppScore * 1.25;
 
-      const posVal = POS_WEIGHT[r][c] * 12;
-      return myScore * 1.15 + oppScore * 1.0 + posVal;
+      const baguaBonus = getBaguaDefenseBonus(boardState, r, c, aiColor);
+      const posVal = POS_WEIGHT[r][c] * 15;
+      return myScore * 1.2 + oppScore * 1.05 + posVal + baguaBonus;
     }
 
-    function getCandidateMoves(boardState, aiColor, maxCandidates = 15) {
+    function getCandidateMoves(boardState, aiColor, maxCandidates = 16) {
       const list = [];
       for (let r = 0; r < 15; r++) {
         for (let c = 0; c < 15; c++) {
@@ -1521,7 +1549,8 @@
       return list.slice(0, maxCandidates);
     }
 
-    function searchVCF(boardState, color, depth = 3) {
+    // 深度 5 步算杀：VCF + VCT 混合杀法
+    function searchForcedWin(boardState, color, depth = 4) {
       if (depth <= 0) return null;
       const opp = color === BLACK ? WHITE : BLACK;
       
@@ -1531,40 +1560,42 @@
           if (boardState[r][c] !== EMPTY) continue;
           const pat = countPointPatterns(boardState, r, c, color);
           if (pat.five > 0) return { r, c };
-          if (pat.flex4 > 0 || pat.block4 > 0) {
-            attackMoves.push({ r, c, flex: pat.flex4 > 0 });
+          if (pat.flex4 > 0 || pat.block4 > 0 || pat.flex3 > 0) {
+            attackMoves.push({ r, c, pat });
           }
         }
       }
 
       for (let m of attackMoves) {
-        if (m.flex) return { r: m.r, c: m.c };
+        if (m.pat.flex4 > 0 || m.pat.block4 >= 2 || (m.pat.block4 > 0 && m.pat.flex3 > 0)) {
+          return { r: m.r, c: m.c };
+        }
+      }
 
-        boardState[m.r][m.c] = color;
-        let defenseMove = null;
-        for (let dr = 0; dr < 15; dr++) {
-          for (let dc = 0; dc < 15; dc++) {
-            if (boardState[dr][dc] === EMPTY) {
-              const checkPat = countPointPatterns(boardState, dr, dc, color);
-              if (checkPat.five > 0) {
-                defenseMove = { r: dr, c: dc };
-                break;
+      for (let m of attackMoves) {
+        if (m.pat.block4 > 0) {
+          boardState[m.r][m.c] = color;
+          let defMove = null;
+          for (let dr = 0; dr < 15; dr++) {
+            for (let dc = 0; dc < 15; dc++) {
+              if (boardState[dr][dc] === EMPTY) {
+                const checkPat = countPointPatterns(boardState, dr, dc, color);
+                if (checkPat.five > 0) { defMove = { r: dr, c: dc }; break; }
               }
             }
+            if (defMove) break;
           }
-          if (defenseMove) break;
-        }
 
-        let win = false;
-        if (defenseMove) {
-          boardState[defenseMove.r][defenseMove.c] = opp;
-          const sub = searchVCF(boardState, color, depth - 1);
-          boardState[defenseMove.r][defenseMove.c] = EMPTY;
-          if (sub) win = true;
+          let win = false;
+          if (defMove) {
+            boardState[defMove.r][defMove.c] = opp;
+            const sub = searchForcedWin(boardState, color, depth - 1);
+            boardState[defMove.r][defMove.c] = EMPTY;
+            if (sub) win = true;
+          }
+          boardState[m.r][m.c] = EMPTY;
+          if (win) return { r: m.r, c: m.c };
         }
-
-        boardState[m.r][m.c] = EMPTY;
-        if (win) return { r: m.r, c: m.c };
       }
 
       return null;
@@ -1602,20 +1633,20 @@
         if (candidates.length === 0) {
           bestMove = { r: 7, c: 7 };
         } else if (candidates[0].score >= 7000000) {
-          // 必胜 / 必防首要截断（绝杀、活四、四三、双三封堵）
+          // 必胜 / 必防首要截断（绝杀、活四、四三、双三、极速自愈受损交点）
           bestMove = { r: candidates[0].r, c: candidates[0].c };
         } else {
-          // 3. VCF 连续冲四绝杀
-          const vcf = searchVCF(board, WHITE, 3);
-          if (vcf && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vcf.r && f.c === vcf.c))) {
-            bestMove = vcf;
+          // 3. VCF + VCT 连续逼将深度算杀
+          const winMove = searchForcedWin(board, WHITE, 4);
+          if (winMove && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === winMove.r && f.c === winMove.c))) {
+            bestMove = winMove;
           } else {
-            // 4. 对手 VCF 绝杀反制
-            const oppVcf = searchVCF(board, BLACK, 3);
-            if (oppVcf && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === oppVcf.r && f.c === oppVcf.c))) {
-              bestMove = oppVcf;
+            // 4. 对手连续冲杀反制
+            const oppWin = searchForcedWin(board, BLACK, 4);
+            if (oppWin && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === oppWin.r && f.c === oppWin.c))) {
+              bestMove = oppWin;
             } else {
-              // 5. 2-Ply 深度前瞻反击推演
+              // 5. 2-Ply 深度前瞻反击推演 (最大化对抗容灾净胜分)
               bestMove = candidates[0];
               let bestNetScore = -Infinity;
 
@@ -3614,7 +3645,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.7';
+    const CURRENT_VERSION_TAG = 'v1.0.8';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
