@@ -667,7 +667,10 @@
     <div class="modal-card">
       <div class="modal-title" id="profileModalTitle">👤 自定义昵称与头像</div>
       
-      <div class="big-avatar-preview" id="bigAvatarPreview">👦</div>
+      <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">
+          👦
+          <span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>
+        </div>
       <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 从相册上传真实照片</button>
 
       <div style="font-size:12px; font-weight:600; color:var(--ios-subtext); margin:10px 0 4px 0;">自定义您的游戏昵称：</div>
@@ -1096,7 +1099,7 @@
     }
 
     function handlePhotoUpload(event) {
-      const file = event.target.files[0];
+      const file = event.target.files && event.target.files[0];
       if (!file) return;
 
       const reader = new FileReader();
@@ -1104,92 +1107,118 @@
         const img = new Image();
         img.onload = () => {
           const offCanvas = document.createElement('canvas');
-          offCanvas.width = 128; offCanvas.height = 128;
+          offCanvas.width = 128;
+          offCanvas.height = 128;
           const offCtx = offCanvas.getContext('2d');
+
           const minDim = Math.min(img.width, img.height);
           const sx = (img.width - minDim) / 2;
           const sy = (img.height - minDim) / 2;
+
           offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 128, 128);
           const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.85);
 
           selectedAvatarData = compressedBase64;
-          document.getElementById('bigAvatarPreview').innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
+          const prevEl = document.getElementById('bigAvatarPreview');
+          if (prevEl) {
+            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+          }
           document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
-          alert("🎉 照片上传成功！点击下方【保存并应用】即可生效！");
+          _applyAvatarChange(compressedBase64);
+          showGameNotice("🎉 真实照片头像设置成功！已实时生效~");
         };
         img.src = e.target.result;
       };
       reader.readAsDataURL(file);
+      event.target.value = '';
     }
 
-    function openProfileModal(player) {
-      // 联机模式：只能改自己（黑方=1，白方=2），不能改对手
-      if (gameMode === 'online') {
-        const myPlayer = (myOnlineColor === BLACK) ? 1 : 2;
-        if (player !== myPlayer) {
+    function openProfileModal(player = 1) {
+      if (player === 2) {
+        if (gameMode === 'online') {
           showGameNotice('🔒 联机中只能修改自己的昵称与头像哦~', true);
           return;
         }
+        if (gameMode === 'ai') {
+          showGameNotice('🤖 大师AI 为智能电脑，无法修改档案哦~', true);
+          return;
+        }
       }
-      if (gameMode === 'ai' && player === 2) {
-        return showGameNotice('🤖 大师AI 为智能电脑，无法修改档案哦~', true);
-      }
-      editingPlayer = player;
-      const currentName = player === 1 ? p1Name : p2Name;
-      selectedAvatarData = player === 1 ? p1Avatar : p2Avatar;
+      editingPlayer = 1;
+      const currentName = p1Name;
+      selectedAvatarData = p1Avatar;
 
-      document.getElementById('profileModalTitle').textContent = player === 1 ? '👤 修改我方昵称与头像' : '👤 修改对方昵称与头像';
-      document.getElementById('inputProfileName').value = currentName;
-      document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(selectedAvatarData);
+      const titleEl = document.getElementById('profileModalTitle');
+      if (titleEl) titleEl.textContent = '👤 自定义我的昵称与头像';
+      const inputEl = document.getElementById('inputProfileName');
+      if (inputEl) inputEl.value = currentName;
+      const prevEl = document.getElementById('bigAvatarPreview');
+      if (prevEl) {
+        prevEl.innerHTML = renderAvatarElement(selectedAvatarData) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+      }
 
       const opts = document.querySelectorAll('.avatar-opt');
       opts.forEach(el => {
         el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData);
       });
 
+      const boyVal = (typeof ANIME_AVATAR_BOY !== 'undefined') ? ANIME_AVATAR_BOY : 'img/avatar_boy.png';
+      const girlVal = (typeof ANIME_AVATAR_GIRL !== 'undefined') ? ANIME_AVATAR_GIRL : 'img/avatar_girl.png';
       const boyCard = document.getElementById('animeCardBoy');
       const girlCard = document.getElementById('animeCardGirl');
-      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_BOY || selectedAvatarData === 'img/avatar_boy.png');
-      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_GIRL || selectedAvatarData === 'img/avatar_girl.png');
+      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === boyVal || selectedAvatarData === 'img/avatar_boy.png');
+      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === girlVal || selectedAvatarData === 'img/avatar_girl.png');
 
-      // 实时预览：昵称输入框每次按键都立即更新 UI + 联机同步
-      const nameInput = document.getElementById('inputProfileName');
-      nameInput.oninput = () => {
-        const val = nameInput.value.trim();
-        if (!val) return;
-        if (editingPlayer === 1) { p1Name = val; localStorage.setItem('gomoku_p1Name', p1Name); }
-        else { p2Name = val; localStorage.setItem('gomoku_p2Name', p2Name); }
-        updatePlayerHeaderUI();
-        if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
-          conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
-        }
-      };
+      if (inputEl) {
+        inputEl.oninput = () => {
+          const val = inputEl.value.trim();
+          if (!val) return;
+          p1Name = val;
+          localStorage.setItem('gomoku_p1Name', p1Name);
+          updatePlayerHeaderUI();
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
+          }
+        };
+      }
 
-      document.getElementById('profileModal').classList.add('show');
+      const modalEl = document.getElementById('profileModal');
+      if (modalEl) modalEl.classList.add('show');
     }
 
     function selectAvatar(elem, char) {
       selectedAvatarData = char;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
-      document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(char);
+      const prevEl = document.getElementById('bigAvatarPreview');
+      if (prevEl) {
+        prevEl.innerHTML = renderAvatarElement(char) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+      }
       _applyAvatarChange(char);
+      showGameNotice('✨ 头像已更换！');
     }
 
     function selectImgAvatar(elem, dataUrl) {
+      if (!dataUrl) dataUrl = 'img/avatar_boy.png';
       selectedAvatarData = dataUrl;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
-      document.getElementById('bigAvatarPreview').innerHTML = `<img src="${dataUrl}" alt="avatar">`;
+      const prevEl = document.getElementById('bigAvatarPreview');
+      if (prevEl) {
+        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+      }
       _applyAvatarChange(dataUrl);
+      showGameNotice('✨ 头像已更换！');
     }
 
     function _applyAvatarChange(avatarData) {
-      const curName = document.getElementById('inputProfileName').value.trim() || (editingPlayer === 1 ? p1Name : p2Name);
-      if (editingPlayer === 1) { p1Avatar = avatarData; localStorage.setItem('gomoku_p1Avatar', p1Avatar); }
-      else { p2Avatar = avatarData; localStorage.setItem('gomoku_p2Avatar', p2Avatar); }
+      const inputEl = document.getElementById('inputProfileName');
+      const curName = (inputEl ? inputEl.value.trim() : '') || p1Name;
+      p1Avatar = avatarData;
+      selectedAvatarData = avatarData;
+      localStorage.setItem('gomoku_p1Avatar', p1Avatar);
       updatePlayerHeaderUI();
-      if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+      if (gameMode === 'online' && conn && conn.open) {
         conn.send({ type: 'profile_sync', name: curName, avatar: avatarData });
       }
     }
@@ -2044,19 +2073,26 @@
     // 🟩 15x15 自然影棚温润木纹方格中央落子
     // ==========================================
     function resizeBoard() {
-      const w = islandWrapper.clientWidth || window.innerWidth;
-      const h = islandWrapper.clientHeight || (window.innerHeight - 190);
-      const maxSide = Math.min(w * 0.98, h * 0.98, 520);
-      cWidth = Math.floor(maxSide); cHeight = Math.floor(maxSide);
+      const isMobile = window.innerWidth <= 600;
+      const screenW = window.innerWidth;
+      const availW = isMobile ? (screenW - 2) : Math.min(islandWrapper.clientWidth || screenW, 580);
+      const availH = islandWrapper.clientHeight || (window.innerHeight - 150);
+      
+      const maxSide = Math.min(availW, availH);
+      cWidth = Math.floor(maxSide); 
+      cHeight = Math.floor(maxSide);
 
       dpr = window.devicePixelRatio || 1;
       cvs.width = cWidth * dpr; cvs.height = cHeight * dpr;
       cvs.style.width = cWidth + 'px'; cvs.style.height = cHeight + 'px';
 
       ctx.resetTransform(); ctx.scale(dpr, dpr);
-      paddingX = cWidth * 0.045; paddingY = cHeight * 0.045;
-      gridX = (cWidth - 2 * paddingX) / 15; gridY = (cHeight - 2 * paddingY) / 15;
-      radius = gridX * 0.42;
+      
+      paddingX = cWidth * (isMobile ? 0.022 : 0.038); 
+      paddingY = cHeight * (isMobile ? 0.022 : 0.038);
+      gridX = (cWidth - 2 * paddingX) / 15; 
+      gridY = (cHeight - 2 * paddingY) / 15;
+      radius = gridX * 0.44;
       invalidateBoardCache();
       draw();
     }
@@ -2853,6 +2889,30 @@
       if (e.key === 'Enter') document.getElementById('btnSendCustom').click();
     };
 
+    // 📱 手机端快速触控响应
+    const p1CardElem = document.getElementById('p1Card');
+    if (p1CardElem) {
+      let tStart = 0;
+      p1CardElem.addEventListener('touchstart', () => { tStart = Date.now(); }, { passive: true });
+      p1CardElem.addEventListener('touchend', (e) => {
+        if (Date.now() - tStart < 400) {
+          e.preventDefault();
+          openProfileModal(1);
+        }
+      });
+    }
+    const p2CardElem = document.getElementById('p2Card');
+    if (p2CardElem) {
+      let tStart = 0;
+      p2CardElem.addEventListener('touchstart', () => { tStart = Date.now(); }, { passive: true });
+      p2CardElem.addEventListener('touchend', (e) => {
+        if (Date.now() - tStart < 400) {
+          e.preventDefault();
+          openProfileModal(2);
+        }
+      });
+    }
+
     function resetBoardOnly() {
       board = Array.from({length: 15}, () => Array(15).fill(0));
       turn = BLACK; history = []; isOver = false;
@@ -3221,7 +3281,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.4';
+    const CURRENT_VERSION_TAG = 'v1.0.5';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {

@@ -1029,11 +1029,19 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     /* 📱 手机端全面自适应紧凑与大字优化 (屏幕宽度 480px 以下) */
     @media screen and (max-width: 480px) {
       body {
-        padding: env(safe-area-inset-top, 2px) 3px env(safe-area-inset-bottom, 2px) 3px !important;
+        padding: env(safe-area-inset-top, 2px) 0 env(safe-area-inset-bottom, 2px) 0 !important;
       }
       .header-area {
+        width: 100vw !important;
+        max-width: 100vw !important;
         gap: 1px !important;
-        padding: 0 2px !important;
+        padding: 0 4px !important;
+      }
+      .island-wrapper {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        padding: 0 !important;
+        margin: 0 !important;
       }
       .player-capsule {
         padding: 2px 7px 2px 2px !important;
@@ -1059,9 +1067,9 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
         padding: 2px 7px !important;
       }
       .main-chat-box {
-        height: 76px !important;
-        min-height: 76px !important;
-        max-height: 76px !important;
+        height: 46px !important;
+        min-height: 46px !important;
+        max-height: 46px !important;
         padding: 2px 6px 1px 6px !important;
         margin-top: 1px !important;
       }
@@ -1072,9 +1080,9 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
         height: 13px !important;
       }
       .main-chat-content {
-        height: 56px !important;
-        min-height: 56px !important;
-        max-height: 56px !important;
+        height: 28px !important;
+        min-height: 28px !important;
+        max-height: 28px !important;
         gap: 1.5px !important;
         padding-top: 1px !important;
       }
@@ -1281,8 +1289,11 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       
       <!-- 头像预览与相册上传按钮 -->
       <div class="profile-header-preview">
-        <div class="big-avatar-preview" id="bigAvatarPreview">👦</div>
-        <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 从相册上传真实照片</button>
+        <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">
+          👦
+          <span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>
+        </div>
+        <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 从手机相册选真实照片</button>
       </div>
 
       <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:4px;">自定义您的游戏昵称：</div>
@@ -1328,7 +1339,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.4</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.5</span></div>
           <div style="font-size:9.5px; color:#636e72;">GitHub 免服务器云端发版</div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1858,7 +1869,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     }
 
     function handlePhotoUpload(event) {
-      const file = event.target.files[0];
+      const file = event.target.files && event.target.files[0];
       if (!file) return;
 
       const reader = new FileReader();
@@ -1878,66 +1889,75 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
           const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.85);
 
           selectedAvatarData = compressedBase64;
-          document.getElementById('bigAvatarPreview').innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
+          const prevEl = document.getElementById('bigAvatarPreview');
+          if (prevEl) {
+            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+          }
           document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
-          alert("🎉 照片上传成功！点击下方【保存并应用】即可生效！");
+          _applyAvatarChange(compressedBase64);
+          showGameNotice("🎉 真实照片头像设置成功！已实时生效~");
         };
         img.src = e.target.result;
       };
       reader.readAsDataURL(file);
+      event.target.value = '';
     }
 
     // --- 自定义昵称与相册头像弹窗交互 ---
-    function openProfileModal(player) {
-      // 联机模式：只能改自己（黑方=1，白方=2），不能改对手
-      if (gameMode === 'online') {
-        const myPlayer = (myOnlineColor === BLACK) ? 1 : 2;
-        if (player !== myPlayer) {
+    function openProfileModal(player = 1) {
+      // 无论我方执黑还是执白，在本地屏幕上：
+      // p1 永远是我方（可随时修改），p2 永远是对方（AI或好友）
+      if (player === 2) {
+        if (gameMode === 'online') {
           showGameNotice('🔒 联机中只能修改自己的昵称与头像哦~', true);
           return;
         }
+        if (gameMode === 'ai') {
+          showGameNotice('🤖 大师AI 为智能电脑，无法修改档案哦~', true);
+          return;
+        }
       }
-      if (gameMode === 'ai' && player === 2) {
-        return showGameNotice('🤖 大师AI 为智能电脑，无法修改档案哦~', true);
-      }
-      editingPlayer = player;
-      const currentName = player === 1 ? p1Name : p2Name;
-      selectedAvatarData = player === 1 ? p1Avatar : p2Avatar;
+      editingPlayer = 1;
+      const currentName = p1Name;
+      selectedAvatarData = p1Avatar;
 
-      document.getElementById('profileModalTitle').textContent = player === 1 ? '👤 修改我方昵称与头像' : '👤 修改对方昵称与头像';
-      document.getElementById('inputProfileName').value = currentName;
-      document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(selectedAvatarData);
+      const titleEl = document.getElementById('profileModalTitle');
+      if (titleEl) titleEl.textContent = '👤 自定义我的昵称与头像';
+      const inputEl = document.getElementById('inputProfileName');
+      if (inputEl) inputEl.value = currentName;
+      const prevEl = document.getElementById('bigAvatarPreview');
+      if (prevEl) {
+        prevEl.innerHTML = renderAvatarElement(selectedAvatarData) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+      }
 
       const opts = document.querySelectorAll('.avatar-opt');
       opts.forEach(el => {
         el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData);
       });
 
+      const boyVal = (typeof ANIME_AVATAR_BOY !== 'undefined') ? ANIME_AVATAR_BOY : 'img/avatar_boy.png';
+      const girlVal = (typeof ANIME_AVATAR_GIRL !== 'undefined') ? ANIME_AVATAR_GIRL : 'img/avatar_girl.png';
       const boyCard = document.getElementById('animeCardBoy');
       const girlCard = document.getElementById('animeCardGirl');
-      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_BOY || selectedAvatarData === 'img/avatar_boy.png');
-      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_GIRL || selectedAvatarData === 'img/avatar_girl.png');
+      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === boyVal || selectedAvatarData === 'img/avatar_boy.png');
+      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === girlVal || selectedAvatarData === 'img/avatar_girl.png');
 
       // ✨ 实时预览：昵称输入框每次按键都立即更新 UI + 联机同步
-      const nameInput = document.getElementById('inputProfileName');
-      nameInput.oninput = () => {
-        const val = nameInput.value.trim();
-        if (!val) return;
-        if (editingPlayer === 1) {
+      if (inputEl) {
+        inputEl.oninput = () => {
+          const val = inputEl.value.trim();
+          if (!val) return;
           p1Name = val;
           localStorage.setItem('gomoku_p1Name', p1Name);
-        } else {
-          p2Name = val;
-          localStorage.setItem('gomoku_p2Name', p2Name);
-        }
-        updatePlayerHeaderUI();
-        // 联机实时同步昵称给对方
-        if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
-          conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
-        }
-      };
+          updatePlayerHeaderUI();
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
+          }
+        };
+      }
 
-      document.getElementById('profileModal').classList.add('show');
+      const modalEl = document.getElementById('profileModal');
+      if (modalEl) modalEl.classList.add('show');
     }
 
     // 选 Emoji 头像 → 立即更新预览 + 保存 + 同步
@@ -1945,32 +1965,38 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       selectedAvatarData = char;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
-      document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(char);
+      const prevEl = document.getElementById('bigAvatarPreview');
+      if (prevEl) {
+        prevEl.innerHTML = renderAvatarElement(char) + '<span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>';
+      }
       _applyAvatarChange(char);
+      showGameNotice('✨ 头像已更换！');
     }
 
     // 选图片头像 → 立即更新预览 + 保存 + 同步
     function selectImgAvatar(elem, dataUrl) {
+      if (!dataUrl) dataUrl = 'img/avatar_boy.png';
       selectedAvatarData = dataUrl;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
-      document.getElementById('bigAvatarPreview').innerHTML = `<img src="${dataUrl}" alt="avatar">`;
+      const prevEl = document.getElementById('bigAvatarPreview');
+      if (prevEl) {
+        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar"><span style="position:absolute; bottom:0; right:0; background:#3b82f6; color:#fff; font-size:11px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #fff; box-shadow:0 2px 4px rgba(0,0,0,0.2);">📷</span>`;
+      }
       _applyAvatarChange(dataUrl);
+      showGameNotice('✨ 头像已更换！');
     }
 
     // 公共：应用头像变更到本地存储 + UI + 联机同步
     function _applyAvatarChange(avatarData) {
-      const curName = document.getElementById('inputProfileName').value.trim() || (editingPlayer === 1 ? p1Name : p2Name);
-      if (editingPlayer === 1) {
-        p1Avatar = avatarData;
-        localStorage.setItem('gomoku_p1Avatar', p1Avatar);
-      } else {
-        p2Avatar = avatarData;
-        localStorage.setItem('gomoku_p2Avatar', p2Avatar);
-      }
+      const inputEl = document.getElementById('inputProfileName');
+      const curName = (inputEl ? inputEl.value.trim() : '') || p1Name;
+      p1Avatar = avatarData;
+      selectedAvatarData = avatarData;
+      localStorage.setItem('gomoku_p1Avatar', p1Avatar);
       updatePlayerHeaderUI();
       // 联机实时同步头像给对方
-      if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+      if (gameMode === 'online' && conn && conn.open) {
         conn.send({ type: 'profile_sync', name: curName, avatar: avatarData });
       }
     }
@@ -2136,7 +2162,9 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     // 结合 WSS 全双工通信，彻底解决移动 4G/5G 运营商大内网对称 NAT 穿透超时失败问题！
     const MQTT_BROKER_URLS = [
       'wss://broker.emqx.io:8084/mqtt',
-      'wss://broker.hivemq.com:8884/mqtt'
+      'wss://broker.hivemq.com:8884/mqtt',
+      'wss://mqtt.eclipseprojects.io:443/mqtt',
+      'wss://test.mosquitto.org:8081/mqtt'
     ];
 
     let mqttClient = null;
@@ -2148,6 +2176,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       }
       if (mqttClientPromise) return mqttClientPromise;
 
+      mqttClient = null;
       mqttClientPromise = new Promise((resolve, reject) => {
         if (typeof mqtt === 'undefined' && typeof window !== 'undefined' && typeof window.mqtt !== 'undefined') {
           window.mqtt = window.mqtt;
@@ -2158,33 +2187,71 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
           return reject(new Error("联机网络组件加载中，请稍后重试"));
         }
 
-        const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
-        const client = m.connect(MQTT_BROKER_URLS[0], {
-          clientId: clientId,
-          connectTimeout: 8000,
-          keepalive: 20,
-          clean: true,
-          reconnectPeriod: 2000
-        });
-
-        const timer = setTimeout(() => {
-          if (!client.connected) {
-            client.end(true);
+        // 逐个尝试节点。旧代码虽然声明了多个节点，但实际永远只连接第一个。
+        const tryBroker = (index) => {
+          const brokerUrl = MQTT_BROKER_URLS[index];
+          if (!brokerUrl) {
             mqttClientPromise = null;
-            reject(new Error("信令网络连接超时"));
+            return reject(new Error("信令网络连接失败，请检查网络后重试"));
           }
-        }, 9000);
 
-        client.on('connect', () => {
-          clearTimeout(timer);
-          mqttClient = client;
-          mqttClientPromise = null;
-          resolve(client);
-        });
+          const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+          let settled = false;
+          let timer = null;
+          let client = null;
 
-        client.on('error', (err) => {
-          console.warn('[MQTT Client Error]', err);
-        });
+          const retry = (reason) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            try { if (client) client.end(true); } catch (_) {}
+            console.warn(`[MQTT] 节点 ${brokerUrl} 不可用，准备切换下一个节点`, reason || '');
+            if (index + 1 < MQTT_BROKER_URLS.length) {
+              setTimeout(() => tryBroker(index + 1), 80);
+            } else {
+              mqttClientPromise = null;
+              reject(new Error("所有信令节点均连接失败，请检查网络后重试"));
+            }
+          };
+
+          try {
+            client = m.connect(brokerUrl, {
+              clientId,
+              connectTimeout: 8000,
+              keepalive: 20,
+              clean: true,
+              reconnectPeriod: 0
+            });
+          } catch (err) {
+            retry(err);
+            return;
+          }
+
+          timer = setTimeout(() => {
+            if (!client.connected) retry(new Error('连接超时'));
+          }, 9000);
+
+          client.once('connect', () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            mqttClient = client;
+            mqttClientPromise = null;
+            console.info(`[MQTT] 已连接信令节点 ${index + 1}/${MQTT_BROKER_URLS.length}`);
+            resolve(client);
+          });
+
+          client.once('error', (err) => {
+            console.warn('[MQTT Client Error]', err);
+            retry(err);
+          });
+
+          client.once('close', () => {
+            retry(new Error('连接关闭'));
+          });
+        };
+
+        tryBroker(0);
       });
 
       return mqttClientPromise;
@@ -2306,36 +2373,50 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
           }
         });
 
-        // 房主监听客方加入握手
+        // 房主监听客方加入握手（多波段防丢包应答）
+        let hostHandshakeDone = false;
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
             const data = JSON.parse(payload.toString());
             if (data.type === 'join_request') {
-              client.removeListener('message', onHostInvite);
+              // 连续回送 join_accepted（0ms, 150ms, 350ms），确保 4G/5G 弱网下对方必能收到
+              const sendAccept = () => {
+                try {
+                  client.publish(h2cTopic, JSON.stringify({
+                    type: 'join_accepted',
+                    name: p1Name,
+                    avatar: p1Avatar
+                  }), { qos: 0 });
+                } catch(_) {}
+              };
+              sendAccept();
+              setTimeout(sendAccept, 150);
+              setTimeout(sendAccept, 350);
 
-              client.publish(h2cTopic, JSON.stringify({
-                type: 'join_accepted',
-                name: p1Name,
-                avatar: p1Avatar
-              }), { qos: 0 });
+              if (!hostHandshakeDone) {
+                hostHandshakeDone = true;
+                setTimeout(() => {
+                  try { client.removeListener('message', onHostInvite); } catch(_) {}
+                }, 1500);
 
-              conn = new MqttRoomConnection(client, roomCode, 'host');
-              myOnlineColor = BLACK;
-              lastActiveRoomCode = roomCode;
-              p2Name = data.name || '好友';
-              p2Avatar = data.avatar || '👧';
-              updatePlayerHeaderUI();
+                conn = new MqttRoomConnection(client, roomCode, 'host');
+                myOnlineColor = BLACK;
+                lastActiveRoomCode = roomCode;
+                p2Name = data.name || '好友';
+                p2Avatar = data.avatar || '👧';
+                updatePlayerHeaderUI();
 
-              if (isReconnecting) {
-                onReconnectSuccess();
-              } else {
-                showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
-                closeOnlineModal();
-                setMode('online');
-                conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+                if (isReconnecting) {
+                  onReconnectSuccess();
+                } else {
+                  showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
+                  closeOnlineModal();
+                  setMode('online');
+                  conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+                }
+                setupConn();
               }
-              setupConn();
             }
           } catch(e) {
             console.warn('[onHostInvite error]', e);
@@ -3403,7 +3484,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
           };
 
           sendReq();
-          joinInterval = setInterval(sendReq, 1200);
+          joinInterval = setInterval(sendReq, 450);
 
           joinTimeout = setTimeout(() => {
             if (!hasJoined) {
@@ -3465,10 +3546,15 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     // 🟩 15x15 方格中央落子 渲染与几何计算
     // ==========================================
     function resizeBoard() {
-      const w = islandWrapper.clientWidth || window.innerWidth;
-      const h = islandWrapper.clientHeight || (window.innerHeight - 190);
-      const maxSide = Math.min(w * 0.98, h * 0.98, 520);
-      cWidth = Math.floor(maxSide); cHeight = Math.floor(maxSide);
+      const isMobile = window.innerWidth <= 600;
+      const screenW = window.innerWidth;
+      // 手机端直接占满全屏宽度（保留极细 2px 边缘缓冲）
+      const availW = isMobile ? (screenW - 2) : Math.min(islandWrapper.clientWidth || screenW, 580);
+      const availH = islandWrapper.clientHeight || (window.innerHeight - 150);
+      
+      const maxSide = Math.min(availW, availH);
+      cWidth = Math.floor(maxSide); 
+      cHeight = Math.floor(maxSide);
 
       dpr = window.devicePixelRatio || 1;
       cvs.width = cWidth * dpr; cvs.height = cHeight * dpr;
@@ -3476,11 +3562,12 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
 
       ctx.resetTransform(); ctx.scale(dpr, dpr);
       
-      paddingX = cWidth * 0.045; 
-      paddingY = cHeight * 0.045;
+      // 手机端将内边距压缩到 2.2%（原 4.5%），棋盘网格扩展铺满 96% 屏幕宽！
+      paddingX = cWidth * (isMobile ? 0.022 : 0.038); 
+      paddingY = cHeight * (isMobile ? 0.022 : 0.038);
       gridX = (cWidth - 2 * paddingX) / 15; 
       gridY = (cHeight - 2 * paddingY) / 15;
-      radius = gridX * 0.42;
+      radius = gridX * 0.44; // 棋子饱满大号，触摸体验极佳
       invalidateBoardCache();
       draw();
     }
@@ -4926,6 +5013,30 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       if (e.key === 'Enter') document.getElementById('btnSendCustom').click();
     };
 
+    // 📱 手机端快速触控响应：确保点击头像或胶囊 100% 秒开个人档案弹窗
+    const p1CardElem = document.getElementById('p1Card');
+    if (p1CardElem) {
+      let tStart = 0;
+      p1CardElem.addEventListener('touchstart', () => { tStart = Date.now(); }, { passive: true });
+      p1CardElem.addEventListener('touchend', (e) => {
+        if (Date.now() - tStart < 400) {
+          e.preventDefault();
+          openProfileModal(1);
+        }
+      });
+    }
+    const p2CardElem = document.getElementById('p2Card');
+    if (p2CardElem) {
+      let tStart = 0;
+      p2CardElem.addEventListener('touchstart', () => { tStart = Date.now(); }, { passive: true });
+      p2CardElem.addEventListener('touchend', (e) => {
+        if (Date.now() - tStart < 400) {
+          e.preventDefault();
+          openProfileModal(2);
+        }
+      });
+    }
+
     function resetBoardOnly() {
       board = Array.from({length: 15}, () => Array(15).fill(0));
       turn = BLACK; history = []; isOver = false; winningLine = null;
@@ -5319,7 +5430,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.4';
+    const CURRENT_VERSION_TAG = 'v1.0.5';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
