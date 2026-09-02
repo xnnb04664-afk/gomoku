@@ -148,8 +148,7 @@
       background: #f8f3ea; border: 2px solid var(--tea-border);
       border-radius: 14px; padding: 3px 8px;
       display: flex; flex-direction: column; justify-content: flex-start;
-      cursor: pointer; margin-top: 2px;
-      height: 76px; min-height: 76px; max-height: 76px;
+      cursor: pointer; margin-top: 1px; height: 46px; min-height: 46px; max-height: 46px;
       overflow: hidden; box-sizing: border-box; transition: transform 0.1s;
       box-shadow: 0 2px 0 var(--tea-border);
     }
@@ -161,7 +160,7 @@
       line-height: 1.1;
     }
     .main-chat-content {
-      height: 52px; min-height: 52px; max-height: 52px;
+      height: 24px; min-height: 24px; max-height: 24px;
       overflow: hidden; display: flex; flex-direction: column; gap: 2px; padding-top: 2px;
     }
     .main-chat-line {
@@ -512,6 +511,28 @@
     .online-action-btn {
       width: 100%; padding: 11px; border-radius: 14px; border: 2px solid var(--tea-border);
       background: #c8382c; color: #fff; font-weight: 900; font-size: 14px; cursor: pointer;
+    }
+  
+    /* 📱 手机端全面自适应紧凑与大字优化 */
+    @media screen and (max-width: 480px) {
+      body { padding: env(safe-area-inset-top, 2px) 3px env(safe-area-inset-bottom, 2px) 3px !important; }
+      .header-area { gap: 1px !important; padding: 0 2px !important; }
+      .player-capsule { padding: 2px 7px 2px 2px !important; }
+      .player-capsule.right { padding: 2px 2px 2px 7px !important; }
+      .player-name { font-size: 13.5px !important; }
+      .signs-row { margin-top: 0 !important; }
+      .sign-board { padding: 1px 7px !important; min-width: 80px !important; }
+      .sign-status { font-size: 13px !important; }
+      .turn-bubble { font-size: 13px !important; padding: 2px 7px !important; }
+      .main-chat-box { height: 44px !important; min-height: 44px !important; max-height: 44px !important; padding: 2px 6px !important; margin-top: 1px !important; }
+      .main-chat-content { height: 22px !important; min-height: 22px !important; max-height: 22px !important; }
+      .main-chat-line { font-size: 13.5px !important; }
+      .card-slots-area { gap: 3px !important; padding: 1px 1px !important; }
+      .card-slot { padding: 3px 1px !important; }
+      .slot-title { font-size: 13px !important; }
+      .slot-sub { font-size: 11px !important; }
+      .bottom-controls { gap: 3px !important; padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important; }
+      .btn-ctrl { padding: 7px 0 !important; font-size: 14px !important; letter-spacing: -0.2px !important; }
     }
   </style>
 <body>
@@ -1735,8 +1756,8 @@
     // ==========================================
     function resizeBoard() {
       const w = islandWrapper.clientWidth || window.innerWidth;
-      const h = islandWrapper.clientHeight || (window.innerHeight - 260);
-      const maxSide = Math.min(w * 0.97, h * 0.98, 520);
+      const h = islandWrapper.clientHeight || (window.innerHeight - 190);
+      const maxSide = Math.min(w * 0.98, h * 0.98, 520);
       cWidth = Math.floor(maxSide); cHeight = Math.floor(maxSide);
 
       dpr = window.devicePixelRatio || 1;

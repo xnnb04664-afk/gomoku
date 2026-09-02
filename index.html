@@ -174,7 +174,7 @@
       font-size: 12px; transform: rotate(15deg); filter: drop-shadow(0 2px 2px rgba(0,0,0,0.3));
     }
     .player-name {
-      font-size: 12px; font-weight: 900; color: #4a2810; margin: 0 4px;
+      font-size: 13.5px; font-weight: 900; color: #4a2810; margin: 0 4px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
@@ -250,8 +250,8 @@
       width: 6px; height: 6px; background: #c88942; border: 2px solid var(--border-dark); border-top: none;
       z-index: -1;
     }
-    .sign-paw { font-size: 13px; }
-    .sign-status { font-weight: 900; font-size: 11.5px; color: #4a2810; }
+    .sign-paw { font-size: 14px; }
+    .sign-status { font-weight: 900; font-size: 13px; color: #4a2810; }
 
     /* "你的回合" 指向气泡 */
     .turn-bubble {
@@ -262,8 +262,8 @@
       border: 2px solid var(--border-dark);
       color: #fff;
       font-weight: 900;
-      font-size: 11.5px;
-      padding: 3px 8px;
+      font-size: 13px;
+      padding: 2px 8px;
       border-radius: 10px;
       box-shadow: 0 2.5px 0 var(--border-dark);
       white-space: nowrap;
@@ -301,10 +301,10 @@
       flex-direction: column;
       justify-content: flex-start;
       cursor: pointer;
-      margin-top: 2px;
-      height: 76px;
-      min-height: 76px;
-      max-height: 76px;
+      margin-top: 1px;
+      height: 46px;
+      min-height: 46px;
+      max-height: 46px;
       overflow: hidden;
       box-sizing: border-box;
       transition: transform 0.1s;
@@ -314,26 +314,26 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      font-size: 11px;
+      font-size: 11.5px;
       font-weight: 900;
       color: #795548;
       border-bottom: 1px dashed rgba(90, 56, 24, 0.2);
-      padding-bottom: 2px;
+      padding-bottom: 1px;
       line-height: 1.1;
     }
     .main-chat-content {
-      height: 52px;
-      min-height: 52px;
-      max-height: 52px;
+      height: 24px;
+      min-height: 24px;
+      max-height: 24px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      gap: 2px;
-      padding-top: 2px;
+      justify-content: center;
+      padding-top: 1px;
     }
     .main-chat-line {
-      font-size: 13px;
-      font-weight: 800;
+      font-size: 13.5px;
+      font-weight: 900;
       color: #2d3436;
       white-space: nowrap;
       overflow: hidden;
@@ -344,10 +344,10 @@
       line-height: 1.25;
     }
     .chat-tag-me {
-      background: #fed385; color: #4a2810; padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 900; flex-shrink: 0;
+      background: #fed385; color: #4a2810; padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 900; flex-shrink: 0;
     }
     .chat-tag-other {
-      background: #e2e8f0; color: #334155; padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 900; flex-shrink: 0;
+      background: #e2e8f0; color: #334155; padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 900; flex-shrink: 0;
     }
 
     /* 棋盘自适应最大化容器 */
@@ -470,16 +470,16 @@
       max-width: 500px;
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
+      gap: 4px;
       z-index: 10;
-      padding: 2px 4px;
+      padding: 1px 2px;
       flex-shrink: 0;
     }
     .card-slot {
       background: rgba(255, 255, 255, 0.75);
       border: 1.5px dashed #90caf9;
-      border-radius: 12px;
-      padding: 5px 3px;
+      border-radius: 11px;
+      padding: 4px 2px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -517,16 +517,16 @@
       position: absolute;
       top: 50%; left: 50%;
       transform: translate(-50%, -50%) rotate(-12deg);
-      font-size: 10px; font-weight: 900;
+      font-size: 11px; font-weight: 900;
       color: #ef4444;
       border: 1.5px solid #ef4444;
-      padding: 1px 4px; border-radius: 4px;
+      padding: 1px 5px; border-radius: 4px;
       letter-spacing: 1px;
-      background: rgba(255,255,255,0.7);
+      background: rgba(255,255,255,0.75);
     }
-    .slot-icon { font-size: 16px; }
-    .slot-title { font-size: 11px; font-weight: 900; color: #1e3a8a; }
-    .slot-sub { font-size: 9px; font-weight: 700; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 95%; }
+    .slot-icon { font-size: 19px; line-height: 1.1; }
+    .slot-title { font-size: 13px; font-weight: 900; color: #1e3a8a; }
+    .slot-sub { font-size: 11px; font-weight: 800; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 95%; }
 
     /* 卡牌与施法指引外层恒定高度容器 (确保棋盘绝对不发生垂直跳动) */
     .card-area-wrapper {
@@ -639,25 +639,25 @@
       max-width: 500px;
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
+      gap: 4px;
       z-index: 10;
-      padding: 2px 4px env(safe-area-inset-bottom, 4px) 4px;
+      padding: 1px 2px env(safe-area-inset-bottom, 2px) 2px;
       flex-shrink: 0;
     }
     .btn-ctrl {
-      padding: 10px 2px;
-      border-radius: 14px;
+      padding: 8px 1px;
+      border-radius: 12px;
       border: 2.5px solid var(--border-dark);
       background: #fed385;
       color: var(--border-dark);
       font-weight: 900;
-      font-size: 12.5px;
+      font-size: 14px;
       cursor: pointer;
-      box-shadow: 0 3px 0 var(--border-dark);
+      box-shadow: 0 2.5px 0 var(--border-dark);
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 4px;
+      gap: 3px;
       transition: all 0.1s;
       white-space: nowrap;
     }
@@ -885,25 +885,102 @@
     }
     .online-tab-btn {
       flex: 1; padding: 8px; border-radius: 12px; border: 2px solid var(--border-dark);
-      background: #fed385; color: var(--border-dark); font-weight: 900; font-size: 13px; cursor: pointer;
+      background: #fed385; color: var(--border-dark); font-weight: 900; font-size: 14px; cursor: pointer;
     }
     .online-tab-btn.active { background: #10b981; color: #fff; }
     .room-code-display {
-      font-size: 26px; font-weight: 900; color: #ff6b81; letter-spacing: 4px;
-      background: #ffeaa7; padding: 12px; border-radius: 14px; border: 2px solid var(--border-dark);
-      margin: 12px 0; user-select: text; -webkit-user-select: text;
+      font-size: 34px; font-weight: 900; color: #ff6b81; letter-spacing: 5px;
+      background: #ffeaa7; padding: 10px 8px; border-radius: 14px; border: 2.5px solid var(--border-dark);
+      margin: 10px 0; user-select: text; -webkit-user-select: text;
     }
     .room-input {
       width: 100%; padding: 10px; border-radius: 12px; border: 2px solid var(--border-dark);
-      font-size: 16px; font-weight: 800; text-align: center; letter-spacing: 2px; margin: 12px 0; outline: none;
+      font-size: 17px; font-weight: 900; text-align: center; letter-spacing: 3px; margin: 10px 0; outline: none;
     }
     .online-action-btn {
       width: 100%; padding: 11px; border-radius: 14px; border: 2px solid var(--border-dark);
-      background: #ff6b81; color: #fff; font-weight: 900; font-size: 14px; cursor: pointer;
+      background: #ff6b81; color: #fff; font-weight: 900; font-size: 15px; cursor: pointer;
       box-shadow: 0 3px 0 var(--border-dark); margin-top: 6px;
     }
     .other-modes-row {
       display: flex; gap: 8px; margin-top: 14px; border-top: 1.5px dashed rgba(90,56,24,0.25); padding-top: 12px;
+    }
+
+    #roomStatusBadge {
+      font-size: 13.5px !important;
+      font-weight: 900 !important;
+      letter-spacing: 0.2px;
+    }
+
+    /* 📱 手机端全面自适应紧凑与大字优化 (屏幕宽度 480px 以下) */
+    @media screen and (max-width: 480px) {
+      body {
+        padding: env(safe-area-inset-top, 2px) 3px env(safe-area-inset-bottom, 2px) 3px !important;
+      }
+      .header-area {
+        gap: 1px !important;
+        padding: 0 2px !important;
+      }
+      .player-capsule {
+        padding: 2px 7px 2px 2px !important;
+      }
+      .player-capsule.right {
+        padding: 2px 2px 2px 7px !important;
+      }
+      .player-name {
+        font-size: 13.5px !important;
+      }
+      .signs-row {
+        margin-top: 0 !important;
+      }
+      .sign-board {
+        padding: 1px 7px !important;
+        min-width: 80px !important;
+      }
+      .sign-status {
+        font-size: 13px !important;
+      }
+      .turn-bubble {
+        font-size: 13px !important;
+        padding: 2px 7px !important;
+      }
+      .main-chat-box {
+        height: 44px !important;
+        min-height: 44px !important;
+        max-height: 44px !important;
+        padding: 2px 6px !important;
+        margin-top: 1px !important;
+      }
+      .main-chat-content {
+        height: 22px !important;
+        min-height: 22px !important;
+        max-height: 22px !important;
+      }
+      .main-chat-line {
+        font-size: 13.5px !important;
+      }
+      .card-slots-area {
+        gap: 3px !important;
+        padding: 1px 1px !important;
+      }
+      .card-slot {
+        padding: 3px 1px !important;
+      }
+      .slot-title {
+        font-size: 13px !important;
+      }
+      .slot-sub {
+        font-size: 11px !important;
+      }
+      .bottom-controls {
+        gap: 3px !important;
+        padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important;
+      }
+      .btn-ctrl {
+        padding: 7px 0 !important;
+        font-size: 14px !important;
+        letter-spacing: -0.2px !important;
+      }
     }
   </style>
 </head>
@@ -1130,17 +1207,17 @@
       </div>
 
       <div id="viewCreateRoom">
-        <div style="font-size:12.5px; font-weight:700; color:#555;">将房间号发给好友，好友加入即可开局：</div>
+        <div style="font-size:14px; font-weight:800; color:#4a2810;">将房间号发给好友，好友加入即可开局：</div>
         <div class="room-code-display" id="myRoomCodeDisplay" onclick="copyRoomCode()" style="cursor:pointer;" title="点击即可快速复制">------</div>
-        <div style="display:flex; justify-content:center; align-items:center; gap:10px; margin:-4px 0 10px 0;">
-          <span id="roomStatusBadge" style="font-size:11px; color:#f59e0b; font-weight:800;">🟡 正在连入信令网络...</span>
-          <span style="font-size:11px; color:#3b82f6; font-weight:800; cursor:pointer; text-decoration:underline;" onclick="refreshNewRoomCode()">🔄 换个房间码</span>
+        <div style="display:flex; justify-content:center; align-items:center; gap:12px; margin:-2px 0 12px 0;">
+          <span id="roomStatusBadge" style="font-size:13.5px; color:#f59e0b; font-weight:900;">🟡 正在连入信令网络...</span>
+          <span style="font-size:13px; color:#3b82f6; font-weight:900; cursor:pointer; text-decoration:underline;" onclick="refreshNewRoomCode()">🔄 换个房间码</span>
         </div>
         <button class="online-action-btn" onclick="copyRoomCode()">📋 一键复制房间码</button>
       </div>
 
       <div id="viewJoinRoom" style="display:none;">
-        <div style="font-size:12.5px; font-weight:700; color:#555;">输入好友给您的 6 位房间号：</div>
+        <div style="font-size:14px; font-weight:800; color:#4a2810;">输入好友给您的 6 位房间号：</div>
         <input type="text" class="room-input" id="inputJoinCode" placeholder="如: 682914" maxlength="10" />
         <button class="online-action-btn" id="btnConnectRoom" onclick="joinOnlineRoom()">🚀 立即连接开局</button>
       </div>
@@ -2792,8 +2869,8 @@
     // ==========================================
     function resizeBoard() {
       const w = islandWrapper.clientWidth || window.innerWidth;
-      const h = islandWrapper.clientHeight || (window.innerHeight - 260);
-      const maxSide = Math.min(w * 0.97, h * 0.98, 520);
+      const h = islandWrapper.clientHeight || (window.innerHeight - 190);
+      const maxSide = Math.min(w * 0.98, h * 0.98, 520);
       cWidth = Math.floor(maxSide); cHeight = Math.floor(maxSide);
 
       dpr = window.devicePixelRatio || 1;
