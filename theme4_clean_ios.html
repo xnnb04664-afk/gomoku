@@ -1134,7 +1134,16 @@
       event.target.value = '';
     }
 
+    
+    function initAnimeThumbnails() {
+      const b = document.getElementById('animeImgBoy');
+      const g = document.getElementById('animeImgGirl');
+      if (b && window.ANIME_AVATAR_BOY) b.src = window.ANIME_AVATAR_BOY;
+      if (g && window.ANIME_AVATAR_GIRL) g.src = window.ANIME_AVATAR_GIRL;
+    }
+
     function openProfileModal(player = 1) {
+      initAnimeThumbnails();
       if (player === 2) {
         if (gameMode === 'online') {
           showGameNotice('🔒 联机中只能修改自己的昵称与头像哦~', true);
@@ -4317,7 +4326,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.9';
+    const CURRENT_VERSION_TAG = 'v1.0.10';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -4482,6 +4491,7 @@
     setTimeout(() => {
       checkAppUpdate(false);
     }, 3000);
+    initAnimeThumbnails();
   </script>
 </body>
 </html>

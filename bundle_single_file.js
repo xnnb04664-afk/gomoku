@@ -64,8 +64,15 @@ if (animeAvatarsContent) {
   inlinedHeadScripts += `  <!-- 内联 专属二次元情侣动漫头像 Base64 数据 -->\n  <script>\n${escapeInlineScript(animeAvatarsContent)}\n  </script>\n`;
 }
 
-// 执行替换
-html = html.replace(peerRegex, inlinedHeadScripts.trim());
+// 执行替换：按 head 边界替换，避免 CDN fallback 中嵌套的 <script> 字符串干扰正则。
+const headStartMarker = '  <!-- 引入 PeerJS 免服务器外网穿透联机库';
+const styleStartMarker = '  <style>';
+const headStart = html.indexOf(headStartMarker);
+const styleStart = html.indexOf(styleStartMarker, headStart);
+if (headStart < 0 || styleStart < 0) {
+  throw new Error('无法定位页面 head 脚本区域');
+}
+html = html.slice(0, headStart) + inlinedHeadScripts.trim() + '\n' + html.slice(styleStart);
 html = html.replace(cherryRegex, '');
 html = html.replace(animeRegex, '');
 

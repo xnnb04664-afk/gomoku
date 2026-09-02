@@ -19,8 +19,26 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
-  let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
-  filePath = filePath.split('?')[0];
+  let requestPath = (req.url || '/').split('?')[0];
+  try {
+    requestPath = decodeURIComponent(requestPath);
+  } catch (_) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('400 Bad Request');
+    return;
+  }
+
+  // 解码后再拼接路径，既支持中文文件名，也阻止 ../ 路径穿越。
+  requestPath = requestPath.replace(/^[/\\]+/, '');
+  if (!requestPath) requestPath = 'index.html';
+  const rootDir = path.resolve(__dirname);
+  const filePath = path.resolve(rootDir, requestPath);
+  const relativePath = path.relative(rootDir, filePath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('403 Forbidden');
+    return;
+  }
 
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';

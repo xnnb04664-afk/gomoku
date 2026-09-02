@@ -14,6 +14,8 @@ with sync_playwright() as p:
         page.on("pageerror", lambda exc, label=label: logs.append(f"{label} PAGEERROR: {exc}"))
         page.goto(url, wait_until="networkidle", timeout=30000)
 
+    print("LOAD_LOGS", *logs, sep="\n")
+    print("GLOBALS", host.evaluate("[typeof openThemeModal, typeof openOnlineModal, typeof GomokuP2PChannel, typeof Peer, typeof mqtt]"))
     host.evaluate("void openOnlineModal()")
     host.wait_for_function("() => document.querySelector('#roomStatusBadge').innerText.includes('P2P 直连房间已就绪')", timeout=20000)
     room_code = host.locator("#myRoomCodeDisplay").inner_text().strip()
