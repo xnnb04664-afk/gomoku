@@ -1736,56 +1736,91 @@
       return String(Math.floor(100000 + Math.random() * 900000));
     }
 
+    let isHostConnecting = false;
+    let hostRetryCount = 0;
+    let hostRetryTimer = null;
+
     // 房主初始化：向官方服务器注册 GOMOKU-xxxxxx
-    function initHostPeer(targetCode = null) {
+    function initHostPeer(targetCode = null, forceNew = false) {
       if (targetCode) currentRoomCode = targetCode;
       if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
 
       const displayEl = document.getElementById('myRoomCodeDisplay');
       const badgeEl = document.getElementById('roomStatusBadge');
       if (displayEl) displayEl.textContent = currentRoomCode;
-      if (badgeEl) {
-        badgeEl.textContent = '🟡 正在连入信令网络...';
-        badgeEl.style.color = '#f59e0b';
-      }
 
       const expectedId = `GOMOKU-${currentRoomCode}`;
-      if (hostPeer && !hostPeer.destroyed && hostPeer.open && hostPeer.id === expectedId) {
+
+      // 1. 若当前实例已经成功就绪且ID匹配，直接展示就绪，无需重复握手
+      if (!forceNew && hostPeer && !hostPeer.destroyed && hostPeer.open && hostPeer.id === expectedId) {
         if (badgeEl) {
-          badgeEl.textContent = '🟢 房间已就绪，等待好友加入...';
+          badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
           badgeEl.style.color = '#10b981';
         }
         return;
       }
 
+      // 2. 防抖连接锁：若当前实例正在发起握手且未超时，避免频繁打断重建
+      if (!forceNew && isHostConnecting && hostPeer && !hostPeer.destroyed) {
+        if (badgeEl) {
+          badgeEl.innerHTML = '🟡 正在连入官方信令网络...';
+          badgeEl.style.color = '#f59e0b';
+        }
+        return;
+      }
+
+      // 3. 安全清理旧实例：解除全部监听器，彻底杜绝 destroy 触发的幽灵 error 回调污染 UI！
+      if (hostRetryTimer) {
+        clearTimeout(hostRetryTimer);
+        hostRetryTimer = null;
+      }
       if (hostPeer) {
-        try { hostPeer.destroy(); } catch(e) {}
+        try {
+          hostPeer.off('open');
+          hostPeer.off('error');
+          hostPeer.off('close');
+          hostPeer.off('connection');
+          hostPeer.destroy();
+        } catch(e) {}
         hostPeer = null;
+      }
+
+      isHostConnecting = true;
+      if (badgeEl) {
+        badgeEl.innerHTML = '🟡 正在连入官方信令网络...';
+        badgeEl.style.color = '#f59e0b';
       }
 
       try {
         hostPeer = new Peer(expectedId, {
-          secure: true, // 强制安全加密 WSS 连接，完美兼容 file:///、HTTPS 及 Android WebView
+          secure: true, // 强制安全加密 WSS 连接，全面兼容 file:///、HTTPS 及 Android WebView
           config: ICE_CONFIG,
-          debug: 1
+          debug: 0
         });
       } catch(err) {
         console.error('[HostPeer create error]', err);
+        isHostConnecting = false;
       }
 
       if (!hostPeer) return;
 
-      hostPeer.on('open', (id) => {
+      const currentActivePeer = hostPeer;
+
+      currentActivePeer.on('open', (id) => {
+        if (currentActivePeer !== hostPeer) return; // 拦截过时旧实例
+        isHostConnecting = false;
+        hostRetryCount = 0;
         const pureCode = id.replace('GOMOKU-', '');
         currentRoomCode = pureCode;
         if (displayEl) displayEl.textContent = pureCode;
         if (badgeEl) {
-          badgeEl.textContent = '🟢 房间已就绪，等待好友加入...';
+          badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
           badgeEl.style.color = '#10b981';
         }
       });
 
-      hostPeer.on('connection', (c) => {
+      currentActivePeer.on('connection', (c) => {
+        if (currentActivePeer !== hostPeer) return;
         conn = c;
         setupConn();
         myOnlineColor = BLACK;
@@ -1797,16 +1832,33 @@
         });
       });
 
-      hostPeer.on('error', (err) => {
+      currentActivePeer.on('error', (err) => {
+        if (currentActivePeer !== hostPeer) return; // 忽略已废弃旧实例误报
+        isHostConnecting = false;
         console.warn('[HostPeer error]', err);
+
         if (err.type === 'unavailable-id') {
-          // 房间号偶发冲突，秒换新号重新注册
+          // 房间号偶发冲突被占，换新号秒级重新注册
           currentRoomCode = generateFastRoomCode();
-          initHostPeer(currentRoomCode);
+          initHostPeer(currentRoomCode, true);
         } else {
-          if (badgeEl) {
-            badgeEl.textContent = '⚠️ 网络重试中...';
-            badgeEl.style.color = '#ef4444';
+          hostRetryCount++;
+          if (hostRetryCount <= 3) {
+            if (badgeEl) {
+              badgeEl.innerHTML = `⚠️ 正在重试信令网络 (第 ${hostRetryCount} 次)... <span style="cursor:pointer;text-decoration:underline;color:#3b82f6;" onclick="initHostPeer(null, true)">[立即重连]</span>`;
+              badgeEl.style.color = '#ef4444';
+            }
+            // 真实触发自动重试机制
+            hostRetryTimer = setTimeout(() => {
+              if (!hostPeer || !hostPeer.open) {
+                initHostPeer(currentRoomCode, true);
+              }
+            }, 1800);
+          } else {
+            if (badgeEl) {
+              badgeEl.innerHTML = `⚠️ 信令云网络连接受阻 <span style="cursor:pointer;text-decoration:underline;color:#3b82f6;" onclick="hostRetryCount=0; initHostPeer(null, true);">[点击重试]</span>`;
+              badgeEl.style.color = '#ef4444';
+            }
           }
         }
       });
@@ -1814,12 +1866,12 @@
 
     // 兼容原有命名的 initPeer 别名
     function initPeer(customCode = null) {
-      initHostPeer(customCode);
+      initHostPeer(customCode, false);
     }
 
     function refreshNewRoomCode() {
       currentRoomCode = generateFastRoomCode();
-      initHostPeer(currentRoomCode);
+      initHostPeer(currentRoomCode, true);
       showGameNotice("🔄 正在刷新全新房间码...", false);
     }
 
