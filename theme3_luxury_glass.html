@@ -1422,22 +1422,29 @@
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
         } else if (card.id === 'reforge_cards') {
-          markCardUsed(idx);
-          const usedCardIds = new Set(currentDrawnCards.map(c => c.id));
-          const availableCards = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
-          const shuffledAvail = [...availableCards].sort(() => Math.random() - 0.5);
+          const usedCardIds = new Set();
+          currentDrawnCards.forEach((c, i) => {
+            if (i !== idx && cardUsedStatus[i]) usedCardIds.add(c.id);
+          });
+          usedCardIds.add('reforge_cards');
+
+          let pool = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
+          if (pool.length < 3) pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
+          const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
+
           let pickIdx = 0;
           for (let i = 0; i < 3; i++) {
-            if (i !== idx && !cardUsedStatus[i]) {
-              if (pickIdx < shuffledAvail.length) {
-                currentDrawnCards[i] = shuffledAvail[pickIdx++];
+            if (i === idx || !cardUsedStatus[i]) {
+              if (pickIdx < shuffledPool.length) {
+                currentDrawnCards[i] = shuffledPool[pickIdx++];
+                cardUsedStatus[i] = false;
               }
             }
           }
           renderCardSlots();
           triggerSkillVFX('reforge_cards');
           playSkillSound('dice');
-          showSkillBanner('🎲', `【${cardTitle}】发动！`, '灵运爆发！未用手牌已全部重铸为全新神技！');
+          showSkillBanner('🃏', `【${cardTitle}】发动！`, '灵运爆发！自身与未用手牌已全部蜕变重铸为全新神技！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }

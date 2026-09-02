@@ -1669,7 +1669,7 @@
       return score;
     }
 
-    function smartAiMove() {
+    function smartAiMove(forbiddenPoints = []) {
       if (isOver) return;
       let bestMove = null;
       let maxScore = -1;
@@ -1677,6 +1677,9 @@
       for (let r = 0; r < 15; r++) {
         for (let c = 0; c < 15; c++) {
           if (board[r][c] === EMPTY) {
+            if (forbiddenPoints && forbiddenPoints.some(f => f.r === r && f.c === c)) {
+              continue; // 规避被预言封锁的禁手点
+            }
             let hasNeighbor = false;
             for (let dr = -2; dr <= 2 && !hasNeighbor; dr++) {
               for (let dc = -2; dc <= 2 && !hasNeighbor; dc++) {
@@ -1880,9 +1883,9 @@
           showSkillBanner('🔄', '对方发动【身份互换】！', '全场棋子黑白颠倒！');
           draw();
         } else if (data.type === 'skill_prophecy') {
-          prophecyPoint = { r: data.r, c: data.c };
+          prophecyPoint = { r: data.r, c: data.c, by: data.by };
           draw();
-          alert(`🔮 对方发动了【预言封锁】！预言你的下一步落点是 (${data.r+1}, ${data.c+1})，命中则撤销！`);
+          showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
         } else if (data.type === 'skill_remove_stone') {
           board[data.r][data.c] = EMPTY;
           history = history.filter(h => !(h.r === data.r && h.c === data.c));
@@ -1978,8 +1981,11 @@
     // ==========================================
     // 🎴 干扰技能卡执行与棋盘交互核心逻辑
     // ==========================================
-    function isProphecied(r, c) {
-      return prophecyPoint && prophecyPoint.r === r && prophecyPoint.c === c;
+    function isProphecied(r, c, p) {
+      if (!prophecyPoint) return false;
+      // 施法者本人落子时，绝对不触发封锁拦截
+      if (prophecyPoint.by && p === prophecyPoint.by) return false;
+      return prophecyPoint.r === r && prophecyPoint.c === c;
     }
 
     function drawRandomThreeCards() {
@@ -2247,22 +2253,33 @@
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
         } else if (card.id === 'reforge_cards') {
-          markCardUsed(idx);
-          const usedCardIds = new Set(currentDrawnCards.map(c => c.id));
-          const availableCards = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
-          const shuffledAvail = [...availableCards].sort(() => Math.random() - 0.5);
+          // 收集当前已使用的卡牌ID，并排除自身（防止无限原地刷天降神抽）
+          const usedCardIds = new Set();
+          currentDrawnCards.forEach((c, i) => {
+            if (i !== idx && cardUsedStatus[i]) usedCardIds.add(c.id);
+          });
+          usedCardIds.add('reforge_cards');
+
+          let pool = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
+          if (pool.length < 3) {
+            pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
+          }
+          const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
+
           let pickIdx = 0;
           for (let i = 0; i < 3; i++) {
-            if (i !== idx && !cardUsedStatus[i]) {
-              if (pickIdx < shuffledAvail.length) {
-                currentDrawnCards[i] = shuffledAvail[pickIdx++];
+            // 天降神抽自身所在槽位 (i === idx) 以及其他未使用的槽位 (!cardUsedStatus[i])，全部重铸！
+            if (i === idx || !cardUsedStatus[i]) {
+              if (pickIdx < shuffledPool.length) {
+                currentDrawnCards[i] = shuffledPool[pickIdx++];
+                cardUsedStatus[i] = false; // 刷新出来的神技牌立即可用！
               }
             }
           }
           renderCardSlots();
           triggerSkillVFX('reforge_cards');
           playSkillSound('dice');
-          showSkillBanner('🃏', `【${cardTitle}】发动！`, '灵运爆发！未用手牌已全部重铸为全新神技！');
+          showSkillBanner('🃏', `【${cardTitle}】发动！`, '灵运爆发！自身与未用手牌已全部蜕变重铸为全新神技！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
@@ -2421,13 +2438,13 @@
         if (board[row][col] !== EMPTY) {
           return invalidAction('🔮 预言封锁只能指向空白格子！', row, col);
         }
-        prophecyPoint = { r: row, c: col };
+        prophecyPoint = { r: row, c: col, by: myColor };
         markCardUsed(slotIdx);
         triggerSkillVFX('freeze', row, col); // 复用冰花特效做视觉标记
         playSkillSound('magic');
-        showSkillBanner('🔮', `【${skillName}】发动！`, `已预言 (${row+1}, ${col+1})，若对手落此处则撤销！`);
+        showSkillBanner('🔮', `【${skillName}】发动！`, `已预言 (${row+1}, ${col+1})，若对手落此处将当场抹杀撤销！`);
         if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_prophecy', r: row, c: col });
+          conn.send({ type: 'skill_prophecy', r: row, c: col, by: myColor });
         }
       } else if (skill.id === 'remove_stone') {
         if (board[row][col] !== enemyColor) {
@@ -4000,15 +4017,28 @@
     function makeMove(r, c, p, fromRemote = false) {
       if (board[r][c] !== EMPTY || isOver) return;
 
-      // 检查是否命中对方的预言封锁
-      if (isProphecied(r, c)) {
-        prophecyPoint = null; // 预言消耗掉
-        alert(`🔮 预言封锁命中！对手预言了此处，你的落子被撤销，继续思考~`);
+      // 检查是否命中对手布下的预言封锁
+      if (isProphecied(r, c, p)) {
+        const victimR = r, victimC = c;
+        prophecyPoint = null; // 预言成功阻断命中，消耗掉
+        triggerSkillVFX('freeze', victimR, victimC);
+        playSkillSound('ice');
+        triggerBoardShake();
+        showSkillBanner('🔮', '【预言封锁】神威生效！', `天机显现！试图在 (${victimR+1}, ${victimC+1}) 的绝杀落子已被天命强行撤销！`);
+        showGameNotice(`🔮 预言封锁命中！撤销 (${victimR+1}, ${victimC+1}) 处的落子！`, true);
         draw();
-        return; // 不落子，不切回合（对手的回合仍在等待）
+
+        // 若是 AI 试图落子被预言拦截，AI 重新寻找其他落子点，绝不卡死
+        if (gameMode === 'ai' && p === WHITE) {
+          setTimeout(() => smartAiMove([{ r: victimR, c: victimC }]), 700);
+        }
+        return; // 不落子，不切回合，对手必须另选位置落子！
       }
-      // 落子后清除预言（对手落在其他地方，预言失效）
-      prophecyPoint = null;
+
+      // 如果对手落在了其他位置，则预言落空失效；若是施法者本人落子，预言保留等待对手落子！
+      if (prophecyPoint && p !== prophecyPoint.by) {
+        prophecyPoint = null;
+      }
 
       board[r][c] = p;
       history.push({r, c, p});
