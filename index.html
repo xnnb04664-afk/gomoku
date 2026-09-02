@@ -1280,7 +1280,7 @@
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.2</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.3</span></div>
           <div style="font-size:9.5px; color:#636e72;">GitHub 免服务器云端发版</div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1841,14 +1841,22 @@
 
     // --- 自定义昵称与相册头像弹窗交互 ---
     function openProfileModal(player) {
+      // 联机模式：只能改自己（黑方=1，白方=2），不能改对手
+      if (gameMode === 'online') {
+        const myPlayer = (myOnlineColor === BLACK) ? 1 : 2;
+        if (player !== myPlayer) {
+          showGameNotice('🔒 联机中只能修改自己的昵称与头像哦~', true);
+          return;
+        }
+      }
       if (gameMode === 'ai' && player === 2) {
-        return alert("🤖 大师AI 为智能电脑，无法修改档案哦~");
+        return showGameNotice('🤖 大师AI 为智能电脑，无法修改档案哦~', true);
       }
       editingPlayer = player;
       const currentName = player === 1 ? p1Name : p2Name;
       selectedAvatarData = player === 1 ? p1Avatar : p2Avatar;
 
-      document.getElementById('profileModalTitle').textContent = player === 1 ? "👤 修改我方昵称与头像" : "👤 修改对方昵称与头像";
+      document.getElementById('profileModalTitle').textContent = player === 1 ? '👤 修改我方昵称与头像' : '👤 修改对方昵称与头像';
       document.getElementById('inputProfileName').value = currentName;
       document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(selectedAvatarData);
 
@@ -1862,26 +1870,66 @@
       if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_BOY || selectedAvatarData === 'img/avatar_boy.png');
       if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_GIRL || selectedAvatarData === 'img/avatar_girl.png');
 
+      // ✨ 实时预览：昵称输入框每次按键都立即更新 UI + 联机同步
+      const nameInput = document.getElementById('inputProfileName');
+      nameInput.oninput = () => {
+        const val = nameInput.value.trim();
+        if (!val) return;
+        if (editingPlayer === 1) {
+          p1Name = val;
+          localStorage.setItem('gomoku_p1Name', p1Name);
+        } else {
+          p2Name = val;
+          localStorage.setItem('gomoku_p2Name', p2Name);
+        }
+        updatePlayerHeaderUI();
+        // 联机实时同步昵称给对方
+        if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
+        }
+      };
+
       document.getElementById('profileModal').classList.add('show');
     }
 
+    // 选 Emoji 头像 → 立即更新预览 + 保存 + 同步
     function selectAvatar(elem, char) {
       selectedAvatarData = char;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
       document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(char);
+      _applyAvatarChange(char);
     }
 
+    // 选图片头像 → 立即更新预览 + 保存 + 同步
     function selectImgAvatar(elem, dataUrl) {
       selectedAvatarData = dataUrl;
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
       document.getElementById('bigAvatarPreview').innerHTML = `<img src="${dataUrl}" alt="avatar">`;
+      _applyAvatarChange(dataUrl);
+    }
+
+    // 公共：应用头像变更到本地存储 + UI + 联机同步
+    function _applyAvatarChange(avatarData) {
+      const curName = document.getElementById('inputProfileName').value.trim() || (editingPlayer === 1 ? p1Name : p2Name);
+      if (editingPlayer === 1) {
+        p1Avatar = avatarData;
+        localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+      } else {
+        p2Avatar = avatarData;
+        localStorage.setItem('gomoku_p2Avatar', p2Avatar);
+      }
+      updatePlayerHeaderUI();
+      // 联机实时同步头像给对方
+      if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+        conn.send({ type: 'profile_sync', name: curName, avatar: avatarData });
+      }
     }
 
     function saveProfile() {
       const nameInput = document.getElementById('inputProfileName').value.trim();
-      if (!nameInput) return alert("请输入有效的昵称！");
+      if (!nameInput) return showGameNotice('⚠️ 昵称不能为空哦！', true);
 
       if (editingPlayer === 1) {
         p1Name = nameInput;
@@ -1897,14 +1945,18 @@
 
       updatePlayerHeaderUI();
       closeProfileModal();
-      alert(`🎉 个人档案已成功保存！`);
+      showGameNotice('🎉 个人档案已保存！');
 
+      // 保存时再做一次完整同步（确保对方数据最终一致）
       if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
         conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
       }
     }
 
     function closeProfileModal() {
+      // 清除实时监听器，防止泄漏
+      const nameInput = document.getElementById('inputProfileName');
+      if (nameInput) nameInput.oninput = null;
       document.getElementById('profileModal').classList.remove('show');
     }
 
@@ -5182,7 +5234,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.2';
+    const CURRENT_VERSION_TAG = 'v1.0.3';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {

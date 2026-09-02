@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -1341,14 +1341,22 @@
     }
 
     function openProfileModal(player) {
+      // 联机模式：只能改自己（黑方=1，白方=2），不能改对手
+      if (gameMode === 'online') {
+        const myPlayer = (myOnlineColor === BLACK) ? 1 : 2;
+        if (player !== myPlayer) {
+          showGameNotice('🔒 联机中只能修改自己的昵称与头像哦~', true);
+          return;
+        }
+      }
       if (gameMode === 'ai' && player === 2) {
-        return alert("🤖 大师AI 为智能电脑，无法修改档案哦~");
+        return showGameNotice('🤖 大师AI 为智能电脑，无法修改档案哦~', true);
       }
       editingPlayer = player;
       const currentName = player === 1 ? p1Name : p2Name;
       selectedAvatarData = player === 1 ? p1Avatar : p2Avatar;
 
-      document.getElementById('profileModalTitle').textContent = player === 1 ? "👤 修改我方昵称与头像" : "👤 修改对方昵称与头像";
+      document.getElementById('profileModalTitle').textContent = player === 1 ? '👤 修改我方昵称与头像' : '👤 修改对方昵称与头像';
       document.getElementById('inputProfileName').value = currentName;
       document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(selectedAvatarData);
 
@@ -1362,6 +1370,19 @@
       if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_BOY || selectedAvatarData === 'img/avatar_boy.png');
       if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === ANIME_AVATAR_GIRL || selectedAvatarData === 'img/avatar_girl.png');
 
+      // 实时预览：昵称输入框每次按键都立即更新 UI + 联机同步
+      const nameInput = document.getElementById('inputProfileName');
+      nameInput.oninput = () => {
+        const val = nameInput.value.trim();
+        if (!val) return;
+        if (editingPlayer === 1) { p1Name = val; localStorage.setItem('gomoku_p1Name', p1Name); }
+        else { p2Name = val; localStorage.setItem('gomoku_p2Name', p2Name); }
+        updatePlayerHeaderUI();
+        if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
+        }
+      };
+
       document.getElementById('profileModal').classList.add('show');
     }
 
@@ -1370,6 +1391,7 @@
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
       document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(char);
+      _applyAvatarChange(char);
     }
 
     function selectImgAvatar(elem, dataUrl) {
@@ -1377,32 +1399,42 @@
       document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
       document.getElementById('bigAvatarPreview').innerHTML = `<img src="${dataUrl}" alt="avatar">`;
+      _applyAvatarChange(dataUrl);
+    }
+
+    function _applyAvatarChange(avatarData) {
+      const curName = document.getElementById('inputProfileName').value.trim() || (editingPlayer === 1 ? p1Name : p2Name);
+      if (editingPlayer === 1) { p1Avatar = avatarData; localStorage.setItem('gomoku_p1Avatar', p1Avatar); }
+      else { p2Avatar = avatarData; localStorage.setItem('gomoku_p2Avatar', p2Avatar); }
+      updatePlayerHeaderUI();
+      if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+        conn.send({ type: 'profile_sync', name: curName, avatar: avatarData });
+      }
     }
 
     function saveProfile() {
       const nameInput = document.getElementById('inputProfileName').value.trim();
-      if (!nameInput) return alert("请输入有效的昵称！");
-
+      if (!nameInput) return showGameNotice('⚠️ 昵称不能为空哦！', true);
       if (editingPlayer === 1) {
         p1Name = nameInput; p1Avatar = selectedAvatarData;
-        localStorage.setItem('gomoku_sweet_p1Name', p1Name);
-        localStorage.setItem('gomoku_sweet_p1Avatar', p1Avatar);
+        localStorage.setItem('gomoku_p1Name', p1Name); localStorage.setItem('gomoku_p1Avatar', p1Avatar);
       } else {
         p2Name = nameInput; p2Avatar = selectedAvatarData;
-        localStorage.setItem('gomoku_sweet_p2Name', p2Name);
-        localStorage.setItem('gomoku_sweet_p2Avatar', p2Avatar);
+        localStorage.setItem('gomoku_p2Name', p2Name); localStorage.setItem('gomoku_p2Avatar', p2Avatar);
       }
-
       updatePlayerHeaderUI();
       closeProfileModal();
-      alert(`🎉 甜蜜档案已成功保存！`);
-
+      showGameNotice('🎉 个人档案已保存！');
       if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
         conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
       }
     }
 
-    function closeProfileModal() { document.getElementById('profileModal').classList.remove('show'); }
+    function closeProfileModal() {
+      const nameInput = document.getElementById('inputProfileName');
+      if (nameInput) nameInput.oninput = null;
+      document.getElementById('profileModal').classList.remove('show');
+    }
 
     function exportChatTxt() {
       if (chatHistory.length === 0) return alert("暂无聊天记录可导出哦~");
@@ -3298,7 +3330,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.2';
+    const CURRENT_VERSION_TAG = 'v1.0.3';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
