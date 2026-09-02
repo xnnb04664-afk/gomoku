@@ -1,0 +1,2797 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
+  <!-- 引入 PeerJS 免服务器外网穿透联机库 -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    :root {
+      --primary: #ff6b81;
+      --bg-sky: linear-gradient(180deg, #4da4ff 0%, #7ec6ff 35%, #bfe8ff 70%, #eef8ff 100%);
+      --yellow-tag: #fed385;
+      --wood-card: #ffeaa7;
+      --border-dark: #5a3818;
+    }
+    * {
+      margin: 0; padding: 0; box-sizing: border-box;
+      user-select: none; -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      position: fixed;
+      inset: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      background: var(--bg-sky);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      color: #3d220f;
+      padding: env(safe-area-inset-top, 4px) 6px env(safe-area-inset-bottom, 6px) 6px;
+      transition: background 0.3s ease, color 0.3s ease;
+    }
+
+    /* 🎨 多主题动态切换背景类 (下棋中无缝换肤) */
+    body.theme-zen-dark { background: #09090b !important; color: #f4f4f5 !important; }
+    body.theme-zen-dark .cloud { display: none; }
+    body.theme-zen-dark .signs-row .sign-board { background: #18181b; border-color: #3f3f46; color: #fff; }
+    body.theme-zen-dark .signs-row .sign-status { color: #fff; }
+    body.theme-zen-dark .main-chat-box { background: rgba(24,24,27,0.85); border-color: #3f3f46; }
+    body.theme-zen-dark .main-chat-header { color: #a1a1aa; }
+    body.theme-zen-dark .main-chat-line { color: #fff; }
+
+    body.theme-sweet-romance { background: radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%) !important; color: #fff !important; }
+    body.theme-sweet-romance .cloud { display: none; }
+    body.theme-sweet-romance .signs-row .sign-board { background: rgba(255,255,255,0.15); border-color: #ff8fa3; color: #fff; }
+    body.theme-sweet-romance .signs-row .sign-status { color: #fbcfe8; }
+    body.theme-sweet-romance .main-chat-box { background: rgba(255,255,255,0.15); border-color: #ff758c; }
+    body.theme-sweet-romance .main-chat-header { color: #fbcfe8; }
+    body.theme-sweet-romance .main-chat-line { color: #fff; }
+
+    body.theme-neo-trad { background: #eae2d5 !important; color: #2c221a !important; }
+    body.theme-neo-trad .cloud { display: none; }
+    body.theme-neo-trad .signs-row .sign-board { background: #fbf8f2; border-color: #dcb374; }
+    body.theme-neo-trad .signs-row .sign-status { color: #4a3b2c; }
+    body.theme-neo-trad .main-chat-box { background: #f7f1e6; border-color: #dcb374; }
+
+    body.theme-luxury-glass { background: #0b0c10 !important; color: #fff !important; }
+    body.theme-luxury-glass .cloud { display: none; }
+    body.theme-luxury-glass .signs-row .sign-board { background: rgba(99,102,241,0.15); border-color: #6366f1; color: #fff; }
+    body.theme-luxury-glass .signs-row .sign-status { color: #818cf8; }
+    body.theme-luxury-glass .main-chat-box { background: rgba(16,18,27,0.85); border-color: #6366f1; }
+    body.theme-luxury-glass .main-chat-line { color: #fff; }
+
+    body.theme-clean-ios { background: #f2f2f7 !important; color: #1d1d1f !important; }
+    body.theme-clean-ios .cloud { display: none; }
+    body.theme-clean-ios .signs-row .sign-board { background: #ffffff; border-color: #d1d1d6; }
+    body.theme-clean-ios .signs-row .sign-status { color: #1d1d1f; }
+    body.theme-clean-ios .main-chat-box { background: #ffffff; border-color: #e5e5ea; }
+
+
+    /* 纯净漂浮白云 */
+    .cloud {
+      position: fixed;
+      background: rgba(255, 255, 255, 0.75);
+      border-radius: 50px;
+      pointer-events: none;
+      z-index: 1;
+      filter: blur(1px);
+    }
+    .cloud::before, .cloud::after {
+      content: "";
+      position: absolute;
+      background: inherit;
+      border-radius: 50%;
+    }
+    .cloud-1 {
+      top: 6%; left: -20px; width: 110px; height: 32px;
+      animation: floatCloud 28s linear infinite alternate;
+    }
+    .cloud-1::before { width: 44px; height: 44px; top: -18px; left: 22px; }
+    .cloud-1::after { width: 30px; height: 30px; top: -12px; left: 56px; }
+
+    .cloud-2 {
+      top: 16%; right: -30px; width: 140px; height: 38px; opacity: 0.65;
+      animation: floatCloud2 34s linear infinite alternate;
+    }
+    .cloud-2::before { width: 50px; height: 50px; top: -20px; left: 28px; }
+    .cloud-2::after { width: 38px; height: 38px; top: -15px; left: 70px; }
+
+    @keyframes floatCloud {
+      from { transform: translateX(0); }
+      to { transform: translateX(35px); }
+    }
+    @keyframes floatCloud2 {
+      from { transform: translateX(0); }
+      to { transform: translateX(-35px); }
+    }
+
+    /* 顶部紧凑玩家信息栏 */
+    .header-area {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      z-index: 10;
+      padding: 1px 4px 0 4px;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    /* 左右对战玩家胶囊 (纯净手绘) */
+    .players-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: relative;
+    }
+    .player-capsule {
+      display: flex;
+      align-items: center;
+      background: #fed385;
+      border: 2px solid var(--border-dark);
+      border-radius: 25px;
+      padding: 2px 10px 2px 3px;
+      box-shadow: 0 3px 0 var(--border-dark);
+      position: relative;
+      max-width: 48%;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+    .player-capsule:active { transform: scale(0.96); }
+    .player-capsule.right {
+      padding: 2px 3px 2px 10px;
+      flex-direction: row-reverse;
+    }
+    .avatar-wrap {
+      position: relative;
+      width: 34px; height: 34px;
+    }
+    .avatar-circle {
+      width: 34px; height: 34px; border-radius: 50%;
+      border: 2px solid #70a1ff; background: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 19px; overflow: hidden;
+    }
+    .avatar-circle img {
+      width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
+    }
+    .player-capsule.right .avatar-circle { border-color: #ff9ff3; }
+    .crown-tag {
+      position: absolute; top: -8px; right: -4px;
+      font-size: 12px; transform: rotate(15deg); filter: drop-shadow(0 2px 2px rgba(0,0,0,0.3));
+    }
+    .player-name {
+      font-size: 12px; font-weight: 900; color: #4a2810; margin: 0 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* 头像处生动持久语音气泡 (大字号 13.5px，持续 5 秒) */
+    .avatar-chat-bubble {
+      position: absolute;
+      top: -38px;
+      background: #ffffff;
+      border: 2px solid var(--border-dark);
+      border-radius: 14px;
+      padding: 5px 12px;
+      font-size: 13.5px;
+      font-weight: 900;
+      color: #2d3436;
+      box-shadow: 0 5px 12px rgba(0,0,0,0.22);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      z-index: 80;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .avatar-chat-bubble.show {
+      animation: bubblePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+    @keyframes bubblePop {
+      0% { transform: scale(0.3) translateY(12px); opacity: 0; }
+      70% { transform: scale(1.08) translateY(-2px); opacity: 1; }
+      100% { transform: scale(1) translateY(0); opacity: 1; }
+    }
+    .avatar-chat-bubble.left-bubble { left: 4px; }
+    .avatar-chat-bubble.left-bubble::after {
+      content: ""; position: absolute; bottom: -6px; left: 14px;
+      border-width: 6px 6px 0 6px; border-style: solid;
+      border-color: #fff transparent transparent transparent;
+    }
+    .avatar-chat-bubble.right-bubble { right: 4px; }
+    .avatar-chat-bubble.right-bubble::after {
+      content: ""; position: absolute; bottom: -6px; right: 14px;
+      border-width: 6px 6px 0 6px; border-style: solid;
+      border-color: #fff transparent transparent transparent;
+    }
+
+    /* 实体路标木牌 */
+    .signs-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      position: relative;
+      padding: 0 2px;
+      margin-top: 1px;
+    }
+    .sign-board {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: #fed385;
+      border: 2px solid var(--border-dark);
+      border-radius: 10px;
+      padding: 2px 10px;
+      box-shadow: 0 2.5px 0 var(--border-dark);
+      position: relative;
+      min-width: 86px;
+    }
+    .sign-board::before {
+      content: "⭐⭐";
+      position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+      font-size: 9px; letter-spacing: 2px;
+    }
+    .sign-pole {
+      position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+      width: 6px; height: 6px; background: #c88942; border: 2px solid var(--border-dark); border-top: none;
+      z-index: -1;
+    }
+    .sign-paw { font-size: 13px; }
+    .sign-status { font-weight: 900; font-size: 11.5px; color: #4a2810; }
+
+    /* "你的回合" 指向气泡 */
+    .turn-bubble {
+      position: absolute;
+      top: -4px;
+      left: 96px;
+      background: #ff6b81;
+      border: 2px solid var(--border-dark);
+      color: #fff;
+      font-weight: 900;
+      font-size: 11.5px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      box-shadow: 0 2.5px 0 var(--border-dark);
+      white-space: nowrap;
+      animation: bounceBubble 1.2s infinite alternate ease-in-out;
+      display: flex;
+      align-items: center;
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      z-index: 20;
+    }
+    .turn-bubble::after {
+      content: "";
+      position: absolute; left: -5px; top: 50%; transform: translateY(-50%);
+      border-width: 4px 5px 4px 0; border-style: solid;
+      border-color: transparent #ff6b81 transparent transparent;
+    }
+    .turn-bubble.right { left: auto; right: 96px; }
+    .turn-bubble.right::after {
+      left: auto; right: -5px;
+      border-width: 4px 0 4px 5px;
+      border-color: transparent transparent transparent #ff6b81;
+    }
+    @keyframes bounceBubble {
+      from { transform: translateY(0) scale(1); }
+      to { transform: translateY(-3px) scale(1.05); }
+    }
+
+    /* 主界面常驻「对局实时聊天框」 */
+    .main-chat-box {
+      background: rgba(255, 253, 245, 0.95);
+      border: 2px solid var(--border-dark);
+      border-radius: 14px;
+      padding: 3px 8px;
+      box-shadow: 0 2.5px 0 var(--border-dark);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      cursor: pointer;
+      margin-top: 2px;
+      height: 76px;
+      min-height: 76px;
+      max-height: 76px;
+      overflow: hidden;
+      box-sizing: border-box;
+      transition: transform 0.1s;
+    }
+    .main-chat-box:active { transform: scale(0.985); }
+    .main-chat-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 900;
+      color: #795548;
+      border-bottom: 1px dashed rgba(90, 56, 24, 0.2);
+      padding-bottom: 2px;
+      line-height: 1.1;
+    }
+    .main-chat-content {
+      height: 52px;
+      min-height: 52px;
+      max-height: 52px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-top: 2px;
+    }
+    .main-chat-line {
+      font-size: 13px;
+      font-weight: 800;
+      color: #2d3436;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      line-height: 1.25;
+    }
+    .chat-tag-me {
+      background: #fed385; color: #4a2810; padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 900; flex-shrink: 0;
+    }
+    .chat-tag-other {
+      background: #e2e8f0; color: #334155; padding: 1px 5px; border-radius: 4px; font-size: 10.5px; font-weight: 900; flex-shrink: 0;
+    }
+
+    /* 棋盘自适应最大化容器 */
+    .island-wrapper {
+      flex: 1;
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 5;
+      padding: 0;
+    }
+    canvas {
+      display: block;
+      cursor: pointer;
+      filter: drop-shadow(0 10px 24px rgba(18, 55, 95, 0.35));
+      touch-action: none;
+    }
+
+    /* 3 张干扰技能卡牌槽位与施法样式 */
+    .card-slots-area {
+      width: 100%;
+      max-width: 500px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      z-index: 10;
+      padding: 2px 4px;
+      flex-shrink: 0;
+    }
+    .card-slot {
+      background: rgba(255, 255, 255, 0.75);
+      border: 1.5px dashed #90caf9;
+      border-radius: 12px;
+      padding: 5px 3px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1px;
+      cursor: pointer;
+      transition: all 0.15s;
+      box-shadow: inset 0 2px 6px rgba(0,0,0,0.05);
+      position: relative;
+      overflow: hidden;
+    }
+    .card-slot:hover {
+      background: rgba(255, 255, 255, 0.92);
+      border-color: #42a5f5;
+      transform: translateY(-2px);
+    }
+    .card-slot:active { transform: translateY(1px); }
+    .card-slot.casting {
+      border: 2px solid #facc15 !important;
+      background: rgba(254, 240, 138, 0.85) !important;
+      box-shadow: 0 0 16px rgba(250, 204, 21, 0.7) !important;
+      animation: slotPulse 1s infinite alternate;
+    }
+    @keyframes slotPulse {
+      0% { transform: scale(1); }
+      100% { transform: scale(1.04); }
+    }
+    .card-slot.used {
+      opacity: 0.4 !important;
+      filter: grayscale(80%);
+      pointer-events: none;
+    }
+    .card-slot.used::after {
+      content: '已使用';
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) rotate(-12deg);
+      font-size: 10px; font-weight: 900;
+      color: #ef4444;
+      border: 1.5px solid #ef4444;
+      padding: 1px 4px; border-radius: 4px;
+      letter-spacing: 1px;
+      background: rgba(255,255,255,0.7);
+    }
+    .slot-icon { font-size: 16px; }
+    .slot-title { font-size: 11px; font-weight: 900; color: #1e3a8a; }
+    .slot-sub { font-size: 9px; font-weight: 700; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 95%; }
+
+    /* 技能施法目标指引条 */
+    .skill-prompt-bar {
+      width: 95%; max-width: 480px; margin: 2px auto 4px auto;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(234, 88, 12, 0.95));
+      color: #fff; border-radius: 12px; padding: 6px 12px;
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 12px; font-weight: 800;
+      box-shadow: 0 4px 15px rgba(245, 158, 11, 0.4);
+      z-index: 20;
+    }
+    .btn-cancel-skill {
+      background: rgba(0,0,0,0.3); color: #fff; border: 1px solid rgba(255,255,255,0.4);
+      border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 800; cursor: pointer;
+    }
+
+    /* 底部直接平铺按键区 (第4个固定为【🌐 联机】，1秒直接打开开房弹窗) */
+    .bottom-controls {
+      width: 100%;
+      max-width: 500px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      z-index: 10;
+      padding: 2px 4px env(safe-area-inset-bottom, 4px) 4px;
+      flex-shrink: 0;
+    }
+    .btn-ctrl {
+      padding: 10px 2px;
+      border-radius: 14px;
+      border: 2.5px solid var(--border-dark);
+      background: #fed385;
+      color: var(--border-dark);
+      font-weight: 900;
+      font-size: 12.5px;
+      cursor: pointer;
+      box-shadow: 0 3px 0 var(--border-dark);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: all 0.1s;
+      white-space: nowrap;
+    }
+    .btn-ctrl:hover { background: #ffe3a3; }
+    .btn-ctrl:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--border-dark); }
+    .btn-ctrl.btn-primary {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #fff;
+    }
+    .btn-ctrl.btn-chat {
+      background: linear-gradient(135deg, #a29bfe 0%, #6c5ce7 100%);
+      color: #fff;
+    }
+    .btn-ctrl.btn-online {
+      background: linear-gradient(135deg, #ff9ff3 0%, #f368e0 100%);
+      color: #fff;
+    }
+
+    /* 完整聊天记录抽屉面板 */
+    .chat-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      display: flex; align-items: flex-end; justify-content: center;
+      z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .chat-backdrop.show { opacity: 1; pointer-events: auto; }
+    .chat-drawer {
+      background: #fffdf5; border: 3.5px solid var(--border-dark); border-bottom: none;
+      border-radius: 24px 24px 0 0; width: 100%; max-width: 480px; padding: 12px 12px 18px 12px;
+      box-shadow: 0 -8px 30px rgba(0,0,0,0.3); transform: translateY(100%);
+      transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+      display: flex; flex-direction: column; gap: 8px;
+      max-height: 84vh;
+    }
+    .chat-backdrop.show .chat-drawer { transform: translateY(0); }
+
+    .chat-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 15px; font-weight: 900; color: var(--border-dark); padding: 0 2px;
+    }
+    .chat-header-actions { display: flex; align-items: center; gap: 6px; }
+    .btn-chat-tool {
+      background: #fed385; border: 1.5px solid var(--border-dark); border-radius: 8px;
+      padding: 4px 9px; font-size: 12px; font-weight: 900; color: var(--border-dark);
+      cursor: pointer; box-shadow: 0 1.5px 0 var(--border-dark);
+    }
+    .btn-chat-tool:active { transform: translateY(1px); box-shadow: none; }
+    .btn-close-chat { font-size: 20px; font-weight: 900; color: #888; cursor: pointer; padding: 2px 6px; }
+
+    .chat-history-box {
+      background: linear-gradient(180deg, #f1f8e9 0%, #e8f5e9 100%);
+      border: 2px solid #a5d6a7; border-radius: 14px;
+      box-shadow: inset 0 2px 6px rgba(46, 125, 50, 0.08);
+      height: 180px; min-height: 180px; max-height: 180px;
+      overflow-y: auto; padding: 8px 6px 8px 8px; display: flex;
+      flex-direction: column; gap: 8px; scroll-behavior: smooth;
+      scrollbar-width: thin; scrollbar-color: #81c784 rgba(232, 245, 233, 0.6);
+    }
+    .chat-history-box::-webkit-scrollbar,
+    #managePhraseList::-webkit-scrollbar {
+      width: 5px;
+    }
+    .chat-history-box::-webkit-scrollbar-track,
+    #managePhraseList::-webkit-scrollbar-track {
+      background: rgba(200, 230, 201, 0.35); border-radius: 10px;
+    }
+    .chat-history-box::-webkit-scrollbar-thumb,
+    #managePhraseList::-webkit-scrollbar-thumb {
+      background: #81c784; border-radius: 10px;
+    }
+    .chat-history-box::-webkit-scrollbar-thumb:hover,
+    #managePhraseList::-webkit-scrollbar-thumb:hover {
+      background: #4caf50;
+    }
+    .msg-row { display: flex; gap: 6px; align-items: flex-start; max-width: 88%; }
+    .msg-row.left { align-self: flex-start; }
+    .msg-row.right { align-self: flex-end; flex-direction: row-reverse; }
+    .msg-avatar {
+      width: 28px; height: 28px; border-radius: 50%; background: #fff;
+      border: 1.5px solid var(--border-dark); display: flex; align-items: center; justify-content: center;
+      font-size: 17px; flex-shrink: 0; overflow: hidden;
+    }
+    .msg-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .msg-body { display: flex; flex-direction: column; }
+    .msg-row.right .msg-body { align-items: flex-end; }
+    .msg-info { font-size: 11px; color: #666; font-weight: 700; margin-bottom: 2px; }
+    .msg-text {
+      padding: 6px 11px; border-radius: 14px; font-size: 14px; font-weight: 800;
+      line-height: 1.4; word-break: break-word; border: 1.5px solid var(--border-dark);
+      box-shadow: 0 1.5px 0 var(--border-dark);
+    }
+    .msg-row.left .msg-text { background: #ffffff; color: #2d3436; border-top-left-radius: 2px; }
+    .msg-row.right .msg-text { background: #fed385; color: #4a2810; border-top-right-radius: 2px; }
+
+    .emoji-row {
+      display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px; scrollbar-width: none;
+      -webkit-overflow-scrolling: touch; touch-action: pan-x !important; cursor: grab;
+    }
+    .emoji-row::-webkit-scrollbar { display: none; }
+    .emoji-item {
+      font-size: 22px; padding: 4px 9px; background: #fff; border: 1.5px solid #dcdde1;
+      border-radius: 10px; cursor: pointer; transition: transform 0.1s; flex-shrink: 0;
+    }
+    .emoji-item:active { transform: scale(1.2); }
+
+    .quick-phrases {
+      display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px; scrollbar-width: none;
+      -webkit-overflow-scrolling: touch; touch-action: pan-x !important; cursor: grab;
+    }
+    .quick-phrases::-webkit-scrollbar { display: none; }
+    .phrase-chip {
+      white-space: nowrap; padding: 7px 11px; background: #ffeaa7; border: 1.5px solid var(--border-dark);
+      border-radius: 12px; font-size: 13px; font-weight: 800; color: var(--border-dark);
+      cursor: pointer; box-shadow: 0 1.5px 0 var(--border-dark); flex-shrink: 0;
+    }
+    .phrase-chip:active { transform: translateY(1px); box-shadow: none; }
+    .phrase-chip-manage {
+      white-space: nowrap; padding: 7px 11px; background: #ff7675; color: #fff; border: 1.5px solid var(--border-dark);
+      border-radius: 12px; font-size: 13px; font-weight: 900; cursor: pointer; box-shadow: 0 1.5px 0 var(--border-dark);
+      flex-shrink: 0;
+    }
+    .phrase-chip-manage:active { transform: translateY(1px); box-shadow: none; }
+
+    .chat-input-row { display: flex; gap: 6px; margin-top: 2px; }
+    .chat-input {
+      flex: 1; padding: 9px 12px; border-radius: 12px; border: 2px solid var(--border-dark);
+      font-size: 14px; font-weight: 700; outline: none; background: #fff; color: #333;
+    }
+    .btn-send {
+      padding: 0 16px; border-radius: 12px; border: 2px solid var(--border-dark);
+      background: #ff6b81; color: #fff; font-weight: 900; font-size: 14.5px; cursor: pointer;
+      box-shadow: 0 2.5px 0 var(--border-dark);
+    }
+    .btn-send:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--border-dark); }
+
+    /* --- 悔棋协商同意模态弹窗 --- */
+    .undo-modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 150; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .undo-modal-backdrop.show { opacity: 1; pointer-events: auto; }
+    .undo-modal-card {
+      background: #fffdf5; border: 3.5px solid var(--border-dark);
+      border-radius: 22px; width: 88%; max-width: 340px; padding: 20px 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35); text-align: center;
+      transform: scale(0.85); transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .undo-modal-backdrop.show .undo-modal-card { transform: scale(1); }
+    .undo-title { font-size: 17px; font-weight: 900; color: var(--border-dark); margin-bottom: 8px; }
+    .undo-desc { font-size: 13.5px; font-weight: 700; color: #555; line-height: 1.5; margin-bottom: 18px; }
+    .undo-btn-row { display: flex; gap: 10px; }
+    .btn-undo-action {
+      flex: 1; padding: 10px 0; border-radius: 14px; border: 2px solid var(--border-dark);
+      font-weight: 900; font-size: 14px; cursor: pointer; box-shadow: 0 3px 0 var(--border-dark);
+    }
+    .btn-undo-action:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--border-dark); }
+    .btn-undo-agree { background: #10b981; color: #fff; }
+    .btn-undo-refuse { background: #ff6b81; color: #fff; }
+
+    /* --- 👤 纯粹自定义昵称与相册头像弹窗 --- */
+    .profile-modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 160; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .profile-modal-backdrop.show { opacity: 1; pointer-events: auto; }
+    .profile-modal-card {
+      background: #fffdf5; border: 3.5px solid var(--border-dark);
+      border-radius: 22px; width: 92%; max-width: 350px; padding: 18px 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35); text-align: center;
+      transform: scale(0.85); transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+      max-height: 88vh; overflow-y: auto;
+    }
+    .profile-modal-backdrop.show .profile-modal-card { transform: scale(1); }
+    
+    .profile-header-preview {
+      display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 10px;
+    }
+    .big-avatar-preview {
+      width: 64px; height: 64px; border-radius: 50%; border: 3px solid var(--border-dark);
+      background: #fff; display: flex; align-items: center; justify-content: center;
+      font-size: 34px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    .big-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+    
+    .btn-upload-photo {
+      background: linear-gradient(135deg, #4da4ff 0%, #1e3a8a 100%);
+      color: #fff; border: 2px solid var(--border-dark); border-radius: 12px;
+      padding: 6px 14px; font-size: 12px; font-weight: 900; cursor: pointer;
+      box-shadow: 0 2px 0 var(--border-dark);
+    }
+    .btn-upload-photo:active { transform: translateY(1px); }
+
+    .avatar-select-grid {
+      display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 8px 0 12px 0;
+    }
+    .avatar-opt {
+      font-size: 20px; padding: 5px 0; background: #fff; border: 2px solid #e2e8f0;
+      border-radius: 10px; cursor: pointer; transition: all 0.15s;
+    }
+    .avatar-opt.selected {
+      border-color: #ff6b81; background: #ffeaa7; transform: scale(1.15); box-shadow: 0 2px 0 var(--border-dark);
+    }
+    .name-input-box {
+      width: 100%; padding: 8px 10px; border-radius: 12px; border: 2px solid var(--border-dark);
+      font-size: 14px; font-weight: 800; text-align: center; outline: none; margin-bottom: 8px;
+    }
+
+    /* --- 🌐 在线联机大厅弹窗 --- */
+    .online-modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 150; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .online-modal-backdrop.show { opacity: 1; pointer-events: auto; }
+    .online-modal-card {
+      background: #fffdf5; border: 3.5px solid var(--border-dark);
+      border-radius: 22px; width: 90%; max-width: 360px; padding: 20px 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35); text-align: center;
+      transform: scale(0.85); transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .online-modal-backdrop.show .online-modal-card { transform: scale(1); }
+    .online-tab-row {
+      display: flex; gap: 8px; margin-bottom: 16px; justify-content: center;
+    }
+    .online-tab-btn {
+      flex: 1; padding: 8px; border-radius: 12px; border: 2px solid var(--border-dark);
+      background: #fed385; color: var(--border-dark); font-weight: 900; font-size: 13px; cursor: pointer;
+    }
+    .online-tab-btn.active { background: #10b981; color: #fff; }
+    .room-code-display {
+      font-size: 26px; font-weight: 900; color: #ff6b81; letter-spacing: 4px;
+      background: #ffeaa7; padding: 12px; border-radius: 14px; border: 2px solid var(--border-dark);
+      margin: 12px 0; user-select: text; -webkit-user-select: text;
+    }
+    .room-input {
+      width: 100%; padding: 10px; border-radius: 12px; border: 2px solid var(--border-dark);
+      font-size: 16px; font-weight: 800; text-align: center; letter-spacing: 2px; margin: 12px 0; outline: none;
+    }
+    .online-action-btn {
+      width: 100%; padding: 11px; border-radius: 14px; border: 2px solid var(--border-dark);
+      background: #ff6b81; color: #fff; font-weight: 900; font-size: 14px; cursor: pointer;
+      box-shadow: 0 3px 0 var(--border-dark); margin-top: 6px;
+    }
+    .other-modes-row {
+      display: flex; gap: 8px; margin-top: 14px; border-top: 1.5px dashed rgba(90,56,24,0.25); padding-top: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="cloud cloud-1"></div>
+  <div class="cloud cloud-2"></div>
+
+  <!-- 本地相册照片上传 input -->
+  <input type="file" id="avatarFileInput" accept="image/*" style="display:none;" onchange="handlePhotoUpload(event)" />
+
+  <!-- 顶部精简状态与对战玩家信息 (无小笔图标，纯净手绘) -->
+  <div class="header-area">
+    <div class="avatar-chat-bubble left-bubble" id="p1ChatBubble">你好呀~ 👋</div>
+    <div class="avatar-chat-bubble right-bubble" id="p2ChatBubble">看招！🐾</div>
+
+    <!-- 左右对战玩家胶囊 -->
+    <div class="players-row">
+      <div class="player-capsule" id="p1Card" onclick="openProfileModal(1)">
+        <div class="avatar-wrap">
+          <div class="avatar-circle" id="p1AvatarIcon">👦</div>
+          <div class="crown-tag">👑</div>
+        </div>
+        <div class="player-name" id="p1NameLabel">小能</div>
+      </div>
+
+      <div class="player-capsule right" id="p2Card" onclick="openProfileModal(2)">
+        <div class="avatar-wrap">
+          <div class="avatar-circle" id="p2AvatarIcon">👧</div>
+          <div class="crown-tag" style="right:auto; left:-4px; transform:rotate(-15deg);">👑</div>
+        </div>
+        <div class="player-name" id="p2NameLabel">大师AI (白子)</div>
+      </div>
+    </div>
+
+    <!-- 实体路标木牌 -->
+    <div class="signs-row">
+      <div class="sign-board" id="signP1">
+        <div class="sign-pole"></div>
+        <div class="sign-paw">🐾</div>
+        <div class="sign-status" id="p1Status">落子中</div>
+      </div>
+
+      <div class="turn-bubble" id="turnBubble">你的回合</div>
+
+      <div class="sign-board" id="signP2">
+        <div class="sign-pole"></div>
+        <div class="sign-paw" style="opacity:0.6;">🐾</div>
+        <div class="sign-status" id="p2Status">等待</div>
+      </div>
+    </div>
+
+    <!-- 主界面常驻「对局实时聊天框」 -->
+    <div class="main-chat-box" id="mainChatBox" onclick="openChatDrawer()">
+      <div class="main-chat-header">
+        <span>💬 实时对局聊天框 (点击畅聊)</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:3px;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格切换</span>
+          <span>📜 展开记录 ➔</span>
+        </div>
+      </div>
+      <div class="main-chat-content" id="mainChatContent">
+        <div class="main-chat-line">
+          <span class="chat-tag-me">我方</span>
+          <span>你好呀~ 晴空草坪见！🌿</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 手机全屏最大化棋盘容器 -->
+  <div class="island-wrapper" id="islandWrapper">
+    <canvas id="cvs"></canvas>
+  </div>
+
+  <!-- 技能施法提示条 (处于选点模式时显示) -->
+  <div class="skill-prompt-bar" id="skillPromptBar" style="display:none;">
+    <span id="skillPromptText">🔮 请在棋盘上选择施法目标</span>
+    <button class="btn-cancel-skill" onclick="cancelActiveSkill()">取消</button>
+  </div>
+
+  <!-- 随机抽取的 3 张干扰技能卡牌槽位 -->
+  <div class="card-slots-area" id="cardSlotsArea"></div>
+
+  <!-- 底部平铺按键区 (第4个固定为【🌐 联机】，1秒直接打开开房弹窗，无需多点) -->
+  <div class="bottom-controls">
+    <button class="btn-ctrl btn-chat" id="btnOpenChat">💬 聊天</button>
+    <button class="btn-ctrl btn-primary" id="btnRestart">🔄 重开</button>
+    <button class="btn-ctrl" id="btnUndo">↩️ 悔棋</button>
+    <button class="btn-ctrl btn-online" id="btnOnline" onclick="openOnlineModal()">🌐 联机</button>
+  </div>
+
+  <!-- 完整聊天记录抽屉面板 -->
+  <div class="chat-backdrop" id="chatBackdrop">
+    <div class="chat-drawer">
+      <div class="chat-header">
+        <span>📜 对局聊天记录</span>
+        <div class="chat-header-actions">
+          <button class="btn-chat-tool" id="btnExportChat" onclick="exportChatTxt()">📥 导出TXT</button>
+          <button class="btn-chat-tool" id="btnCopyChat" onclick="copyChatHistory()">📋 复制</button>
+          <div class="btn-close-chat" id="btnCloseChat">✖</div>
+        </div>
+      </div>
+
+      <div class="chat-history-box" id="chatHistoryBox"></div>
+
+      <div class="emoji-row">
+        <div class="emoji-item" onclick="sendChat('🐾')">🐾</div>
+        <div class="emoji-item" onclick="sendChat('❤️')">❤️</div>
+        <div class="emoji-item" onclick="sendChat('🥺')">🥺</div>
+        <div class="emoji-item" onclick="sendChat('😎')">😎</div>
+        <div class="emoji-item" onclick="sendChat('☕')">☕</div>
+        <div class="emoji-item" onclick="sendChat('🍰')">🍰</div>
+        <div class="emoji-item" onclick="sendChat('👏')">👏</div>
+        <div class="emoji-item" onclick="sendChat('💥')">💥</div>
+        <div class="emoji-item" onclick="sendChat('💤')">💤</div>
+      </div>
+
+      <div class="quick-phrases" id="quickPhrasesContainer"></div>
+
+      <div class="chat-input-row">
+        <input type="text" class="chat-input" id="chatInput" placeholder="输入你想说的话..." maxlength="30" />
+        <button class="btn-send" id="btnSendCustom">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 悔棋协商同意模态弹窗 -->
+  <div class="undo-modal-backdrop" id="undoModal">
+    <div class="undo-modal-card">
+      <div class="undo-title">↩️ 悔棋申请</div>
+      <div class="undo-desc" id="undoDescText">对方请求悔棋一步，是否同意？</div>
+      <div class="undo-btn-row">
+        <button class="btn-undo-action btn-undo-agree" id="btnUndoAgree">✅ 同意悔棋</button>
+        <button class="btn-undo-action btn-undo-refuse" id="btnUndoRefuse">❌ 拒绝</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 👤 纯粹自定义昵称与相册头像弹窗 -->
+  <div class="profile-modal-backdrop" id="profileModal">
+    <div class="profile-modal-card">
+      <div class="undo-title" id="profileModalTitle">👤 自定义昵称与头像</div>
+      
+      <!-- 头像预览与相册上传按钮 -->
+      <div class="profile-header-preview">
+        <div class="big-avatar-preview" id="bigAvatarPreview">👦</div>
+        <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 从相册上传真实照片</button>
+      </div>
+
+      <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:4px;">自定义您的游戏昵称：</div>
+      <input type="text" class="name-input-box" id="inputProfileName" placeholder="最多10个字符" maxlength="10" />
+
+      <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:4px;">或选用经典萌趣 Emoji 头像：</div>
+      <div class="avatar-select-grid" id="avatarSelectGrid">
+        <div class="avatar-opt" onclick="selectAvatar(this, '👦')">👦</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '👧')">👧</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🐱')">🐱</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🐶')">🐶</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🐼')">🐼</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🦁')">🦁</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🦊')">🦊</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🐯')">🐯</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🐰')">🐰</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🐸')">🐸</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🦄')">🦄</div>
+        <div class="avatar-opt" onclick="selectAvatar(this, '🌸')">🌸</div>
+      </div>
+
+      <div class="undo-btn-row">
+        <button class="btn-undo-action btn-undo-agree" onclick="saveProfile()">💾 保存并应用</button>
+        <button class="btn-undo-action btn-undo-refuse" onclick="closeProfileModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⚙️ 快捷短语管理自定义弹窗 -->
+  <div class="online-modal-backdrop" id="phraseManageModal">
+    <div class="online-modal-card" style="max-width:380px; text-align:left;">
+      <div class="undo-title" style="text-align:center;">⚙️ 自定义快捷短语</div>
+      
+      <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:6px;">输入新短语（最多20字）：</div>
+      <div style="display:flex; gap:6px; margin-bottom:12px;">
+        <input type="text" id="inputNewPhrase" placeholder="如: 棋逢对手，幸甚至哉！" maxlength="20" style="flex:1; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark); font-size:13px; font-weight:800; outline:none;" />
+        <button class="btn-chat-tool" onclick="addNewPhrase()" style="background:#10b981; color:#fff; border-color:#059669; padding:0 12px; flex-shrink:0;">➕ 添加</button>
+      </div>
+
+      <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:6px;">当前快捷短语列表：</div>
+      <div id="managePhraseList" style="max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-bottom:12px; padding-right:2px;"></div>
+
+      <div style="display:flex; justify-content:space-between; gap:8px;">
+        <button class="btn-chat-tool" onclick="restoreDefaultPhrases()" style="background:#fed385;">🔄 恢复默认</button>
+        <button class="btn-chat-tool" onclick="closePhraseManageModal()" style="background:#ff6b81; color:#fff;">完成关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 🌐 在线联机房间大厅 (1步直达开房，支持切双人/人机) -->
+  <div class="online-modal-backdrop" id="onlineModal">
+    <div class="online-modal-card">
+      <div class="undo-title">🌐 联机对战 & 房间大厅</div>
+      <div class="online-tab-row">
+        <button class="online-tab-btn active" id="tabCreateRoom" onclick="switchOnlineTab('create')">🏠 创建房间</button>
+        <button class="online-tab-btn" id="tabJoinRoom" onclick="switchOnlineTab('join')">🚪 加入房间</button>
+      </div>
+
+      <div id="viewCreateRoom">
+        <div style="font-size:12.5px; font-weight:700; color:#555;">将房间号发给好友，好友加入即可开局：</div>
+        <div class="room-code-display" id="myRoomCodeDisplay">生成中...</div>
+        <div style="font-size:11px; color:#888; margin-bottom:8px;">💡 支持跨外网/手机/电脑互联</div>
+        <button class="online-action-btn" onclick="copyRoomCode()">📋 复制房间码</button>
+      </div>
+
+      <div id="viewJoinRoom" style="display:none;">
+        <div style="font-size:12.5px; font-weight:700; color:#555;">输入好友给您的 6 位房间号：</div>
+        <input type="text" class="room-input" id="inputJoinCode" placeholder="如: 682914" maxlength="10" />
+        <button class="online-action-btn" id="btnConnectRoom" onclick="joinOnlineRoom()">🚀 立即连接开局</button>
+      </div>
+
+      <!-- 快捷切换其他单机模式 -->
+      <div class="other-modes-row">
+        <button class="btn-chat-tool" style="flex:1;" onclick="setMode('pvp'); closeOnlineModal();">👥 双人同屏</button>
+        <button class="btn-chat-tool" style="flex:1;" onclick="setMode('ai'); closeOnlineModal();">🤖 人机对弈</button>
+      </div>
+
+      <button class="btn-chat-tool" style="margin-top:10px; width:100%; padding:8px;" onclick="closeOnlineModal()">关闭窗口</button>
+    </div>
+  </div>
+
+  <!-- 🎨 六大顶级视觉风格无缝切换弹窗 -->
+  <div class="online-modal-backdrop" id="themeModal" onclick="if(event.target===this)closeThemeModal()">
+    <div class="online-modal-card" style="max-width:380px; max-height:85vh; overflow-y:auto;">
+      <div class="undo-title">🎨 对局中无缝换装</div>
+      <div style="font-size:12px; font-weight:800; color:#10b981; margin-bottom:12px; background:#e8f5e9; padding:4px 8px; border-radius:8px;">⚡ 下棋中点击秒换！棋子位置与对局进度 100% 保留！</div>
+
+      <div style="display:flex; flex-direction:column; gap:9px;">
+        <!-- 1. 晴空草坪版 (官方默认) -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:#e8f5e9; border:2px solid #2e7d32; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('default')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:22px;">🌿</div>
+            <div style="text-align:left;">
+              <div style="font-size:13px; font-weight:900; color:#1b5e20;">晴空浮岛草坪版 (官方默认)</div>
+              <div style="font-size:10px; font-weight:700; color:#2e7d32;">可爱手绘 · 猫爪肉垫 · 蓝天白云</div>
+            </div>
+          </div>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#2e7d32; padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.15);">⚡ 秒换</span>
+        </div>
+
+        <!-- 2. 草莓蜜桃恋爱版 -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%); border:2px solid #ff758c; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('sweet_romance')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:22px;">💖</div>
+            <div style="text-align:left;">
+              <div style="font-size:13px; font-weight:900; color:#ff8fa3;">草莓蜜桃恋爱版 (晚霞柔光)</div>
+              <div style="font-size:10px; font-weight:700; color:#fbcfe8;">果冻心形棋子 · 💖爱心星位 · 奶茶圆盘</div>
+            </div>
+          </div>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:linear-gradient(135deg,#ff758c,#ff8fa3); padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.2);">⚡ 秒换</span>
+        </div>
+
+        <!-- 3. 极简禅意暗黑版 -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:#18181b; border:2px solid #3f3f46; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('zen_dark')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:22px;">禅</div>
+            <div style="text-align:left;">
+              <div style="font-size:13px; font-weight:900; color:#f4f4f5;">极简禅意暗黑版 (Zen Dark)</div>
+              <div style="font-size:10px; font-weight:700; color:#a1a1aa;">黑曜石白玉 · 哑光黑胡桃木</div>
+            </div>
+          </div>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#27272a; padding:3px 8px; border-radius:6px; border:1px solid #52525b;">⚡ 秒换</span>
+        </div>
+
+        <!-- 4. 新中式宣纸榧木版 -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:#fbf8f2; border:2px solid #dcb374; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('neo_trad')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:22px;">📜</div>
+            <div style="text-align:left;">
+              <div style="font-size:13px; font-weight:900; color:#4a3b2c;">新中式宣纸榧木版 (雅集古风)</div>
+              <div style="font-size:10px; font-weight:700; color:#8c7866;">宣纸榧木年轮 · 水墨象牙玉石</div>
+            </div>
+          </div>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#c88942; padding:3px 8px; border-radius:6px;">⚡ 秒换</span>
+        </div>
+
+        <!-- 5. 现代奢华毛玻璃版 -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:#0b0c10; border:2px solid #6366f1; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('luxury_glass')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:22px;">✨</div>
+            <div style="text-align:left;">
+              <div style="font-size:13px; font-weight:900; color:#fff;">现代奢华毛玻璃版 (Luxury Glass)</div>
+              <div style="font-size:10px; font-weight:700; color:#818cf8;">Linear 冷光紫 · 悬浮黑胡桃木</div>
+            </div>
+          </div>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#4f46e5; padding:3px 8px; border-radius:6px;">⚡ 秒换</span>
+        </div>
+
+        <!-- 6. Clean iOS 极简暖白手机版 -->
+        <div style="display:flex; align-items:center; justify-content:space-between; background:#f2f2f6; border:2px solid #0071e3; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('clean_ios')">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="font-size:22px;">📱</div>
+            <div style="text-align:left;">
+              <div style="font-size:13px; font-weight:900; color:#1d1d1f;">Clean iOS 极简暖白手机版</div>
+              <div style="font-size:10px; font-weight:700; color:#86868b;">自然影棚柔光 · 悬浮抽屉微振感</div>
+            </div>
+          </div>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#0071e3; padding:3px 8px; border-radius:6px;">⚡ 秒换</span>
+        </div>
+      </div>
+
+      <button class="btn-chat-tool" style="margin-top:14px; width:100%; padding:8px;" onclick="closeThemeModal()">关闭</button>
+    </div>
+  </div>
+
+  <script>
+    function openThemeModal() {
+      document.getElementById('themeModal').classList.add('show');
+    }
+    function closeThemeModal() {
+      document.getElementById('themeModal').classList.remove('show');
+    }
+
+    const BOARD_SIZE = 15;
+    const EMPTY = 0, BLACK = 1, WHITE = 2;
+    let board = Array.from({length: 15}, () => Array(15).fill(0));
+    let turn = BLACK;
+    let history = [];
+    let isOver = false;
+    let soundEnabled = true;
+
+    // 自定义玩家昵称与头像
+    let p1Name = localStorage.getItem('gomoku_p1Name') || '小能';
+    let p1Avatar = localStorage.getItem('gomoku_p1Avatar') || '👦';
+    let p2Name = localStorage.getItem('gomoku_p2Name') || '零碎小土豆';
+    let p2Avatar = localStorage.getItem('gomoku_p2Avatar') || '👧';
+
+    let editingPlayer = 1;
+    let selectedAvatarData = p1Avatar;
+
+    // 默认初始模式: 'ai' (人机对弈)
+    let gameMode = 'ai';
+    let myOnlineColor = BLACK;
+    let peer = null;
+    let conn = null;
+    let myRoomId = '';
+
+    // ==========================================
+    // 🃏 干扰牌技能卡池系统 (每次随机抽取3张)
+    // ==========================================
+    const SKILL_CARD_POOL = [
+      {
+        id: 'rewind',
+        name: '时空倒流',
+        sweetName: '撒娇耍赖 🥺',
+        icon: '⏳',
+        sweetIcon: '🥺',
+        desc: '强行撤回上一手落子',
+        sweetDesc: '刚才不算数嘛！强行悔棋一步~',
+        needTarget: false
+      },
+      {
+        id: 'freeze',
+        name: '寒冰封禁',
+        sweetName: '冷静一下 🧊',
+        icon: '❄️',
+        sweetIcon: '🧊',
+        desc: '封印空位1回合双方禁下',
+        sweetDesc: '封印空位1回合，宝贝不能下这里~',
+        needTarget: true,
+        targetType: 'empty'
+      },
+      {
+        id: 'double_move',
+        name: '双星连珠',
+        sweetName: '爱的抱抱 🎁',
+        icon: '⚡',
+        sweetIcon: '🎁',
+        desc: '本回合获得额外落子机会',
+        sweetDesc: '奖励本回合可以连续落两子~',
+        needTarget: false
+      },
+      {
+        id: 'remove_stone',
+        name: '虚空陨石',
+        sweetName: '奶茶暴击 🧋',
+        icon: '💥',
+        sweetIcon: '🧋',
+        desc: '抹除对方一颗未成势的孤子',
+        sweetDesc: '请喝奶茶！拿掉宝贝一颗孤子~',
+        needTarget: true,
+        targetType: 'enemy_stone'
+      },
+      {
+        id: 'shift_stone',
+        name: '移星换斗',
+        sweetName: '偷心盗贼 💘',
+        icon: '🌟',
+        sweetIcon: '💘',
+        desc: '将己方一子平移到相邻空格',
+        sweetDesc: '把己方一子平移到相邻空格~',
+        needTarget: true,
+        targetType: 'shift'
+      },
+      {
+        id: 'fog_blind',
+        name: '迷雾遮天',
+        sweetName: '蒙上双眼 🙈',
+        icon: '🌫️',
+        sweetIcon: '🙈',
+        desc: '释放3x3迷雾遮挡对手视线1回合',
+        sweetDesc: '蒙住宝贝眼睛！迷雾遮挡1回合~',
+        needTarget: true,
+        targetType: 'empty'
+      }
+    ];
+
+    let currentDrawnCards = []; // [card, card, card]
+    let cardUsedStatus = [false, false, false];
+    let activeSkill = null; // { slotIdx, skill, step, srcR, srcC }
+    let frozenPoint = null; // { r, c, expireStep }
+    let fogArea = null; // { r, c, expireStep }
+    let hasExtraMove = false; // 双星连珠额外落子状态
+
+    const cvs = document.getElementById('cvs');
+    const ctx = cvs.getContext('2d');
+    const islandWrapper = document.getElementById('islandWrapper');
+
+    let cWidth = 380, cHeight = 380, paddingX = 16, paddingY = 16, gridX = 23, gridY = 23, radius = 10;
+    let dpr = window.devicePixelRatio || 1;
+
+    function getNowTime() {
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${day} ${hh}:${mm}`;
+    }
+
+    let p1ChatTimer = null;
+    let p2ChatTimer = null;
+    let chatHistory = [
+      { sender: 1, name: p1Name, avatar: p1Avatar, text: '你好呀~ 晴空草坪见！🌿', time: getNowTime() }
+    ];
+
+    function renderAvatarElement(avatar) {
+      if (avatar.startsWith('data:image') || avatar.startsWith('http')) {
+        return `<img src="${avatar}" alt="avatar">`;
+      }
+      return avatar;
+    }
+
+    function updatePlayerHeaderUI() {
+      document.getElementById('p1NameLabel').textContent = p1Name;
+      document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
+      
+      const p2Label = document.getElementById('p2NameLabel');
+      const p2Icon = document.getElementById('p2AvatarIcon');
+      if (gameMode === 'ai') {
+        p2Label.textContent = '大师AI (白子)';
+        p2Icon.innerHTML = '🤖';
+      } else if (gameMode === 'online') {
+        p2Label.textContent = myOnlineColor === BLACK ? (p2Name + ' (白子)') : '房主 (黑子)';
+        p2Icon.innerHTML = renderAvatarElement(p2Avatar);
+      } else {
+        p2Label.textContent = p2Name;
+        p2Icon.innerHTML = renderAvatarElement(p2Avatar);
+      }
+    }
+
+    function renderChatHistory() {
+      const box = document.getElementById('chatHistoryBox');
+      box.innerHTML = chatHistory.map(msg => `
+        <div class="msg-row ${msg.sender === 1 ? 'right' : 'left'}">
+          <div class="msg-avatar">${renderAvatarElement(msg.avatar)}</div>
+          <div class="msg-body">
+            <div class="msg-info">${msg.name} · ${msg.time}</div>
+            <div class="msg-text">${msg.text}</div>
+          </div>
+        </div>
+      `).join('');
+      box.scrollTop = box.scrollHeight;
+
+      const mainContent = document.getElementById('mainChatContent');
+      const recent3 = chatHistory.slice(-3);
+      mainContent.innerHTML = recent3.map(m => `
+        <div class="main-chat-line">
+          <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
+          <span>${m.text}</span>
+        </div>
+      `).join('');
+    }
+
+    function showBubble(player, text) {
+      playPopSound();
+      if (player === 1) {
+        const bubble = document.getElementById('p1ChatBubble');
+        bubble.textContent = text;
+        bubble.classList.remove('show');
+        void bubble.offsetWidth;
+        bubble.classList.add('show');
+        clearTimeout(p1ChatTimer);
+        p1ChatTimer = setTimeout(() => bubble.classList.remove('show'), 5000);
+      } else {
+        const bubble = document.getElementById('p2ChatBubble');
+        bubble.textContent = text;
+        bubble.classList.remove('show');
+        void bubble.offsetWidth;
+        bubble.classList.add('show');
+        clearTimeout(p2ChatTimer);
+        p2ChatTimer = setTimeout(() => bubble.classList.remove('show'), 5000);
+      }
+    }
+
+    function addMessage(sender, text) {
+      const name = sender === 1 ? p1Name : (gameMode === 'ai' ? '大师AI' : p2Name);
+      const avatar = sender === 1 ? p1Avatar : (gameMode === 'ai' ? '🤖' : p2Avatar);
+      chatHistory.push({ sender, name, avatar, text, time: getNowTime() });
+      renderChatHistory();
+      showBubble(sender, text);
+
+      if (gameMode === 'online' && conn && conn.open && sender === 1) {
+        conn.send({ type: 'chat', text, name: p1Name, avatar: p1Avatar });
+      }
+    }
+
+    function sendChat(msg) {
+      if (!msg || !msg.trim()) return;
+      addMessage(1, msg.trim());
+      const input = document.getElementById('chatInput');
+      input.value = '';
+      input.focus();
+    }
+
+    // --- 📷 玩家相册照片上传与自动压缩为 Base64 ---
+    function triggerPhotoUpload() {
+      document.getElementById('avatarFileInput').click();
+    }
+
+    function handlePhotoUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const offCanvas = document.createElement('canvas');
+          offCanvas.width = 128;
+          offCanvas.height = 128;
+          const offCtx = offCanvas.getContext('2d');
+
+          const minDim = Math.min(img.width, img.height);
+          const sx = (img.width - minDim) / 2;
+          const sy = (img.height - minDim) / 2;
+
+          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 128, 128);
+          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.85);
+
+          selectedAvatarData = compressedBase64;
+          document.getElementById('bigAvatarPreview').innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
+          document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('selected'));
+          alert("🎉 照片上传成功！点击下方【保存并应用】即可生效！");
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // --- 自定义昵称与相册头像弹窗交互 ---
+    function openProfileModal(player) {
+      if (gameMode === 'ai' && player === 2) {
+        return alert("🤖 大师AI 为智能电脑，无法修改档案哦~");
+      }
+      editingPlayer = player;
+      const currentName = player === 1 ? p1Name : p2Name;
+      selectedAvatarData = player === 1 ? p1Avatar : p2Avatar;
+
+      document.getElementById('profileModalTitle').textContent = player === 1 ? "👤 修改我方昵称与头像" : "👤 修改对方昵称与头像";
+      document.getElementById('inputProfileName').value = currentName;
+      document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(selectedAvatarData);
+
+      const opts = document.querySelectorAll('.avatar-opt');
+      opts.forEach(el => {
+        el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData);
+      });
+
+      document.getElementById('profileModal').classList.add('show');
+    }
+
+    function selectAvatar(elem, char) {
+      selectedAvatarData = char;
+      document.querySelectorAll('.avatar-opt').forEach(el => el.classList.remove('selected'));
+      elem.classList.add('selected');
+      document.getElementById('bigAvatarPreview').innerHTML = renderAvatarElement(char);
+    }
+
+    function saveProfile() {
+      const nameInput = document.getElementById('inputProfileName').value.trim();
+      if (!nameInput) return alert("请输入有效的昵称！");
+
+      if (editingPlayer === 1) {
+        p1Name = nameInput;
+        p1Avatar = selectedAvatarData;
+        localStorage.setItem('gomoku_p1Name', p1Name);
+        localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+      } else {
+        p2Name = nameInput;
+        p2Avatar = selectedAvatarData;
+        localStorage.setItem('gomoku_p2Name', p2Name);
+        localStorage.setItem('gomoku_p2Avatar', p2Avatar);
+      }
+
+      updatePlayerHeaderUI();
+      closeProfileModal();
+      alert(`🎉 个人档案已成功保存！`);
+
+      if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
+        conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+      }
+    }
+
+    function closeProfileModal() {
+      document.getElementById('profileModal').classList.remove('show');
+    }
+
+    function exportChatTxt() {
+      if (chatHistory.length === 0) return alert("暂无聊天记录可导出哦~");
+      let txt = `===================================\n🌿 五子棋·晴空对决 对局聊天记录\n⏰ 导出时间: ${getNowTime()}\n===================================\n\n`;
+      chatHistory.forEach(item => { txt += `[${item.time}] ${item.name}: ${item.text}\n`; });
+      txt += `\n===================================\n`;
+      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `五子棋聊天记录_${Date.now()}.txt`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      alert("🎉 聊天记录已导出为 TXT！");
+    }
+
+    function copyChatHistory() {
+      if (chatHistory.length === 0) return alert("暂无聊天记录可复制~");
+      let txt = `【五子棋对局聊天记录】\n`;
+      chatHistory.forEach(item => { txt += `[${item.time}] ${item.name}: ${item.text}\n`; });
+      navigator.clipboard ? navigator.clipboard.writeText(txt).then(() => alert("📋 聊天记录已复制！")) : alert("📋 已复制！");
+    }
+
+    function openChatDrawer() {
+      renderChatHistory();
+      document.getElementById('chatBackdrop').classList.add('show');
+      setTimeout(() => document.getElementById('chatInput').focus(), 150);
+    }
+    function closeChatDrawer() {
+      document.getElementById('chatBackdrop').classList.remove('show');
+      document.getElementById('chatInput').value = '';
+    }
+
+    // ==========================================
+    // 🧠 五子棋大师级高智商 AI 算法引擎
+    // ==========================================
+    const SCORE = {
+      FIVE: 100000,
+      OPEN_FOUR: 10000,
+      BLOCKED_FOUR: 2500,
+      OPEN_THREE: 2000,
+      BLOCKED_THREE: 200,
+      OPEN_TWO: 100,
+      BLOCKED_TWO: 10
+    };
+
+    function evaluateDirection(r, c, dr, dc, p) {
+      let count = 1, openEnds = 0;
+      let nr = r + dr, nc = c + dc;
+      while (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] === p) {
+        count++; nr += dr; nc += dc;
+      }
+      if (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] === EMPTY) openEnds++;
+
+      nr = r - dr; nc = c - dc;
+      while (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] === p) {
+        count++; nr -= dr; nc -= dc;
+      }
+      if (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] === EMPTY) openEnds++;
+
+      if (count >= 5) return SCORE.FIVE;
+      if (count === 4) return openEnds === 2 ? SCORE.OPEN_FOUR : (openEnds === 1 ? SCORE.BLOCKED_FOUR : 0);
+      if (count === 3) return openEnds === 2 ? SCORE.OPEN_THREE : (openEnds === 1 ? SCORE.BLOCKED_THREE : 0);
+      if (count === 2) return openEnds === 2 ? SCORE.OPEN_TWO : (openEnds === 1 ? SCORE.BLOCKED_TWO : 0);
+      return 0;
+    }
+
+    function evaluatePointScore(r, c, p) {
+      let score = 0;
+      const dirs = [[0,1], [1,0], [1,1], [1,-1]];
+      for (const [dr, dc] of dirs) {
+        score += evaluateDirection(r, c, dr, dc, p);
+      }
+      return score;
+    }
+
+    function smartAiMove() {
+      if (isOver) return;
+      let bestMove = null;
+      let maxScore = -1;
+
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (board[r][c] === EMPTY) {
+            let hasNeighbor = false;
+            for (let dr = -2; dr <= 2 && !hasNeighbor; dr++) {
+              for (let dc = -2; dc <= 2 && !hasNeighbor; dc++) {
+                const nr = r + dr, nc = c + dc;
+                if (nr >= 0 && nr < 15 && nc >= 0 && nc < 15 && board[nr][nc] !== EMPTY) {
+                  hasNeighbor = true;
+                }
+              }
+            }
+            if (!hasNeighbor && history.length > 0) continue;
+
+            board[r][c] = WHITE;
+            const attackScore = evaluatePointScore(r, c, WHITE);
+            board[r][c] = EMPTY;
+
+            board[r][c] = BLACK;
+            const defenseScore = evaluatePointScore(r, c, BLACK);
+            board[r][c] = EMPTY;
+
+            const centerDist = Math.abs(r - 7) + Math.abs(c - 7);
+            const totalScore = attackScore * 1.15 + defenseScore * 1.0 + (14 - centerDist);
+
+            if (totalScore > maxScore) {
+              maxScore = totalScore;
+              bestMove = { r, c };
+            }
+          }
+        }
+      }
+
+      if (!bestMove) bestMove = { r: 7, c: 7 };
+      makeMove(bestMove.r, bestMove.c, WHITE);
+    }
+
+    // ==========================================
+    // 🌐 WebRTC P2P 房间联机核心逻辑 (1步直达开房)
+    // ==========================================
+    function initPeer() {
+      if (peer) return;
+      const randomCode = Math.floor(100000 + Math.random() * 900000);
+      myRoomId = `GOMOKU-${randomCode}`;
+      peer = new Peer(myRoomId);
+
+      peer.on('open', (id) => {
+        document.getElementById('myRoomCodeDisplay').textContent = randomCode;
+      });
+
+      peer.on('connection', (c) => {
+        conn = c;
+        setupConn();
+        myOnlineColor = BLACK;
+        alert("🎉 好友已成功加入房间！您执黑先行~");
+        closeOnlineModal();
+        setMode('online');
+        conn.on('open', () => {
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+        });
+      });
+    }
+
+    function setupConn() {
+      conn.on('data', (data) => {
+        if (data.type === 'move') {
+          makeMove(data.r, data.c, data.p, true);
+        } else if (data.type === 'chat') {
+          addMessage(2, data.text);
+        } else if (data.type === 'profile_sync') {
+          p2Name = data.name;
+          p2Avatar = data.avatar;
+          updatePlayerHeaderUI();
+        } else if (data.type === 'undo_req') {
+          undoDescText.textContent = "对方发起了悔棋申请，是否同意？";
+          document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
+          document.getElementById('btnUndoRefuse').style.display = "block";
+          undoModal.classList.add('show');
+        } else if (data.type === 'undo_res') {
+          if (data.agree) {
+            doUndo();
+            alert("✅ 对方同意了您的悔棋申请！");
+          } else {
+            alert("❌ 对方拒绝了您的悔棋申请！");
+          }
+        } else if (data.type === 'restart') {
+          resetBoardOnly();
+          alert("🔄 对方重新开启了新对局！");
+        } else if (data.type === 'skill_use') {
+          alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
+        } else if (data.type === 'skill_freeze') {
+          frozenPoint = { r: data.r, c: data.c, expireStep: data.expireStep };
+          draw();
+          alert(`❄️ 对方发动了【寒冰封禁】！位于 (${data.r+1}, ${data.c+1}) 的点本回合禁止落子！`);
+        } else if (data.type === 'skill_remove_stone') {
+          board[data.r][data.c] = EMPTY;
+          history = history.filter(h => !(h.r === data.r && h.c === data.c));
+          draw();
+          alert(`💥 对方发动了【虚空陨石】！抹除了您在 (${data.r+1}, ${data.c+1}) 的棋子！`);
+        } else if (data.type === 'skill_shift_stone') {
+          board[data.fromR][data.fromC] = EMPTY;
+          board[data.toR][data.toC] = data.p;
+          const histItem = history.find(h => h.r === data.fromR && h.c === data.fromC);
+          if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
+          draw();
+          alert(`🌟 对方发动了【移星换斗】！将其棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
+        } else if (data.type === 'skill_fog') {
+          fogArea = { r: data.r, c: data.c, expireStep: data.expireStep };
+          draw();
+          alert(`🌫️ 对方发动了【迷雾遮天】！3x3 区域视线受到阻碍！`);
+        }
+      });
+    }
+
+    // ==========================================
+    // 🎴 干扰技能卡执行与棋盘交互核心逻辑
+    // ==========================================
+    function isPointFrozen(r, c) {
+      return frozenPoint && frozenPoint.r === r && frozenPoint.c === c && history.length < frozenPoint.expireStep;
+    }
+
+    function isFogActive() {
+      return fogArea && history.length < fogArea.expireStep;
+    }
+
+    function drawRandomThreeCards() {
+      const shuffled = [...SKILL_CARD_POOL].sort(() => Math.random() - 0.5);
+      currentDrawnCards = shuffled.slice(0, 3);
+      cardUsedStatus = [false, false, false];
+      activeSkill = null;
+      frozenPoint = null;
+      fogArea = null;
+      hasExtraMove = false;
+      cancelActiveSkill();
+      renderCardSlots();
+    }
+
+    function renderCardSlots() {
+      const area = document.getElementById('cardSlotsArea');
+      if (!area) return;
+      area.innerHTML = currentDrawnCards.map((card, idx) => {
+        const isUsed = cardUsedStatus[idx];
+        const isCasting = activeSkill && activeSkill.slotIdx === idx;
+        const icon = card.icon;
+        const name = card.name;
+        const desc = card.desc;
+        return `
+          <div class="card-slot ${isUsed ? 'used' : ''} ${isCasting ? 'casting' : ''}"
+               onclick="handleCardClick(${idx})"
+               title="${desc}">
+            <div class="slot-icon">${icon}</div>
+            <div class="slot-title">${name}</div>
+            <div class="slot-sub">${isUsed ? '已使用' : desc}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function handleCardClick(idx) {
+      if (isOver) return;
+      if (cardUsedStatus[idx]) return;
+      if (gameMode === 'online' && turn !== myOnlineColor) {
+        return alert("⏳ 还没到您的回合，请在自己回合使用干扰牌！");
+      }
+      if (gameMode === 'ai' && turn !== BLACK) {
+        return alert("⏳ AI 正在思考中，请在自己的回合施展技能！");
+      }
+
+      if (activeSkill && activeSkill.slotIdx === idx) {
+        cancelActiveSkill();
+        return;
+      }
+
+      const card = currentDrawnCards[idx];
+      if (!card.needTarget) {
+        if (card.id === 'rewind') {
+          if (history.length === 0) return alert("棋盘上还没有棋子，无法倒流时间！");
+          doUndo();
+          markCardUsed(idx);
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
+          }
+          alert(`✨ 成功发动【${card.name}】！时间倒流一步~`);
+        } else if (card.id === 'double_move') {
+          hasExtraMove = true;
+          markCardUsed(idx);
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
+          }
+          alert(`⚡ 成功发动【${card.name}】！本回合落子后可额外再落一子！`);
+        }
+      } else {
+        activeSkill = { slotIdx: idx, skill: card, step: 1 };
+        renderCardSlots();
+        showSkillPrompt(card);
+      }
+    }
+
+    function showSkillPrompt(card) {
+      const bar = document.getElementById('skillPromptBar');
+      const text = document.getElementById('skillPromptText');
+      if (!bar || !text) return;
+      bar.style.display = 'flex';
+      if (card.id === 'freeze') {
+        text.textContent = `❄️ 请在棋盘上点击选择要封印的空位 (1回合禁下)`;
+      } else if (card.id === 'remove_stone') {
+        text.textContent = `💥 请在棋盘上点击要抹除的对方孤子`;
+      } else if (card.id === 'shift_stone') {
+        text.textContent = `🌟 第1步：点击己方一颗要平移的棋子`;
+      } else if (card.id === 'fog_blind') {
+        text.textContent = `🌫️ 请在棋盘上点击释放 3x3 迷雾的位置`;
+      }
+    }
+
+    function cancelActiveSkill() {
+      activeSkill = null;
+      const bar = document.getElementById('skillPromptBar');
+      if (bar) bar.style.display = 'none';
+      renderCardSlots();
+      draw();
+    }
+
+    function markCardUsed(idx) {
+      cardUsedStatus[idx] = true;
+      activeSkill = null;
+      const bar = document.getElementById('skillPromptBar');
+      if (bar) bar.style.display = 'none';
+      renderCardSlots();
+      draw();
+    }
+
+    function handleSkillClick(row, col) {
+      if (!activeSkill) return;
+      const { slotIdx, skill } = activeSkill;
+      const myColor = (gameMode === 'online') ? myOnlineColor : turn;
+      const enemyColor = myColor === BLACK ? WHITE : BLACK;
+
+      if (skill.id === 'freeze') {
+        if (board[row][col] !== EMPTY) {
+          return alert("❄️ 寒冰封禁只能施加在空白交叉点上！");
+        }
+        frozenPoint = { r: row, c: col, expireStep: history.length + 2 };
+        markCardUsed(slotIdx);
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_freeze', r: row, c: col, expireStep: frozenPoint.expireStep });
+        }
+        alert(`❄️ 封印成功！该点将在下一回合内禁止任何人落子！`);
+      } else if (skill.id === 'remove_stone') {
+        if (board[row][col] !== enemyColor) {
+          return alert("💥 只能抹除对方的棋子！");
+        }
+        board[row][col] = EMPTY;
+        history = history.filter(h => !(h.r === row && h.c === col));
+        markCardUsed(slotIdx);
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_remove_stone', r: row, c: col });
+        }
+        alert(`💥 成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
+      } else if (skill.id === 'shift_stone') {
+        if (activeSkill.step === 1) {
+          if (board[row][col] !== myColor) {
+            return alert("🌟 请选择己方的棋子进行平移！");
+          }
+          activeSkill.step = 2;
+          activeSkill.srcR = row;
+          activeSkill.srcC = col;
+          const text = document.getElementById('skillPromptText');
+          if (text) text.textContent = `🌟 第2步：请点击相邻的空白位置 (八方向距离1)`;
+          draw();
+        } else if (activeSkill.step === 2) {
+          if (board[row][col] !== EMPTY) {
+            return alert("🌟 目标点必须是空白位置！");
+          }
+          const dr = Math.abs(row - activeSkill.srcR);
+          const dc = Math.abs(col - activeSkill.srcC);
+          if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) {
+            return alert("🌟 只能平移到相邻的 8 个方向空格之一！");
+          }
+          board[activeSkill.srcR][activeSkill.srcC] = EMPTY;
+          board[row][col] = myColor;
+          const histItem = history.find(h => h.r === activeSkill.srcR && h.c === activeSkill.srcC);
+          if (histItem) { histItem.r = row; histItem.c = col; }
+          const sR = activeSkill.srcR, sC = activeSkill.srcC;
+          markCardUsed(slotIdx);
+          if (gameMode === 'online' && conn && conn.open) {
+            conn.send({ type: 'skill_shift_stone', fromR: sR, fromC: sC, toR: row, toC: col, p: myColor });
+          }
+          alert(`🌟 移星换斗成功！棋子平移至 (${row+1}, ${col+1})！`);
+          if (checkWin(row, col, myColor)) {
+            isOver = true;
+            alert(`🎉 恭喜【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`);
+          }
+        }
+      } else if (skill.id === 'fog_blind') {
+        fogArea = { r: row, c: col, expireStep: history.length + 2 };
+        markCardUsed(slotIdx);
+        if (gameMode === 'online' && conn && conn.open) {
+          conn.send({ type: 'skill_fog', r: row, c: col, expireStep: fogArea.expireStep });
+        }
+        alert(`🌫️ 迷雾释出！以 (${row+1}, ${col+1}) 为中心的 3x3 区域进入迷雾！`);
+      }
+    }
+
+    function joinOnlineRoom() {
+      const code = document.getElementById('inputJoinCode').value.trim();
+      if (!code) return alert("请输入 6 位房间码！");
+      initPeer();
+      const targetId = `GOMOKU-${code}`;
+      conn = peer.connect(targetId);
+      conn.on('open', () => {
+        setupConn();
+        myOnlineColor = WHITE;
+        alert("🎉 成功连入房间！房主执黑先行，您执白~");
+        closeOnlineModal();
+        setMode('online');
+        conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+      });
+    }
+
+    function switchOnlineTab(tab) {
+      document.getElementById('tabCreateRoom').classList.toggle('active', tab === 'create');
+      document.getElementById('tabJoinRoom').classList.toggle('active', tab === 'join');
+      document.getElementById('viewCreateRoom').style.display = tab === 'create' ? 'block' : 'none';
+      document.getElementById('viewJoinRoom').style.display = tab === 'join' ? 'block' : 'none';
+    }
+
+    function copyRoomCode() {
+      const code = document.getElementById('myRoomCodeDisplay').textContent;
+      navigator.clipboard ? navigator.clipboard.writeText(code).then(() => alert(`📋 房间码【${code}】已复制！快发给好友吧~`)) : alert(`房间码: ${code}`);
+    }
+
+    function openOnlineModal() {
+      initPeer();
+      document.getElementById('onlineModal').classList.add('show');
+    }
+    function closeOnlineModal() {
+      document.getElementById('onlineModal').classList.remove('show');
+    }
+
+    function setMode(mode) {
+      gameMode = mode;
+      updatePlayerHeaderUI();
+      resetBoardOnly();
+      if (mode === 'pvp') alert("👥 已切换为【双人同屏】对战模式！");
+      else if (mode === 'ai') alert("🤖 已切换为【人机对弈】模式！");
+    }
+
+    // ==========================================
+    // 🟩 15x15 方格中央落子 渲染与几何计算
+    // ==========================================
+    function resizeBoard() {
+      const w = islandWrapper.clientWidth || window.innerWidth;
+      const h = islandWrapper.clientHeight || (window.innerHeight - 260);
+      const maxSide = Math.min(w * 0.97, h * 0.98, 520);
+      cWidth = Math.floor(maxSide); cHeight = Math.floor(maxSide);
+
+      dpr = window.devicePixelRatio || 1;
+      cvs.width = cWidth * dpr; cvs.height = cHeight * dpr;
+      cvs.style.width = cWidth + 'px'; cvs.style.height = cHeight + 'px';
+
+      ctx.resetTransform(); ctx.scale(dpr, dpr);
+      
+      paddingX = cWidth * 0.045; 
+      paddingY = cHeight * 0.045;
+      gridX = (cWidth - 2 * paddingX) / 15; 
+      gridY = (cHeight - 2 * paddingY) / 15;
+      radius = gridX * 0.42;
+      draw();
+    }
+
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    function playPopSound() {
+      if (!soundEnabled) return;
+      if (actx.state === 'suspended') actx.resume();
+      const t = actx.currentTime;
+      const osc = actx.createOscillator(); const gain = actx.createGain();
+      osc.type = 'sine'; osc.frequency.setValueAtTime(520, t);
+      osc.frequency.exponentialRampToValueAtTime(1250, t + 0.035);
+      osc.frequency.exponentialRampToValueAtTime(600, t + 0.08);
+      gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      osc.connect(gain); gain.connect(actx.destination);
+      osc.start(t); osc.stop(t + 0.1);
+    }
+
+    function updateUI() {
+      const bubble = document.getElementById('turnBubble');
+      const p1Status = document.getElementById('p1Status');
+      const p2Status = document.getElementById('p2Status');
+      
+      if (turn === BLACK) {
+        p1Status.textContent = '落子中'; p2Status.textContent = '等待';
+        bubble.textContent = (gameMode === 'online' && myOnlineColor !== BLACK) ? '对手回合' : '你的回合';
+        bubble.className = 'turn-bubble';
+        document.getElementById('p1Card').style.opacity = '1';
+        document.getElementById('p2Card').style.opacity = '0.75';
+      } else {
+        p1Status.textContent = '等待';
+        p2Status.textContent = gameMode === 'ai' ? '思考中' : '落子中';
+        bubble.textContent = (gameMode === 'online' && myOnlineColor !== WHITE) ? '对手回合' : (gameMode === 'ai' ? '思考中' : '对手回合');
+        bubble.className = 'turn-bubble right';
+        document.getElementById('p1Card').style.opacity = '0.75';
+        document.getElementById('p2Card').style.opacity = '1';
+      }
+    }
+
+    // 晴空浮岛草坪版是官方默认版本，默认始终展示青草绿地与猫爪棋子
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlTheme = urlParams.get('theme');
+    // 若 URL 明确传参或当前 session 切换过才生效，否则始终呈现官方纯净草坪版
+    let activeThemeKey = urlTheme || sessionStorage.getItem('gomoku_active_theme') || 'default';
+    if (activeThemeKey === 'default') {
+      try { localStorage.removeItem('gomoku_active_theme'); } catch(e){}
+    }
+
+    function switchThemeSeamless(key) {
+      activeThemeKey = key;
+      sessionStorage.setItem('gomoku_active_theme', key);
+      if (key === 'default') {
+        try { localStorage.removeItem('gomoku_active_theme'); } catch(e){}
+      } else {
+        localStorage.setItem('gomoku_active_theme', key);
+      }
+      document.body.className = key === 'default' ? '' : 'theme-' + key.replace('_', '-');
+      closeThemeModal();
+      draw();
+      
+      const names = {
+        'default': '晴空浮岛草坪版 🌿',
+        'sweet_romance': '草莓蜜桃恋爱版 💖',
+        'zen_dark': '极简禅意暗黑版 禅',
+        'neo_trad': '新中式宣纸榧木版 📜',
+        'luxury_glass': '现代奢华毛玻璃版 ✨',
+        'clean_ios': 'Clean iOS 极简暖白手机版 📱'
+      };
+      // 优雅微提示
+      const bubble = document.getElementById('turnBubble');
+      const oldText = bubble.textContent;
+      bubble.textContent = `✨ 已换装: ${names[key] || key}`;
+      setTimeout(() => { updateUI(); }, 2000);
+    }
+
+    // --- 1. 经典手绘晴空草坪棋盘 ---
+    function drawHandmadeGrassBoard() {
+      const bx = paddingX - 2, by = paddingY - 2;
+      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+
+      ctx.fillStyle = '#9aaab7'; ctx.strokeStyle = '#576574'; ctx.lineWidth = Math.max(1.2, cWidth * 0.004);
+      const stoneCount = 7; const sW = (cWidth - 16) / stoneCount; const stoneH = Math.max(8, cHeight * 0.03);
+      for (let i = 0; i < stoneCount; i++) {
+        const sx = 8 + i * sW;
+        ctx.beginPath(); ctx.roundRect(sx + 1, cHeight - stoneH - 3, sW - 2, stoneH, 4); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.roundRect(sx + 1, 3, sW - 2, stoneH * 0.9, 4); ctx.fill(); ctx.stroke();
+      }
+
+      ctx.fillStyle = '#78c82e'; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 8); ctx.fill();
+
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          const gx = paddingX + c * gridX, gy = paddingY + r * gridY;
+          const isLight = (r + c) % 2 === 0;
+          
+          ctx.fillStyle = isLight ? '#8cd63e' : '#77c42b';
+          ctx.fillRect(gx, gy, gridX, gridY);
+
+          ctx.fillStyle = isLight ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.06)';
+          ctx.fillRect(gx, gy, gridX, 1); 
+          ctx.fillRect(gx, gy, 1, gridY);
+
+          ctx.strokeStyle = 'rgba(76, 139, 22, 0.25)';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(gx, gy, gridX, gridY);
+        }
+      }
+      drawGrassFringe(bx, by, bw, bh);
+    }
+
+    function drawGrassFringe(bx, by, bw, bh) {
+      ctx.save();
+      const countX = Math.round(cWidth / 10), countY = Math.round(cHeight / 10);
+      drawEdgeTufts(bx, by, bx + bw, by, 0, -1, countX);
+      drawEdgeTufts(bx, by + bh, bx + bw, by + bh, 0, 1, countX);
+      drawEdgeTufts(bx, by, bx, by + bh, -1, 0, countY);
+      drawEdgeTufts(bx + bw, by, bx + bw, by + bh, 1, 0, countY);
+      ctx.restore();
+    }
+
+    function drawEdgeTufts(x1, y1, x2, y2, nx, ny, count) {
+      const dx = (x2 - x1) / count, dy = (y2 - y1) / count, scale = cWidth / 380;
+      ctx.fillStyle = '#4c8b16'; ctx.beginPath();
+      for (let i = 0; i <= count; i++) {
+        const cx = x1 + i * dx, cy = y1 + i * dy;
+        const len = (7 + Math.sin(i * 1.8) * 3 + Math.cos(i * 3.4) * 2) * scale;
+        ctx.lineTo(cx - dx * 0.5, cy - dy * 0.5);
+        ctx.lineTo(cx + nx * len + (Math.sin(i * 2.5) * 2 * scale), cy + ny * len + (Math.cos(i * 2.5) * 2 * scale));
+        ctx.lineTo(cx + dx * 0.5, cy + dy * 0.5);
+      }
+      ctx.fill();
+
+      ctx.fillStyle = '#8cd63e'; ctx.beginPath();
+      for (let i = 0; i <= count; i++) {
+        const cx = x1 + (i + 0.3) * dx, cy = y1 + (i + 0.3) * dy;
+        const len = (6 + Math.cos(i * 2.1) * 2.5) * scale;
+        ctx.lineTo(cx - dx * 0.4, cy - dy * 0.4);
+        ctx.lineTo(cx + nx * len, cy + ny * len);
+        ctx.lineTo(cx + dx * 0.4, cy + dy * 0.4);
+      }
+      ctx.fill();
+    }
+
+    function drawPaw(x, y, r, pawColor) {
+      ctx.fillStyle = pawColor; ctx.beginPath();
+      ctx.ellipse(x, y + r*0.14, r*0.38, r*0.3, 0, 0, Math.PI*2); ctx.fill();
+      const toes = [
+        { dx: -r*0.32, dy: -r*0.18, rad: r*0.13 }, { dx: -r*0.11, dy: -r*0.35, rad: r*0.14 },
+        { dx: r*0.11, dy: -r*0.35, rad: r*0.14 }, { dx: r*0.32, dy: -r*0.18, rad: r*0.13 }
+      ];
+      for (const toe of toes) { ctx.beginPath(); ctx.arc(x+toe.dx, y+toe.dy, toe.rad, 0, Math.PI*2); ctx.fill(); }
+    }
+
+    // --- 2. 草莓蜜桃恋爱版棋盘 (奶茶圆盘 + 💖爱心星位) ---
+    function drawSweetRomanceBoard() {
+      const bx = paddingX - 4, by = paddingY - 4;
+      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+      
+      // 阴影与奶茶烤漆木盘
+      ctx.save();
+      ctx.shadowColor = 'rgba(255,117,140,0.3)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 8;
+      const bg = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      bg.addColorStop(0, '#ebd5c8'); bg.addColorStop(0.5, '#debfae'); bg.addColorStop(1, '#cb9f88');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 22); ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 柔和玫瑰金网格线
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 15; i++) {
+        const x = paddingX + (i + 0.5) * gridX;
+        const y = paddingY + (i + 0.5) * gridY;
+        ctx.strokeStyle = 'rgba(120, 75, 70, 0.28)';
+        ctx.beginPath(); ctx.moveTo(x, paddingY + 0.5 * gridY); ctx.lineTo(x, paddingY + 14.5 * gridY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(paddingX + 0.5 * gridX, y); ctx.lineTo(paddingX + 14.5 * gridX, y); ctx.stroke();
+      }
+
+      // 💖 爱心星位
+      const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+      ctx.font = `${Math.round(gridX * 0.38)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (const [r, c] of stars) {
+        ctx.fillText('💖', paddingX + (c + 0.5) * gridX, paddingY + (r + 0.5) * gridY);
+      }
+    }
+
+    // --- 3. 极简禅意暗黑版棋盘 ---
+    function drawZenDarkBoard() {
+      const bx = paddingX - 4, by = paddingY - 4;
+      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 10;
+      const bg = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      bg.addColorStop(0, '#1c1c21'); bg.addColorStop(1, '#111114');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = '#2d2d34'; ctx.lineWidth = 1.5; ctx.stroke();
+
+      for (let i = 0; i < 15; i++) {
+        const x = paddingX + (i + 0.5) * gridX;
+        const y = paddingY + (i + 0.5) * gridY;
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(x, paddingY + 0.5 * gridX); ctx.lineTo(x, paddingY + 14.5 * gridX); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(paddingX + 0.5 * gridX, y); ctx.lineTo(paddingX + 14.5 * gridX, y); ctx.stroke();
+      }
+      const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+      ctx.fillStyle = '#71717a';
+      for (const [r, c] of stars) {
+        ctx.beginPath(); ctx.arc(paddingX + (c + 0.5) * gridX, paddingY + (r + 0.5) * gridY, 3, 0, Math.PI*2); ctx.fill();
+      }
+    }
+
+    // --- 4. 新中式宣纸榧木版棋盘 ---
+    function drawNeoTradBoard() {
+      const bx = paddingX - 4, by = paddingY - 4;
+      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(92,64,51,0.3)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 6;
+      const bg = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      bg.addColorStop(0, '#dfc599'); bg.addColorStop(0.5, '#cfb17d'); bg.addColorStop(1, '#be9d68');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 12); ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = '#8c7047'; ctx.lineWidth = 1.8; ctx.stroke();
+
+      for (let i = 0; i < 15; i++) {
+        const x = paddingX + (i + 0.5) * gridX;
+        const y = paddingY + (i + 0.5) * gridY;
+        ctx.strokeStyle = 'rgba(74, 59, 44, 0.45)'; ctx.lineWidth = 0.9;
+        ctx.beginPath(); ctx.moveTo(x, paddingY + 0.5 * gridY); ctx.lineTo(x, paddingY + 14.5 * gridY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(paddingX + 0.5 * gridX, y); ctx.lineTo(paddingX + 14.5 * gridX, y); ctx.stroke();
+      }
+      const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+      ctx.fillStyle = '#c88942';
+      for (const [r, c] of stars) {
+        ctx.beginPath(); ctx.arc(paddingX + (c + 0.5) * gridX, paddingY + (r + 0.5) * gridY, 3.5, 0, Math.PI*2); ctx.fill();
+      }
+    }
+
+    // --- 5. 现代奢华毛玻璃版棋盘 ---
+    function drawLuxuryGlassBoard() {
+      const bx = paddingX - 4, by = paddingY - 4;
+      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(99,102,241,0.35)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+      const bg = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      bg.addColorStop(0, '#151624'); bg.addColorStop(1, '#0c0d16');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 18); ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
+
+      for (let i = 0; i < 15; i++) {
+        const x = paddingX + (i + 0.5) * gridX;
+        const y = paddingY + (i + 0.5) * gridY;
+        ctx.strokeStyle = 'rgba(129, 140, 248, 0.22)'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(x, paddingY + 0.5 * gridY); ctx.lineTo(x, paddingY + 14.5 * gridY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(paddingX + 0.5 * gridX, y); ctx.lineTo(paddingX + 14.5 * gridX, y); ctx.stroke();
+      }
+      const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+      ctx.font = `${Math.round(gridX * 0.32)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (const [r, c] of stars) {
+        ctx.fillText('✨', paddingX + (c + 0.5) * gridX, paddingY + (r + 0.5) * gridY);
+      }
+    }
+
+    // --- 6. Clean iOS 极简暖白版棋盘 ---
+    function drawCleanIosBoard() {
+      const bx = paddingX - 4, by = paddingY - 4;
+      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.12)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+      const bg = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      bg.addColorStop(0, '#f9f6f0'); bg.addColorStop(1, '#ede6db');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 20); ctx.fill();
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(0,0,0,0.08)'; ctx.lineWidth = 1.5; ctx.stroke();
+
+      for (let i = 0; i < 15; i++) {
+        const x = paddingX + (i + 0.5) * gridX;
+        const y = paddingY + (i + 0.5) * gridY;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(x, paddingY + 0.5 * gridY); ctx.lineTo(x, paddingY + 14.5 * gridY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(paddingX + 0.5 * gridX, y); ctx.lineTo(paddingX + 14.5 * gridX, y); ctx.stroke();
+      }
+      const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+      ctx.fillStyle = '#8e8e93';
+      for (const [r, c] of stars) {
+        ctx.beginPath(); ctx.arc(paddingX + (c + 0.5) * gridX, paddingY + (r + 0.5) * gridY, 2.5, 0, Math.PI*2); ctx.fill();
+      }
+    }
+
+    // --- 多材质棋子渲染器 ---
+    function drawThemedStone(x, y, r, stoneColor, theme) {
+      if (theme === 'sweet_romance') {
+        // 🍬 果冻布丁质感 + 心形反光高光
+        ctx.save();
+        ctx.beginPath(); ctx.arc(x, y + 2, r * 0.95, 0, Math.PI*2);
+        ctx.fillStyle = stoneColor === BLACK ? 'rgba(255, 117, 140, 0.35)' : 'rgba(110, 168, 254, 0.3)';
+        ctx.fill();
+
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 2, x, y, r);
+        if (stoneColor === BLACK) {
+          g.addColorStop(0, '#ff9a9e'); g.addColorStop(0.5, '#fecfef'); g.addColorStop(1, '#ff6b8b');
+        } else {
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.6, '#e0c3fc'); g.addColorStop(1, '#8ec5fc');
+        }
+        ctx.fillStyle = g; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.2; ctx.stroke();
+
+        // 💖 雕刻小爱心微光
+        ctx.font = `${Math.round(r * 0.75)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('💖', x, y);
+        ctx.restore();
+      } else if (theme === 'zen_dark') {
+        // 🖤 3D黑曜石与羊脂白玉
+        ctx.save();
+        ctx.beginPath(); ctx.arc(x + 2, y + 3, r * 0.95, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fill();
+
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 1, x, y, r);
+        if (stoneColor === BLACK) {
+          g.addColorStop(0, '#3f3f46'); g.addColorStop(0.7, '#18181b'); g.addColorStop(1, '#09090b');
+        } else {
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.8, '#f4f4f5'); g.addColorStop(1, '#d4d4d8');
+        }
+        ctx.fillStyle = g; ctx.fill();
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+      } else if (theme === 'neo_trad') {
+        // 📜 新中式水墨与象牙白玉
+        ctx.save();
+        ctx.beginPath(); ctx.arc(x + 1.5, y + 2.5, r * 0.92, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(74, 59, 44, 0.4)'; ctx.fill();
+
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        const g = ctx.createRadialGradient(x - r*0.3, y - r*0.3, 1, x, y, r);
+        if (stoneColor === BLACK) {
+          g.addColorStop(0, '#2c221a'); g.addColorStop(0.8, '#14100c'); g.addColorStop(1, '#000');
+        } else {
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#faf6ee'); g.addColorStop(1, '#e8dcbe');
+        }
+        ctx.fillStyle = g; ctx.fill();
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(220,179,116,0.5)' : 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+      } else if (theme === 'luxury_glass') {
+        // ✨ 冷光冷紫珠宝质感
+        ctx.save();
+        ctx.beginPath(); ctx.arc(x, y + 3, r * 0.95, 0, Math.PI*2);
+        ctx.fillStyle = stoneColor === BLACK ? 'rgba(0,0,0,0.8)' : 'rgba(99,102,241,0.4)'; ctx.fill();
+
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 1, x, y, r);
+        if (stoneColor === BLACK) {
+          g.addColorStop(0, '#4f46e5'); g.addColorStop(0.4, '#1e1b4b'); g.addColorStop(1, '#090a10');
+        } else {
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.6, '#e0e7ff'); g.addColorStop(1, '#818cf8');
+        }
+        ctx.fillStyle = g; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.restore();
+      } else if (theme === 'clean_ios') {
+        // 📱 苹果纯净极简原石
+        ctx.save();
+        ctx.beginPath(); ctx.arc(x, y + 2.5, r * 0.95, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fill();
+
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 1, x, y, r);
+        if (stoneColor === BLACK) {
+          g.addColorStop(0, '#3a3a3c'); g.addColorStop(0.8, '#1c1c1e'); g.addColorStop(1, '#000000');
+        } else {
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.85, '#f2f2f7'); g.addColorStop(1, '#e5e5ea');
+        }
+        ctx.fillStyle = g; ctx.fill();
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.06)';
+        ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+      } else {
+        // 🌿 经典晴空浮岛草坪猫爪棋子
+        ctx.beginPath(); ctx.arc(x+1.5, y+2.5, r*0.95, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(20, 60, 10, 0.45)'; ctx.fill();
+
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        if (stoneColor === BLACK) {
+          const g = ctx.createRadialGradient(x-r*0.35, y-r*0.35, 1, x, y, r);
+          g.addColorStop(0, '#4a5568'); g.addColorStop(0.6, '#2d3748'); g.addColorStop(1, '#1a202c');
+          ctx.fillStyle = g; ctx.fill();
+          drawPaw(x, y, r, '#ff7675');
+        } else {
+          const g = ctx.createRadialGradient(x-r*0.35, y-r*0.35, 1, x, y, r);
+          g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#fff5f7'); g.addColorStop(1, '#fed7e2');
+          ctx.fillStyle = g; ctx.fill();
+          drawPaw(x, y, r, '#e17055');
+        }
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        ctx.lineWidth = Math.max(1.2, cWidth * 0.0035);
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.stroke();
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, cWidth, cHeight);
+
+      // 1. 根据当前无缝主题绘制专属底盘
+      if (activeThemeKey === 'zen_dark') drawZenDarkBoard();
+      else if (activeThemeKey === 'sweet_romance') drawSweetRomanceBoard();
+      else if (activeThemeKey === 'neo_trad') drawNeoTradBoard();
+      else if (activeThemeKey === 'luxury_glass') drawLuxuryGlassBoard();
+      else if (activeThemeKey === 'clean_ios') drawCleanIosBoard();
+      else drawHandmadeGrassBoard();
+
+      // 2. 根据当前无缝主题绘制全部已落棋子 (对局进度 100% 保持)
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (board[r][c] !== EMPTY) {
+            const x = paddingX + (c + 0.5) * gridX;
+            const y = paddingY + (r + 0.5) * gridY;
+            drawThemedStone(x, y, radius, board[r][c], activeThemeKey);
+          }
+        }
+      }
+
+      // 3. 最后一手标记 (各主题自适应)
+      if (history.length > 0) {
+        const last = history[history.length-1];
+        const lx = paddingX + (last.c + 0.5) * gridX;
+        const ly = paddingY + (last.r + 0.5) * gridY;
+        const markSize = Math.max(12, Math.round(cWidth * 0.035));
+
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        if (activeThemeKey === 'sweet_romance') {
+          ctx.font = `${markSize}px sans-serif`; ctx.fillText('💖', lx, ly);
+        } else if (activeThemeKey === 'zen_dark') {
+          ctx.beginPath(); ctx.arc(lx, ly, radius * 0.35, 0, Math.PI*2);
+          ctx.strokeStyle = '#6366f1'; ctx.lineWidth = 2.5; ctx.stroke();
+        } else if (activeThemeKey === 'luxury_glass') {
+          ctx.font = `${markSize}px sans-serif`; ctx.fillText('✨', lx, ly);
+        } else if (activeThemeKey === 'clean_ios') {
+          ctx.beginPath(); ctx.arc(lx, ly, radius * 0.35, 0, Math.PI*2);
+          ctx.strokeStyle = '#0071e3'; ctx.lineWidth = 2.5; ctx.stroke();
+        } else if (activeThemeKey === 'neo_trad') {
+          ctx.beginPath(); ctx.arc(lx, ly, radius * 0.35, 0, Math.PI*2);
+          ctx.strokeStyle = '#c8382c'; ctx.lineWidth = 2.5; ctx.stroke();
+        } else {
+          ctx.font = `${markSize}px sans-serif`; ctx.fillText('❤️', lx, ly);
+        }
+      }
+
+      // 4. 绘制【移星换斗】第一步选中的己方棋子高亮光环
+      if (activeSkill && activeSkill.skill.id === 'shift_stone' && activeSkill.step === 2) {
+        const sx = paddingX + (activeSkill.srcC + 0.5) * gridX;
+        const sy = paddingY + (activeSkill.srcR + 0.5) * gridY;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(sx, sy, radius * 1.35, 0, Math.PI * 2);
+        ctx.strokeStyle = '#facc15'; ctx.lineWidth = 3; ctx.stroke();
+        ctx.restore();
+      }
+
+      // 5. 绘制【寒冰封禁】冰花特效
+      if (frozenPoint && isPointFrozen(frozenPoint.r, frozenPoint.c)) {
+        const fx = paddingX + (frozenPoint.c + 0.5) * gridX;
+        const fy = paddingY + (frozenPoint.r + 0.5) * gridY;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(fx, fy, radius * 0.9, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(186, 230, 253, 0.5)'; ctx.fill();
+        ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2.5; ctx.setLineDash([4, 3]); ctx.stroke();
+        ctx.font = `${Math.floor(radius * 1.1)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('❄️', fx, fy + 1);
+        ctx.restore();
+      }
+
+      // 6. 绘制【迷雾遮蔽】3x3 区域遮罩
+      if (fogArea && isFogActive()) {
+        const minR = Math.max(0, fogArea.r - 1);
+        const maxR = Math.min(14, fogArea.r + 1);
+        const minC = Math.max(0, fogArea.c - 1);
+        const maxC = Math.min(14, fogArea.c + 1);
+        const x1 = paddingX + minC * gridX;
+        const y1 = paddingY + minR * gridY;
+        const w = (maxC - minC + 1) * gridX;
+        const h = (maxR - minR + 1) * gridY;
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(x1, y1, w, h, 16);
+        else ctx.rect(x1, y1, w, h);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.font = `bold ${Math.floor(gridX * 0.5)}px sans-serif`;
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('🌫️ 迷雾遮挡', x1 + w/2, y1 + h/2);
+        ctx.restore();
+      }
+    }
+
+    function checkWin(r, c, p) {
+      const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+      for (const [dr,dc] of dirs) {
+        let cnt = 1;
+        for (let s=1; s<=4; s++) {
+          const nr=r+s*dr, nc=c+s*dc;
+          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) cnt++; else break;
+        }
+        for (let s=1; s<=4; s++) {
+          const nr=r-s*dr, nc=c-s*dc;
+          if (nr>=0&&nr<15&&nc>=0&&nc<15&&board[nr][nc]===p) cnt++; else break;
+        }
+        if (cnt >= 5) return true;
+      }
+      return false;
+    }
+
+    function makeMove(r, c, p, fromRemote = false) {
+      if (board[r][c] !== EMPTY || isOver) return;
+
+      // 检查是否被寒冰封印
+      if (isPointFrozen(r, c)) {
+        alert("❄️ 该位置已被寒冰封印，本回合禁止任何人落子！");
+        return;
+      }
+
+      board[r][c] = p;
+      history.push({r, c, p});
+      playPopSound();
+      draw();
+
+      if (gameMode === 'online' && !fromRemote && conn && conn.open) {
+        conn.send({ type: 'move', r, c, p });
+      }
+
+      if (checkWin(r, c, p)) {
+        isOver = true;
+        const winner = p === BLACK ? (p1Name + ' (黑子)') : (gameMode === 'ai' ? '大师AI (白子)' : p2Name + ' (白子)');
+        setTimeout(() => alert(`🎉 恭喜【${winner}】达成五连珠获胜！`), 120);
+        return;
+      }
+
+      // 双星连珠技能：若激活则本回合可额外再落一子，不切换turn
+      if (hasExtraMove) {
+        hasExtraMove = false;
+        alert("⚡【双星连珠】神威生效！本回合可连续再落一子！");
+      } else {
+        turn = p === BLACK ? WHITE : BLACK;
+      }
+
+      updateUI();
+      persistGameState();
+
+      if (gameMode === 'ai' && turn === WHITE && !isOver) {
+        setTimeout(smartAiMove, 260);
+      }
+    }
+
+    cvs.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (isOver) return;
+      if (gameMode === 'ai' && turn !== BLACK) return;
+      if (gameMode === 'online' && turn !== myOnlineColor) return;
+
+      const rect = cvs.getBoundingClientRect();
+      const clickX = (e.clientX - rect.left) * (cWidth / rect.width);
+      const clickY = (e.clientY - rect.top) * (cHeight / rect.height);
+      
+      const col = Math.floor((clickX - paddingX) / gridX);
+      const row = Math.floor((clickY - paddingY) / gridY);
+      
+      if (row >= 0 && row < 15 && col >= 0 && col < 15) {
+        // 如果正处于技能选点施法模式，优先处理施法
+        if (activeSkill) {
+          handleSkillClick(row, col);
+          return;
+        }
+        if (board[row][col] === EMPTY) {
+          makeMove(row, col, turn);
+        }
+      }
+    });
+
+    // 底部按键绑定
+    document.getElementById('btnOpenChat').onclick = openChatDrawer;
+    document.getElementById('btnCloseChat').onclick = closeChatDrawer;
+    document.getElementById('chatBackdrop').onclick = (e) => {
+      if (e.target === document.getElementById('chatBackdrop')) closeChatDrawer();
+    };
+
+    document.getElementById('btnSendCustom').onclick = () => {
+      const input = document.getElementById('chatInput');
+      sendChat(input.value);
+    };
+    document.getElementById('chatInput').onkeydown = (e) => {
+      if (e.key === 'Enter') document.getElementById('btnSendCustom').click();
+    };
+
+    function resetBoardOnly() {
+      board = Array.from({length: 15}, () => Array(15).fill(0));
+      turn = BLACK; history = []; isOver = false;
+      drawRandomThreeCards();
+      draw(); updateUI();
+      persistGameState();
+    }
+
+    document.getElementById('btnRestart').onclick = () => {
+      resetBoardOnly();
+      if (gameMode === 'online' && conn && conn.open) conn.send({ type: 'restart' });
+    };
+
+    function doUndo() {
+      if (history.length === 0 || isOver) return;
+      if (gameMode === 'ai' && history.length >= 2) {
+        const a = history.pop(); const b = history.pop();
+        board[a.r][a.c] = EMPTY; board[b.r][b.c] = EMPTY;
+        turn = BLACK;
+      } else {
+        const last = history.pop();
+        board[last.r][last.c] = EMPTY;
+        turn = last.p;
+      }
+      draw(); updateUI();
+      persistGameState();
+    }
+
+    const undoModal = document.getElementById('undoModal');
+    const undoDescText = document.getElementById('undoDescText');
+
+    document.getElementById('btnUndo').onclick = () => {
+      if (history.length === 0 || isOver) return;
+
+      if (gameMode === 'ai') {
+        undoDescText.textContent = "正在向大师AI申请悔棋一步...";
+        undoModal.classList.add('show');
+        document.getElementById('btnUndoAgree').textContent = "确认悔棋";
+        document.getElementById('btnUndoRefuse').style.display = "none";
+      } else if (gameMode === 'online') {
+        if (conn && conn.open) {
+          conn.send({ type: 'undo_req' });
+          alert("📡 已向联机好友发送悔棋申请，等待对方同意...");
+        }
+      } else {
+        const applicant = turn === BLACK ? `${p2Name} (白方)` : `${p1Name} (黑方)`;
+        undoDescText.textContent = `【${applicant}】请求悔棋一步，是否同意？`;
+        document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
+        document.getElementById('btnUndoRefuse').style.display = "block";
+        undoModal.classList.add('show');
+      }
+    };
+
+    document.getElementById('btnUndoAgree').onclick = () => {
+      undoModal.classList.remove('show');
+      if (gameMode === 'online' && conn && conn.open) {
+        conn.send({ type: 'undo_res', agree: true });
+      }
+      doUndo();
+    };
+
+    document.getElementById('btnUndoRefuse').onclick = () => {
+      undoModal.classList.remove('show');
+      if (gameMode === 'online' && conn && conn.open) {
+        conn.send({ type: 'undo_res', agree: false });
+      } else {
+        alert("❌ 对方拒绝了您的悔棋申请！落子无悔哦~");
+      }
+    };
+
+    // ==========================================
+    // 💬 快捷短语管理系统 (支持自定义、本地记忆与左右拖拽滑动)
+    // ==========================================
+    const DEFAULT_PHRASES = [
+      "快点吧，等得我花都谢了~ 🌸",
+      "手滑了手滑了，让我悔一步嘛 🥺",
+      "哇！这步棋走得好绝啊！✨",
+      "哈哈，这局我赢定啦！😎",
+      "落子无悔，大丈夫一言九鼎！🤠",
+      "承让承让，承蒙关照啦~ 🎉",
+      "棋逢对手，打得精彩！👏",
+      "静心以待，后手发力！🍵"
+    ];
+
+    let customPhrases = [];
+    try {
+      const saved = localStorage.getItem('gomoku_custom_phrases');
+      customPhrases = saved ? JSON.parse(saved) : [...DEFAULT_PHRASES];
+    } catch (e) {
+      customPhrases = [...DEFAULT_PHRASES];
+    }
+
+    function savePhrases() {
+      localStorage.setItem('gomoku_custom_phrases', JSON.stringify(customPhrases));
+    }
+
+    function renderQuickPhrases() {
+      const container = document.getElementById('quickPhrasesContainer');
+      if (!container) return;
+      let html = `<div class="phrase-chip-manage" onclick="openPhraseManageModal()">⚙️ 自定义</div>`;
+      html += customPhrases.map((phrase) => `
+        <div class="phrase-chip" onclick="sendChat('${phrase.replace(/'/g, "\\'")}')">${phrase}</div>
+      `).join('');
+      container.innerHTML = html;
+    }
+
+    function openPhraseManageModal() {
+      const modal = document.getElementById('phraseManageModal');
+      const list = document.getElementById('managePhraseList');
+      list.innerHTML = customPhrases.map((p, idx) => `
+        <div class="phrase-manage-item" draggable="true" data-index="${idx}"
+             style="display:flex; align-items:center; justify-content:space-between; background:#fff; padding:7px 10px; border-radius:8px; border:1.5px solid #cbd5e1; font-size:12.5px; font-weight:800; cursor:grab; user-select:none; opacity:1 !important; transition:transform 0.15s, box-shadow 0.15s, border-color 0.15s; touch-action:none;"
+             ondragstart="handlePhraseDragStart(event)"
+             ondragover="handlePhraseDragOver(event)"
+             ondragend="handlePhraseDragEnd(event)"
+             ontouchstart="handlePhraseTouchStart(event)"
+             ontouchmove="handlePhraseTouchMove(event)"
+             ontouchend="handlePhraseTouchEnd(event)">
+          <div style="display:flex; align-items:center; gap:8px; overflow:hidden; flex:1;">
+            <span class="drag-handle" style="font-size:16px; color:#94a3b8; cursor:grab; padding:0 2px;">⠿</span>
+            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; color:#2d3436;">${idx + 1}. ${p}</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:4px; flex-shrink:0;">
+            <button class="btn-move-up" onclick="event.stopPropagation(); movePhrase(${idx}, -1)" ${idx === 0 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer; font-weight:900;">▲</button>
+            <button class="btn-move-down" onclick="event.stopPropagation(); movePhrase(${idx}, 1)" ${idx === customPhrases.length - 1 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer; font-weight:900;">▼</button>
+            <button onclick="event.stopPropagation(); deletePhrase(${idx})" style="background:#ff7675; color:#fff; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer;">❌</button>
+          </div>
+        </div>
+      `).join('');
+      modal.classList.add('show');
+    }
+
+    function closePhraseManageModal() {
+      document.getElementById('phraseManageModal').classList.remove('show');
+      renderQuickPhrases();
+    }
+
+    // 动态同步更新DOM列表的序号与按钮状态
+    function updateManageItemNumbers() {
+      const list = document.getElementById('managePhraseList');
+      if (!list) return;
+      const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
+      items.forEach((item, idx) => {
+        item.dataset.index = idx;
+        const txt = item.querySelector('.phrase-item-text');
+        if (txt && customPhrases[idx]) {
+          txt.textContent = `${idx + 1}. ${customPhrases[idx]}`;
+        }
+        const upBtn = item.querySelector('.btn-move-up');
+        const downBtn = item.querySelector('.btn-move-down');
+        if (upBtn) {
+          upBtn.disabled = idx === 0;
+          upBtn.style.opacity = idx === 0 ? '0.25' : '1';
+          upBtn.setAttribute('onclick', `event.stopPropagation(); movePhrase(${idx}, -1)`);
+        }
+        if (downBtn) {
+          downBtn.disabled = idx === items.length - 1;
+          downBtn.style.opacity = idx === items.length - 1 ? '0.25' : '1';
+          downBtn.setAttribute('onclick', `event.stopPropagation(); movePhrase(${idx}, 1)`);
+        }
+        const delBtn = item.querySelector('button[style*="#ff7675"]');
+        if (delBtn) {
+          delBtn.setAttribute('onclick', `event.stopPropagation(); deletePhrase(${idx})`);
+        }
+      });
+    }
+
+    // 快速上下移动
+    function movePhrase(idx, delta) {
+      const target = idx + delta;
+      if (target < 0 || target >= customPhrases.length) return;
+      const temp = customPhrases[idx];
+      customPhrases[idx] = customPhrases[target];
+      customPhrases[target] = temp;
+      savePhrases();
+      openPhraseManageModal();
+      renderQuickPhrases();
+    }
+
+    // ==========================================
+    // 🔀 自定义内实时拖动换位 (不做透明处理，其他项动态让位)
+    // ==========================================
+    let draggedPhraseItem = null;
+
+    function handlePhraseDragStart(e) {
+      draggedPhraseItem = e.currentTarget;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', '');
+      // 绝不做透明处理！保持 100% 不透明，增加悬浮投影与高亮边框
+      draggedPhraseItem.style.opacity = '1';
+      draggedPhraseItem.style.borderColor = '#4caf50';
+      draggedPhraseItem.style.boxShadow = '0 6px 18px rgba(76, 175, 80, 0.4)';
+      draggedPhraseItem.style.transform = 'scale(1.02)';
+      draggedPhraseItem.style.zIndex = '10';
+    }
+
+    function handlePhraseDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const targetItem = e.currentTarget;
+      if (!draggedPhraseItem || targetItem === draggedPhraseItem) return;
+
+      const list = document.getElementById('managePhraseList');
+      const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
+      const srcIdx = items.indexOf(draggedPhraseItem);
+      const targetIdx = items.indexOf(targetItem);
+      if (srcIdx === -1 || targetIdx === -1) return;
+
+      // DOM 实时插位换序，其他快捷语丝滑平移让位
+      if (srcIdx < targetIdx) {
+        list.insertBefore(draggedPhraseItem, targetItem.nextSibling);
+      } else {
+        list.insertBefore(draggedPhraseItem, targetItem);
+      }
+
+      // 实时同步数组与序号
+      const [moved] = customPhrases.splice(srcIdx, 1);
+      customPhrases.splice(targetIdx, 0, moved);
+      savePhrases();
+      updateManageItemNumbers();
+      renderQuickPhrases();
+    }
+
+    function handlePhraseDragEnd(e) {
+      if (draggedPhraseItem) {
+        draggedPhraseItem.style.opacity = '1';
+        draggedPhraseItem.style.borderColor = '#cbd5e1';
+        draggedPhraseItem.style.boxShadow = 'none';
+        draggedPhraseItem.style.transform = 'none';
+        draggedPhraseItem.style.zIndex = '';
+        draggedPhraseItem = null;
+      }
+      updateManageItemNumbers();
+    }
+
+    // 移动端 Touch 触摸实时拖动换位
+    let touchedPhraseItem = null;
+
+    function handlePhraseTouchStart(e) {
+      touchedPhraseItem = e.currentTarget;
+      // 绝不做透明处理！
+      touchedPhraseItem.style.opacity = '1';
+      touchedPhraseItem.style.borderColor = '#4caf50';
+      touchedPhraseItem.style.boxShadow = '0 6px 18px rgba(76, 175, 80, 0.4)';
+      touchedPhraseItem.style.transform = 'scale(1.02)';
+      touchedPhraseItem.style.zIndex = '10';
+    }
+
+    function handlePhraseTouchMove(e) {
+      if (!touchedPhraseItem) return;
+      const touch = e.touches[0];
+      const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+      const targetItem = elem ? elem.closest('.phrase-manage-item') : null;
+      if (!targetItem || targetItem === touchedPhraseItem) return;
+
+      const list = document.getElementById('managePhraseList');
+      const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
+      const srcIdx = items.indexOf(touchedPhraseItem);
+      const targetIdx = items.indexOf(targetItem);
+      if (srcIdx === -1 || targetIdx === -1) return;
+
+      // 实时换位插位
+      if (srcIdx < targetIdx) {
+        list.insertBefore(touchedPhraseItem, targetItem.nextSibling);
+      } else {
+        list.insertBefore(touchedPhraseItem, targetItem);
+      }
+
+      const [moved] = customPhrases.splice(srcIdx, 1);
+      customPhrases.splice(targetIdx, 0, moved);
+      savePhrases();
+      updateManageItemNumbers();
+      renderQuickPhrases();
+    }
+
+    function handlePhraseTouchEnd(e) {
+      if (touchedPhraseItem) {
+        touchedPhraseItem.style.opacity = '1';
+        touchedPhraseItem.style.borderColor = '#cbd5e1';
+        touchedPhraseItem.style.boxShadow = 'none';
+        touchedPhraseItem.style.transform = 'none';
+        touchedPhraseItem.style.zIndex = '';
+        touchedPhraseItem = null;
+      }
+      updateManageItemNumbers();
+    }
+
+    function addNewPhrase() {
+      const input = document.getElementById('inputNewPhrase');
+      const val = input.value.trim();
+      if (!val) return alert("请输入快捷短语内容！");
+      customPhrases.push(val);
+      savePhrases();
+      input.value = '';
+      openPhraseManageModal();
+      renderQuickPhrases();
+    }
+
+    function deletePhrase(idx) {
+      if (customPhrases.length <= 1) return alert("至少保留一条快捷短语哦~");
+      customPhrases.splice(idx, 1);
+      savePhrases();
+      openPhraseManageModal();
+      renderQuickPhrases();
+    }
+
+    function restoreDefaultPhrases() {
+      if (confirm("确定要恢复内置默认快捷短语吗？")) {
+        customPhrases = [...DEFAULT_PHRASES];
+        savePhrases();
+        openPhraseManageModal();
+        renderQuickPhrases();
+      }
+    }
+
+    // 通用丝滑鼠标水平拖拽滑动 (解决桌面端鼠标拖动与移动端滑动手感)
+    function enableHorizontalDrag(el) {
+      if (!el) return;
+      let isDown = false, startX, scrollLeft;
+      el.addEventListener('mousedown', (e) => {
+        isDown = true;
+        startX = e.pageX - el.offsetLeft;
+        scrollLeft = el.scrollLeft;
+      });
+      el.addEventListener('mouseleave', () => { isDown = false; });
+      el.addEventListener('mouseup', () => { isDown = false; });
+      el.addEventListener('mousemove', (e) => {
+        if (!isDown) return;
+        e.preventDefault();
+        const x = e.pageX - el.offsetLeft;
+        const walk = (x - startX) * 1.5;
+        el.scrollLeft = scrollLeft - walk;
+      });
+    }
+
+    // ==========================================
+    // 💾 棋局状态跨页面互通保全 (对局不丢失，切换无忧)
+    // ==========================================
+    function persistGameState() {
+      try {
+        const state = {
+          board, history, turn, stepCount: history.length, isOver, gameMode,
+          p1Name, p2Name, p1Avatar, p2Avatar
+        };
+        sessionStorage.setItem('gomoku_active_game_state', JSON.stringify(state));
+      } catch(e) {}
+    }
+
+    function restoreGameStateIfAny() {
+      try {
+        const raw = sessionStorage.getItem('gomoku_active_game_state');
+        if (raw) {
+          const s = JSON.parse(raw);
+          if (s.board && s.history && s.history.length > 0 && !s.isOver) {
+            board = s.board;
+            history = s.history;
+            turn = s.turn;
+            isOver = s.isOver || false;
+            if (s.gameMode) gameMode = s.gameMode;
+            if (gameMode === 'ai' && turn === WHITE && !isOver) {
+              setTimeout(smartAiMove, 300);
+            }
+          }
+        }
+      } catch(e) {}
+    }
+
+    window.addEventListener('resize', resizeBoard);
+    window.addEventListener('orientationchange', () => setTimeout(resizeBoard, 150));
+    
+    // 初始化
+    if (activeThemeKey && activeThemeKey !== 'default') {
+      document.body.className = 'theme-' + activeThemeKey.replace('_', '-');
+    } else {
+      document.body.className = '';
+      activeThemeKey = 'default';
+    }
+    restoreGameStateIfAny();
+    updatePlayerHeaderUI();
+    renderChatHistory();
+    renderQuickPhrases();
+    drawRandomThreeCards();
+    resizeBoard();
+    updateUI();
+
+    // 启用水平拖拽滑动
+    enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));
+    enableHorizontalDrag(document.querySelector('.emoji-row'));
+  </script>
+</body>
+</html>
