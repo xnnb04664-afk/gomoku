@@ -1526,8 +1526,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.10</span></div>
-          <div style="font-size:9.5px; color:#636e72;">GitHub 免服务器云端发版</div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.11</span></div>
+          <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
       </div>
@@ -5984,7 +5984,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.10';
+    const CURRENT_VERSION_TAG = 'v1.0.11';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -6070,33 +6070,45 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       // 对比本地版本
       if (compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0) {
-        // ✨ 优先尝试应用内无感静默热更新（直接拉取最新页面并刷新生效）
-        if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile) {
-          const updateHtmlUrls = [
-            `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`,
-            `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
-            `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`
-          ];
+        // ✨ 全自动更新核心机制：发现新版本立即自动启动静默更新
+        showGameNotice(`🚀 发现新版本 ${versionData.tag}，已启动全自动更新...`, false);
 
-          for (const uUrl of updateHtmlUrls) {
-            try {
-              showGameNotice('🚀 检测到新版本，正在为您无感自动更新...', false);
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 6000);
-              const res = await fetch(uUrl, { signal: controller.signal });
-              clearTimeout(timeoutId);
-              if (res.ok) {
-                const htmlText = await res.text();
-                if (htmlText && htmlText.length > 50000) {
-                  AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
-                  showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
-                  setTimeout(() => { location.reload(); }, 1200);
-                  return;
+        // 1. 若在 Android 原生运行环境下：
+        if (typeof AndroidNativeApp !== 'undefined') {
+          // A. 优先尝试秒级无感 HTML 热更新
+          if (AndroidNativeApp.saveHotUpdateFile) {
+            const updateHtmlUrls = [
+              `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`,
+              `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
+              `https://gcore.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`
+            ];
+
+            for (const uUrl of updateHtmlUrls) {
+              try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
+                const res = await fetch(uUrl, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (res.ok) {
+                  const htmlText = await res.text();
+                  if (htmlText && htmlText.length > 50000) {
+                    AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
+                    showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
+                    setTimeout(() => { location.reload(); }, 1000);
+                    return;
+                  }
                 }
+              } catch(err) {
+                console.warn('[Auto HotUpdate fallback]', err);
               }
-            } catch(err) {
-              console.warn('[Auto HotUpdate fallback]', err);
             }
+          }
+
+          // B. 若无感热更新未命中，全自动在后台拉取并弹出安装（无需用户手动点击任何链接）
+          if (AndroidNativeApp.downloadAndInstallApk) {
+            const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+            AndroidNativeApp.downloadAndInstallApk(fastLink);
+            showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
           }
         }
 
@@ -6111,11 +6123,11 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           const btnFast = document.getElementById('btnFastDownload');
           if (btnFast) {
             btnFast.href = fastLink;
+            btnFast.textContent = '🚀 正在自动更新 (点击可重新下载)';
             btnFast.onclick = (e) => {
               if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
                 e.preventDefault();
                 AndroidNativeApp.downloadAndInstallApk(fastLink);
-                closeUpdateModal();
               }
             };
           }
@@ -6135,7 +6147,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         }
       } else {
         if (isManual) {
-          showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG}) 啦~`);
+          showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG})，全自动更新守护中~`);
         }
       }
     }
@@ -6145,10 +6157,18 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       if (el) el.style.display = 'none';
     }
 
-    // 页面加载 3 秒后静默检查更新 (不打扰玩家，有新版才弹窗)
+    // 页面加载 1.5 秒后静默全自动检查更新
     setTimeout(() => {
       checkAppUpdate(false);
-    }, 3000);
+    }, 1500);
+
+    // 当用户切回游戏时，自动静默检测更新
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        checkAppUpdate(false);
+      }
+    });
+
     initAnimeThumbnails();
   </script>
 </body>

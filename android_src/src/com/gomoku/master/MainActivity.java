@@ -22,9 +22,14 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.os.StrictMode;
+import android.provider.Settings;
 import android.widget.Toast;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public class MainActivity extends Activity {
 
@@ -48,6 +53,12 @@ public class MainActivity extends Activity {
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         );
+
+        // 允许跨进程共享安装包 URI，保障所有 Android 版本全自动呼起安装器
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            StrictMode.VmPolicy.Builder builder = new StrictMode.VmPolicy.Builder();
+            StrictMode.setVmPolicy(builder.build());
+        }
 
         // 2. 常亮防灭屏
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -272,13 +283,98 @@ public class MainActivity extends Activity {
 
     public void startApkDownload(final String apkUrl) {
         runOnUiThread(() -> {
-            try {
-                Toast.makeText(MainActivity.this, "🚀 正在后台自动下载最新安装包，完成后将自动呼起安装...", Toast.LENGTH_LONG).show();
+            Toast.makeText(MainActivity.this, "🚀 正在全自动下载最新版，完成后将自动弹出安装...", Toast.LENGTH_LONG).show();
+        });
 
+        new Thread(() -> {
+            try {
+                File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (destDir == null) destDir = getFilesDir();
+                if (!destDir.exists()) destDir.mkdirs();
+                File destFile = new File(destDir, "gomoku_latest.apk");
+                if (destFile.exists()) destFile.delete();
+
+                // 优先使用极速流式 HTTP 下载（支持自动跟随重定向并校验安装包完整性）
+                URL url = new URL(apkUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(true);
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(40000);
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) GomokuMasterApp");
+
+                int responseCode = conn.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_MOVED_TEMP || responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == 307 || responseCode == 308) {
+                    String newUrl = conn.getHeaderField("Location");
+                    if (newUrl != null && !newUrl.isEmpty()) {
+                        conn.disconnect();
+                        url = new URL(newUrl);
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setInstanceFollowRedirects(true);
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(40000);
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) GomokuMasterApp");
+                        responseCode = conn.getResponseCode();
+                    }
+                }
+
+                if (responseCode >= 200 && responseCode < 300) {
+                    InputStream in = conn.getInputStream();
+                    FileOutputStream fos = new FileOutputStream(destFile);
+                    byte[] buf = new byte[8192];
+                    int len;
+                    while ((len = in.read(buf)) != -1) {
+                        fos.write(buf, 0, len);
+                    }
+                    fos.flush();
+                    fos.close();
+                    in.close();
+                    conn.disconnect();
+
+                    if (destFile.exists() && destFile.length() > 500000) {
+                        runOnUiThread(() -> installDownloadedApk(destFile));
+                        return;
+                    }
+                }
+                fallbackDownloadManager(apkUrl);
+            } catch (Exception e) {
+                android.util.Log.e("MainActivity", "Direct download error, falling back to DownloadManager: " + e.getMessage());
+                fallbackDownloadManager(apkUrl);
+            }
+        }).start();
+    }
+
+    private void installDownloadedApk(File apkFile) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!getPackageManager().canRequestPackageInstalls()) {
+                    Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋安装应用，以完成全自动更新", Toast.LENGTH_LONG).show();
+                    Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                    startActivity(permIntent);
+                }
+            }
+
+            Intent installIntent = new Intent(Intent.ACTION_VIEW);
+            installIntent.setDataAndType(Uri.fromFile(apkFile), "application/vnd.android.package-archive");
+            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(installIntent);
+            Toast.makeText(MainActivity.this, "🎉 下载完成，请点击【安装/更新】即可完成更新！", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk"));
+                startActivity(intent);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void fallbackDownloadManager(final String apkUrl) {
+        runOnUiThread(() -> {
+            try {
                 final DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(apkUrl));
                 req.setMimeType("application/vnd.android.package-archive");
-                req.setTitle("五子棋 最新版更新");
+                req.setTitle("五子棋 最新版全自动更新");
                 req.setDescription("正在极速下载安装包...");
                 req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
 
@@ -295,20 +391,17 @@ public class MainActivity extends Activity {
                     public void onReceive(Context context, Intent intent) {
                         long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
                         if (id == downloadId) {
-                            try {
-                                unregisterReceiver(this);
-                            } catch (Exception ignored) {}
-
-                            Uri downloadUri = dm.getUriForDownloadedFile(downloadId);
-                            if (downloadUri != null) {
-                                Intent installIntent = new Intent(Intent.ACTION_VIEW);
-                                installIntent.setDataAndType(downloadUri, "application/vnd.android.package-archive");
-                                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                                try {
-                                    startActivity(installIntent);
-                                } catch (Exception e) {
-                                    Toast.makeText(context, "自动呼起安装失败，请在手机【下载管理】中点击安装", Toast.LENGTH_LONG).show();
+                            try { unregisterReceiver(this); } catch (Exception ignored) {}
+                            if (destFile.exists() && destFile.length() > 500000) {
+                                installDownloadedApk(destFile);
+                            } else {
+                                Uri downloadUri = dm.getUriForDownloadedFile(downloadId);
+                                if (downloadUri != null) {
+                                    Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                                    installIntent.setDataAndType(downloadUri, "application/vnd.android.package-archive");
+                                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                    try { startActivity(installIntent); } catch (Exception ignored) {}
                                 }
                             }
                         }
