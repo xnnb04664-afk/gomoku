@@ -1133,7 +1133,7 @@
         <div style="font-size:12.5px; font-weight:700; color:#555;">将房间号发给好友，好友加入即可开局：</div>
         <div class="room-code-display" id="myRoomCodeDisplay" onclick="copyRoomCode()" style="cursor:pointer;" title="点击即可快速复制">------</div>
         <div style="display:flex; justify-content:center; align-items:center; gap:10px; margin:-4px 0 10px 0;">
-          <span style="font-size:11px; color:#10b981; font-weight:800;">🟢 房间码已秒级就绪</span>
+          <span id="roomStatusBadge" style="font-size:11px; color:#f59e0b; font-weight:800;">🟡 正在连入信令网络...</span>
           <span style="font-size:11px; color:#3b82f6; font-weight:800; cursor:pointer; text-decoration:underline;" onclick="refreshNewRoomCode()">🔄 换个房间码</span>
         </div>
         <button class="online-action-btn" onclick="copyRoomCode()">📋 一键复制房间码</button>
@@ -1712,93 +1712,77 @@
     }
 
     // ==========================================
-    // 🌐 WebRTC P2P 房间联机核心逻辑 (0ms极速出码 + 多节点高可用)
     // ==========================================
-    const ONLINE_SERVERS = [
-      { host: '0.peerjs.com', port: 443, path: '/', secure: true },
-      { host: 'peerjs.92k.de', port: 443, path: '/', secure: true }
-    ];
+    // 🌐 WebRTC P2P 房间联机核心逻辑 (稳定高穿透·双端解耦)
+    // ==========================================
     const ICE_CONFIG = {
       iceServers: [
         { urls: 'stun:stun.qq.com:3478' },
         { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:stun.syncthing.net:3478' }
+        { urls: 'stun:stun.syncthing.net:3478' },
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
       ]
     };
 
-    let currentServerIdx = 0;
-    let peerConnectTimer = null;
     let currentRoomCode = '';
+    let hostPeer = null;    // 房主专属 Peer 实例 (固定 ID)
+    let clientPeer = null;  // 客方专属 Peer 实例 (动态 ID)
 
     function generateFastRoomCode() {
       return String(Math.floor(100000 + Math.random() * 900000));
     }
 
-    function initPeer(customCode = null, serverIdx = 0) {
-      // 🚀 核心优化 1：打开即秒级出码，0 毫秒呈现给玩家！
-      if (!currentRoomCode || customCode) {
-        currentRoomCode = customCode || generateFastRoomCode();
-      }
-      myRoomId = `GOMOKU-${currentRoomCode}`;
+    // 房主初始化：向官方服务器注册 GOMOKU-xxxxxx
+    function initHostPeer(targetCode = null) {
+      if (targetCode) currentRoomCode = targetCode;
+      if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
 
       const displayEl = document.getElementById('myRoomCodeDisplay');
-      if (displayEl) {
-        displayEl.textContent = currentRoomCode;
+      const badgeEl = document.getElementById('roomStatusBadge');
+      if (displayEl) displayEl.textContent = currentRoomCode;
+      if (badgeEl) {
+        badgeEl.textContent = '🟡 正在连入信令网络...';
+        badgeEl.style.color = '#f59e0b';
       }
 
-      if (peer && !peer.destroyed && peer.open && peer.id === myRoomId) {
+      const expectedId = `GOMOKU-${currentRoomCode}`;
+      if (hostPeer && !hostPeer.destroyed && hostPeer.open && hostPeer.id === expectedId) {
+        if (badgeEl) {
+          badgeEl.textContent = '🟢 房间已就绪，等待好友加入...';
+          badgeEl.style.color = '#10b981';
+        }
         return;
       }
-      if (peer) {
-        try { peer.destroy(); } catch(e) {}
-        peer = null;
-      }
 
-      currentServerIdx = serverIdx % ONLINE_SERVERS.length;
-      const srv = ONLINE_SERVERS[currentServerIdx];
+      if (hostPeer) {
+        try { hostPeer.destroy(); } catch(e) {}
+        hostPeer = null;
+      }
 
       try {
-        peer = new Peer(myRoomId, {
-          host: srv.host,
-          port: srv.port,
-          path: srv.path,
-          secure: srv.secure,
+        hostPeer = new Peer(expectedId, {
+          secure: true, // 强制安全加密 WSS 连接，完美兼容 file:///、HTTPS 及 Android WebView
           config: ICE_CONFIG,
-          debug: 0
+          debug: 1
         });
-      } catch(e) {
-        peer = new Peer(myRoomId, { config: ICE_CONFIG, debug: 0 });
+      } catch(err) {
+        console.error('[HostPeer create error]', err);
       }
 
-      // 4秒超时自动切换备用信令节点，永不卡死
-      if (peerConnectTimer) clearTimeout(peerConnectTimer);
-      peerConnectTimer = setTimeout(() => {
-        if (peer && !peer.open && !conn) {
-          console.warn(`[Peer] 连接节点 ${srv.host} 超时，正在自动切换备用节点...`);
-          initPeer(currentRoomCode, serverIdx + 1);
-        }
-      }, 4000);
+      if (!hostPeer) return;
 
-      peer.on('open', (id) => {
-        if (peerConnectTimer) clearTimeout(peerConnectTimer);
-        const codeText = id.replace('GOMOKU-', '');
-        currentRoomCode = codeText;
-        if (displayEl) displayEl.textContent = codeText;
-      });
-
-      peer.on('error', (err) => {
-        console.warn('[Peer error]', err);
-        if (peerConnectTimer) clearTimeout(peerConnectTimer);
-        if (err.type === 'unavailable-id') {
-          // 房间号偶发冲突，秒换新号重试
-          currentRoomCode = generateFastRoomCode();
-          initPeer(currentRoomCode, serverIdx);
-        } else if (!peer.open && !conn) {
-          setTimeout(() => initPeer(currentRoomCode, serverIdx + 1), 600);
+      hostPeer.on('open', (id) => {
+        const pureCode = id.replace('GOMOKU-', '');
+        currentRoomCode = pureCode;
+        if (displayEl) displayEl.textContent = pureCode;
+        if (badgeEl) {
+          badgeEl.textContent = '🟢 房间已就绪，等待好友加入...';
+          badgeEl.style.color = '#10b981';
         }
       });
 
-      peer.on('connection', (c) => {
+      hostPeer.on('connection', (c) => {
         conn = c;
         setupConn();
         myOnlineColor = BLACK;
@@ -1809,16 +1793,56 @@
           conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
         });
       });
+
+      hostPeer.on('error', (err) => {
+        console.warn('[HostPeer error]', err);
+        if (err.type === 'unavailable-id') {
+          // 房间号偶发冲突，秒换新号重新注册
+          currentRoomCode = generateFastRoomCode();
+          initHostPeer(currentRoomCode);
+        } else {
+          if (badgeEl) {
+            badgeEl.textContent = '⚠️ 网络重试中...';
+            badgeEl.style.color = '#ef4444';
+          }
+        }
+      });
+    }
+
+    // 兼容原有命名的 initPeer 别名
+    function initPeer(customCode = null) {
+      initHostPeer(customCode);
     }
 
     function refreshNewRoomCode() {
       currentRoomCode = generateFastRoomCode();
-      initPeer(currentRoomCode, currentServerIdx);
-      showGameNotice("🔄 已刷新生成全新房间码！", false);
+      initHostPeer(currentRoomCode);
+      showGameNotice("🔄 正在刷新全新房间码...", false);
     }
 
+    let onlineHeartbeatTimer = null;
     function setupConn() {
+      if (!conn) return;
+      if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+      onlineHeartbeatTimer = setInterval(() => {
+        if (conn && conn.open) {
+          try { conn.send({ type: 'ping' }); } catch(e) {}
+        }
+      }, 6000);
+
+      conn.on('close', () => {
+        if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+        showGameNotice("⚠️ 联机连接已断开！", true);
+      });
+
       conn.on('data', (data) => {
+        if (data.type === 'ping') {
+          try { conn.send({ type: 'pong' }); } catch(e) {}
+          return;
+        }
+        if (data.type === 'pong') {
+          return;
+        }
         if (data.type === 'move') {
           makeMove(data.r, data.c, data.p, true);
         } else if (data.type === 'chat') {
@@ -2585,24 +2609,40 @@
       const btn = document.getElementById('btnConnectRoom');
       if (btn) {
         btn.disabled = true;
-        btn.textContent = '⏳ 正在极速连接中...';
-      }
-
-      if (!peer || peer.destroyed) {
-        initPeer();
+        btn.textContent = '⏳ 正在连接好友房间...';
       }
 
       const targetId = `GOMOKU-${code}`;
-      const executeConnect = () => {
-        conn = peer.connect(targetId, { reliable: true });
+
+      // 准备客方的 Peer 实例 (无需固定 ID，避免与房主 ID 冲突)
+      if (!clientPeer || clientPeer.destroyed) {
+        try {
+          clientPeer = new Peer({
+            secure: true, // 强制安全加密 WSS 连接
+            config: ICE_CONFIG,
+            debug: 1
+          });
+        } catch(e) {
+          clientPeer = new Peer({ secure: true });
+        }
+      }
+
+      const connectToHost = () => {
+        try {
+          conn = clientPeer.connect(targetId, { reliable: true });
+        } catch(e) {
+          console.error('[client connect error]', e);
+        }
 
         let joinTimer = setTimeout(() => {
           if (btn) {
             btn.disabled = false;
             btn.textContent = '🚀 立即连接开局';
           }
-          showGameNotice("⚠️ 连接超时，请确认好友房间是否已打开！", true);
-        }, 6500);
+          showGameNotice("⚠️ 连接超时，请确认房主处于【创建房间】界面且房间号输入正确！", true);
+        }, 12000);
+
+        if (!conn) return;
 
         conn.on('open', () => {
           clearTimeout(joinTimer);
@@ -2618,23 +2658,27 @@
           conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
         });
 
-        conn.on('error', () => {
+        conn.on('error', (err) => {
           clearTimeout(joinTimer);
           if (btn) {
             btn.disabled = false;
             btn.textContent = '🚀 立即连接开局';
           }
-          showGameNotice("❌ 连接失败，请检查房间码或让好友刷新重开！", true);
+          showGameNotice("❌ 连接失败，请检查房间码或让好友刷新重试！", true);
         });
       };
 
-      if (peer.open) {
-        executeConnect();
+      if (clientPeer.open) {
+        connectToHost();
       } else {
-        peer.once('open', executeConnect);
-        setTimeout(() => {
-          if (!conn || !conn.open) executeConnect();
-        }, 1200);
+        clientPeer.once('open', connectToHost);
+        clientPeer.once('error', (err) => {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🚀 立即连接开局';
+          }
+          showGameNotice("❌ 信令网络连接受阻，请检查网络后重试！", true);
+        });
       }
     }
 

@@ -1351,13 +1351,27 @@
     }
 
     // ==========================================
-    // 🌐 WebRTC P2P 异地情侣免服联机
+    // 🌐 WebRTC P2P 异地情侣免服联机 (高穿透+强制安全WSS)
     // ==========================================
+    const ICE_CONFIG = {
+      iceServers: [
+        { urls: 'stun:stun.qq.com:3478' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:stun.syncthing.net:3478' },
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
     function initPeer() {
       if (peer) return;
       const randomCode = Math.floor(100000 + Math.random() * 900000);
       myRoomId = `SWEET-${randomCode}`;
-      peer = new Peer(myRoomId);
+      peer = new Peer(myRoomId, {
+        secure: true,
+        config: ICE_CONFIG,
+        debug: 1
+      });
 
       peer.on('open', (id) => {
         document.getElementById('myRoomCodeDisplay').textContent = randomCode;
@@ -1466,15 +1480,20 @@
       if (!code) return alert("请输入 6 位房间码！");
       initPeer();
       const targetId = `SWEET-${code}`;
-      conn = peer.connect(targetId);
-      conn.on('open', () => {
-        setupConn();
-        myOnlineColor = WHITE;
-        alert("🎉 成功连入宝贝房间！房主执海盐晴空蓝，您执蜜桃草莓粉~ 💖");
-        closeOnlineModal();
-        setMode('online');
-        conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
-      });
+      const doConnect = () => {
+        conn = peer.connect(targetId, { reliable: true });
+        conn.on('open', () => {
+          setupConn();
+          myOnlineColor = WHITE;
+          alert("🎉 成功连入宝贝房间！房主执海盐晴空蓝，您执蜜桃草莓粉~ 💖");
+          closeOnlineModal();
+          setMode('online');
+          conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+        });
+        conn.on('error', () => alert("❌ 连接失败，请检查房间码！"));
+      };
+      if (peer && peer.open) doConnect();
+      else if (peer) peer.once('open', doConnect);
     }
 
     // ==========================================
