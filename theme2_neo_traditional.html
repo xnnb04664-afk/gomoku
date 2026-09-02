@@ -1086,7 +1086,7 @@
 
 
     const cvs = document.getElementById('cvs');
-    const ctx = cvs.getContext('2d');
+    let ctx = cvs.getContext('2d');
     const islandWrapper = document.getElementById('islandWrapper');
 
     let cWidth = 380, cHeight = 380, paddingX = 16, paddingY = 16, gridX = 23, gridY = 23, radius = 10;
@@ -1931,6 +1931,7 @@
       paddingX = cWidth * 0.045; paddingY = cHeight * 0.045;
       gridX = (cWidth - 2 * paddingX) / 15; gridY = (cHeight - 2 * paddingY) / 15;
       radius = gridX * 0.42;
+      invalidateBoardCache();
       draw();
     }
 
