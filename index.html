@@ -1611,8 +1611,8 @@
         sweetName: '天降锦囊 🃏',
         icon: '🃏',
         sweetIcon: '🃏',
-        desc: '重铸未用手牌，抽取全新技能卡',
-        sweetDesc: '变变变！重新换两张全新惊喜卡~',
+        desc: '神迹刷新！重置全部手牌(含已使用牌)，获得3张全新可用神技',
+        sweetDesc: '奇迹大转盘！全部3张卡牌统统复活换新~',
         needTarget: false
       },
       {
@@ -2805,36 +2805,23 @@
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
         } else if (card.id === 'reforge_cards') {
-          // 收集当前已使用的卡牌ID，并排除自身（防止无限原地刷天降神抽）
-          const usedCardIds = new Set();
-          currentDrawnCards.forEach((c, i) => {
-            if (i !== idx && cardUsedStatus[i]) usedCardIds.add(c.id);
-          });
-          usedCardIds.add('reforge_cards');
-
-          let pool = SKILL_CARD_POOL.filter(c => !usedCardIds.has(c.id));
-          if (pool.length < 3) {
-            pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
-          }
+          // 排除天降神抽自身，从其他8大技能中随机洗牌抽出3张全新神技牌
+          const pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
           const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
 
-          let pickIdx = 0;
+          // 核心机制：全场 3 个卡牌槽位（包括之前已使用变灰的干扰牌和自身）全部满血重铸并复活！
           for (let i = 0; i < 3; i++) {
-            // 天降神抽自身所在槽位 (i === idx) 以及其他未使用的槽位 (!cardUsedStatus[i])，全部重铸！
-            if (i === idx || !cardUsedStatus[i]) {
-              if (pickIdx < shuffledPool.length) {
-                currentDrawnCards[i] = shuffledPool[pickIdx++];
-                cardUsedStatus[i] = false; // 刷新出来的神技牌立即可用！
-              }
-            }
+            currentDrawnCards[i] = shuffledPool[i];
+            cardUsedStatus[i] = false; // 刷新出来的全部神技牌立即可用！
           }
           renderCardSlots();
           triggerSkillVFX('reforge_cards');
           playSkillSound('dice');
-          showSkillBanner('🃏', `【${cardTitle}】发动！`, '灵运爆发！自身与未用手牌已全部蜕变重铸为全新神技！');
+          showSkillBanner('🃏', `【${cardTitle}】发动！`, '神迹降临！全场所有手牌（包含已使用的干扰牌）全部满血复活换新！');
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
+          persistGameState();
         } else if (card.id === 'identity_swap') {
           if (history.length === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
           // 全盘颜色互换
