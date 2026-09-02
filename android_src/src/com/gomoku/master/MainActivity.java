@@ -18,14 +18,15 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
-    private WebView mWebView;
-    private long mLastBackPressTime = 0;
+    private WebView       mWebView;
+    private LocalWebServer mLocalServer;
+    private long          mLastBackPressTime = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 1. 设置无标题栏与强行开启 Window 硬件加速
+        // 1. 无标题栏 + Window 硬件加速
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
@@ -36,21 +37,31 @@ public class MainActivity extends Activity {
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         );
 
-        // 2. 保持屏幕常亮 (对局中防灭屏)
+        // 2. 常亮防灭屏
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // 3. 全面屏沉浸式隐藏状态栏与虚拟导航栏 (Sticky Immersive)
+        // 3. Sticky Immersive 全面屏
         applyImmersiveSticky();
 
         mWebView = new WebView(this);
-        // 背景设为深色，消除初次加载时的白色闪屏
         mWebView.setBackgroundColor(Color.parseColor("#1a1a2e"));
         setContentView(mWebView);
 
         setupWebView();
 
-        // 加载本地极速离线游戏主页
-        mWebView.loadUrl("file:///android_asset/index.html");
+        // 4. 启动内嵌 HTTP 服务器（localhost:8080）
+        //    目的：让 WebView 从 http://localhost 加载，彻底解除 file:// 协议
+        //    对 WebSocket/WebRTC DataChannel 的各类安全限制，使联机与网页版行为完全一致。
+        mLocalServer = new LocalWebServer(getAssets());
+        boolean serverReady = mLocalServer.startAndWait();
+
+        if (serverReady) {
+            mWebView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
+        } else {
+            // 极罕见情况：服务器未能在 500ms 内就绪，回退到 file:// 并提示
+            android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
+            mWebView.loadUrl("file:///android_asset/index.html");
+        }
     }
 
     private void applyImmersiveSticky() {
@@ -69,44 +80,42 @@ public class MainActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            applyImmersiveSticky();
-        }
+        if (hasFocus) applyImmersiveSticky();
     }
 
     private void setupWebView() {
         WebSettings settings = mWebView.getSettings();
 
-        // 1. JavaScript 与现代 Web 核心驱动
+        // JavaScript 与现代 Web 核心驱动
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
 
-        // 2. 渲染优先级与硬件加速光栅化调优
+        // 渲染优先级与硬件加速
         settings.setRenderPriority(WebSettings.RenderPriority.HIGH);
         mWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         mWebView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
         mWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
-        // 3. 缓存策略深度优化：首选本地极速缓存
+        // 缓存策略
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(mWebView, true);
         }
 
-        // 4. 视口自适应与缩放控制 (禁止冗余双击缩放，消除 300ms 点击延迟)
+        // 视口自适应（禁止缩放消除 300ms 点击延迟）
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
 
-        // 5. 音频与多媒体自动无阻播放
+        // 音频自动播放
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
             settings.setMediaPlaybackRequiresUserGesture(false);
         }
 
-        // 6. 允许本地 Asset 文件与数据访问
+        // 文件访问（用于回退兼容）
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
@@ -114,26 +123,25 @@ public class MainActivity extends Activity {
             settings.setAllowUniversalAccessFromFileURLs(true);
         }
 
-        // 7. 页面导航保持在 WebView 内部
+        // 页面导航保持在 WebView 内部
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                view.loadUrl(url);
-                return true;
+                // localhost 内的跳转保持在 WebView；外链交给系统浏览器
+                if (url.startsWith("http://localhost") || url.startsWith("file://")) {
+                    view.loadUrl(url);
+                    return true;
+                }
+                return false;
             }
         });
 
-        // 8. 处理 WebRTC 权限自动授予 (联机对决免打扰)
+        // WebRTC 权限自动授予
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            request.grant(request.getResources());
-                        }
-                    });
+                    runOnUiThread(() -> request.grant(request.getResources()));
                 }
             }
         });
@@ -141,11 +149,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        long currentTime = System.currentTimeMillis();
-        if (currentTime - mLastBackPressTime < 2000) {
+        long now = System.currentTimeMillis();
+        if (now - mLastBackPressTime < 2000) {
             super.onBackPressed();
         } else {
-            mLastBackPressTime = currentTime;
+            mLastBackPressTime = now;
             Toast.makeText(this, "再按一次退出游戏", Toast.LENGTH_SHORT).show();
         }
     }
@@ -155,7 +163,7 @@ public class MainActivity extends Activity {
         super.onResume();
         if (mWebView != null) {
             mWebView.onResume();
-            mWebView.resumeTimers(); // 恢复 JS 计时器与动画
+            mWebView.resumeTimers();
         }
     }
 
@@ -164,18 +172,21 @@ public class MainActivity extends Activity {
         super.onPause();
         if (mWebView != null) {
             mWebView.onPause();
-            mWebView.pauseTimers(); // 暂停后台计时器，防止发热与耗电
+            mWebView.pauseTimers();
         }
     }
 
     @Override
     protected void onDestroy() {
+        // 停止本地服务器
+        if (mLocalServer != null) {
+            mLocalServer.stopServer();
+            mLocalServer = null;
+        }
+        // 安全销毁 WebView
         if (mWebView != null) {
-            // 安全从父容器解绑并彻底销毁，杜绝内存泄漏
             ViewGroup parent = (ViewGroup) mWebView.getParent();
-            if (parent != null) {
-                parent.removeView(mWebView);
-            }
+            if (parent != null) parent.removeView(mWebView);
             mWebView.stopLoading();
             mWebView.clearHistory();
             mWebView.removeAllViews();

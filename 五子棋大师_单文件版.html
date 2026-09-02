@@ -1302,7 +1302,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.1</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.2</span></div>
           <div style="font-size:9.5px; color:#636e72;">GitHub 免服务器云端发版</div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -2063,6 +2063,9 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
         // 🌐 全球 Anycast 骨干节点 (Cloudflare 极速跨网零丢包)
         { urls: 'stun:stun.cloudflare.com:3478' },
         { urls: 'stun:stun.syncthing.net:3478' },
+        // 🌍 通用 STUN 兜底 (PeerJS 官方 & FreeSWITCH 全球节点)
+        { urls: 'stun:stun.peerjs.com:3478' },
+        { urls: 'stun:freestun.net:3478' },
         // 🔄 开放 WebRTC TURN 中继服务器 (跨运营商对称 NAT/4G/5G 移动蜂窝中继保障)
         {
           urls: [
@@ -2072,10 +2075,32 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
           ],
           username: 'openrelayproject',
           credential: 'openrelayproject'
+        },
+        // 🔄 freestun 免费 TURN 中继备用 (全球开放节点)
+        {
+          urls: [
+            'turn:freestun.net:3478',
+            'turns:freestun.net:5349'
+          ],
+          username: 'free',
+          credential: 'free'
         }
       ],
       iceCandidatePoolSize: 10
     };
+
+    // 📡 PeerJS 信令服务器配置：优先使用香港节点 (0.peerjs.com)，国内移动网络友好
+    // 注意：默认 peerjs.com 为美国节点，移动 4G/5G 下常超时导致卡"连接中"
+    function makePeerConfig(extraOpts) {
+      return Object.assign({
+        host: '0.peerjs.com',   // 香港 Anycast 节点，国内延迟 ~60ms vs 默认 ~300ms+
+        port: 443,
+        path: '/',
+        secure: true,
+        config: ICE_CONFIG,
+        debug: 0
+      }, extraOpts || {});
+    }
 
     let currentRoomCode = '';
     let hostPeer = null;    // 房主专属 Peer 实例 (固定 ID)
@@ -2141,11 +2166,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       }
 
       try {
-        hostPeer = new Peer(expectedId, {
-          secure: true, // 强制安全加密 WSS 连接，全面兼容 file:///、HTTPS 及 Android WebView
-          config: ICE_CONFIG,
-          debug: 0
-        });
+        hostPeer = new Peer(expectedId, makePeerConfig());
       } catch(err) {
         console.error('[HostPeer create error]', err);
         isHostConnecting = false;
@@ -2280,7 +2301,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       if (myOnlineColor === WHITE) {
         // 客方主动向房主发起重连
         if (!clientPeer || clientPeer.destroyed) {
-          clientPeer = new Peer({ secure: true, config: ICE_CONFIG, debug: 0 });
+          clientPeer = new Peer(makePeerConfig());
         }
         
         const tryConnect = () => {
@@ -3226,13 +3247,9 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
       // 准备客方的 Peer 实例 (无需固定 ID，避免与房主 ID 冲突)
       if (!clientPeer || clientPeer.destroyed) {
         try {
-          clientPeer = new Peer({
-            secure: true, // 强制安全加密 WSS 连接
-            config: ICE_CONFIG,
-            debug: 1
-          });
+          clientPeer = new Peer(makePeerConfig());
         } catch(e) {
-          clientPeer = new Peer({ secure: true });
+          clientPeer = new Peer(makePeerConfig({ debug: 1 }));
         }
       }
 
@@ -5187,7 +5204,7 @@ const ANIME_AVATAR_GIRL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAAC
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 免服务器自动检查更新系统 (Zero Serverless Cloud Updates)
-    const CURRENT_VERSION_TAG = 'v1.0.1';
+    const CURRENT_VERSION_TAG = 'v1.0.2';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
