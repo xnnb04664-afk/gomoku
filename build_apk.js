@@ -146,26 +146,31 @@ const alignedApk = path.join(TEMP_BUILD, 'aligned.apk');
 run(ZIPALIGN, ['-f', '-p', '4', withDexApk, alignedApk]);
 
 console.log('>>> [7/7] 对 APK 进行数字签名 (apksigner)...');
-const tempKeystore = path.join(TEMP_BUILD, 'release.keystore');
-run('keytool', [
-  '-genkeypair',
-  '-v',
-  '-keystore', tempKeystore,
-  '-storepass', '123456',
-  '-alias', 'gomoku',
-  '-keypass', '123456',
-  '-keyalg', 'RSA',
-  '-keysize', '2048',
-  '-validity', '10000',
-  '-dname', 'CN=GomokuMaster, OU=Game, O=ZhuanZ1, L=BJ, ST=BJ, C=CN'
-]);
+let keystorePath = KEYSTORE;
+if (!fs.existsSync(keystorePath)) {
+  console.log('>>> [首次构建] 生成项目唯一永久正式签名密钥 release.keystore...');
+  run('keytool', [
+    '-genkeypair',
+    '-v',
+    '-keystore', keystorePath,
+    '-storepass', '123456',
+    '-alias', 'gomoku',
+    '-keypass', '123456',
+    '-keyalg', 'RSA',
+    '-keysize', '2048',
+    '-validity', '10000',
+    '-dname', 'CN=Gomoku, OU=Game, O=ZhuanZ1, L=BJ, ST=BJ, C=CN'
+  ]);
+} else {
+  console.log('>>> [持久签名] 复用项目根目录固定正式签名密钥 (保证手机可无缝覆盖安装更新): ' + keystorePath);
+}
 
 const tempSignedApk = path.join(TEMP_BUILD, 'signed.apk');
 run('cmd.exe', [
   '/c',
   APKSIGNER,
   'sign',
-  '--ks', tempKeystore,
+  '--ks', keystorePath,
   '--ks-pass', 'pass:123456',
   '--ks-key-alias', 'gomoku',
   '--key-pass', 'pass:123456',
