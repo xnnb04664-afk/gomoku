@@ -927,6 +927,53 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       letter-spacing: 0.2px;
     }
 
+    /* 🎨 手绘果冻风通用确认模态弹窗 (彻底替代丑陋的系统 confirm) */
+    .custom-confirm-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.62);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 250; opacity: 0; pointer-events: none; transition: opacity 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    }
+    .custom-confirm-backdrop.show { opacity: 1; pointer-events: auto; }
+    .custom-confirm-card {
+      background: #fffdf5; border: 3.5px solid var(--border-dark);
+      border-radius: 24px; width: 88%; max-width: 320px; padding: 22px 18px 18px 18px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.4), inset 0 2px 0 rgba(255,255,255,0.8);
+      text-align: center;
+      transform: scale(0.82) translateY(20px);
+      transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .custom-confirm-backdrop.show .custom-confirm-card { transform: scale(1) translateY(0); }
+    .custom-confirm-icon { font-size: 38px; line-height: 1.1; margin-bottom: 6px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15)); }
+    .custom-confirm-title { font-size: 17px; font-weight: 900; color: var(--border-dark); margin-bottom: 8px; }
+    .custom-confirm-text { font-size: 14px; font-weight: 800; color: #475569; line-height: 1.5; margin-bottom: 18px; }
+    .custom-confirm-buttons { display: flex; gap: 10px; justify-content: center; }
+    .btn-confirm-cancel {
+      flex: 1; padding: 10px 0; border-radius: 12px; border: 2.5px solid var(--border-dark);
+      background: #f1f5f9; color: #475569; font-weight: 900; font-size: 14px; cursor: pointer;
+      box-shadow: 0 3px 0 var(--border-dark); transition: all 0.1s;
+    }
+    .btn-confirm-cancel:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--border-dark); }
+    .btn-confirm-ok {
+      flex: 1.2; padding: 10px 0; border-radius: 12px; border: 2.5px solid var(--border-dark);
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #ffffff; font-weight: 900; font-size: 14.5px; cursor: pointer;
+      box-shadow: 0 3px 0 var(--border-dark); transition: all 0.1s;
+    }
+    .btn-confirm-ok:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--border-dark); }
+
+    .phrase-manage-item {
+      transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.15s, border-color 0.15s;
+    }
+    .phrase-manage-item.is-dragging {
+      background: #ecfdf5 !important;
+      border-color: #10b981 !important;
+      box-shadow: 0 8px 24px rgba(16, 185, 129, 0.45) !important;
+      transform: scale(1.025);
+      z-index: 50 !important;
+      position: relative;
+    }
+
     /* 📱 手机端全面自适应紧凑与大字优化 (屏幕宽度 480px 以下) */
     @media screen and (max-width: 480px) {
       body {
@@ -1331,6 +1378,19 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
     </div>
   </div>
 
+  <!-- 🐾 手绘果冻风通用确认模态弹窗 (彻底杜绝系统丑陋的白色原生弹窗) -->
+  <div class="custom-confirm-backdrop" id="customConfirmModal" onclick="if(event.target===this)closeCustomConfirm(false)">
+    <div class="custom-confirm-card">
+      <div class="custom-confirm-icon" id="customConfirmIcon">🐾</div>
+      <div class="custom-confirm-title" id="customConfirmTitle">提示</div>
+      <div class="custom-confirm-text" id="customConfirmText">确定要执行此操作吗？</div>
+      <div class="custom-confirm-buttons">
+        <button class="btn-confirm-cancel" id="btnConfirmCancel" onclick="closeCustomConfirm(false)">取消</button>
+        <button class="btn-confirm-ok" id="btnConfirmOk" onclick="closeCustomConfirm(true)">确定</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     function openThemeModal() {
       document.getElementById('themeModal').classList.add('show');
@@ -1338,6 +1398,38 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
     function closeThemeModal() {
       document.getElementById('themeModal').classList.remove('show');
     }
+
+    // 🐾 手绘果冻风通用确认弹窗 (彻底消灭所有浏览器的“此页面显示”系统原生弹窗)
+    let customConfirmCallback = null;
+    function showCustomConfirm(text, onOk, onCancel, options = {}) {
+      const modal = document.getElementById('customConfirmModal');
+      if (!modal) {
+        if (onOk) onOk();
+        return;
+      }
+      document.getElementById('customConfirmText').textContent = text;
+      document.getElementById('customConfirmTitle').textContent = options.title || '操作确认';
+      document.getElementById('customConfirmIcon').textContent = options.icon || '🐾';
+      customConfirmCallback = { onOk, onCancel };
+      modal.classList.add('show');
+    }
+
+    function closeCustomConfirm(result) {
+      const modal = document.getElementById('customConfirmModal');
+      if (modal) modal.classList.remove('show');
+      if (result && customConfirmCallback && customConfirmCallback.onOk) {
+        customConfirmCallback.onOk();
+      } else if (!result && customConfirmCallback && customConfirmCallback.onCancel) {
+        customConfirmCallback.onCancel();
+      }
+      customConfirmCallback = null;
+    }
+
+    // 🛡️ 全局拦截 window.confirm，彻底杜绝系统丑陋白色阻塞对话框
+    window.confirm = function(msg) {
+      showCustomConfirm(msg, () => {});
+      return false;
+    };
 
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
@@ -4449,8 +4541,8 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       const modal = document.getElementById('phraseManageModal');
       const list = document.getElementById('managePhraseList');
       list.innerHTML = customPhrases.map((p, idx) => `
-        <div class="phrase-manage-item" draggable="true" data-index="${idx}"
-             style="display:flex; align-items:center; justify-content:space-between; background:#fff; padding:7px 10px; border-radius:8px; border:1.5px solid #cbd5e1; font-size:12.5px; font-weight:800; cursor:grab; user-select:none; opacity:1 !important; transition:transform 0.15s, box-shadow 0.15s, border-color 0.15s; touch-action:none;"
+        <div class="phrase-manage-item" draggable="true" data-index="${idx}" data-phrase="${p.replace(/"/g, '&quot;')}"
+             style="display:flex; align-items:center; justify-content:space-between; background:#fff; padding:7px 10px; border-radius:8px; border:1.5px solid #cbd5e1; font-size:12.5px; font-weight:800; cursor:grab; user-select:none; opacity:1 !important; touch-action:none;"
              ondragstart="handlePhraseDragStart(event)"
              ondragover="handlePhraseDragOver(event)"
              ondragend="handlePhraseDragEnd(event)"
@@ -4483,9 +4575,10 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
       const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
       items.forEach((item, idx) => {
         item.dataset.index = idx;
+        const phrase = item.getAttribute('data-phrase') || '';
         const txt = item.querySelector('.phrase-item-text');
-        if (txt && customPhrases[idx]) {
-          txt.textContent = `${idx + 1}. ${customPhrases[idx]}`;
+        if (txt && phrase) {
+          txt.textContent = `${idx + 1}. ${phrase}`;
         }
         const upBtn = item.querySelector('.btn-move-up');
         const downBtn = item.querySelector('.btn-move-down');
@@ -4519,111 +4612,100 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
     }
 
     // ==========================================
-    // 🔀 自定义内实时拖动换位 (不做透明处理，其他项动态让位)
+    // 🔀 快捷语高级实时换位拖拽排序引擎 (移动触屏 + 鼠标全面支持，其他语录实时移动让位)
     // ==========================================
-    let draggedPhraseItem = null;
+    let activeDragPhraseItem = null;
 
+    function getDragAfterElement(container, y) {
+      const draggableElements = [...container.querySelectorAll('.phrase-manage-item:not(.is-dragging)')];
+      return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+          return { offset: offset, element: child };
+        } else {
+          return closest;
+        }
+      }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+
+    // 1. 桌面端 HTML5 Drag&Drop 实时换位
     function handlePhraseDragStart(e) {
-      draggedPhraseItem = e.currentTarget;
+      activeDragPhraseItem = e.currentTarget;
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', '');
-      // 绝不做透明处理！保持 100% 不透明，增加悬浮投影与高亮边框
-      draggedPhraseItem.style.opacity = '1';
-      draggedPhraseItem.style.borderColor = '#4caf50';
-      draggedPhraseItem.style.boxShadow = '0 6px 18px rgba(76, 175, 80, 0.4)';
-      draggedPhraseItem.style.transform = 'scale(1.02)';
-      draggedPhraseItem.style.zIndex = '10';
+      setTimeout(() => {
+        if (activeDragPhraseItem) activeDragPhraseItem.classList.add('is-dragging');
+      }, 0);
     }
 
     function handlePhraseDragOver(e) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      const targetItem = e.currentTarget;
-      if (!draggedPhraseItem || targetItem === draggedPhraseItem) return;
+      if (!activeDragPhraseItem) return;
 
       const list = document.getElementById('managePhraseList');
-      const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
-      const srcIdx = items.indexOf(draggedPhraseItem);
-      const targetIdx = items.indexOf(targetItem);
-      if (srcIdx === -1 || targetIdx === -1) return;
-
-      // DOM 实时插位换序，其他快捷语丝滑平移让位
-      if (srcIdx < targetIdx) {
-        list.insertBefore(draggedPhraseItem, targetItem.nextSibling);
+      const afterElement = getDragAfterElement(list, e.clientY);
+      if (afterElement == null) {
+        if (list.lastElementChild !== activeDragPhraseItem) {
+          list.appendChild(activeDragPhraseItem);
+          updateManageItemNumbers();
+        }
       } else {
-        list.insertBefore(draggedPhraseItem, targetItem);
+        if (afterElement !== activeDragPhraseItem && afterElement.previousElementSibling !== activeDragPhraseItem) {
+          list.insertBefore(activeDragPhraseItem, afterElement);
+          updateManageItemNumbers();
+        }
       }
-
-      // 实时同步数组与序号
-      const [moved] = customPhrases.splice(srcIdx, 1);
-      customPhrases.splice(targetIdx, 0, moved);
-      savePhrases();
-      updateManageItemNumbers();
-      renderQuickPhrases();
     }
 
     function handlePhraseDragEnd(e) {
-      if (draggedPhraseItem) {
-        draggedPhraseItem.style.opacity = '1';
-        draggedPhraseItem.style.borderColor = '#cbd5e1';
-        draggedPhraseItem.style.boxShadow = 'none';
-        draggedPhraseItem.style.transform = 'none';
-        draggedPhraseItem.style.zIndex = '';
-        draggedPhraseItem = null;
-      }
-      updateManageItemNumbers();
+      finishPhraseDrag();
     }
 
-    // 移动端 Touch 触摸实时拖动换位
-    let touchedPhraseItem = null;
-
+    // 2. 移动端 Touch 触摸实时换位 (基于手指垂直坐标计算，其他语录动态让位平移)
     function handlePhraseTouchStart(e) {
-      touchedPhraseItem = e.currentTarget;
-      // 绝不做透明处理！
-      touchedPhraseItem.style.opacity = '1';
-      touchedPhraseItem.style.borderColor = '#4caf50';
-      touchedPhraseItem.style.boxShadow = '0 6px 18px rgba(76, 175, 80, 0.4)';
-      touchedPhraseItem.style.transform = 'scale(1.02)';
-      touchedPhraseItem.style.zIndex = '10';
+      activeDragPhraseItem = e.currentTarget;
+      activeDragPhraseItem.classList.add('is-dragging');
     }
 
     function handlePhraseTouchMove(e) {
-      if (!touchedPhraseItem) return;
+      if (!activeDragPhraseItem) return;
+      if (e.cancelable) e.preventDefault();
       const touch = e.touches[0];
-      const elem = document.elementFromPoint(touch.clientX, touch.clientY);
-      const targetItem = elem ? elem.closest('.phrase-manage-item') : null;
-      if (!targetItem || targetItem === touchedPhraseItem) return;
-
       const list = document.getElementById('managePhraseList');
-      const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
-      const srcIdx = items.indexOf(touchedPhraseItem);
-      const targetIdx = items.indexOf(targetItem);
-      if (srcIdx === -1 || targetIdx === -1) return;
-
-      // 实时换位插位
-      if (srcIdx < targetIdx) {
-        list.insertBefore(touchedPhraseItem, targetItem.nextSibling);
+      const afterElement = getDragAfterElement(list, touch.clientY);
+      if (afterElement == null) {
+        if (list.lastElementChild !== activeDragPhraseItem) {
+          list.appendChild(activeDragPhraseItem);
+          updateManageItemNumbers();
+        }
       } else {
-        list.insertBefore(touchedPhraseItem, targetItem);
+        if (afterElement !== activeDragPhraseItem && afterElement.previousElementSibling !== activeDragPhraseItem) {
+          list.insertBefore(activeDragPhraseItem, afterElement);
+          updateManageItemNumbers();
+        }
       }
-
-      const [moved] = customPhrases.splice(srcIdx, 1);
-      customPhrases.splice(targetIdx, 0, moved);
-      savePhrases();
-      updateManageItemNumbers();
-      renderQuickPhrases();
     }
 
     function handlePhraseTouchEnd(e) {
-      if (touchedPhraseItem) {
-        touchedPhraseItem.style.opacity = '1';
-        touchedPhraseItem.style.borderColor = '#cbd5e1';
-        touchedPhraseItem.style.boxShadow = 'none';
-        touchedPhraseItem.style.transform = 'none';
-        touchedPhraseItem.style.zIndex = '';
-        touchedPhraseItem = null;
+      finishPhraseDrag();
+    }
+
+    function finishPhraseDrag() {
+      if (!activeDragPhraseItem) return;
+      activeDragPhraseItem.classList.remove('is-dragging');
+      activeDragPhraseItem = null;
+
+      const list = document.getElementById('managePhraseList');
+      if (list) {
+        const items = Array.from(list.querySelectorAll('.phrase-manage-item'));
+        customPhrases = items.map(el => el.getAttribute('data-phrase') || '').filter(Boolean);
+        savePhrases();
+        updateManageItemNumbers();
+        renderQuickPhrases();
+        playPopSound();
       }
-      updateManageItemNumbers();
     }
 
     function addNewPhrase() {
@@ -4639,19 +4721,24 @@ window.CHERRY_BOMB_AUDIO_DATA = 'data:audio/mpeg;base64,SUQzBAAAAAADUlRQRTIAAAAX
 
     function deletePhrase(idx) {
       if (customPhrases.length <= 1) return alert("至少保留一条快捷短语哦~");
-      customPhrases.splice(idx, 1);
-      savePhrases();
-      openPhraseManageModal();
-      renderQuickPhrases();
+      const phraseText = customPhrases[idx];
+      showCustomConfirm(`确定要删除快捷语「${phraseText}」吗？`, () => {
+        customPhrases.splice(idx, 1);
+        savePhrases();
+        openPhraseManageModal();
+        renderQuickPhrases();
+        showGameNotice("🗑️ 已删除该快捷短语");
+      }, null, { title: '删除短语', icon: '🗑️' });
     }
 
     function restoreDefaultPhrases() {
-      if (confirm("确定要恢复内置默认快捷短语吗？")) {
+      showCustomConfirm("确定要恢复内置默认快捷短语吗？", () => {
         customPhrases = [...DEFAULT_PHRASES];
         savePhrases();
         openPhraseManageModal();
         renderQuickPhrases();
-      }
+        showGameNotice("✅ 已恢复默认快捷短语~");
+      }, null, { title: '恢复默认短语', icon: '🔄' });
     }
 
     // 通用丝滑鼠标水平拖拽滑动 (解决桌面端鼠标拖动与移动端滑动手感)
