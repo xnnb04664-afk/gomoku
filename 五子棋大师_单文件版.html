@@ -1976,7 +1976,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.63</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.64</div>
         </div>
       </div>
 
@@ -3014,7 +3014,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
     }
 
-    function saveProfile() {
+    async function saveProfile() {
       const nameInput = document.getElementById('inputProfileName').value.trim();
       if (!nameInput) return showGameNotice('⚠️ 昵称不能为空哦！', true);
 
@@ -3023,6 +3023,27 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         p1Avatar = selectedAvatarData;
         localStorage.setItem('gomoku_p1Name', p1Name);
         localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+
+        // 🌟 核心同步：如果已登录，立即将新昵称和头像同步到云端数据库与全服天梯榜！
+        if (currentUserUid) {
+          try {
+            safeApiFetch('/api/user/update_profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                uid: currentUserUid,
+                token: currentUserToken,
+                nickname: p1Name,
+                avatar: p1Avatar
+              })
+            }).then(r => r.json()).then(res => {
+              if (res && res.code === 0) {
+                console.log('[saveProfile] 云端天梯榜昵称已成功同步:', p1Name);
+                fetchLeaderboard(false);
+              }
+            }).catch(e => console.warn('[saveProfile sync error]', e));
+          } catch(e) {}
+        }
       } else {
         p2Name = nameInput;
         p2Avatar = selectedAvatarData;
@@ -3031,8 +3052,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
 
       updatePlayerHeaderUI();
+      updateAccountUI();
       closeProfileModal();
-      showGameNotice('🎉 个人档案已保存！');
+      showGameNotice('🎉 个人档案已保存，天梯榜与对局昵称已同步！');
 
       // 保存时再做一次完整同步（确保对方数据最终一致）
       if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
@@ -5938,8 +5960,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       const btnLogout = document.getElementById("btnLogoutAction");
       if (currentUsername) {
         if (icon) icon.textContent = "✅";
-        if (title) title.textContent = `正式账号: ${currentUsername}`;
-        if (subText) subText.textContent = "账号安全受保护，换设备登录即可找回积分！";
+        if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${currentUsername}</span> <span style="font-size:11px; color:#64748b; font-weight:normal;">(昵称: ${p1Name})</span>`;
+        if (subText) subText.innerHTML = `天梯展示昵称: <b style="color:#10b981;">${p1Name}</b> · 登录可用账号或昵称`;
         if (btnAuth) {
           btnAuth.textContent = "🔄 切换";
           btnAuth.onclick = () => openAuthModal("login");
@@ -6311,7 +6333,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       const html = list.map((item, idx) => {
         const rank = idx + 1;
-        const isP1 = (item.name === p1Name);
+        const isP1 = (item.name === p1Name) || (currentUserUid && String(item.uid) === String(currentUserUid)) || (currentUsername && item.name === currentUsername);
         if (isP1) {
           myRankNum = rank;
           myScore = item.score;
@@ -8281,7 +8303,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.63';
+    const CURRENT_VERSION_TAG = 'v1.0.64';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
