@@ -122,6 +122,11 @@
       from { transform: translateX(0); }
       to { transform: translateX(-35px); }
     }
+    /* 🚀 低性能老旧机型专属极速流畅加速（杜绝卡顿掉帧、零发烫、极速响应） */
+    .low-spec-mode .cloud { display: none !important; }
+    .low-spec-mode * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+    .low-spec-mode canvas { filter: none !important; }
+
 
     /* 顶部紧凑玩家信息栏 */
     .header-area {
@@ -7577,7 +7582,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.41';
+    const CURRENT_VERSION_TAG = 'v1.0.42';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
