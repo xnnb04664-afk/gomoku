@@ -155,13 +155,14 @@ public class MainActivity extends Activity {
 
         // 3. Sticky Immersive 全面屏
         applyImmersiveSticky();
-        // ⚡ 启动极速秒开调优：安全哈希与注入探测异步并发执行，彻底解除对主线程绘制的阻塞
-        new Thread(() -> {
+        try {
             enforceAntiReverseProtection();
             if (!verifyApkSignatureIntegrity()) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show());
+                Toast.makeText(this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show();
             }
-        }).start();
+        } catch (Exception e) {
+            android.util.Log.w("MainActivity", "Security check bypassed safely: " + e.getMessage());
+        }
 
         mWebView = new WebView(this);
         mWebView.setBackgroundColor(Color.parseColor("#4da4ff"));
