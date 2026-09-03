@@ -1543,10 +1543,10 @@
 
 
 
-      <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
+      <!-- 🚀 官方云端版本检测与在线更新引擎 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.27</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.28</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1934,7 +1934,7 @@
     </div>
   </div>
 
-  <!-- 🚀 GitHub 自动检查更新模态弹窗 -->
+  <!-- 🚀 官方云端自动检查更新模态弹窗 -->
   <div class="custom-confirm-backdrop" id="appUpdateModal" style="display:none; z-index: 100003;" onclick="if(event.target===this)closeUpdateModal()">
     <div class="custom-confirm-card" style="max-width:330px; text-align:left;">
       <div style="text-align:center; font-size:36px; margin-bottom:4px;">🚀</div>
@@ -1961,7 +1961,7 @@
           <span>⚡ 国内极速下载更新 (推荐)</span>
         </a>
         <a id="btnOfficialDownload" href="#" target="_blank" class="btn-confirm-cancel" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; padding:7px 0; border-radius:10px; font-weight:800; font-size:11.5px; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">
-          <span>🌐 GitHub 官方原源下载</span>
+          <span>🌐 官方全球高速通道下载</span>
         </a>
         <button type="button" class="btn-confirm-cancel" onclick="closeUpdateModal()" style="padding:6px 0; border-radius:10px; font-size:11.5px; background:#f1f5f9; color:#64748b; border:none;">稍后再说</button>
       </div>
@@ -7026,7 +7026,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.27';
+    const CURRENT_VERSION_TAG = 'v1.0.28';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -7079,7 +7079,7 @@
       isCheckingAppUpdate = true;
 
       if (isManual) {
-        showGameNotice('🔍 正在连接 GitHub 官方与国内高速通道...');
+        showGameNotice('🔍 正在连接官方云端检查最新更新...');
       }
 
       let versionData = null;
