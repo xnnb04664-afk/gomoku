@@ -84,7 +84,9 @@ execSync('node build_apk.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 5. 校验产物
 const apkPath = path.join(ROOT_DIR, '五子棋.apk');
-const singleHtmlPath = path.join(ROOT_DIR, 'gomoku.html');
+const singleHtmlPath = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
+const gomokuHtmlPath = path.join(ROOT_DIR, 'gomoku.html');
+fs.copyFileSync(singleHtmlPath, gomokuHtmlPath);
 
 if (!fs.existsSync(apkPath) || !fs.existsSync(singleHtmlPath)) {
   console.error('❌ 打包校验未通过，产物缺失！');

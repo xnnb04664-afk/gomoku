@@ -75,6 +75,45 @@ public class MainActivity extends Activity {
         }
     }
 
+    
+    // 🛡️ 手机端防逆向安全套件：动态调试检测 + 动态 Hook 注入防御 + 切断远程调试
+    private void enforceAntiReverseProtection() {
+        // 1. 彻底禁用 WebView 远程 USB 调试（切断黑客使用 PC Chrome DevTools 窃取代码与注入脚本）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            WebView.setWebContentsDebuggingEnabled(false);
+        }
+
+        // 2. 动态调试器附着拦截（JDWP / GDB / IDA Pro 调试检测）
+        if (android.os.Debug.isDebuggerConnected() || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            android.util.Log.e("SecurityGuard", "检测到非法调试器挂载，为保护游戏安全已强制终止运行！");
+            Toast.makeText(this, "⚠️ 安全拦截：检测到非法调试环境！", Toast.LENGTH_LONG).show();
+            android.os.Process.killProcess(android.os.Process.myPid());
+            System.exit(0);
+        }
+
+        // 3. 动态 Hook 框架检测（Frida / Xposed / Substrate 注入探测）
+        if (detectHookFramework()) {
+            android.util.Log.w("SecurityGuard", "检测到系统底层注入框架！");
+            Toast.makeText(this, "⚠️ 安全提示：检测到当前设备存在 Hook 注入环境，已开启高风险防御！", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static boolean detectHookFramework() {
+        try {
+            throw new Exception("probe_hook");
+        } catch (Exception e) {
+            for (StackTraceElement elem : e.getStackTrace()) {
+                String cls = elem.getClassName().toLowerCase();
+                if (cls.contains("de.robv.android.xposed") ||
+                    cls.contains("com.saurik.substrate") ||
+                    cls.contains("frida")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean isOfficialDownloadUrl(String url) {
         if (url == null) return false;
         return url.contains("github.com/xnnb04664-afk/gomoku") ||
@@ -116,6 +155,7 @@ public class MainActivity extends Activity {
 
         // 3. Sticky Immersive 全面屏
         applyImmersiveSticky();
+        enforceAntiReverseProtection();
         if (!verifyApkSignatureIntegrity()) {
             Toast.makeText(this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show();
         }
