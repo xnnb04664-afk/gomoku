@@ -1,9 +1,9 @@
 {
-  "versionName": "1.0.16",
-  "versionCode": 17,
-  "releaseTag": "v1.0.16",
-  "publishTime": "2026-09-02",
-  "updateLog": "五子棋 v1.0.16 官方正式版更新发布！\n1. 支持国内网络极速更新与覆盖安装\n2. 120Hz极速性能调优\n3. 9大干扰卡牌池与断线自动重连",
+  "versionName": "1.0.17",
+  "versionCode": 18,
+  "releaseTag": "v1.0.17",
+  "publishTime": "2026-09-03",
+  "updateLog": "五子棋 v1.0.17 官方正式版更新发布！\n1. 支持国内网络极速更新与覆盖安装\n2. 120Hz极速性能调优\n3. 9大干扰卡牌池与断线自动重连",
   "download": {
     "fastUrl": "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
     "backupFastUrl": "https://ghps.cc/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",

@@ -1293,12 +1293,24 @@
         <div class="avatar-opt" onclick="selectAvatar(this, '🐸')">🐸</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🦄')">🦄</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🌸')">🌸</div>
+      </div>      <!-- 🏆 全服天梯积分与排行榜 -->
+      <div style="background:linear-gradient(135deg, rgba(254,243,199,0.95), rgba(253,230,138,0.95)); border:1.5px solid #f59e0b; border-radius:12px; padding:6px 10px; margin:8px 0 6px 0; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 6px rgba(245,158,11,0.15);">
+        <div style="text-align:left; line-height:1.2;">
+          <div style="font-size:12px; font-weight:900; color:#b45309; display:flex; align-items:center; gap:4px;">
+            <span>🏆 全服天梯对战榜</span>
+            <span id="myLadderBadge" style="background:#f59e0b; color:#fff; font-size:10px; padding:1px 6px; border-radius:10px; font-weight:800;">积分: 1000</span>
+          </div>
+          <div style="font-size:9.5px; color:#92400e; font-weight:700;">胜负云端同步 · Cloudflare D1 存储</div>
+        </div>
+        <button type="button" class="btn-chat-tool" onclick="openLeaderboardModal()" style="background:#d97706; color:#fff; border-color:#b45309; padding:4px 9px; font-size:11px; border-radius:8px; font-weight:900; cursor:pointer;">🏅 查看排名</button>
       </div>
+
+
 
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.16</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.17</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1355,7 +1367,19 @@
         <div style="font-size:14px; font-weight:800; color:#4a2810;">输入好友给您的 6 位房间号：</div>
         <input type="text" class="room-input" id="inputJoinCode" placeholder="如: 682914" maxlength="10" />
         <button class="online-action-btn" id="btnConnectRoom" onclick="joinOnlineRoom()">🚀 立即连接开局</button>
+      </div>      <!-- 🏆 全服天梯排行榜入口 -->
+      <div style="background:linear-gradient(135deg, rgba(254,243,199,0.95), rgba(253,230,138,0.95)); border:1.5px solid #f59e0b; border-radius:12px; padding:6px 10px; margin:10px 0 8px 0; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 6px rgba(245,158,11,0.15);">
+        <div style="text-align:left; line-height:1.2;">
+          <div style="font-size:12px; font-weight:900; color:#b45309; display:flex; align-items:center; gap:4px;">
+            <span>🏆 全服天梯风云榜</span>
+            <span style="background:#f59e0b; color:#fff; font-size:9.5px; padding:1px 5px; border-radius:8px; font-weight:800;">D1实时榜</span>
+          </div>
+          <div style="font-size:9.5px; color:#92400e; font-weight:700;">全国棋友同台竞技 · 实时段位排行</div>
+        </div>
+        <button type="button" class="btn-chat-tool" onclick="openLeaderboardModal()" style="background:#d97706; color:#fff; border-color:#b45309; padding:4px 9px; font-size:11px; border-radius:8px; font-weight:900; cursor:pointer;">🏅 查看榜单</button>
       </div>
+
+
 
       <!-- 快捷切换其他单机模式 -->
       <div class="other-modes-row">
@@ -1366,6 +1390,42 @@
       <button class="btn-chat-tool" style="margin-top:10px; width:100%; padding:8px;" onclick="closeOnlineModal()">关闭窗口</button>
     </div>
   </div>
+  <!-- 🏆 全服天梯排行榜弹窗 (Cloudflare D1 驱动) -->
+  <div class="online-modal-backdrop" id="leaderboardModal" style="display:none;" onclick="closeLeaderboardModal()">
+    <div class="online-modal-card" style="max-width:390px; width:94%; max-height:85vh; display:flex; flex-direction:column; padding:14px; box-sizing:border-box;" onclick="event.stopPropagation()">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1.5px solid rgba(0,0,0,0.08); padding-bottom:8px;">
+        <div style="text-align:left;">
+          <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
+            <span>🏆 全服天梯风云榜</span>
+            <span style="font-size:10px; background:#10b981; color:#fff; padding:1px 6px; border-radius:8px; font-weight:800;">Cloudflare D1</span>
+          </div>
+          <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">胜局 +25 分 · 败局 -15 分 · 实时云端同步</div>
+        </div>
+        <button onclick="closeLeaderboardModal()" style="background:none; border:none; font-size:18px; cursor:pointer; color:#64748b; font-weight:900; padding:2px 6px;">✕</button>
+      </div>
+
+      <!-- 排行榜滚动列表区域 -->
+      <div id="leaderboardList" style="flex:1; overflow-y:auto; min-height:220px; max-height:360px; display:flex; flex-direction:column; gap:6px; padding:2px 4px 6px 0;">
+        <div style="text-align:center; padding:30px 0; color:#64748b; font-size:12px; font-weight:800;">
+          <div style="font-size:24px; margin-bottom:6px; animation:bounceBubble 1s infinite alternate;">⏳</div>
+          正在连接 Cloudflare 全球云端拉取天梯榜单...
+        </div>
+      </div>
+
+      <!-- 底部操作与我的战绩状态栏 -->
+      <div style="margin-top:8px; border-top:1.5px solid rgba(0,0,0,0.08); padding-top:8px; display:flex; justify-content:space-between; align-items:center;">
+        <div id="myRankStatusText" style="font-size:11px; font-weight:800; color:#334155; text-align:left;">
+          当前玩家: <span style="color:#0984e3;">小能</span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn-chat-tool" onclick="fetchGlobalLeaderboard(true)" style="background:#0ea5e9; color:#fff; border-color:#0284c7; padding:4px 9px; font-size:11px; border-radius:8px; font-weight:800; cursor:pointer;">🔄 刷新</button>
+          <button class="btn-chat-tool" onclick="closeLeaderboardModal()" style="background:#e2e8f0; color:#334155; border-color:#cbd5e1; padding:4px 9px; font-size:11px; border-radius:8px; font-weight:800; cursor:pointer;">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
 
   <!-- 🎨 六大顶级视觉风格无缝切换弹窗 -->
   <div class="online-modal-backdrop" id="themeModal" onclick="if(event.target===this)closeThemeModal()">
@@ -4251,6 +4311,199 @@
         }
       } catch(e) {}
     }
+    // ══════════════════════════════════════════════════════════════════
+    // 🏆 Cloudflare Worker + D1 全服天梯排行榜与战绩同步系统
+    // ══════════════════════════════════════════════════════════════════
+    const CLOUDFLARE_API_HOST = "https://gomoku-backend.xnnb04664.workers.dev";
+    let cachedLeaderboard = [];
+    let isReportingMatch = false;
+
+    function openLeaderboardModal() {
+      const modal = document.getElementById('leaderboardModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        fetchGlobalLeaderboard(false);
+      }
+    }
+
+    function closeLeaderboardModal() {
+      const modal = document.getElementById('leaderboardModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    async function fetchGlobalLeaderboard(isManualRefresh = false) {
+      const listEl = document.getElementById('leaderboardList');
+      const statusText = document.getElementById('myRankStatusText');
+      const badge = document.getElementById('myLadderBadge');
+
+      if (isManualRefresh && listEl) {
+        listEl.innerHTML = `
+          <div style="text-align:center; padding:30px 0; color:#64748b; font-size:12px; font-weight:800;">
+            <div style="font-size:24px; margin-bottom:6px; animation:bounceBubble 1s infinite alternate;">⏳</div>
+            正在实时拉取 Cloudflare D1 最新数据...
+          </div>
+        `;
+      }
+
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/rank?_t=${Date.now()}`);
+        const json = await res.json();
+
+        if (json && json.code === 0 && Array.isArray(json.data)) {
+          cachedLeaderboard = json.data;
+          renderLeaderboardUI(cachedLeaderboard);
+        } else {
+          if (listEl && isManualRefresh) {
+            listEl.innerHTML = `<div style="text-align:center; padding:30px 0; color:#ef4444; font-size:12px; font-weight:800;">获取排行榜失败，请稍后重试</div>`;
+          }
+        }
+      } catch (err) {
+        console.warn("拉取排行榜异常:", err);
+        if (listEl && cachedLeaderboard.length === 0) {
+          listEl.innerHTML = `<div style="text-align:center; padding:30px 0; color:#ef4444; font-size:12px; font-weight:800;">网络连接异常，请检查网络</div>`;
+        }
+      }
+    }
+
+    function renderLeaderboardUI(list) {
+      const listEl = document.getElementById('leaderboardList');
+      const statusText = document.getElementById('myRankStatusText');
+      const badge = document.getElementById('myLadderBadge');
+      if (!listEl) return;
+
+      if (list.length === 0) {
+        listEl.innerHTML = `
+          <div style="text-align:center; padding:36px 0; color:#64748b; font-size:12px; font-weight:800;">
+            <div style="font-size:32px; margin-bottom:8px;">🌱</div>
+            暂无玩家上榜，快去赢下一局荣登榜首吧！
+          </div>
+        `;
+        return;
+      }
+
+      let myRankNum = -1;
+      let myScore = 1000;
+
+      const html = list.map((item, idx) => {
+        const rank = idx + 1;
+        const isP1 = (item.name === p1Name);
+        if (isP1) {
+          myRankNum = rank;
+          myScore = item.score;
+        }
+
+        let rankBadge = `<span style="font-size:13px; font-weight:900; color:#64748b; min-width:22px; text-align:center;">#${rank}</span>`;
+        let cardBg = 'background:rgba(255,255,255,0.85); border:1px solid #e2e8f0;';
+
+        if (rank === 1) {
+          rankBadge = `<span style="font-size:20px;">🥇</span>`;
+          cardBg = 'background:linear-gradient(135deg, #fef3c7, #fffbeb); border:1.5px solid #f59e0b; box-shadow:0 2px 6px rgba(245,158,11,0.2);';
+        } else if (rank === 2) {
+          rankBadge = `<span style="font-size:20px;">🥈</span>`;
+          cardBg = 'background:linear-gradient(135deg, #f1f5f9, #f8fafc); border:1.5px solid #94a3b8;';
+        } else if (rank === 3) {
+          rankBadge = `<span style="font-size:20px;">🥉</span>`;
+          cardBg = 'background:linear-gradient(135deg, #ffedd5, #fff7ed); border:1.5px solid #ea580c;';
+        }
+
+        // 段位标签计算
+        let tierName = '🌱 初窥门径';
+        let tierColor = '#10b981';
+        if (item.score >= 1400) { tierName = '👑 绝代棋圣'; tierColor = '#e11d48'; }
+        else if (item.score >= 1200) { tierName = '⚔️ 妙手大师'; tierColor = '#8b5cf6'; }
+        else if (item.score >= 1100) { tierName = '🌟 棋坛新秀'; tierColor = '#3b82f6'; }
+
+        // 头像展示：emoji 或图片 url/base64
+        let avatarEl = `<span style="font-size:22px; line-height:1;">${item.avatar || '👦'}</span>`;
+        if (item.avatar && (item.avatar.startsWith('data:image') || item.avatar.startsWith('http'))) {
+          avatarEl = `<img src="${item.avatar}" style="width:28px; height:28px; border-radius:50%; object-fit:cover; border:1px solid #cbd5e1;" />`;
+        }
+
+        const winRate = item.total_games > 0 ? Math.round((item.wins / item.total_games) * 100) : 0;
+
+        return `
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; border-radius:10px; ${cardBg}">
+            <div style="display:flex; align-items:center; gap:8px;">
+              ${rankBadge}
+              <div style="width:28px; height:28px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                ${avatarEl}
+              </div>
+              <div style="text-align:left; line-height:1.25;">
+                <div style="font-size:12.5px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
+                  <span>${escapeRankHTML(item.name)}</span>
+                  ${isP1 ? '<span style="font-size:9.5px; background:#ef4444; color:#fff; padding:1px 4px; border-radius:4px; font-weight:800;">我</span>' : ''}
+                  <span style="font-size:9.5px; color:${tierColor}; font-weight:800; border:1px solid ${tierColor}; padding:0 3px; border-radius:4px;">${tierName}</span>
+                </div>
+                <div style="font-size:10px; color:#64748b; font-weight:700;">胜率: ${winRate}% (${item.wins}胜/${item.total_games}局)</div>
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:13px; font-weight:900; color:#b45309;">🏆 ${item.score}</div>
+              <div style="font-size:9px; color:#94a3b8; font-weight:800;">积分</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      listEl.innerHTML = html;
+
+      if (statusText) {
+        if (myRankNum > 0) {
+          statusText.innerHTML = `我的排名: <b style="color:#b45309;">第 ${myRankNum} 名</b> (积分: <b style="color:#0ea5e9;">${myScore}</b>)`;
+        } else {
+          statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (暂未入榜，赢下一局即上榜)`;
+        }
+      }
+
+      if (badge && myScore) {
+        badge.textContent = `积分: ${myScore}`;
+      }
+    }
+
+    async function reportMatchResult(isWin) {
+      if (isReportingMatch) return;
+      isReportingMatch = true;
+      setTimeout(() => { isReportingMatch = false; }, 3000);
+
+      const playerName = (p1Name && p1Name.trim()) ? p1Name.trim() : '小能';
+      let avatarToSend = p1Avatar || '👦';
+      if (typeof currentP1AvatarData !== 'undefined' && currentP1AvatarData && currentP1AvatarData.length < 2000) {
+        avatarToSend = currentP1AvatarData;
+      }
+
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/report_game`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerName: playerName,
+            avatar: avatarToSend,
+            isWin: !!isWin
+          })
+        });
+        const data = await res.json();
+        if (data && data.code === 0) {
+          const toastMsg = isWin ? `🏆 天梯胜利！积分 +25，战绩已同步云端` : `💔 天梯惜败！积分 -15，战绩已同步云端`;
+          if (typeof showGameNotice === 'function') {
+            showGameNotice(toastMsg, true);
+          }
+          setTimeout(() => fetchGlobalLeaderboard(false), 1200);
+        }
+      } catch (err) {
+        console.warn("上报天梯战绩失败:", err);
+      }
+    }
+
+    function escapeRankHTML(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+
 
     // 🏆 胜负终局统一结算与音效调度器 (严格区分胜利方与失败方的专属音效)
     function triggerGameEnd(winnerColor, customWinReason = '') {
@@ -4276,6 +4529,8 @@
         showSkillBanner('💔', '【棋局惜败】胜败乃兵家常事！', customWinReason || `【${winnerName}】达成五连珠！胜不骄败不馁，再战一局必定逆袭！`);
         setTimeout(() => alert(`💔 棋局惜败！【${winnerName}】达成五连珠，不要气馁，再接再厉！`), 350);
       }
+      reportMatchResult(isPlayerWin);
+
       draw();
     }
 
@@ -5770,7 +6025,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.16';
+    const CURRENT_VERSION_TAG = 'v1.0.17';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
