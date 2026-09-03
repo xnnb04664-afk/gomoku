@@ -1293,7 +1293,22 @@
         <div class="avatar-opt" onclick="selectAvatar(this, '🐸')">🐸</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🦄')">🦄</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🌸')">🌸</div>
-      </div>      <!-- 🏆 全服天梯积分与排行榜 -->
+      </div>
+      <!-- 🛡️ 官方 UID 身份与登录/注册状态卡片 -->
+      <div id="userAccountCard" style="background:linear-gradient(135deg, rgba(240,249,255,0.95), rgba(224,242,254,0.95)); border:1.5px solid #38bdf8; border-radius:12px; padding:8px 10px; margin:6px 0 8px 0; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 6px rgba(56,189,248,0.15);">
+        <div style="text-align:left; line-height:1.25;">
+          <div style="font-size:12px; font-weight:900; color:#0369a1; display:flex; align-items:center; gap:5px;">
+            <span id="accountStatusIcon">👤</span>
+            <span id="accountStatusTitle">游客身份</span>
+            <span id="userUidBadge" style="background:#0284c7; color:#fff; font-size:10px; padding:1px 6px; border-radius:8px; font-weight:800; cursor:pointer;" onclick="copyMyUid()" title="点击复制UID">UID: ------ 📋</span>
+          </div>
+          <div id="accountSubText" style="font-size:9.5px; color:#0c4a6e; font-weight:700; margin-top:2px;">注册绑定账号密码，换手机重装不丢积分！</div>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:4px 9px; font-size:11px; border-radius:8px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
+        </div>
+      </div>
+      <!-- 🏆 全服天梯积分与排行榜 -->
       <div style="background:linear-gradient(135deg, rgba(254,243,199,0.95), rgba(253,230,138,0.95)); border:1.5px solid #f59e0b; border-radius:12px; padding:6px 10px; margin:8px 0 6px 0; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 6px rgba(245,158,11,0.15);">
         <div style="text-align:left; line-height:1.2;">
           <div style="font-size:12px; font-weight:900; color:#b45309; display:flex; align-items:center; gap:4px;">
@@ -1310,7 +1325,7 @@
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.17</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.18</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1390,6 +1405,95 @@
       <button class="btn-chat-tool" style="margin-top:10px; width:100%; padding:8px;" onclick="closeOnlineModal()">关闭窗口</button>
     </div>
   </div>
+  <!-- 🔑 高安全账号认证中心弹窗 (登录 / 注册 / 密保找回) -->
+  <div class="online-modal-backdrop" id="authModal" style="display:none;" onclick="closeAuthModal()">
+    <div class="online-modal-card" style="max-width:380px; width:92%; padding:16px; box-sizing:border-box;" onclick="event.stopPropagation()">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1.5px solid rgba(0,0,0,0.08); padding-bottom:8px;">
+        <div style="text-align:left;">
+          <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
+            <span>🛡️ 云端账号安全中心</span>
+          </div>
+          <div style="font-size:10px; color:#64748b; font-weight:700;">支持跨设备继承积分 · 密保防盗保护</div>
+        </div>
+        <button onclick="closeAuthModal()" style="background:none; border:none; font-size:18px; cursor:pointer; color:#64748b; font-weight:900; padding:2px 6px;">✕</button>
+      </div>
+
+      <!-- 选项卡切换 -->
+      <div class="online-tab-row" style="margin-bottom:12px;">
+        <button class="online-tab-btn active" id="tabAuthLogin" onclick="switchAuthTab('login')">🔑 账号登录</button>
+        <button class="online-tab-btn" id="tabAuthRegister" onclick="switchAuthTab('register')">📝 注册账号</button>
+        <button class="online-tab-btn" id="tabAuthReset" onclick="switchAuthTab('reset')">🛡️ 找回密码</button>
+      </div>
+
+      <!-- 选项卡 1：账号登录 -->
+      <div id="viewAuthLogin">
+        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">账号 / 用户名：</div>
+        <input type="text" id="loginUsername" placeholder="输入您的注册账号" maxlength="20" class="name-input-box" style="margin-bottom:8px;" />
+
+        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">登录密码：</div>
+        <input type="password" id="loginPassword" placeholder="输入密码" maxlength="32" class="name-input-box" style="margin-bottom:12px;" />
+
+        <div id="loginErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;"></div>
+
+        <button class="online-action-btn" onclick="submitLogin()" id="btnLoginSubmit" style="width:100%; margin-bottom:8px;">🚀 立即安全登录</button>
+        <div style="text-align:right;">
+          <span style="font-size:11px; color:#0284c7; font-weight:800; cursor:pointer;" onclick="switchAuthTab('reset')">忘记密码？通过密保找回 ➔</span>
+        </div>
+      </div>
+
+      <!-- 选项卡 2：注册账号 -->
+      <div id="viewAuthRegister" style="display:none;">
+        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">新账号用户名（3~20位字母数字）：</div>
+        <input type="text" id="regUsername" placeholder="如: myname2026" maxlength="20" class="name-input-box" style="margin-bottom:6px;" />
+
+        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">设置密码（4~32位）：</div>
+        <input type="password" id="regPassword" placeholder="设置您的防盗密码" maxlength="32" class="name-input-box" style="margin-bottom:6px;" />
+
+        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">🛡️ 密保安全问题（用于忘记密码时快速找回）：</div>
+        <select id="regSecurityQ" class="name-input-box" style="margin-bottom:6px; font-size:11px; font-weight:800; padding:6px;">
+          <option value="你出生的城市是？">你出生的城市是？</option>
+          <option value="你最喜欢的棋手或动漫角色？">你最喜欢的棋手或动漫角色？</option>
+          <option value="你小学的全名是？">你小学的全名是？</option>
+          <option value="你母亲的姓氏是？">你母亲的姓氏是？</option>
+        </select>
+
+        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">密保答案（防盗加密存储）：</div>
+        <input type="text" id="regSecurityA" placeholder="填写答案 (请牢记)" maxlength="20" class="name-input-box" style="margin-bottom:12px;" />
+
+        <div id="regErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;"></div>
+
+        <button class="online-action-btn" onclick="submitRegister()" id="btnRegSubmit" style="width:100%;">📝 确认注册并绑定战绩</button>
+      </div>
+
+      <!-- 选项卡 3：密保找回密码 -->
+      <div id="viewAuthReset" style="display:none;">
+        <div id="resetStep1">
+          <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">输入需要找回的账号：</div>
+          <input type="text" id="resetUsername" placeholder="输入您的注册账号" maxlength="20" class="name-input-box" style="margin-bottom:10px;" />
+          <button class="online-action-btn" onclick="fetchSecurityQuestion()" style="width:100%;">下一步：查询密保问题 ➔</button>
+        </div>
+
+        <div id="resetStep2" style="display:none;">
+          <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; padding:6px 10px; margin-bottom:8px; text-align:left;">
+            <div style="font-size:10px; color:#0369a1; font-weight:800;">您的密保安全问题：</div>
+            <div id="displaySecurityQ" style="font-size:12px; font-weight:900; color:#0c4a6e; margin-top:2px;">-</div>
+          </div>
+
+          <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">输入密保答案：</div>
+          <input type="text" id="resetAnswer" placeholder="输入您之前填写的密保答案" maxlength="20" class="name-input-box" style="margin-bottom:6px;" />
+
+          <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">输入新密码：</div>
+          <input type="password" id="resetNewPwd" placeholder="设置新密码 (4~32位)" maxlength="32" class="name-input-box" style="margin-bottom:12px;" />
+
+          <button class="online-action-btn" onclick="submitResetPassword()" style="width:100%;">🛡️ 验证密保并重置密码</button>
+        </div>
+
+        <div id="resetErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-top:8px; text-align:left; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;"></div>
+      </div>
+    </div>
+  </div>
+
+
   <!-- 🏆 全服天梯排行榜弹窗 (Cloudflare D1 驱动) -->
   <div class="online-modal-backdrop" id="leaderboardModal" style="display:none;" onclick="closeLeaderboardModal()">
     <div class="online-modal-card" style="max-width:390px; width:94%; max-height:85vh; display:flex; flex-direction:column; padding:14px; box-sizing:border-box;" onclick="event.stopPropagation()">
@@ -1895,17 +1999,21 @@
       reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
+          if (file.type && file.type.includes('svg')) {
+            showGameNotice('🛡️ 为防止脚本注入，暂不支持 SVG 格式图片，请选用 JPG/PNG 图片~', true);
+            return;
+          }
           const offCanvas = document.createElement('canvas');
-          offCanvas.width = 128;
-          offCanvas.height = 128;
+          offCanvas.width = 80;
+          offCanvas.height = 80;
           const offCtx = offCanvas.getContext('2d');
 
           const minDim = Math.min(img.width, img.height);
           const sx = (img.width - minDim) / 2;
           const sy = (img.height - minDim) / 2;
 
-          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 128, 128);
-          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.85);
+          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 80, 80);
+          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.80);
 
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
@@ -4312,6 +4420,283 @@
       } catch(e) {}
     }
     // ══════════════════════════════════════════════════════════════════
+    // 🛡️ 云端账号认证与安全 Token 管理器 (Session & Anti-BruteForce)
+    // ══════════════════════════════════════════════════════════════════
+    let currentUserUid = localStorage.getItem('gomoku_user_uid') || '';
+    let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
+    let currentUsername = localStorage.getItem('gomoku_user_username') || '';
+
+    async function initUserSession() {
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/auth/guest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: currentUserUid,
+            token: currentUserToken
+          })
+        });
+        const json = await res.json();
+        if (json && json.code === 0 && json.data) {
+          applyUserData(json.data);
+        }
+      } catch (e) {
+        console.warn('initUserSession error:', e);
+      }
+    }
+
+    function applyUserData(data) {
+      if (!data) return;
+      currentUserUid = data.uid || currentUserUid;
+      currentUserToken = data.token || currentUserToken;
+      currentUsername = data.username || '';
+
+      localStorage.setItem('gomoku_user_uid', currentUserUid);
+      localStorage.setItem('gomoku_user_token', currentUserToken);
+      if (currentUsername) {
+        localStorage.setItem('gomoku_user_username', currentUsername);
+      } else {
+        localStorage.removeItem('gomoku_user_username');
+      }
+
+      // 同步天梯分与段位
+      if (typeof data.score === 'number') {
+        const badge = document.getElementById('myLadderBadge');
+        if (badge) badge.textContent = `积分: ${data.score}`;
+      }
+
+      updateAccountUI();
+    }
+
+    function updateAccountUI() {
+      const icon = document.getElementById('accountStatusIcon');
+      const title = document.getElementById('accountStatusTitle');
+      const uidBadge = document.getElementById('userUidBadge');
+      const subText = document.getElementById('accountSubText');
+      const btnAuth = document.getElementById('btnAuthAction');
+
+      if (uidBadge && currentUserUid) {
+        uidBadge.textContent = `UID: ${currentUserUid} 📋`;
+      }
+
+      if (currentUsername) {
+        if (icon) icon.textContent = '✅';
+        if (title) title.textContent = `正式账号: ${currentUsername}`;
+        if (subText) subText.textContent = '账号安全受保护，换设备登录即可找回积分！';
+        if (btnAuth) {
+          btnAuth.textContent = '🔄 切换账号';
+          btnAuth.onclick = () => openAuthModal('login');
+        }
+      } else {
+        if (icon) icon.textContent = '👤';
+        if (title) title.textContent = '游客身份 (未绑定)';
+        if (subText) subText.textContent = '注册绑定账号密码，换手机重装不丢积分！';
+        if (btnAuth) {
+          btnAuth.textContent = '🔑 登录/注册';
+          btnAuth.onclick = () => openAuthModal('login');
+        }
+      }
+    }
+
+    function copyMyUid() {
+      if (!currentUserUid) return;
+      navigator.clipboard.writeText(currentUserUid).then(() => {
+        showGameNotice(`📋 专属 UID [${currentUserUid}] 已复制到剪贴板！`, true);
+      }).catch(() => {
+        prompt('请复制您的专属 UID：', currentUserUid);
+      });
+    }
+
+    function openAuthModal(tab = 'login') {
+      const modal = document.getElementById('authModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        switchAuthTab(tab);
+      }
+    }
+
+    function closeAuthModal() {
+      const modal = document.getElementById('authModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function switchAuthTab(tab) {
+      ['login', 'register', 'reset'].forEach(t => {
+        const btn = document.getElementById('tabAuth' + t.charAt(0).toUpperCase() + t.slice(1));
+        const view = document.getElementById('viewAuth' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (btn) btn.classList.toggle('active', t === tab);
+        if (view) view.style.display = (t === tab) ? 'block' : 'none';
+      });
+      // 隐藏所有报错条
+      ['loginErrorMsg', 'regErrorMsg', 'resetErrorMsg'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+    }
+
+    async function submitLogin() {
+      const u = (document.getElementById('loginUsername').value || '').trim();
+      const p = (document.getElementById('loginPassword').value || '');
+      const errEl = document.getElementById('loginErrorMsg');
+
+      if (!u || !p) {
+        errEl.textContent = '请输入账号与密码';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      errEl.style.display = 'none';
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const json = await res.json();
+        if (json.code === 0 && json.data) {
+          applyUserData(json.data);
+          p1Name = json.data.nickname || u;
+          localStorage.setItem('gomoku_p1Name', p1Name);
+          updatePlayerHeaderUI();
+          closeAuthModal();
+          showGameNotice(`🎉 欢迎回来，棋士【${p1Name}】！已切换为正式账号`, true);
+        } else {
+          errEl.textContent = json.msg || '登录失败';
+          errEl.style.display = 'block';
+        }
+      } catch (err) {
+        errEl.textContent = '网络连接失败，请检查网络';
+        errEl.style.display = 'block';
+      }
+    }
+
+    async function submitRegister() {
+      const u = (document.getElementById('regUsername').value || '').trim();
+      const p = (document.getElementById('regPassword').value || '');
+      const q = document.getElementById('regSecurityQ').value;
+      const a = (document.getElementById('regSecurityA').value || '').trim();
+      const errEl = document.getElementById('regErrorMsg');
+
+      if (!u || u.length < 3) {
+        errEl.textContent = '账号名称长度至少 3 位';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!p || p.length < 4) {
+        errEl.textContent = '密码长度至少 4 位';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!a) {
+        errEl.textContent = '请填写密保答案，以便忘记密码时找回';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      errEl.style.display = 'none';
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: u,
+            password: p,
+            nickname: p1Name || u,
+            avatar: p1Avatar || '👦',
+            uid: currentUserUid,
+            token: currentUserToken,
+            securityQuestion: q,
+            securityAnswer: a
+          })
+        });
+        const json = await res.json();
+        if (json.code === 0 && json.data) {
+          applyUserData(json.data);
+          closeAuthModal();
+          showGameNotice(`🎉 账号【${u}】注册并绑定成功！战绩积分终身保留`, true);
+        } else {
+          errEl.textContent = json.msg || '注册失败';
+          errEl.style.display = 'block';
+        }
+      } catch (err) {
+        errEl.textContent = '网络连接失败，请检查网络';
+        errEl.style.display = 'block';
+      }
+    }
+
+    async function fetchSecurityQuestion() {
+      const u = (document.getElementById('resetUsername').value || '').trim();
+      const errEl = document.getElementById('resetErrorMsg');
+
+      if (!u) {
+        errEl.textContent = '请输入要找回的账号';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      errEl.style.display = 'none';
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/auth/get_security_q`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u })
+        });
+        const json = await res.json();
+        if (json.code === 0 && json.data) {
+          document.getElementById('displaySecurityQ').textContent = json.data.question;
+          document.getElementById('resetStep1').style.display = 'none';
+          document.getElementById('resetStep2').style.display = 'block';
+        } else {
+          errEl.textContent = json.msg || '查询账号失败';
+          errEl.style.display = 'block';
+        }
+      } catch(e) {
+        errEl.textContent = '网络连接失败，请检查网络';
+        errEl.style.display = 'block';
+      }
+    }
+
+    async function submitResetPassword() {
+      const u = (document.getElementById('resetUsername').value || '').trim();
+      const a = (document.getElementById('resetAnswer').value || '').trim();
+      const np = (document.getElementById('resetNewPwd').value || '');
+      const errEl = document.getElementById('resetErrorMsg');
+
+      if (!a) {
+        errEl.textContent = '请输入密保答案';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!np || np.length < 4) {
+        errEl.textContent = '新密码长度至少 4 位';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      errEl.style.display = 'none';
+      try {
+        const res = await fetch(`${CLOUDFLARE_API_HOST}/api/auth/reset_password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, securityAnswer: a, newPassword: np })
+        });
+        const json = await res.json();
+        if (json.code === 0 && json.data) {
+          applyUserData(json.data);
+          closeAuthModal();
+          showGameNotice(`🎉 密码已成功重置！已自动安全登录`, true);
+        } else {
+          errEl.textContent = json.msg || '重置密码失败';
+          errEl.style.display = 'block';
+        }
+      } catch(e) {
+        errEl.textContent = '网络连接失败，请检查网络';
+        errEl.style.display = 'block';
+      }
+    }
+
+
+    // ══════════════════════════════════════════════════════════════════
     // 🏆 Cloudflare Worker + D1 全服天梯排行榜与战绩同步系统
     // ══════════════════════════════════════════════════════════════════
     const CLOUDFLARE_API_HOST = "https://gomoku-backend.xnnb04664.workers.dev";
@@ -6025,7 +6410,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.17';
+    const CURRENT_VERSION_TAG = 'v1.0.18';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
