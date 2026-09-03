@@ -1252,10 +1252,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     .profile-modal-backdrop.show { opacity: 1; pointer-events: auto; }
     .profile-modal-card {
       background: #fffdf5; border: 3.5px solid var(--border-dark);
-      border-radius: 22px; width: 92%; max-width: 350px; padding: 18px 16px;
+      border-radius: 22px; width: 92%; max-width: 350px; padding: 14px 14px 10px 14px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.35); text-align: center;
       transform: scale(0.85); transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-      max-height: 88vh; overflow-y: auto;
+      max-height: 85vh; display: flex; flex-direction: column; box-sizing: border-box;
+    }
+    .profile-modal-scroll {
+      flex: 1; overflow-y: auto; padding-right: 2px; -webkit-overflow-scrolling: touch;
     }
     .profile-modal-backdrop.show .profile-modal-card { transform: scale(1); }
     
@@ -1813,6 +1816,32 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     <button onclick="confirmLeaveOnlineRoom()" style="background:linear-gradient(135deg, #ef4444, #dc2626); color:#fff; border:none; border-radius:8px; padding:4px 10px; font-size:11px; font-weight:900; cursor:pointer; box-shadow:0 2px 4px rgba(239,68,68,0.4);">🚪 退出房间</button>
   </div>
 
+  <!-- 🔍 主棋盘复盘模式顶部状态栏 (跳转到大棋盘后直观显示) -->
+  <div id="replayTopBar" style="display:none; position:relative; z-index:25; justify-content:space-between; align-items:center; background:linear-gradient(135deg, #0284c7, #0369a1); color:#fff; border-radius:12px; padding:6px 12px; margin:4px auto; max-width:460px; width:92%; border:1.5px solid #38bdf8; box-shadow:0 3px 10px rgba(2,132,199,0.35);">
+    <div style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:900;">
+      <span>🔍 正在复盘:</span>
+      <span id="replayOppLabel" style="color:#fef08a;">VS 大师AI</span>
+      <span id="replayBadgeLabel" style="font-size:10px; background:#10b981; color:#fff; padding:1px 6px; border-radius:4px; font-weight:900;">🏆 胜利</span>
+    </div>
+    <button type="button" onclick="exitReplayMode()" style="background:#ef4444; color:#fff; border:none; border-radius:8px; padding:4px 10px; font-size:11px; font-weight:900; cursor:pointer; box-shadow:0 2px 4px rgba(239,68,68,0.35);">❌ 退出复盘</button>
+  </div>
+
+  <!-- 🔍 主棋盘复盘控制 Dock (浮动在棋盘正下方，控制落子步数电影级回放) -->
+  <div id="replayControlDock" style="display:none; flex-direction:column; gap:6px; background:rgba(255,255,255,0.96); border:2px solid var(--border-dark); border-radius:14px; padding:8px 12px; margin:6px auto; max-width:460px; width:92%; box-shadow:0 6px 18px rgba(0,0,0,0.18); backdrop-filter:blur(10px);">
+    <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; font-weight:900; color:#334155;">
+      <span id="replayStepLabel">第 0 / 0 手</span>
+      <span id="replayTurnLabel" style="color:#0284c7;">黑方落子</span>
+    </div>
+    <input type="range" id="replayMainSlider" min="0" max="0" value="0" style="width:100%; accent-color:#0284c7; cursor:pointer;" oninput="onMainReplaySlider(this.value)">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+      <button type="button" class="btn-chat-tool" onclick="mainReplayJump(0)" style="flex:1; padding:6px 0; font-size:11px; font-weight:900;">⏮️ 开局</button>
+      <button type="button" class="btn-chat-tool" onclick="mainReplayStep(-1)" style="flex:1; padding:6px 0; font-size:11px; font-weight:900;">◀ 上一手</button>
+      <button type="button" id="btnMainReplayAuto" class="btn-chat-tool" onclick="toggleMainReplayAuto()" style="flex:1.2; padding:6px 0; font-size:11px; font-weight:900; background:#0284c7; color:#fff; border-color:#0369a1;">▶️ 播放</button>
+      <button type="button" class="btn-chat-tool" onclick="mainReplayStep(1)" style="flex:1; padding:6px 0; font-size:11px; font-weight:900;">下一手 ▶</button>
+      <button type="button" class="btn-chat-tool" onclick="mainReplayJumpToEnd()" style="flex:1; padding:6px 0; font-size:11px; font-weight:900;">⏭️ 终局</button>
+    </div>
+  </div>
+
   <!-- 手机全屏最大化棋盘容器 -->
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
@@ -1899,8 +1928,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     <!-- 👤 纯粹自定义昵称与相册头像弹窗 -->
   <div class="profile-modal-backdrop" id="profileModal">
     <div class="profile-modal-card">
-      <div class="undo-title" id="profileModalTitle">👤 自定义我的昵称与头像</div>
+      <div class="undo-title" id="profileModalTitle" style="flex-shrink:0; margin-bottom:6px;">👤 自定义我的昵称与头像</div>
       
+      <!-- 📜 中间滚动内容区域 (保持平滑滚动) -->
+      <div class="profile-modal-scroll">
       <!-- 头像预览与相册上传按钮 -->
       <div class="profile-header-preview">
         <div class="big-avatar-preview" id="bigAvatarPreview" onclick="triggerPhotoUpload()" title="点击直接从手机相册更换照片" style="cursor:pointer; position:relative;">👦</div>
@@ -1977,7 +2008,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.82</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.83</div>
         </div>
       </div>
 
@@ -1997,7 +2028,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           github.com/xnnb04664-afk/gomoku
         </div>
       </div>
-      <div class="undo-btn-row">
+      </div>
+      <!-- 🔒 底部按钮常驻固定区 (一直显示在弹窗最下方，绝不需要用户下滑即可点击！) -->
+      <div class="undo-btn-row" style="flex-shrink:0; margin-top:8px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08); background:#fffdf5; z-index:2;">
         <button class="btn-undo-action btn-undo-agree" onclick="saveProfile()">💾 保存并应用</button>
         <button class="btn-undo-action btn-undo-refuse" onclick="closeProfileModal()">关闭</button>
       </div>
@@ -6922,14 +6955,16 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     
+// ═════════════════════════════════════════════════════════════════════════
+    // 🎯 主棋盘专业复盘引擎 (点击查看棋局直接跳转主棋盘，大屏带手数动态推演)
     // ═════════════════════════════════════════════════════════════════════════
-    // 🔍 历史对局棋局复盘与落子步骤电影级回放引擎 (Replay Engine)
-    // ═════════════════════════════════════════════════════════════════════════
-    let currentReplayItem = null;
-    let currentReplayMoves = [];
-    let replayCurrentStep = 0;
-    let replayPlayTimer = null;
+    let isReplayMode = false;
+    let replaySavedState = null;
+    let replayAllMoves = [];
+    let replayStepIndex = 0;
+    let replayAutoTimer = null;
 
+    // 点击【查看棋局】直接跳转到主棋盘！
     function openReplayModalByIndex(idx) {
       try {
         const key = getHistoryStorageKey();
@@ -6937,235 +6972,197 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         const item = list[idx];
         if (!item) return;
 
-        currentReplayItem = item;
-        currentReplayMoves = Array.isArray(item.movesData) ? item.movesData : [];
-        replayCurrentStep = currentReplayMoves.length; // 默认展开终局完整局面
+        // 1. 关掉所有弹窗
+        closeHistoryModal();
+        closeProfileModal();
+        if (typeof closeReplayModal === 'function') closeReplayModal();
 
-        const modal = document.getElementById("gameReplayModal");
-        const badge = document.getElementById("replayResultBadge");
-        const vsInfo = document.getElementById("replayVsInfo");
-        const slider = document.getElementById("replayStepSlider");
-
-        if (badge) {
-          badge.textContent = item.isWin ? "🏆 胜利" : "💔 惜败";
-          badge.style.background = item.isWin ? "#10b981" : "#ef4444";
+        // 2. 检查是否有全盘落子谱数据
+        replayAllMoves = Array.isArray(item.movesData) ? item.movesData : [];
+        if (replayAllMoves.length === 0) {
+          showGameNotice("📜 本局为早期极速战报，未记录详细走法谱；最新对局均支持完整单步复盘！");
+          return;
         }
-        if (vsInfo) {
-          const modeName = item.mode === "online" ? "全服联机" : (item.mode === "ai" ? "大师AI" : "同屏对战");
-          vsInfo.textContent = `VS ${item.oppName || "对手"} (${modeName}) · 共 ${currentReplayMoves.length || item.moves || 0} 手 · ${item.date || ""} ${item.time || ""}`;
+
+        // 3. 备份当前对局状态（以便退出复盘时完美恢复）
+        if (!isReplayMode) {
+          replaySavedState = {
+            board: board.map(r => [...r]),
+            history: history.map(h => ({ ...h })),
+            turn, isOver, gameMode,
+            p1Name, p2Name, p1Avatar, p2Avatar
+          };
+        }
+
+        // 4. 激活主棋盘复盘模式
+        isReplayMode = true;
+        replayStepIndex = replayAllMoves.length; // 默认展示终局决胜盘面
+
+        // 更新顶部状态栏与 Dock
+        const topBar = document.getElementById("replayTopBar");
+        const dock = document.getElementById("replayControlDock");
+        const oppLabel = document.getElementById("replayOppLabel");
+        const badgeLabel = document.getElementById("replayBadgeLabel");
+        const slider = document.getElementById("replayMainSlider");
+
+        if (oppLabel) oppLabel.textContent = `VS ${item.oppName || "对手"}`;
+        if (badgeLabel) {
+          badgeLabel.textContent = item.isWin ? "🏆 胜利" : "💔 惜败";
+          badgeLabel.style.background = item.isWin ? "#10b981" : "#ef4444";
         }
         if (slider) {
           slider.min = 0;
-          slider.max = currentReplayMoves.length;
-          slider.value = replayCurrentStep;
+          slider.max = replayAllMoves.length;
+          slider.value = replayStepIndex;
         }
 
-        if (modal) modal.classList.add("show");
-        drawReplayBoard();
-      } catch(e) {
-        console.error("Replay open error:", e);
-      }
-    }
+        if (topBar) topBar.style.display = "flex";
+        if (dock) dock.style.display = "flex";
 
-    function closeReplayModal() {
-      if (replayPlayTimer) {
-        clearInterval(replayPlayTimer);
-        replayPlayTimer = null;
-      }
-      const btnPlay = document.getElementById("btnReplayAutoPlay");
-      if (btnPlay) btnPlay.textContent = "▶️ 播放";
+        // 隐藏常规对战底部控制栏，避免干扰
+        const bottomCtrls = document.querySelector(".bottom-controls");
+        if (bottomCtrls) bottomCtrls.style.display = "none";
+        const cardArea = document.querySelector(".card-area-wrapper");
+        if (cardArea) cardArea.style.display = "none";
 
-      const modal = document.getElementById("gameReplayModal");
-      if (modal) modal.classList.remove("show");
-    }
-
-    function onReplaySliderChange(val) {
-      replayCurrentStep = parseInt(val, 10);
-      drawReplayBoard();
-    }
-
-    function replayStep(delta) {
-      const next = replayCurrentStep + delta;
-      if (next >= 0 && next <= currentReplayMoves.length) {
-        replayCurrentStep = next;
-        const slider = document.getElementById("replayStepSlider");
-        if (slider) slider.value = replayCurrentStep;
-        drawReplayBoard();
-      }
-    }
-
-    function replayJumpTo(step) {
-      replayCurrentStep = Math.max(0, Math.min(step, currentReplayMoves.length));
-      const slider = document.getElementById("replayStepSlider");
-      if (slider) slider.value = replayCurrentStep;
-      drawReplayBoard();
-    }
-
-    function replayJumpToEnd() {
-      replayJumpTo(currentReplayMoves.length);
-    }
-
-    function toggleReplayAutoPlay() {
-      const btnPlay = document.getElementById("btnReplayAutoPlay");
-      if (replayPlayTimer) {
-        clearInterval(replayPlayTimer);
-        replayPlayTimer = null;
-        if (btnPlay) btnPlay.textContent = "▶️ 播放";
-      } else {
-        if (replayCurrentStep >= currentReplayMoves.length) {
-          replayJumpTo(0);
-        }
-        if (btnPlay) btnPlay.textContent = "⏸️ 暂停";
-        replayPlayTimer = setInterval(() => {
-          if (replayCurrentStep < currentReplayMoves.length) {
-            replayStep(1);
+        // 5. 页面平滑跳转聚焦到主棋盘！
+        setTimeout(() => {
+          const bWrap = document.getElementById("islandWrapper") || document.getElementById("cvs");
+          if (bWrap) {
+            bWrap.scrollIntoView({ behavior: "smooth", block: "center" });
           } else {
-            clearInterval(replayPlayTimer);
-            replayPlayTimer = null;
-            if (btnPlay) btnPlay.textContent = "▶️ 播放";
+            window.scrollTo({ top: 0, behavior: "smooth" });
           }
-        }, 600);
+        }, 50);
+
+        applyMainReplayStep(replayStepIndex);
+        showGameNotice(`🔍 已载入【VS ${item.oppName || "对手"}】棋局，支持动态复盘回放！`);
+      } catch(e) {
+        console.error("Main board replay error:", e);
       }
     }
 
-    // 绘制复盘棋盘与带手数的棋子
-    function drawReplayBoard() {
-      const cvs = document.getElementById("replayCanvas");
-      if (!cvs) return;
-      const ctx = cvs.getContext("2d");
-      const w = cvs.width, h = cvs.height;
+    function applyMainReplayStep(step) {
+      replayStepIndex = Math.max(0, Math.min(step, replayAllMoves.length));
 
-      // 更新控制器提示文本
-      const stepText = document.getElementById("replayStepText");
-      const turnIndicator = document.getElementById("replayTurnIndicator");
-      if (stepText) {
-        stepText.textContent = `当前: 第 ${replayCurrentStep} 手 / 共 ${currentReplayMoves.length} 手`;
+      // 清空主棋盘
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          board[r][c] = EMPTY;
+        }
       }
-      if (turnIndicator) {
-        if (replayCurrentStep === 0) {
-          turnIndicator.textContent = "准备开局 (黑方先手)";
-          turnIndicator.style.color = "#1e293b";
+      history = [];
+
+      // 逐步应用落子
+      for (let i = 0; i < replayStepIndex; i++) {
+        const m = replayAllMoves[i];
+        if (m && m.r >= 0 && m.r < 15 && m.c >= 0 && m.c < 15) {
+          board[m.r][m.c] = m.p;
+          history.push({ r: m.r, c: m.c, p: m.p });
+        }
+      }
+
+      // 更新 Dock 提示文本
+      const stepLabel = document.getElementById("replayStepLabel");
+      const turnLabel = document.getElementById("replayTurnLabel");
+      const slider = document.getElementById("replayMainSlider");
+
+      if (stepLabel) {
+        stepLabel.textContent = `当前: 第 ${replayStepIndex} / 共 ${replayAllMoves.length} 手`;
+      }
+      if (turnLabel) {
+        if (replayStepIndex === 0) {
+          turnLabel.textContent = "准备开局 (黑方先手)";
+          turnLabel.style.color = "#1e293b";
         } else {
-          const lastMove = currentReplayMoves[replayCurrentStep - 1];
-          const colorName = lastMove ? (lastMove.p === 1 ? "黑方落子" : "白方落子") : "";
-          turnIndicator.textContent = `第 ${replayCurrentStep} 手: ${colorName}`;
-          turnIndicator.style.color = lastMove && lastMove.p === 1 ? "#1e293b" : "#0284c7";
+          const lastM = replayAllMoves[replayStepIndex - 1];
+          const colorName = lastM ? (lastM.p === 1 ? "黑方落子" : "白方落子") : "";
+          turnLabel.textContent = `第 ${replayStepIndex} 手: ${colorName}`;
+          turnLabel.style.color = lastM && lastM.p === 1 ? "#1e293b" : "#0284c7";
         }
       }
+      if (slider) slider.value = replayStepIndex;
 
-      // 1. 绘制高拟真木纹棋盘背景
-      const grad = ctx.createLinearGradient(0, 0, w, h);
-      grad.addColorStop(0, "#e9c496");
-      grad.addColorStop(0.5, "#dfb584");
-      grad.addColorStop(1, "#d1a26e");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
+      draw();
+    }
 
-      // 棋盘边框阴影
-      ctx.strokeStyle = "#8d5b28";
-      ctx.lineWidth = 4;
-      ctx.strokeRect(6, 6, w - 12, h - 12);
+    function onMainReplaySlider(val) {
+      applyMainReplayStep(parseInt(val, 10));
+    }
 
-      const pad = 28;
-      const grid = (w - pad * 2) / 14;
+    function mainReplayStep(delta) {
+      applyMainReplayStep(replayStepIndex + delta);
+    }
 
-      // 2. 绘制 15x15 网格线
-      ctx.strokeStyle = "rgba(74, 40, 16, 0.75)";
-      ctx.lineWidth = 1.5;
-      for (let i = 0; i < 15; i++) {
-        // 横线
-        ctx.beginPath();
-        ctx.moveTo(pad, pad + i * grid);
-        ctx.lineTo(w - pad, pad + i * grid);
-        ctx.stroke();
-        // 竖线
-        ctx.beginPath();
-        ctx.moveTo(pad + i * grid, pad);
-        ctx.lineTo(pad + i * grid, h - pad);
-        ctx.stroke();
-      }
+    function mainReplayJump(step) {
+      applyMainReplayStep(step);
+    }
 
-      // 3. 绘制 5 个星位 (天元与四隅)
-      const stars = [[3, 3], [11, 3], [7, 7], [3, 11], [11, 11]];
-      ctx.fillStyle = "rgba(74, 40, 16, 0.9)";
-      for (const [sr, sc] of stars) {
-        ctx.beginPath();
-        ctx.arc(pad + sc * grid, pad + sr * grid, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
+    function mainReplayJumpToEnd() {
+      applyMainReplayStep(replayAllMoves.length);
+    }
 
-      // 如果没有任何手数记录（旧版简报），显示提示
-      if (currentReplayMoves.length === 0) {
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.font = "bold 16px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("本局为早期极速战报，未记录走法谱", w / 2, h / 2 - 10);
-        ctx.font = "12px sans-serif";
-        ctx.fillText("最新版本（v1.0.80）起每局均完整录制并云端存档", w / 2, h / 2 + 15);
-        return;
-      }
-
-      const radius = grid * 0.44;
-
-      // 4. 绘制前 replayCurrentStep 步的所有棋子与清晰手数字体
-      for (let i = 0; i < replayCurrentStep; i++) {
-        const m = currentReplayMoves[i];
-        if (!m) continue;
-        const x = pad + m.c * grid;
-        const y = pad + m.r * grid;
-        const isBlack = (m.p === 1);
-
-        // 绘制立体光影棋子
-        ctx.save();
-        ctx.shadowColor = "rgba(0,0,0,0.4)";
-        ctx.shadowBlur = 6;
-        ctx.shadowOffsetX = 2;
-        ctx.shadowOffsetY = 2;
-
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        const stoneGrad = ctx.createRadialGradient(x - radius * 0.3, y - radius * 0.3, radius * 0.1, x, y, radius);
-        if (isBlack) {
-          stoneGrad.addColorStop(0, "#4a5568");
-          stoneGrad.addColorStop(0.7, "#1a202c");
-          stoneGrad.addColorStop(1, "#000000");
-        } else {
-          stoneGrad.addColorStop(0, "#ffffff");
-          stoneGrad.addColorStop(0.8, "#edf2f7");
-          stoneGrad.addColorStop(1, "#cbd5e0");
+    function toggleMainReplayAuto() {
+      const btnAuto = document.getElementById("btnMainReplayAuto");
+      if (replayAutoTimer) {
+        clearInterval(replayAutoTimer);
+        replayAutoTimer = null;
+        if (btnAuto) btnAuto.textContent = "▶️ 播放";
+      } else {
+        if (replayStepIndex >= replayAllMoves.length) {
+          applyMainReplayStep(0);
         }
-        ctx.fillStyle = stoneGrad;
-        ctx.fill();
-        ctx.restore();
-
-        // 棋子外描边
-        ctx.strokeStyle = isBlack ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        // 打印落子序号 (如 1, 2, 3...)
-        const stepNum = i + 1;
-        ctx.font = `bold ${Math.round(radius * 1.05)}px Arial, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = isBlack ? "#f8fafc" : "#1e293b";
-        ctx.fillText(String(stepNum), x, y + 1);
-
-        // 最后一手红点/高亮光环标记
-        if (i === replayCurrentStep - 1) {
-          ctx.beginPath();
-          ctx.arc(x, y, radius * 1.25, 0, Math.PI * 2);
-          ctx.strokeStyle = "#ef4444";
-          ctx.lineWidth = 2.5;
-          ctx.setLineDash([4, 2]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
+        if (btnAuto) btnAuto.textContent = "⏸️ 暂停";
+        replayAutoTimer = setInterval(() => {
+          if (replayStepIndex < replayAllMoves.length) {
+            mainReplayStep(1);
+          } else {
+            clearInterval(replayAutoTimer);
+            replayAutoTimer = null;
+            if (btnAuto) btnAuto.textContent = "▶️ 播放";
+          }
+        }, 650);
       }
     }
 
-    
+    // 退出复盘模式，丝滑切回正常游戏
+    function exitReplayMode() {
+      if (replayAutoTimer) {
+        clearInterval(replayAutoTimer);
+        replayAutoTimer = null;
+      }
+      const btnAuto = document.getElementById("btnMainReplayAuto");
+      if (btnAuto) btnAuto.textContent = "▶️ 播放";
+
+      isReplayMode = false;
+      const topBar = document.getElementById("replayTopBar");
+      const dock = document.getElementById("replayControlDock");
+      if (topBar) topBar.style.display = "none";
+      if (dock) dock.style.display = "none";
+
+      const bottomCtrls = document.querySelector(".bottom-controls");
+      if (bottomCtrls) bottomCtrls.style.display = "flex";
+      const cardArea = document.querySelector(".card-area-wrapper");
+      if (cardArea) cardArea.style.display = "flex";
+
+      // 恢复之前的对局状态
+      if (replaySavedState) {
+        board = replaySavedState.board.map(r => [...r]);
+        history = replaySavedState.history.map(h => ({ ...h }));
+        turn = replaySavedState.turn;
+        isOver = replaySavedState.isOver;
+        gameMode = replaySavedState.gameMode;
+        p1Name = replaySavedState.p1Name;
+        p2Name = replaySavedState.p2Name;
+        p1Avatar = replaySavedState.p1Avatar;
+        p2Avatar = replaySavedState.p2Avatar;
+        replaySavedState = null;
+      }
+
+      draw();
+      showGameNotice("已退出复盘模式");
+    }
+
     // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回)
     async function syncCloudHistory() {
       if (typeof currentUserUid === "undefined" || !currentUserUid) return;
@@ -8223,6 +8220,20 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         }
       }
 
+      // 🔍 复盘模式：在大棋盘棋子上绘制清晰的落子步数序号 (1, 2, 3...)
+      if (isReplayMode && history && history.length > 0) {
+        for (let i = 0; i < history.length; i++) {
+          const st = history[i];
+          const sx = paddingX + (st.c + 0.5) * gridX;
+          const sy = paddingY + (st.r + 0.5) * gridY;
+          ctx.font = `bold ${Math.round(radius * 0.95)}px Arial, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = (st.p === 1) ? '#f8fafc' : '#1e293b';
+          ctx.fillText(String(i + 1), sx, sy + 1);
+        }
+      }
+
       // 3. 最后一手标记 (各主题自适应)
       if (history.length > 0) {
         const last = history[history.length-1];
@@ -8400,6 +8411,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     cvs.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      if (isReplayMode) return; // 复盘模式下禁止在主棋盘落子
       if (isOver) return;
       if (gameMode === 'ai' && turn !== BLACK) return;
       if (gameMode === 'online' && turn !== myOnlineColor) return;
@@ -9023,7 +9035,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.82';
+    const CURRENT_VERSION_TAG = 'v1.0.83';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
