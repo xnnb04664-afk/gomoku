@@ -1977,7 +1977,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.73</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.74</div>
         </div>
       </div>
 
@@ -5999,6 +5999,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     function applyUserData(data) {
       if (!data) return;
+      if (typeof data.score === 'number') {
+        const badge = document.getElementById('myLadderBadge');
+        if (badge) badge.textContent = `${data.score} 分`;
+      }
       if (data.uid) {
         currentUserUid = String(data.uid);
         localStorage.setItem("gomoku_user_uid", currentUserUid);
@@ -6032,6 +6036,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         localStorage.setItem("gomoku_p1Name", p1Name);
       }
       updatePlayerHeaderUI();
+      updateAccountUI();
+      updateHistoryCountUI();
 
       // 双保险：写入 Android 原生持久化存储（不怕清缓存、不怕杀后台）
       if (currentUsername && typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
@@ -6085,6 +6091,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           btnLogout.style.display = "none";
         }
       }
+      updateHistoryCountUI();
     }
 
     function copyMyUid() {
@@ -6192,6 +6199,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           p1Name = json.data.nickname || u;
           localStorage.setItem("gomoku_p1Name", p1Name);
           updatePlayerHeaderUI();
+          updateAccountUI();
+          updateHistoryCountUI();
           closeAuthModal();
           showGameNotice(`🎉 欢迎回来，棋士【${p1Name}】！已成功登录`, true);
         } else {
@@ -8558,7 +8567,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.73';
+    const CURRENT_VERSION_TAG = 'v1.0.74';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
@@ -8793,17 +8802,66 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         
         if (btnFast) {
           btnFast.style.display = "flex";
-          btnFast.innerHTML = "<span>⚡ 极速全自动下载更新 (推荐)</span>";
-          btnFast.onclick = (e) => {
-            e.preventDefault();
-            setVisualProgress(5, "🚀 正在启动全自动极速下载...");
-            isAppDownloading = true;
-            if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
-              AndroidNativeApp.downloadAndInstallApk(fastLink);
-            } else {
-              window.location.href = fastLink;
-            }
-          };
+          // 🌟 核心革新：如果处于原生 App 环境，首推免安装秒级在线热更新！
+          if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveHotUpdateFile) {
+            btnFast.innerHTML = "<span>⚡ 免安装一键秒更 (推荐·2秒无感)</span>";
+            btnFast.onclick = async (e) => {
+              e.preventDefault();
+              setVisualProgress(15, "🚀 正在通过高速 CDN 拉取最新版本...");
+              isAppDownloading = true;
+              try {
+                const hotUrls = [
+                  "https://gh-proxy.com/https://raw.githubusercontent.com/" + GITHUB_REPO + "/master/index.html?_t=" + Date.now(),
+                  "https://raw.githubusercontent.com/" + GITHUB_REPO + "/master/index.html?_t=" + Date.now()
+                ];
+                let newHtml = null;
+                for (const hUrl of hotUrls) {
+                  try {
+                    setVisualProgress(35, "📥 正在极速接收最新核心代码...");
+                    const res = await fetch(hUrl);
+                    if (res.ok) {
+                      const txt = await res.text();
+                      if (txt && txt.includes("五子棋") && txt.length > 50000) {
+                        newHtml = txt;
+                        break;
+                      }
+                    }
+                  } catch(_) {}
+                }
+                if (newHtml) {
+                  setVisualProgress(80, "💾 正在写入本地沙盒存储...");
+                  const ok = AndroidNativeApp.saveHotUpdateFile("index.html", newHtml);
+                  if (ok) {
+                    setVisualProgress(100, "🎉 免安装秒更成功！正在重载应用...");
+                    showGameNotice("🎉 更新成功！即将无缝进入最新版", false);
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 1200);
+                    return;
+                  }
+                }
+                throw new Error("热更新写入异常，自动转入 APK 完整下载通道");
+              } catch(err) {
+                console.warn('[HotUpdate Fallback]', err);
+                setVisualProgress(50, "🔄 正在转入完整 APK 安装通道...");
+                if (AndroidNativeApp.downloadAndInstallApk) {
+                  AndroidNativeApp.downloadAndInstallApk(fastLink);
+                }
+              }
+            };
+          } else {
+            btnFast.innerHTML = "<span>⚡ 极速全自动下载更新 (推荐)</span>";
+            btnFast.onclick = (e) => {
+              e.preventDefault();
+              setVisualProgress(5, "🚀 正在启动全自动极速下载...");
+              isAppDownloading = true;
+              if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
+                AndroidNativeApp.downloadAndInstallApk(fastLink);
+              } else {
+                window.location.href = fastLink;
+              }
+            };
+          }
         }
         if (btnOfficial) {
           btnOfficial.style.display = "flex";

@@ -67,8 +67,23 @@ copyRecursiveSync(path.join(SRC_DIR, 'res'), path.join(TEMP_BUILD, 'res'));
 copyRecursiveSync(path.join(SRC_DIR, 'src'), path.join(TEMP_BUILD, 'src'));
 fs.copyFileSync(path.join(SRC_DIR, 'AndroidManifest.xml'), path.join(TEMP_BUILD, 'AndroidManifest.xml'));
 
-// 同步 HTML/CSS/JS 到 assets
-fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets', 'index.html'));
+// ⚡ 极速离线秒开关键优化：将内联完整的单文件版置入 assets/index.html，彻底解除一切外部网络依赖与 document.write 阻塞
+const singleFileHtml = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
+if (fs.existsSync(singleFileHtml) && fs.statSync(singleFileHtml).size > 100000) {
+  fs.copyFileSync(singleFileHtml, path.join(TEMP_BUILD, 'assets', 'index.html'));
+  console.log('📦 成功内联单文件离线旗舰版到 APK assets/index.html (0毫秒纯本地秒开)');
+} else {
+  fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets', 'index.html'));
+}
+
+// 同步完整的 js, css, img 目录到 assets，保证本地微型服务器绝对不报 404
+['js', 'css', 'img'].forEach(dir => {
+  const srcD = path.join(ROOT_DIR, dir);
+  if (fs.existsSync(srcD)) {
+    copyRecursiveSync(srcD, path.join(TEMP_BUILD, 'assets', dir));
+  }
+});
+
 ['theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'].forEach(f => {
   const p = path.join(ROOT_DIR, f);
   if (fs.existsSync(p)) fs.copyFileSync(p, path.join(TEMP_BUILD, 'assets', f));

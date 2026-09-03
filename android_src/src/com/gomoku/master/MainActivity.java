@@ -155,13 +155,16 @@ public class MainActivity extends Activity {
 
         // 3. Sticky Immersive 全面屏
         applyImmersiveSticky();
-        enforceAntiReverseProtection();
-        if (!verifyApkSignatureIntegrity()) {
-            Toast.makeText(this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show();
-        }
+        // ⚡ 启动极速秒开调优：安全哈希与注入探测异步并发执行，彻底解除对主线程绘制的阻塞
+        new Thread(() -> {
+            enforceAntiReverseProtection();
+            if (!verifyApkSignatureIntegrity()) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show());
+            }
+        }).start();
 
         mWebView = new WebView(this);
-        mWebView.setBackgroundColor(Color.parseColor("#1a1a2e"));
+        mWebView.setBackgroundColor(Color.parseColor("#4da4ff"));
         setContentView(mWebView);
 
         setupWebView();
@@ -172,15 +175,18 @@ public class MainActivity extends Activity {
             currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
         } catch (Exception ignored) {}
         SharedPreferences sp = getSharedPreferences("app_prefs", MODE_PRIVATE);
+        int lastCode = sp.getInt("last_version_code", 0);
         File updateDir = new File(getFilesDir(), "hot_update");
-        // 彻底清理任何旧版本残留的离线缓存，确保覆盖安装后100%秒级展示最新版本
-        if (updateDir.exists()) {
-            File[] files = updateDir.listFiles();
-            if (files != null) {
-                for (File f : files) f.delete();
+        // 🌟 仅当真正安装了更高版本号的原生 APK 时，才清理热更新沙盒，避免日常热更新在冷启动后被误删
+        if (currentCode > lastCode) {
+            if (updateDir.exists()) {
+                File[] files = updateDir.listFiles();
+                if (files != null) {
+                    for (File f : files) f.delete();
+                }
             }
+            sp.edit().putInt("last_version_code", currentCode).apply();
         }
-        sp.edit().putInt("last_version_code", currentCode).apply();
         if (!updateDir.exists()) updateDir.mkdirs();
         mLocalServer = new LocalWebServer(getAssets(), updateDir);
         boolean serverReady = mLocalServer.startAndWait();
