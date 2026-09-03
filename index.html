@@ -1619,7 +1619,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.83</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.84</div>
         </div>
       </div>
 
@@ -3114,12 +3114,9 @@
       return null;
     }
 
-    // 🚀 6 步做杀逼杀推演 (VCT: Victory by Continuous Threat)
+    // 🚀 6 步做杀逼杀推演 (VCT: 极速精剪枝版)
     function searchVCT(boardState, color, depth = 6) {
       if (depth <= 0) return null;
-      const vcf = searchVCF(boardState, color, 8);
-      if (vcf) return vcf;
-
       const opp = color === BLACK ? WHITE : BLACK;
       const threats = [];
 
@@ -3136,9 +3133,9 @@
         }
       }
 
-      for (let m of threats.slice(0, 5)) {
+      for (let m of threats.slice(0, 4)) {
         boardState[m.r][m.c] = color;
-        const oppMoves = getCandidateMoves(boardState, opp, 3);
+        const oppMoves = getCandidateMoves(boardState, opp, 2);
         let allDefeated = oppMoves.length > 0;
         for (let oppM of oppMoves) {
           boardState[oppM.r][oppM.c] = opp;
@@ -3170,7 +3167,7 @@
       }
 
       const currentColor = isMaximizing ? aiColor : oppColor;
-      const candidates = getCandidateMoves(boardState, currentColor, 8);
+      const candidates = getCandidateMoves(boardState, currentColor, 6);
       if (candidates.length === 0) return { score: 0 };
 
       if (candidates[0].score >= 20000000) {
@@ -8016,7 +8013,7 @@
       persistGameState();
 
       if (gameMode === 'ai' && turn === WHITE && !isOver) {
-        setTimeout(smartAiMove, 260);
+        setTimeout(smartAiMove, 80);
       }
     }
 
@@ -8646,7 +8643,7 @@
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.83';
+    const CURRENT_VERSION_TAG = 'v1.0.84';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
