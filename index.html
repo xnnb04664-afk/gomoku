@@ -904,6 +904,19 @@
       z-index: 150; opacity: 0; pointer-events: none; transition: opacity 0.2s;
     }
     .online-modal-backdrop.show { opacity: 1; pointer-events: auto; }
+
+    /* 🏆 天梯榜与安全账号认证弹窗顶层置顶层叠与显隐修复 */
+    #authModal, #leaderboardModal {
+      z-index: 100010 !important;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    #authModal.show, #leaderboardModal.show {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+
     .online-modal-card {
       background: #fffdf5; border: 3.5px solid var(--border-dark);
       border-radius: 22px; width: 90%; max-width: 360px; padding: 20px 16px;
@@ -1315,7 +1328,7 @@
             <span>🏆 全服天梯对战榜</span>
             <span id="myLadderBadge" style="background:#f59e0b; color:#fff; font-size:10px; padding:1px 6px; border-radius:10px; font-weight:800;">积分: 1000</span>
           </div>
-          <div style="font-size:9.5px; color:#92400e; font-weight:700;">胜负云端同步 · Cloudflare D1 存储</div>
+          <div style="font-size:9.5px; color:#92400e; font-weight:700;">全服实时竞技 · 每局胜负自动计分</div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="openLeaderboardModal()" style="background:#d97706; color:#fff; border-color:#b45309; padding:4px 9px; font-size:11px; border-radius:8px; font-weight:900; cursor:pointer;">🏅 查看排名</button>
       </div>
@@ -1325,7 +1338,7 @@
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.19</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.20</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1387,7 +1400,7 @@
         <div style="text-align:left; line-height:1.2;">
           <div style="font-size:12px; font-weight:900; color:#b45309; display:flex; align-items:center; gap:4px;">
             <span>🏆 全服天梯风云榜</span>
-            <span style="background:#f59e0b; color:#fff; font-size:9.5px; padding:1px 5px; border-radius:8px; font-weight:800;">D1实时榜</span>
+            <span style="background:#f59e0b; color:#fff; font-size:9.5px; padding:1px 5px; border-radius:8px; font-weight:800;">全服榜</span>
           </div>
           <div style="font-size:9.5px; color:#92400e; font-weight:700;">全国棋友同台竞技 · 实时段位排行</div>
         </div>
@@ -1406,7 +1419,7 @@
     </div>
   </div>
   <!-- 🔑 高安全账号认证中心弹窗 (登录 / 注册 / 密保找回) -->
-  <div class="online-modal-backdrop" id="authModal" style="display:none;" onclick="closeAuthModal()">
+  <div class="online-modal-backdrop" id="authModal" onclick="closeAuthModal()">
     <div class="online-modal-card" style="max-width:380px; width:92%; padding:16px; box-sizing:border-box;" onclick="event.stopPropagation()">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1.5px solid rgba(0,0,0,0.08); padding-bottom:8px;">
         <div style="text-align:left;">
@@ -1495,13 +1508,13 @@
 
 
   <!-- 🏆 全服天梯排行榜弹窗 (Cloudflare D1 驱动) -->
-  <div class="online-modal-backdrop" id="leaderboardModal" style="display:none;" onclick="closeLeaderboardModal()">
+  <div class="online-modal-backdrop" id="leaderboardModal" onclick="closeLeaderboardModal()">
     <div class="online-modal-card" style="max-width:390px; width:94%; max-height:85vh; display:flex; flex-direction:column; padding:14px; box-sizing:border-box;" onclick="event.stopPropagation()">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1.5px solid rgba(0,0,0,0.08); padding-bottom:8px;">
         <div style="text-align:left;">
           <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
             <span>🏆 全服天梯风云榜</span>
-            <span style="font-size:10px; background:#10b981; color:#fff; padding:1px 6px; border-radius:8px; font-weight:800;">Cloudflare D1</span>
+            
           </div>
           <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">胜局 +25 分 · 败局 -15 分 · 实时云端同步</div>
         </div>
@@ -1512,7 +1525,7 @@
       <div id="leaderboardList" style="flex:1; overflow-y:auto; min-height:220px; max-height:360px; display:flex; flex-direction:column; gap:6px; padding:2px 4px 6px 0;">
         <div style="text-align:center; padding:30px 0; color:#64748b; font-size:12px; font-weight:800;">
           <div style="font-size:24px; margin-bottom:6px; animation:bounceBubble 1s infinite alternate;">⏳</div>
-          正在连接 Cloudflare 全球云端拉取天梯榜单...
+          正在连接全服拉取天梯榜单...
         </div>
       </div>
 
@@ -1653,6 +1666,18 @@
       </div>
       <div style="font-size:11px; font-weight:800; color:#64748b; margin-bottom:4px;">更新内容说明：</div>
       <div id="updateNotesContent" style="max-height:120px; overflow-y:auto; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:10px; padding:8px; font-size:11px; color:#334155; line-height:1.5; white-space:pre-wrap; margin-bottom:12px;"></div>
+
+      <!-- 🚀 下载进度条 -->
+      <div id="updateProgressBarWrap" style="display:none; margin:10px 0 12px 0;">
+        <div style="display:flex; justify-content:space-between; font-size:11.5px; font-weight:800; color:#0369a1; margin-bottom:5px;">
+          <span id="updateProgressStatusText">正在极速下载更新包...</span>
+          <span id="updateProgressPercentText" style="color:#10b981; font-weight:900;">0%</span>
+        </div>
+        <div style="width:100%; height:9px; background:#e2e8f0; border-radius:10px; overflow:hidden; border:1px solid #cbd5e1; box-shadow:inset 0 1px 3px rgba(0,0,0,0.1);">
+          <div id="updateProgressBarInner" style="width:0%; height:100%; background:linear-gradient(90deg, #10b981, #059669); border-radius:10px; transition:width 0.2s ease;"></div>
+        </div>
+      </div>
+
       <div style="display:flex; flex-direction:column; gap:8px;">
         <a id="btnFastDownload" href="#" target="_blank" class="btn-confirm-ok" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; padding:9px 0; border-radius:10px; font-weight:900; font-size:12.5px; background:#10b981; border-color:#059669; box-shadow:0 3px 0 #047857; color:#fff;">
           <span>⚡ 国内极速下载更新 (推荐)</span>
@@ -4510,14 +4535,15 @@
     function openAuthModal(tab = 'login') {
       const modal = document.getElementById('authModal');
       if (modal) {
-        modal.style.display = 'flex';
+        modal.classList.add('show');
         switchAuthTab(tab);
       }
+    }
     }
 
     function closeAuthModal() {
       const modal = document.getElementById('authModal');
-      if (modal) modal.style.display = 'none';
+      if (modal) modal.classList.remove('show');
     }
 
     function switchAuthTab(tab) {
@@ -4706,14 +4732,15 @@
     function openLeaderboardModal() {
       const modal = document.getElementById('leaderboardModal');
       if (modal) {
-        modal.style.display = 'flex';
+        modal.classList.add('show');
         fetchGlobalLeaderboard(false);
       }
+    }
     }
 
     function closeLeaderboardModal() {
       const modal = document.getElementById('leaderboardModal');
-      if (modal) modal.style.display = 'none';
+      if (modal) modal.classList.remove('show');
     }
 
     async function fetchGlobalLeaderboard(isManualRefresh = false) {
@@ -4725,7 +4752,7 @@
         listEl.innerHTML = `
           <div style="text-align:center; padding:30px 0; color:#64748b; font-size:12px; font-weight:800;">
             <div style="font-size:24px; margin-bottom:6px; animation:bounceBubble 1s infinite alternate;">⏳</div>
-            正在实时拉取 Cloudflare D1 最新数据...
+            正在实时同步全服天梯最新排名...
           </div>
         `;
       }
@@ -6410,7 +6437,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.19';
+    const CURRENT_VERSION_TAG = 'v1.0.20';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -6429,16 +6456,28 @@
     let isAppDownloading = false;
 
     // 原生下载进度实时通知
-    window.onApkDownloadProgress = function(percent, status) {
+        window.onApkDownloadProgress = function(percent, status) {
       const btn = document.getElementById('btnFastDownload');
-      if (!btn) return;
+      const progressWrap = document.getElementById('updateProgressBarWrap');
+      const progressInner = document.getElementById('updateProgressBarInner');
+      const progressPercent = document.getElementById('updateProgressPercentText');
+      const progressStatus = document.getElementById('updateProgressStatusText');
+
+      if (progressWrap) progressWrap.style.display = 'block';
+
       if (status === 'done' || percent >= 100) {
         isAppDownloading = false;
-        btn.innerHTML = '<span>✅ 下载完成，请在手机弹窗点击【安装】</span>';
-        setTimeout(() => closeUpdateModal(), 2000);
+        if (progressInner) progressInner.style.width = '100%';
+        if (progressPercent) progressPercent.textContent = '100%';
+        if (progressStatus) progressStatus.textContent = '✅ 下载完成，正在调起安装...';
+        if (btn) btn.innerHTML = '<span>✅ 下载完成，请在手机上确认安装</span>';
+        setTimeout(() => closeUpdateModal(), 2500);
       } else if (percent > 0) {
         isAppDownloading = true;
-        btn.innerHTML = `<span>⚡ 正在全自动下载 ${percent}%...</span>`;
+        if (progressInner) progressInner.style.width = percent + '%';
+        if (progressPercent) progressPercent.textContent = percent + '%';
+        if (progressStatus) progressStatus.textContent = `🚀 正在下载安装包... ${percent}%`;
+        if (btn) btn.innerHTML = `<span>⏳ 正在全自动极速下载 (${percent}%)...</span>`;
       }
     };
 
