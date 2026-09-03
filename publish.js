@@ -5,12 +5,80 @@ const { execSync } = require('child_process');
 const ROOT_DIR = __dirname;
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
 
+const vm = require('vm');
+
 console.log('======================================================');
 console.log('🚀 五子棋全平台极速一键发布引擎 (One-Click Publisher & GitHub Releases)');
 console.log('======================================================');
 
+// 0. 发布前严密静态语法与核心完整性安全卡点 (100% 杜绝任何语法错误流出到正式包)
+console.log('>>> [0/8] 🛡️ 正在执行发布前代码全量静态语法与完整性校验...');
+
+function runPreflightChecks() {
+  let hasError = false;
+
+  // A. 校验 index.html 内所有 script 标签的 JavaScript 语法
+  const indexPath = path.join(ROOT_DIR, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    const html = fs.readFileSync(indexPath, 'utf8');
+    const scriptRegex = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+    let match;
+    let scriptIdx = 0;
+    while ((match = scriptRegex.exec(html)) !== null) {
+      scriptIdx++;
+      const code = match[1].trim();
+      if (!code) continue;
+      try {
+        new vm.Script(code, { filename: `index.html#script[${scriptIdx}]` });
+      } catch (err) {
+        console.error(`\n❌ [发布致命拦截] index.html 第 ${scriptIdx} 个 script 标签存在语法错误:`);
+        console.error(err.message);
+        hasError = true;
+      }
+    }
+
+    // B. 核心关键 DOM 元素与核心函数存在性检查
+    const criticalElements = ['cvs', 'gameResultModal', 'p1NameLabel', 'myLadderBadge'];
+    for (const elemId of criticalElements) {
+      if (!html.includes(`id="${elemId}"`)) {
+        console.error(`\n❌ [发布致命拦截] index.html 缺失关键核心 DOM 元素: id="${elemId}"`);
+        hasError = true;
+      }
+    }
+
+    const criticalFuncs = ['draw', 'makeMove', 'checkWin', 'triggerGameEnd', 'reportMatchResult', 'showGameResultModal', 'resetBoardOnly'];
+    for (const funcName of criticalFuncs) {
+      if (!html.includes(`function ${funcName}`)) {
+        console.error(`\n❌ [发布致命拦截] index.html 缺失关键核心函数: function ${funcName}`);
+        hasError = true;
+      }
+    }
+  }
+
+  // C. 校验 backend/worker.js 语法
+  const workerPath = path.join(ROOT_DIR, 'backend', 'worker.js');
+  if (fs.existsSync(workerPath)) {
+    try {
+      execSync('node --check backend/worker.js', { stdio: 'pipe' });
+    } catch (err) {
+      console.error('\n❌ [发布致命拦截] backend/worker.js 存在语法错误:');
+      console.error(err.stderr ? err.stderr.toString() : err.message);
+      hasError = true;
+    }
+  }
+
+  if (hasError) {
+    console.error('\n🚫 发布流程被安全门禁拦截！代码中存在语法或完整性问题，已强行终止发包！\n');
+    process.exit(1);
+  }
+
+  console.log('✅ 静态语法与核心完整性校验 100% 通过，允许继续发包！');
+}
+
+runPreflightChecks();
+
 // 1. 自动解析并递增 Android 版本号
-console.log('>>> [1/7] 读取并递增应用版本号...');
+console.log('>>> [1/8] 读取并递增应用版本号...');
 let manifestContent = fs.readFileSync(MANIFEST_PATH, 'utf8');
 const codeMatch = manifestContent.match(/android:versionCode="(\d+)"/);
 const nameMatch = manifestContent.match(/android:versionName="([\d\.]+)"/);
@@ -37,7 +105,7 @@ if (codeMatch && nameMatch) {
 }
 
 // 2. 同步更新所有 HTML 中的 CURRENT_VERSION_TAG 与 UI 显示
-console.log('>>> [2/7] 同步前端版本号到 6 大主题...');
+console.log('>>> [2/8] 同步前端版本号到 6 大主题...');
 const htmlFiles = [
   'index.html',
   'theme1_zen_dark.html',
@@ -84,11 +152,11 @@ if (fs.existsSync(workerJsPath)) {
 }
 
 // 3. 打包单文件离线网页版
-console.log('>>> [3/7] 正在构建最新单文件离线旗舰版...');
+console.log('>>> [3/8] 正在构建最新单文件离线旗舰版...');
 execSync('node bundle_single_file.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 4. 构建原生 Android APK (持久密钥签名)
-console.log('>>> [4/7] 正在调用 Android 原生 SDK 编译并持久化签名 APK...');
+console.log('>>> [4/8] 正在调用 Android 原生 SDK 编译并持久化签名 APK...');
 execSync('node build_apk.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 5. 校验产物
@@ -104,10 +172,10 @@ if (!fs.existsSync(apkPath) || !fs.existsSync(singleHtmlPath)) {
 
 const apkSize = (fs.statSync(apkPath).size / (1024 * 1024)).toFixed(2);
 const htmlSize = (fs.statSync(singleHtmlPath).size / 1024).toFixed(2);
-console.log(`>>> [5/7] 交付物产物校验通过: APK ${apkSize} MB | HTML ${htmlSize} KB (v${newName})`);
+console.log(`>>> [5/8] 交付物产物校验通过: APK ${apkSize} MB | HTML ${htmlSize} KB (v${newName})`);
 
 // 6. 执行 Git 本地提交并推送到 GitHub
-console.log('>>> [6/7] 执行 Git 提交并推送到 GitHub...');
+console.log('>>> [6/8] 执行 Git 提交并推送到 GitHub...');
 try {
   const commitMsg = `release: 发布 v${newName} (Build ${newCode}) - 原生APK与GitHub Releases同步就绪`;
   execSync('git add .', { cwd: ROOT_DIR, stdio: 'inherit' });
@@ -120,7 +188,7 @@ try {
 }
 
 // 7. 自动在 GitHub Releases 上创建发版并上传 APK
-console.log('>>> [7/7] 正在将最新 APK 发布到 GitHub Releases...');
+console.log('>>> [7/8] 正在将最新 APK 发布到 GitHub Releases...');
 const releaseTag = `v${newName}`;
 const releaseApk = path.join(ROOT_DIR, 'gomoku.apk');
 const releaseHtml = path.join(ROOT_DIR, 'gomoku.html');
