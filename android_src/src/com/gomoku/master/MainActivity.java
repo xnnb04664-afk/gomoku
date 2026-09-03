@@ -27,6 +27,7 @@ import android.os.StrictMode;
 import android.provider.Settings;
 import android.widget.Toast;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -155,6 +156,7 @@ public class MainActivity extends Activity {
 
         // 3. Sticky Immersive 全面屏
         applyImmersiveSticky();
+        unlockHighRefreshRate();
         try {
             enforceAntiReverseProtection();
             if (!verifyApkSignatureIntegrity()) {
@@ -220,6 +222,61 @@ public class MainActivity extends Activity {
         if (hasFocus) applyImmersiveSticky();
     }
 
+    private void unlockHighRefreshRate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                android.view.Display display = getDisplay();
+                if (display != null) {
+                    android.view.Display.Mode[] modes = display.getSupportedModes();
+                    android.view.Display.Mode maxMode = null;
+                    float maxRate = 60.0f;
+                    for (android.view.Display.Mode m : modes) {
+                        if (m.getRefreshRate() > maxRate) {
+                            maxRate = m.getRefreshRate();
+                            maxMode = m;
+                        }
+                    }
+                    if (maxMode != null) {
+                        WindowManager.LayoutParams lp = getWindow().getAttributes();
+                        lp.preferredDisplayModeId = maxMode.getModeId();
+                        getWindow().setAttributes(lp);
+                    }
+                }
+            } catch (Exception ignored) {}
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                WindowManager.LayoutParams lp = getWindow().getAttributes();
+                android.view.Display.Mode[] modes = getWindowManager().getDefaultDisplay().getSupportedModes();
+                float maxRate = 60.0f;
+                int bestModeId = 0;
+                for (android.view.Display.Mode m : modes) {
+                    if (m.getRefreshRate() > maxRate) {
+                        maxRate = m.getRefreshRate();
+                        bestModeId = m.getModeId();
+                    }
+                }
+                if (bestModeId != 0) {
+                    lp.preferredDisplayModeId = bestModeId;
+                    getWindow().setAttributes(lp);
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private static String getMimeTypeFromPath(String path) {
+        if (path.endsWith(".html") || path.endsWith(".htm")) return "text/html; charset=utf-8";
+        if (path.endsWith(".js") || path.endsWith(".mjs")) return "application/javascript; charset=utf-8";
+        if (path.endsWith(".css")) return "text/css; charset=utf-8";
+        if (path.endsWith(".json")) return "application/json; charset=utf-8";
+        if (path.endsWith(".png")) return "image/png";
+        if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+        if (path.endsWith(".webp")) return "image/webp";
+        if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".mp3")) return "audio/mpeg";
+        if (path.endsWith(".wav")) return "audio/wav";
+        return "application/octet-stream";
+    }
+
     private void setupWebView() {
         WebSettings settings = mWebView.getSettings();
 
@@ -233,6 +290,9 @@ public class MainActivity extends Activity {
         mWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         mWebView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
         mWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            settings.setOffscreenPreRaster(true);
+        }
 
         // 缓存策略
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
@@ -330,6 +390,37 @@ public class MainActivity extends Activity {
 
         // 页面导航保持在 WebView 内部；外链 APK 自动下载安装
         mWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, android.webkit.WebResourceRequest request) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    Uri uri = request.getUrl();
+                    if (uri != null && ("localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost()))) {
+                        String path = uri.getPath();
+                        if (path == null || path.equals("/") || path.isEmpty()) path = "index.html";
+                        if (path.startsWith("/")) path = path.substring(1);
+
+                        // 1. 优先从热更新沙盒目录极速内存映射流式读取
+                        File updateDir = new File(getFilesDir(), "hot_update");
+                        if (updateDir.exists()) {
+                            File localFile = new File(updateDir, path);
+                            if (localFile.exists() && localFile.isFile() && localFile.length() > 0) {
+                                try {
+                                    String mime = getMimeTypeFromPath(path);
+                                    return new android.webkit.WebResourceResponse(mime, "UTF-8", new FileInputStream(localFile));
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                        // 2. 内存直通读取原生 APK assets 资源 (零 TCP 握手开销)
+                        try {
+                            InputStream in = getAssets().open(path);
+                            String mime = getMimeTypeFromPath(path);
+                            return new android.webkit.WebResourceResponse(mime, "UTF-8", in);
+                        } catch (Exception ignored) {}
+                    }
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 // localhost 内的跳转保持在 WebView

@@ -1588,7 +1588,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.75</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.76</div>
         </div>
       </div>
 
@@ -7587,7 +7587,7 @@
           makeMove(row, col, turn);
         }
       }
-    });
+    }, { passive: false });
 
     // 底部按键绑定
     document.getElementById('btnOpenChat').onclick = openChatDrawer;
@@ -8178,7 +8178,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.75';
+    const CURRENT_VERSION_TAG = 'v1.0.76';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
