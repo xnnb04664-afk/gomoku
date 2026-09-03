@@ -1583,7 +1583,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.54</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.55</div>
         </div>
       </div>
 
@@ -3087,13 +3087,36 @@
 
         this.pubTopic = role === 'host' ? `gomoku/v3/${roomCode}/h2c` : `gomoku/v3/${roomCode}/c2h`;
         this.subTopic = role === 'host' ? `gomoku/v3/${roomCode}/c2h` : `gomoku/v3/${roomCode}/h2c`;
+        this.sigTopic = `gomoku/v3/${roomCode}/p2p_speed_sig`;
+
+        this.isP2pReady = false;
+        this.pc = null;
+        this.dc = null;
+        this.processedMsgIds = new Set();
 
         try { this.client.subscribe(this.subTopic, { qos: 0 }); } catch(_) {}
+        try { this.client.subscribe(this.sigTopic, { qos: 0 }); } catch(_) {}
 
         this.messageHandler = (topic, payload) => {
+          if (topic === this.sigTopic) {
+            try {
+              const sig = JSON.parse(payload.toString());
+              this._handleWebRtcSignal(sig);
+            } catch(e) {}
+            return;
+          }
           if (topic !== this.subTopic) return;
           try {
             const data = JSON.parse(payload.toString());
+            // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
+            if (data._mid) {
+              if (this.processedMsgIds.has(data._mid)) return;
+              this.processedMsgIds.add(data._mid);
+              if (this.processedMsgIds.size > 200) {
+                const first = this.processedMsgIds.values().next().value;
+                this.processedMsgIds.delete(first);
+              }
+            }
             this.emit('data', data);
           } catch(e) {
             console.warn('[MqttRoom parse error]', e);
@@ -3101,14 +3124,136 @@
         };
 
         this.client.on('message', this.messageHandler);
+
+        // 🚀 后台静默启动 WebRTC STUN 穿透探针（绝不阻断正常下棋，打通即享 1ms 局域网/公网极速直连）
+        this._startSilentP2PProbe();
+      }
+
+      _startSilentP2PProbe() {
+        try {
+          const RTCPC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+          if (!RTCPC) return;
+
+          const pc = new RTCPC({
+            iceServers: [
+              { urls: 'stun:stun.qq.com:3478' },
+              { urls: 'stun:stun.cloudflare.com:3478' }
+            ],
+            iceCandidatePoolSize: 4
+          });
+          this.pc = pc;
+
+          pc.onicecandidate = (e) => {
+            if (e.candidate && this.client && this.client.connected) {
+              try {
+                this.client.publish(this.sigTopic, JSON.stringify({
+                  sender: this.role,
+                  type: 'ice',
+                  candidate: e.candidate.toJSON()
+                }), { qos: 0 });
+              } catch(_) {}
+            }
+          };
+
+          if (this.role === 'host') {
+            const dc = pc.createDataChannel('gomoku_dc', { ordered: true });
+            this._bindDataChannel(dc);
+            pc.createOffer().then(offer => {
+              return pc.setLocalDescription(offer).then(() => {
+                if (this.client && this.client.connected) {
+                  this.client.publish(this.sigTopic, JSON.stringify({
+                    sender: 'host',
+                    type: 'offer',
+                    sdp: offer.sdp
+                  }), { qos: 0 });
+                }
+              });
+            }).catch(() => {});
+          } else {
+            pc.ondatachannel = (e) => {
+              this._bindDataChannel(e.channel);
+            };
+          }
+        } catch(err) {
+          console.warn('[P2P silent probe init]', err);
+        }
+      }
+
+      async _handleWebRtcSignal(sig) {
+        if (!sig || sig.sender === this.role || !this.pc) return;
+        try {
+          if (sig.type === 'offer' && this.role === 'client') {
+            await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sig.sdp }));
+            const answer = await this.pc.createAnswer();
+            await this.pc.setLocalDescription(answer);
+            if (this.client && this.client.connected) {
+              this.client.publish(this.sigTopic, JSON.stringify({
+                sender: 'client',
+                type: 'answer',
+                sdp: answer.sdp
+              }), { qos: 0 });
+            }
+          } else if (sig.type === 'answer' && this.role === 'host') {
+            if (this.pc.signalingState !== 'stable') {
+              await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sig.sdp }));
+            }
+          } else if (sig.type === 'ice' && sig.candidate) {
+            try {
+              await this.pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
+            } catch(_) {}
+          }
+        } catch(e) {}
+      }
+
+      _bindDataChannel(dc) {
+        this.dc = dc;
+        dc.onopen = () => {
+          this.isP2pReady = true;
+          console.info('🎉 [P2P Dual-Track] WebRTC 点对点直连通道成功建立！升级为 1ms 极速传输！');
+          showGameNotice('⚡ 已无感激活 P2P 点对点极速直连 (1ms)', false);
+        };
+        dc.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data._mid) {
+              if (this.processedMsgIds.has(data._mid)) return;
+              this.processedMsgIds.add(data._mid);
+            }
+            this.emit('data', data);
+          } catch(err) {}
+        };
+        dc.onclose = () => {
+          this.isP2pReady = false;
+        };
+        dc.onerror = () => {
+          this.isP2pReady = false;
+        };
       }
 
       send(data) {
-        if (!this.open || !this.client || !this.client.connected) return;
-        try {
-          this.client.publish(this.pubTopic, JSON.stringify(data), { qos: 0 });
-        } catch(e) {
-          console.warn('[MqttRoom send error]', e);
+        if (!this.open) return;
+        if (!data._mid) {
+          data._mid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+        }
+        const jsonStr = JSON.stringify(data);
+
+        // 🚀 双轨竞速：若 P2P 直连已打通，优先走 P2P UDP 直传！
+        if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
+          try {
+            this.dc.send(jsonStr);
+            return;
+          } catch(e) {
+            this.isP2pReady = false;
+          }
+        }
+
+        // 基石信道：走 100% 全网连通的 MQTT Anycast 云信道
+        if (this.client && this.client.connected) {
+          try {
+            this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
+          } catch(e) {
+            console.warn('[MqttRoom send error]', e);
+          }
         }
       }
 
@@ -3134,6 +3279,15 @@
 
       close() {
         this.open = false;
+        this.isP2pReady = false;
+        if (this.dc) {
+          try { this.dc.close(); } catch(_) {}
+          this.dc = null;
+        }
+        if (this.pc) {
+          try { this.pc.close(); } catch(_) {}
+          this.pc = null;
+        }
         if (this.client) {
           try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
         }
@@ -5885,6 +6039,7 @@
     // 🏆 胜负终局统一结算与音效调度器 (严格区分胜利方与失败方的专属音效)
     function triggerGameEnd(winnerColor, customWinReason = '') {
       isOver = true;
+      try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
       const isPlayerWin = (gameMode === 'ai')
         ? (winnerColor === BLACK)
         : (gameMode === 'online' ? (winnerColor === myOnlineColor) : true);
@@ -7045,6 +7200,7 @@
         onlineHeartbeatTimer = null;
       }
       currentRoomCode = null;
+      try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
       cancelQuickMatch();
       hideMatchingFloatingBar();
       setMode("pvp", true);
@@ -7454,7 +7610,7 @@
     }
 
     // ==========================================
-    // 💾 棋局状态跨页面互通保全 (对局不丢失，切换无忧)
+    // 💾 棋局状态跨页面互通保全 (对局不丢失，切换无忧，划掉后台自动恢复)
     // ==========================================
     function persistGameState() {
       try {
@@ -7463,10 +7619,59 @@
           p1Name, p2Name, p1Avatar, p2Avatar
         };
         sessionStorage.setItem('gomoku_active_game_state', JSON.stringify(state));
+
+        // 💾 针对划掉后台/杀进程的永久保全 (有效期 5 分钟)
+        if (gameMode === 'online' && !isOver && currentRoomCode) {
+          const session = {
+            roomCode: currentRoomCode,
+            myColor: myOnlineColor,
+            myRole: myOnlineColor === BLACK ? 'host' : 'client',
+            p1Name, p1Avatar, p2Name, p2Avatar,
+            board, history, turn,
+            currentDrawnCards, cardUsedStatus,
+            timestamp: Date.now()
+          };
+          localStorage.setItem('gomoku_active_online_room', JSON.stringify(session));
+        } else {
+          localStorage.removeItem('gomoku_active_online_room');
+        }
       } catch(e) {}
     }
 
     function restoreGameStateIfAny() {
+      // 1. 优先检测是否刚刚在联机对局中被系统杀后台或划掉后台
+      try {
+        const rawOnline = localStorage.getItem('gomoku_active_online_room');
+        if (rawOnline) {
+          const session = JSON.parse(rawOnline);
+          if (session && session.roomCode && (Date.now() - session.timestamp < 300000)) {
+            console.info('检测到刚刚有一局未完成的联机对战，自动恢复房间:', session.roomCode);
+            currentRoomCode = session.roomCode;
+            lastActiveRoomCode = session.roomCode;
+            myOnlineColor = session.myColor;
+            p1Name = session.p1Name || p1Name;
+            p1Avatar = session.p1Avatar || p1Avatar;
+            p2Name = session.p2Name || '好友';
+            p2Avatar = session.p2Avatar || '👧';
+            if (session.board) board = session.board;
+            if (session.history) history = session.history;
+            if (session.turn) turn = session.turn;
+            if (session.currentDrawnCards) currentDrawnCards = session.currentDrawnCards;
+            if (session.cardUsedStatus) cardUsedStatus = session.cardUsedStatus;
+            gameMode = 'online';
+
+            setTimeout(() => {
+              showGameNotice(`🔄 检测到您刚退出后台，正在自动重连回房间【${session.roomCode}】...`, false);
+              triggerOnlineReconnect("划掉后台恢复");
+            }, 800);
+            return;
+          } else {
+            localStorage.removeItem('gomoku_active_online_room');
+          }
+        }
+      } catch(e) {}
+
+      // 2. 常规 session 恢复
       try {
         const raw = sessionStorage.getItem('gomoku_active_game_state');
         if (raw) {
@@ -7508,7 +7713,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.54';
+    const CURRENT_VERSION_TAG = 'v1.0.55';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
