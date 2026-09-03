@@ -136,12 +136,26 @@ export default {
       }
     }
 
-    // 🛡️ 隐形伪装防护：严禁浏览器直接访问与爬虫探测，未携带客户端通行证一律伪装为 404 Nginx 离线页面
-    const clientHeader = request.headers.get("X-Gomoku-Client");
-    if (url.pathname === "/" || (request.method !== "OPTIONS" && clientHeader !== "gomoku-app-client-auth")) {
+    // 🛡️ 终极安全第一网关：全量强制校验客户端专属安全暗号，阻断一切外部未授权访问！
+    const isDocNav = request.headers.get("sec-fetch-dest") === "document" || request.headers.get("sec-fetch-mode") === "navigate";
+    if (url.pathname === "/" || url.pathname === "/index.html" || isDocNav) {
       return new Response('<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style="font-family:sans-serif;text-align:center;padding:120px 20px;"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style="color:#888;font-size:12px;">nginx</div></body></html>', {
         status: 404,
         headers: { "Content-Type": "text/html; charset=utf-8" }
+      });
+    }
+
+    const clientHeader = request.headers.get("X-Gomoku-Client");
+    if (request.method !== "OPTIONS" && clientHeader !== "gomoku-app-client-auth") {
+      return new Response(JSON.stringify({
+        code: 426,
+        msg: "🛡️ 官方安全网关已升级加固！请覆盖安装最新版游戏以保障账号数据安全。"
+      }), {
+        status: 403,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json; charset=utf-8"
+        }
       });
     }
 

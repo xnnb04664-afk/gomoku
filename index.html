@@ -3447,6 +3447,52 @@
     }
 
     let onlineHeartbeatTimer = null;
+    // 🛡️ P2P 技能反作弊拦截审计层：严密防止恶意发包、无限施法、越界攻击与虚假改子
+    let opponentSkillsUsedCount = 0;
+
+    function validateIncomingSkill(data) {
+      // 1. 施法上限风控：每位玩家单局最多只能使用 3 张干扰牌（神抽偶发额外计 1 次容限）
+      if (opponentSkillsUsedCount >= 4) {
+        console.warn("⚠️ 拦截到对手过度施法攻击，已自动丢弃作弊数据包！");
+        showGameNotice("⚠️ 拦截到对手异常技能数据包，已自动防御！", true);
+        return false;
+      }
+      
+      // 2. 严格坐标类型与 15x15 越界数值校验（杜绝 NaN、负数或越界崩溃注入）
+      const isValidCoord = (n) => typeof n === "number" && Number.isInteger(n) && n >= 0 && n < 15;
+      
+      if ("r" in data && !isValidCoord(data.r)) return false;
+      if ("c" in data && !isValidCoord(data.c)) return false;
+      if ("fromR" in data && !isValidCoord(data.fromR)) return false;
+      if ("fromC" in data && !isValidCoord(data.fromC)) return false;
+      if ("toR" in data && !isValidCoord(data.toR)) return false;
+      if ("toC" in data && !isValidCoord(data.toC)) return false;
+      if ("r1" in data && !isValidCoord(data.r1)) return false;
+      if ("c1" in data && !isValidCoord(data.c1)) return false;
+      if ("r2" in data && !isValidCoord(data.r2)) return false;
+      if ("c2" in data && !isValidCoord(data.c2)) return false;
+
+      // 3. 目标物理实体合法性校验（防凭空捏造）
+      if (data.type === "skill_remove_stone") {
+        if (board[data.r][data.c] === EMPTY) return false;
+      } else if (data.type === "skill_shift_stone") {
+        if (board[data.fromR][data.fromC] === EMPTY || board[data.toR][data.toC] !== EMPTY) return false;
+        if (Math.abs(data.fromR - data.toR) > 1 || Math.abs(data.fromC - data.toC) > 1) return false;
+      } else if (data.type === "skill_swap_color") {
+        if (board[data.r][data.c] === EMPTY) return false;
+      } else if (data.type === "skill_swap_positions") {
+        if (board[data.r1][data.c1] === EMPTY || board[data.r2][data.c2] === EMPTY) return false;
+      } else if (data.type === "skill_mega_bomb") {
+        if (!Array.isArray(data.stones)) return false;
+        let count = 0;
+        for (let r = 0; r < 15; r++) for (let col = 0; col < 15; col++) if (board[r][col] !== EMPTY) count++;
+        if (data.stones.length !== count) return false;
+      }
+
+      opponentSkillsUsedCount++;
+      return true;
+    }
+
     function setupConn() {
       if (!conn) return;
       if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
@@ -3540,9 +3586,14 @@
         } else if (data.type === 'restart') {
           resetBoardOnly();
           alert("🔄 对方重新开启了新对局！");
-        } else if (data.type === 'skill_use') {
+        } else if (data.type === "skill_use") {
           alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
-        } else if (data.type === 'skill_identity_swap') {
+        } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
+          if (!validateIncomingSkill(data)) {
+            console.warn("[AntiCheat] 技能报文非法，已被裁判拦截丢弃:", data);
+            return;
+          }
+          if (data.type === "skill_identity_swap") {
           // 身份互换：全盘棋子颜色对调
           for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
             if (board[r][c] === BLACK) board[r][c] = WHITE;
@@ -7117,6 +7168,7 @@
     }
 
     function resetBoardOnly() {
+      opponentSkillsUsedCount = 0;
       board = Array.from({length: 15}, () => Array(15).fill(0));
       turn = BLACK; history = []; isOver = false; winningLine = null;
       activeVFX = [];
@@ -7525,7 +7577,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.40';
+    const CURRENT_VERSION_TAG = 'v1.0.41';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
