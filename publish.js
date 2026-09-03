@@ -159,13 +159,14 @@ const vJson = {
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
 console.log('📌 已同步更新 version.json (国内极速直连数据源)');
 
-// 同步更新 backend/worker.js 中的版本号
+// 同步更新 backend/worker.js 中的版本号与更新日志
 const workerJsPath = path.join(ROOT_DIR, 'backend', 'worker.js');
 if (fs.existsSync(workerJsPath)) {
   let wCode = fs.readFileSync(workerJsPath, 'utf8');
   wCode = wCode.replace(/tag:\s*["']v[\d\.]+["']/, `tag: "v${newName}"`);
+  wCode = wCode.replace(/updateLog:\s*["'`][\s\S]*?["'`]\s*,/, `updateLog: ${JSON.stringify(vJson.updateLog)},`);
   fs.writeFileSync(workerJsPath, wCode, 'utf8');
-  console.log(`📌 已同步更新 backend/worker.js 版本为 v${newName}`);
+  console.log(`📌 已同步更新 backend/worker.js 版本与精准更新日志为 v${newName}`);
 }
 
 // 3. 打包单文件离线网页版
@@ -214,7 +215,7 @@ fs.copyFileSync(singleHtmlPath, releaseHtml);
 
 try {
   const releaseTitle = `五子棋 ${releaseTag} 官方正式版 (APK + 单文件HTML双发布)`;
-  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n- 📱 原生 Android 极速安装包：\`gomoku.apk\` (1.5MB，闪电安装)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (1.0MB，免安装双击即玩)\n- 🛡️ 官方原厂数字证书自校验防篡改系统\n- 🌐 WebRTC 跨网联机与断线瞬时重连\n- 🎴 9大强力干扰技能卡与全面屏手势舒适避让`;
+  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 极速安装包：\`gomoku.apk\` (1.5MB，闪电安装)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (免安装双击即玩)`;
   
   execSync(`gh release create ${releaseTag} "gomoku.apk" "gomoku.html" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);

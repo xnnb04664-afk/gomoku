@@ -76,18 +76,18 @@ fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets
   const srcD = path.join(ROOT_DIR, dir);
   if (fs.existsSync(srcD)) {
     copyRecursiveSync(srcD, path.join(TEMP_BUILD, 'assets', dir));
+    copyRecursiveSync(srcD, path.join(SRC_DIR, 'assets', dir));
   }
 });
 
 ['theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'].forEach(f => {
   const p = path.join(ROOT_DIR, f);
-  if (fs.existsSync(p)) fs.copyFileSync(p, path.join(TEMP_BUILD, 'assets', f));
+  if (fs.existsSync(p)) {
+    fs.copyFileSync(p, path.join(TEMP_BUILD, 'assets', f));
+    fs.copyFileSync(p, path.join(SRC_DIR, 'assets', f));
+  }
 });
-copyRecursiveSync(path.join(ROOT_DIR, 'css'), path.join(TEMP_BUILD, 'assets', 'css'));
-copyRecursiveSync(path.join(ROOT_DIR, 'js'), path.join(TEMP_BUILD, 'assets', 'js'));
-if (fs.existsSync(path.join(ROOT_DIR, 'img'))) {
-  copyRecursiveSync(path.join(ROOT_DIR, 'img'), path.join(TEMP_BUILD, 'assets', 'img'));
-}
+fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(SRC_DIR, 'assets', 'index.html'));
 
 console.log('>>> [3/7] 编译 Android 资源 (aapt2 compile & link)...');
 const resZip = path.join(TEMP_BUILD, 'resources.zip');
@@ -151,6 +151,39 @@ const withDexApk = path.join(TEMP_BUILD, 'with_dex.apk');
 fs.copyFileSync(unalignedApk, withDexApk);
 
 run(AAPT, ['add', withDexApk, 'classes.dex'], { cwd: path.join(TEMP_BUILD, 'dex') });
+
+// 🌟 核心跨平台兼容修复：规范化 APK 内部 assets 的 Windows 反斜杠为标准 Linux 正斜杠
+function normalizeApkZipEntrySlashes(apkPath) {
+  let buf = fs.readFileSync(apkPath);
+  let count = 0;
+  for (let i = 0; i < buf.length - 30; i++) {
+    if (buf[i] === 0x50 && buf[i+1] === 0x4b && buf[i+2] === 0x03 && buf[i+3] === 0x04) {
+      const nameLen = buf.readUInt16LE(i + 26);
+      for (let j = 0; j < nameLen; j++) {
+        if (buf[i + 30 + j] === 0x5C) {
+          buf[i + 30 + j] = 0x2F;
+          count++;
+        }
+      }
+    }
+  }
+  for (let i = 0; i < buf.length - 46; i++) {
+    if (buf[i] === 0x50 && buf[i+1] === 0x4b && buf[i+2] === 0x01 && buf[i+3] === 0x02) {
+      const nameLen = buf.readUInt16LE(i + 28);
+      for (let j = 0; j < nameLen; j++) {
+        if (buf[i + 46 + j] === 0x5C) {
+          buf[i + 46 + j] = 0x2F;
+          count++;
+        }
+      }
+    }
+  }
+  fs.writeFileSync(apkPath, buf);
+  if (count > 0) {
+    console.log(`>>> [路径规范化] 成功将 APK 中 ${count} 处 Windows 反斜杠转换为标准 Linux 正斜杠 (杜绝 assets 404)`);
+  }
+}
+normalizeApkZipEntrySlashes(withDexApk);
 
 const alignedApk = path.join(TEMP_BUILD, 'aligned.apk');
 run(ZIPALIGN, ['-f', '-p', '4', withDexApk, alignedApk]);

@@ -178,9 +178,9 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.84",
+        tag: "v1.0.85",
         officialRepo: "xnnb04664-afk/gomoku",
-        updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
+        updateLog: "五子棋 v1.0.85 官方正式版更新说明：\n\n🎯 【主棋盘大屏动态复盘】历史战绩点击「查看棋局」，直接平滑跳转至主棋盘大屏！每颗棋子中心清晰印上落子序号（1, 2, 3...），支持滑动条拖拽推演、单步进退、自动电影级播放与终局一键跳转\n\n🔒 【设置弹窗按钮底部常驻】个人中心弹窗底部「保存并应用」与「关闭」按钮改为永远固定常驻在屏幕最下方，打开弹窗一眼可见，彻底告别必须滑到最底部的繁琐操作\n\n☁️ 【历史战绩云端存储与双向彻底抹除】全盘走法谱与棋局数据全自动备份至 Cloudflare D1 云端数据库，换手机/重装账号一键找回；清空记录本地与云端彻底同步抹除\n\n⚡ 【免安装秒更4路全球CDN并发竞速】免安装在线热更新采用 jsDelivr、Fastly、GitHub 加速镜像 4 路全球 CDN 并发竞速（Promise.any），彻底消灭网络卡顿丢包，点一次秒更完成\n\n🧠 【全国冠军级大师 AI 极速算力】职业开局天元定式 + 10步 VCF 冲四绝杀与拦截 + 6步 VCT 逼杀 + 负极大值 Alpha-Beta 极值博弈剪枝，算法深思速度全面提速榨潜\n\n🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
         htmlDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/五子棋大师_单文件版.html",
         officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"

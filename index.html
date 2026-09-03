@@ -1558,15 +1558,15 @@
         <span>✨ 专属情侣动漫头像（点击选用）：</span>
       </div>
       <div class="anime-avatar-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:6px; margin-bottom:8px;">
-        <div class="anime-avatar-card" id="animeCardBoy" onclick="selectImgAvatar(this, window.ANIME_AVATAR_BOY)">
-          <img id="animeImgBoy" src="" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #70a1ff;" />
+        <div class="anime-avatar-card" id="animeCardBoy" onclick="selectImgAvatar(this, window.ANIME_AVATAR_BOY || 'img/avatar_boy.png')">
+          <img id="animeImgBoy" src="img/avatar_boy.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #70a1ff;" />
           <div style="text-align:left; line-height:1.2;">
             <div style="font-size:12px; font-weight:900; color:#2d3436;">银发少年 👦</div>
             <div style="font-size:10px; color:#636e72;">优雅礼服</div>
           </div>
         </div>
-        <div class="anime-avatar-card" id="animeCardGirl" onclick="selectImgAvatar(this, window.ANIME_AVATAR_GIRL)">
-          <img id="animeImgGirl" src="" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #ff9ff3;" />
+        <div class="anime-avatar-card" id="animeCardGirl" onclick="selectImgAvatar(this, window.ANIME_AVATAR_GIRL || 'img/avatar_girl.png')">
+          <img id="animeImgGirl" src="img/avatar_girl.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #ff9ff3;" />
           <div style="text-align:left; line-height:1.2;">
             <div style="font-size:12px; font-weight:900; color:#2d3436;">银发少女 👧</div>
             <div style="font-size:10px; color:#636e72;">甜美眨眼</div>
@@ -1619,7 +1619,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.84</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.85</div>
         </div>
       </div>
 
@@ -8643,7 +8643,7 @@
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.84';
+    const CURRENT_VERSION_TAG = 'v1.0.85';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;

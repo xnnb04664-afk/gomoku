@@ -264,10 +264,10 @@ public class MainActivity extends Activity {
     }
 
     private static String getMimeTypeFromPath(String path) {
-        if (path.endsWith(".html") || path.endsWith(".htm")) return "text/html; charset=utf-8";
-        if (path.endsWith(".js") || path.endsWith(".mjs")) return "application/javascript; charset=utf-8";
-        if (path.endsWith(".css")) return "text/css; charset=utf-8";
-        if (path.endsWith(".json")) return "application/json; charset=utf-8";
+        if (path.endsWith(".html") || path.endsWith(".htm")) return "text/html";
+        if (path.endsWith(".js") || path.endsWith(".mjs")) return "application/javascript";
+        if (path.endsWith(".css")) return "text/css";
+        if (path.endsWith(".json")) return "application/json";
         if (path.endsWith(".png")) return "image/png";
         if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
         if (path.endsWith(".webp")) return "image/webp";
@@ -392,14 +392,17 @@ public class MainActivity extends Activity {
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, android.webkit.WebResourceRequest request) {
+                // localhost 流量 100% 交由成熟完善的 LocalWebServer HTTP 协议栈处理（原生返回标准的 200 OK 与 Content-Type，避免 WebView 解析异常）
+                // 仅当协议为 file:// 时（极罕见端口完全被占用的极端兜底），才通过内存流拦截
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     Uri uri = request.getUrl();
-                    if (uri != null && ("localhost".equals(uri.getHost()) || "127.0.0.1".equals(uri.getHost()))) {
+                    if (uri != null && "file".equals(uri.getScheme())) {
                         String path = uri.getPath();
                         if (path == null || path.equals("/") || path.isEmpty()) path = "index.html";
                         if (path.startsWith("/")) path = path.substring(1);
+                        if (path.startsWith("android_asset/")) path = path.substring("android_asset/".length());
 
-                        // 1. 优先从热更新沙盒目录极速内存映射流式读取
+                        // 1. 优先从热更新沙盒目录极速流式读取
                         File updateDir = new File(getFilesDir(), "hot_update");
                         if (updateDir.exists()) {
                             File localFile = new File(updateDir, path);
@@ -410,7 +413,7 @@ public class MainActivity extends Activity {
                                 } catch (Exception ignored) {}
                             }
                         }
-                        // 2. 内存直通读取原生 APK assets 资源 (零 TCP 握手开销)
+                        // 2. 内存直通读取原生 APK assets 资源
                         try {
                             InputStream in = getAssets().open(path);
                             String mime = getMimeTypeFromPath(path);

@@ -1,6 +1,6 @@
 /**
- * 五子棋音频管理器 (Web Audio API 纯算法实时合成)
- * 无需外部音频资源，零延迟、零依赖、音质清脆自然
+ * 五子棋音频管理器 (Web Audio API 纯算法治愈系音效生成器)
+ * 采用清脆水滴泡泡声 (Bubble Pop)、童话八音盒 (Music Box)、Q弹软糖滑音
  */
 class SoundEffects {
   constructor() {
@@ -25,7 +25,7 @@ class SoundEffects {
   }
 
   /**
-   * 模拟落子木质敲击声（双层合成：高频瞬态点击 + 木质箱体低频共鸣）
+   * 可爱治愈水滴泡泡落子声 (Cute Bubble Pop / Waterdrop)
    */
   playPieceSound() {
     if (!this.enabled) return;
@@ -34,45 +34,43 @@ class SoundEffects {
 
     const t = this.ctx.currentTime;
 
-    // 1. 瞬态接触声 (Click/Snap)
-    const snapOsc = this.ctx.createOscillator();
-    const snapGain = this.ctx.createGain();
-    snapOsc.type = 'triangle';
-    snapOsc.frequency.setValueAtTime(800 + Math.random() * 200, t);
-    snapOsc.frequency.exponentialRampToValueAtTime(120, t + 0.04);
+    // 1. 水滴泡泡音 (快速频率上滑后瞬降，形成清脆的“啵”声)
+    const popOsc = this.ctx.createOscillator();
+    const popGain = this.ctx.createGain();
 
-    snapGain.gain.setValueAtTime(0.7, t);
-    snapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+    popOsc.type = 'sine';
+    const baseFreq = 480 + Math.random() * 120; // 稍带随机音调更生动
+    popOsc.frequency.setValueAtTime(baseFreq * 0.7, t);
+    popOsc.frequency.exponentialRampToValueAtTime(baseFreq * 2.2, t + 0.035);
+    popOsc.frequency.exponentialRampToValueAtTime(baseFreq, t + 0.08);
 
-    snapOsc.connect(snapGain);
-    snapGain.connect(this.ctx.destination);
-    snapOsc.start(t);
-    snapOsc.stop(t + 0.05);
+    popGain.gain.setValueAtTime(0.6, t);
+    popGain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
 
-    // 2. 棋盘木质共鸣声 (Wood Knock Resonance)
-    const knockOsc = this.ctx.createOscillator();
-    const knockGain = this.ctx.createGain();
-    const filter = this.ctx.createBiquadFilter();
+    popOsc.connect(popGain);
+    popGain.connect(this.ctx.destination);
+    popOsc.start(t);
+    popOsc.stop(t + 0.1);
 
-    knockOsc.type = 'sine';
-    knockOsc.frequency.setValueAtTime(260 + Math.random() * 40, t);
-    knockOsc.frequency.exponentialRampToValueAtTime(80, t + 0.12);
+    // 2. 泛音软糖弹性微音
+    const jellyOsc = this.ctx.createOscillator();
+    const jellyGain = this.ctx.createGain();
 
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(600, t);
+    jellyOsc.type = 'triangle';
+    jellyOsc.frequency.setValueAtTime(baseFreq * 1.5, t);
+    jellyOsc.frequency.exponentialRampToValueAtTime(baseFreq * 0.9, t + 0.06);
 
-    knockGain.gain.setValueAtTime(0.5, t);
-    knockGain.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    jellyGain.gain.setValueAtTime(0.2, t);
+    jellyGain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
 
-    knockOsc.connect(filter);
-    filter.connect(knockGain);
-    knockGain.connect(this.ctx.destination);
-    knockOsc.start(t);
-    knockOsc.stop(t + 0.15);
+    jellyOsc.connect(jellyGain);
+    jellyGain.connect(this.ctx.destination);
+    jellyOsc.start(t);
+    jellyOsc.stop(t + 0.08);
   }
 
   /**
-   * 悔棋音效（轻快的撤销滑音）
+   * Q弹软糖悔棋滑音 (Cute Undo "Boing")
    */
   playUndoSound() {
     if (!this.enabled) return;
@@ -84,81 +82,87 @@ class SoundEffects {
     const gain = this.ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(450, t);
-    osc.frequency.exponentialRampToValueAtTime(220, t + 0.12);
+    osc.frequency.setValueAtTime(320, t);
+    osc.frequency.exponentialRampToValueAtTime(580, t + 0.06);
+    osc.frequency.exponentialRampToValueAtTime(260, t + 0.14);
 
-    gain.gain.setValueAtTime(0.3, t);
-    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.12);
+    gain.gain.setValueAtTime(0.4, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
 
     osc.connect(gain);
     gain.connect(this.ctx.destination);
     osc.start(t);
-    osc.stop(t + 0.13);
+    osc.stop(t + 0.16);
   }
 
   /**
-   * 提示音效 (Hint)
+   * 小风铃提示音效 (Cute Hint Chime)
    */
   playHintSound() {
     if (!this.enabled) return;
     this.init();
     if (!this.ctx) return;
 
+    const notes = [659.25, 880, 1174.66]; // E5, A5, D6
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, t); // D5
-    osc.frequency.setValueAtTime(880, t + 0.08); // A5
+    notes.forEach((freq, idx) => {
+      const noteTime = t + idx * 0.06;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
 
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.22);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, noteTime);
 
-    osc.connect(gain);
-    gain.connect(this.ctx.destination);
-    osc.start(t);
-    osc.stop(t + 0.23);
+      gain.gain.setValueAtTime(0.3, noteTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, noteTime + 0.35);
+
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(noteTime);
+      osc.stop(noteTime + 0.36);
+    });
   }
 
   /**
-   * 胜利华丽和弦 (C Major 琶音)
+   * 童话八音盒胜利旋律 (Cute Music Box Win)
    */
   playWinSound() {
     if (!this.enabled) return;
     this.init();
     if (!this.ctx) return;
 
-    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+    // 欢快治愈大调音阶: G5, B5, D6, G6
+    const notes = [783.99, 987.77, 1174.66, 1567.98];
     const t = this.ctx.currentTime;
 
     notes.forEach((freq, idx) => {
-      const noteTime = t + idx * 0.1;
+      const noteTime = t + idx * 0.12;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
-      osc.type = 'triangle';
+      osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, noteTime);
 
-      gain.gain.setValueAtTime(0.35, noteTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, noteTime + 0.6);
+      gain.gain.setValueAtTime(0.4, noteTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, noteTime + 0.7);
 
       osc.connect(gain);
       gain.connect(this.ctx.destination);
       osc.start(noteTime);
-      osc.stop(noteTime + 0.62);
+      osc.stop(noteTime + 0.72);
     });
   }
 
   /**
-   * 失败/认输音效
+   * 呆萌认输/平局音
    */
   playLoseSound() {
     if (!this.enabled) return;
     this.init();
     if (!this.ctx) return;
 
-    const notes = [440, 415.3, 392, 349.23]; // A4, Ab4, G4, F4
+    const notes = [523.25, 493.88, 440]; // C5, B4, A4
     const t = this.ctx.currentTime;
 
     notes.forEach((freq, idx) => {
@@ -166,21 +170,21 @@ class SoundEffects {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
-      osc.type = 'sawtooth';
+      osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, noteTime);
 
-      gain.gain.setValueAtTime(0.2, noteTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, noteTime + 0.4);
+      gain.gain.setValueAtTime(0.25, noteTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, noteTime + 0.35);
 
       osc.connect(gain);
       gain.connect(this.ctx.destination);
       osc.start(noteTime);
-      osc.stop(noteTime + 0.42);
+      osc.stop(noteTime + 0.36);
     });
   }
 
   /**
-   * 禁手 / 警报声
+   * 禁手/萌系警告声 (Pew Pew)
    */
   playAlertSound() {
     if (!this.enabled) return;
@@ -191,19 +195,45 @@ class SoundEffects {
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
 
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(220, t);
-    osc.frequency.setValueAtTime(180, t + 0.08);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(600, t);
+    osc.frequency.exponentialRampToValueAtTime(200, t + 0.15);
 
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
 
     osc.connect(gain);
     gain.connect(this.ctx.destination);
     osc.start(t);
-    osc.stop(t + 0.22);
+    osc.stop(t + 0.18);
+  }
+  /**
+   * 爆炸音效：直接播放内嵌的樱桃炸弹音频
+   */
+  playExplosionSound() {
+    if (!this.enabled) return;
+    if (!window.CHERRY_BOMB_AUDIO_DATA) {
+      console.warn('Embedded explosion audio is unavailable.');
+      return;
+    }
+    const audio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
+    audio.preload = 'auto';
+    audio.play().catch(err => console.warn('Audio playback failed:', err));
+  }
+
+}
+window.soundEffects = new SoundEffects();
+
+// Global helper to play skill sounds
+function playSkillSound(name) {
+  switch(name) {
+    case 'bomb':
+      window.soundEffects.playExplosionSound();
+      break;
+    case 'magic':
+      window.soundEffects.playAlertSound();
+      break;
+    default:
+      console.warn('Unknown skill sound:', name);
   }
 }
-
-// 导出单例
-window.soundEffects = new SoundEffects();

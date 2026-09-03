@@ -1,5 +1,5 @@
 /**
- * 五子棋游戏入口、联机通信与 UI 事件绑定 (Main Entry & Network Event Handlers)
+ * 五子棋游戏入口、联机通信与 UI 事件绑定 (治愈可爱版)
  */
 document.addEventListener('DOMContentLoaded', () => {
   // 1. 初始化渲染器、游戏引擎与网络管理器
@@ -16,6 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
     whiteTime: document.getElementById('whiteTime'),
     blackRole: document.getElementById('blackRole'),
     whiteRole: document.getElementById('whiteRole'),
+    blackEmoji: document.getElementById('blackEmoji'),
+    whiteEmoji: document.getElementById('whiteEmoji'),
     
     // 状态统计
     stepCount: document.getElementById('stepCount'),
@@ -31,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSurrender: document.getElementById('btnSurrender'),
 
     // 设置选项
+    selectTheme: document.getElementById('selectTheme'),
     selectMode: document.getElementById('selectMode'),
     selectDifficulty: document.getElementById('selectDifficulty'),
     difficultyRow: document.getElementById('difficultyRow'),
@@ -62,6 +65,13 @@ document.addEventListener('DOMContentLoaded', () => {
     boardWrapper: document.querySelector('.board-wrapper')
   };
 
+  // 主题与 Emoji 映射
+  const themeEmojis = {
+    macaron: { black: '🍫', white: '🍨' },
+    pet: { black: '🐱', white: '🐶' },
+    strawberry: { black: '🍫', white: '🍓' }
+  };
+
   // 3. 界面状态同步回调
   game.onStateChange = (state) => {
     // 切换卡片高亮
@@ -90,30 +100,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // 4. 对局结束回调
   game.onGameOver = (result) => {
     let title = '';
-    let icon = '🏆';
+    let icon = '🎉';
 
     if (result.winner === 0) {
-      title = '势均力敌，和棋！';
+      title = '势均力敌，和棋啦！';
       icon = '🤝';
     } else if (game.mode === 'pve') {
       if (result.winner === game.playerColor) {
-        title = '恭喜！您获得了胜利！';
-        icon = '🎉';
+        title = '太棒啦！你获胜了！';
+        icon = '👑';
       } else {
-        title = '很遗憾，AI 棋高一招！';
-        icon = '🤖';
+        title = 'AI 略胜一筹，再接再厉！';
+        icon = '🐾';
       }
     } else if (game.mode === 'online') {
       if (result.winner === game.playerColor) {
-        title = '胜利！您击败了对手！';
-        icon = '🎉';
+        title = '胜利！恭喜赢下对局！';
+        icon = '💖';
       } else {
-        title = '对局结束，对手获胜！';
-        icon = '⚔️';
+        title = '对局结束，对手胜出啦！';
+        icon = '✨';
       }
     } else {
       title = `${result.winner === BLACK ? '黑方' : '白方'} 胜出！`;
-      icon = '👑';
+      icon = '🎉';
     }
 
     dom.modalTitle.textContent = title;
@@ -136,12 +146,10 @@ document.addEventListener('DOMContentLoaded', () => {
       dom.statusDot.classList.add('connected');
       showTip('🎉 联机成功，对局已就绪！');
       if (network.isHost) {
-        // 房主作为黑先手
         game.playerColor = BLACK;
         dom.blackRole.textContent = '我 (房主)';
         dom.whiteRole.textContent = '对手';
-        // 同步房主规则给客机
-        network.send('SYNC_INIT', { enableFoul: game.enableFoul });
+        network.send('SYNC_INIT', { enableFoul: game.enableFoul, theme: boardRenderer.theme });
       } else {
         game.playerColor = WHITE;
         dom.blackRole.textContent = '对手 (房主)';
@@ -161,6 +169,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (type === 'SYNC_INIT') {
       game.enableFoul = payload.enableFoul;
       dom.toggleFoul.checked = payload.enableFoul;
+      if (payload.theme) {
+        boardRenderer.setTheme(payload.theme);
+        dom.selectTheme.value = payload.theme;
+        updateAvatarEmojis(payload.theme);
+      }
     } else if (type === 'MOVE') {
       game.handleRemoteMove(payload.r, payload.c, payload.player, payload.foul);
     } else if (type === 'RESTART_REQ') {
@@ -197,7 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else if (type === 'SURRENDER') {
       game.surrender(payload.player);
-      showTip('对手认输了！');
+      showTip('对手认输啦！');
     } else if (type === 'CHAT') {
       showChatBubble(payload.emoji, false);
     }
@@ -213,7 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return { clientX: e.clientX, clientY: e.clientY };
   }
 
-  // 鼠标移动悬浮指引
   canvas.addEventListener('mousemove', (e) => {
     if (game.isGameOver) return;
     if (game.mode === 'online' && game.currentTurn !== game.playerColor) {
@@ -228,7 +240,6 @@ document.addEventListener('DOMContentLoaded', () => {
     boardRenderer.setHover(null);
   });
 
-  // 点击落子
   canvas.addEventListener('click', (e) => {
     window.soundEffects.init();
     const coord = boardRenderer.getGridCoord(e.clientX, e.clientY);
@@ -237,7 +248,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 移动端触摸落子
   canvas.addEventListener('touchstart', (e) => {
     window.soundEffects.init();
     const pos = getEventCoord(e);
@@ -258,6 +268,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }, { passive: true });
 
   // 8. 控制面板事件绑定
+  // 主题切换
+  dom.selectTheme.addEventListener('change', (e) => {
+    const theme = e.target.value;
+    boardRenderer.setTheme(theme);
+    updateAvatarEmojis(theme);
+    showTip(`主题已切换为：${e.target.options[e.target.selectedIndex].text}`);
+    if (game.mode === 'online' && network.isConnected && network.isHost) {
+      network.send('SYNC_INIT', { enableFoul: game.enableFoul, theme });
+    }
+  });
+
+  function updateAvatarEmojis(theme) {
+    const cfg = themeEmojis[theme] || themeEmojis.macaron;
+    dom.blackEmoji.textContent = cfg.black;
+    dom.whiteEmoji.textContent = cfg.white;
+  }
+
   // 新开局
   dom.btnRestart.addEventListener('click', () => {
     if (game.mode === 'online') {
@@ -271,7 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     dom.gameOverModal.classList.remove('show');
     game.reset();
-    showTip('新对局已开始！');
+    showTip('✨ 新对局开始啦！');
   });
 
   // 悔棋
@@ -283,7 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (game.undo()) {
-      showTip('已悔棋一步');
+      showTip('已撤销一步');
     }
   });
 
@@ -291,14 +318,14 @@ document.addEventListener('DOMContentLoaded', () => {
   dom.btnHint.addEventListener('click', () => {
     const hint = game.requestHint();
     if (hint) {
-      showTip(`AI 推荐落子点：${String.fromCharCode(65 + hint.c)}${15 - hint.r}`);
+      showTip(`⭐ 推荐落子点：${String.fromCharCode(65 + hint.c)}${15 - hint.r}`);
     }
   });
 
   // 认输
   dom.btnSurrender.addEventListener('click', () => {
     if (game.isGameOver) return;
-    if (confirm('确定要认输吗？')) {
+    if (confirm('确定要认输本局吗？')) {
       if (game.mode === 'online' && network.isConnected) {
         network.send('SURRENDER', { player: game.playerColor });
       }
@@ -306,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 模式切换 (人机 / 双人 / 联机)
+  // 模式切换
   dom.selectMode.addEventListener('change', (e) => {
     const mode = e.target.value;
     game.mode = mode;
@@ -333,10 +360,9 @@ document.addEventListener('DOMContentLoaded', () => {
       dom.difficultyRow.style.display = 'none';
       dom.firstHandRow.style.display = 'none';
       dom.onlineCard.style.display = 'flex';
-      dom.btnHint.style.display = 'none'; // 联机竞技禁用 AI 提示
+      dom.btnHint.style.display = 'none';
       dom.blackRole.textContent = '黑方';
       dom.whiteRole.textContent = '白方';
-      // 自动创建房间
       const code = network.createRoom();
       dom.currentRoomCode.textContent = code;
       dom.roomCodeDisplay.style.display = 'flex';
@@ -356,7 +382,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const code = dom.currentRoomCode.textContent;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(code).then(() => {
-        showTip(`房间号 ${code} 已复制到剪贴板！`);
+        showTip(`房间号 ${code} 已复制！`);
       });
     } else {
       showTip(`房间号: ${code}`);
@@ -367,7 +393,7 @@ document.addEventListener('DOMContentLoaded', () => {
   dom.btnJoinRoom.addEventListener('click', () => {
     const code = dom.joinRoomInput.value.trim().toUpperCase();
     if (!code || code.length < 4) {
-      showTip('请输入正确的房间号！');
+      showTip('请输入正确的 6 位房间码！');
       return;
     }
     network.joinRoom(code);
@@ -387,7 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 难度切换
   dom.selectDifficulty.addEventListener('change', (e) => {
     game.difficulty = e.target.value;
-    showTip(`AI 难度已切换为：${e.target.options[e.target.selectedIndex].text}`);
+    showTip(`AI 难度切换为：${e.target.options[e.target.selectedIndex].text}`);
   });
 
   // 先手/后手切换
@@ -404,7 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
     game.enableFoul = e.target.checked;
     showTip(`禁手规则已${game.enableFoul ? '开启 (黑棋禁三三/四四/长连)' : '关闭'}`);
     if (game.mode === 'online' && network.isConnected && network.isHost) {
-      network.send('SYNC_INIT', { enableFoul: game.enableFoul });
+      network.send('SYNC_INIT', { enableFoul: game.enableFoul, theme: boardRenderer.theme });
     }
   });
 
@@ -418,7 +444,7 @@ document.addEventListener('DOMContentLoaded', () => {
     dom.gameOverModal.classList.remove('show');
     if (game.mode === 'online' && network.isConnected) {
       network.send('RESTART_REQ');
-      showTip('已向对手发送重开请求...');
+      showTip('已发送重开请求...');
     } else {
       game.reset();
     }

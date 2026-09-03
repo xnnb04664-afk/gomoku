@@ -15,7 +15,7 @@ import java.util.*;
  */
 public class LocalWebServer extends Thread {
 
-    private static final int    PORT    = 8080;
+    private static volatile int sActualPort = 8080;
     private static final String TAG     = "LocalWebServer";
 
     private final AssetManager  assets;
@@ -72,30 +72,39 @@ public class LocalWebServer extends Thread {
         try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
     }
 
-    public static int getPort() { return PORT; }
+    public static int getPort() { return sActualPort; }
 
     // ── 主循环 ────────────────────────────────────────────────────
     @Override
     public void run() {
-        try {
-            serverSocket = new ServerSocket();
-            serverSocket.setReuseAddress(true);
-            serverSocket.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT));
-            running = true;
-
-            while (running) {
-                try {
-                    final Socket client = serverSocket.accept();
-                    // 每个请求用独立线程处理，避免阻塞
-                    Thread t = new Thread(() -> handleRequest(client));
-                    t.setDaemon(true);
-                    t.start();
-                } catch (IOException e) {
-                    if (!running) break;
-                }
+        int[] candidatePorts = {8080, 8081, 8082, 8088, 8888, 8989, 0};
+        for (int p : candidatePorts) {
+            try {
+                serverSocket = new ServerSocket();
+                serverSocket.setReuseAddress(true);
+                serverSocket.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), p));
+                sActualPort = serverSocket.getLocalPort();
+                running = true;
+                break;
+            } catch (IOException e) {
+                try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
             }
-        } catch (IOException e) {
-            android.util.Log.e(TAG, "Server error: " + e.getMessage());
+        }
+        if (!running) {
+            android.util.Log.e(TAG, "Server error: could not bind to any port");
+            return;
+        }
+
+        while (running) {
+            try {
+                final Socket client = serverSocket.accept();
+                // 每个请求用独立线程处理，避免阻塞
+                Thread t = new Thread(() -> handleRequest(client));
+                t.setDaemon(true);
+                t.start();
+            } catch (IOException e) {
+                if (!running) break;
+            }
         }
     }
 
