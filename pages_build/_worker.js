@@ -153,7 +153,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.70",
+        tag: "v1.0.71",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",

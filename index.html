@@ -1520,7 +1520,7 @@
 
       <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:4px;">自定义您的账号与对局昵称：</div>
       <input type="text" class="name-input-box" id="inputProfileName" placeholder="最多12个字符" maxlength="12" />
-      <div style="font-size:10px; color:#0284c7; font-weight:700; margin:2px 0 6px 0;">💡 昵称即账号名，修改后登录账号与全服天梯将同步变更</div>
+      <div id="profileSyncTip" style="font-size:10px; color:#0284c7; font-weight:700; margin:2px 0 6px 0;">💡 昵称即账号名，修改后登录账号与全服天梯将同步变更</div>
 
       <!-- 🌟 专属二次元唯美动漫头像（情侣对弈） -->
       <div style="font-size:12px; font-weight:900; color:#e056fd; margin:6px 0 4px 0; display:flex; align-items:center; gap:4px;">
@@ -1588,7 +1588,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.71</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.72</div>
         </div>
       </div>
 
@@ -2565,6 +2565,14 @@
 
       const titleEl = document.getElementById('profileModalTitle');
       if (titleEl) titleEl.textContent = '👤 自定义我的昵称与头像';
+      const syncTip = document.getElementById('profileSyncTip');
+      if (syncTip) {
+        if (currentUserUid || currentUsername) {
+          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${currentUsername || p1Name})</span> · 修改后登录账号与全服天梯将同步变更`;
+        } else {
+          syncTip.innerHTML = `⚠️ <span style="color:#d97706;">当前为游客模式 (未登录)</span> · 修改仅在本地生效，登录正式账号后方可上天梯榜`;
+        }
+      }
       const inputEl = document.getElementById('inputProfileName');
       if (inputEl) inputEl.value = currentName;
       const prevEl = document.getElementById('bigAvatarPreview');
@@ -2739,8 +2747,11 @@
       updateAccountUI();
 
       // 🌟 用户明确要求：在主页保存并应用之后不退出，就保持当前页面！
-      // 绝不调用 closeProfileModal()，保持当前弹窗开启状态
-      showGameNotice('🎉 保存成功！当前账号与昵称已应用', false);
+      if (!currentUserUid && !currentUsername) {
+        showGameNotice('💾 游客昵称已保存在本地。登录正式账号即可同步至全服天梯榜！', false);
+      } else {
+        showGameNotice('🎉 保存成功！账号与昵称已应用并同步至全服天梯！', false);
+      }
 
       // 保存时再做一次完整同步（确保对方数据最终一致）
       if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
@@ -6089,7 +6100,11 @@
         if (myRankNum > 0) {
           statusText.innerHTML = `我的排名: <b style="color:#b45309;">第 ${myRankNum} 名</b> (积分: <b style="color:#0ea5e9;">${myScore}</b>)`;
         } else {
-          statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (暂未入榜，赢下一局即上榜)`;
+          if (!currentUserUid && !currentUsername) {
+            statusText.innerHTML = `当前身份: <b style="color:#64748b;">${escapeRankHTML(p1Name)} (游客未登录)</b> · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">点此登录正式账号</a>`;
+          } else {
+            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (暂未入榜，赢下一局即上榜)`;
+          }
         }
       }
 
@@ -8140,7 +8155,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.71';
+    const CURRENT_VERSION_TAG = 'v1.0.72';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
