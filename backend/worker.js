@@ -153,7 +153,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.69",
+        tag: "v1.0.70",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
@@ -209,46 +209,23 @@ async function allocateNextAvailableUid(env) {
   return String(Date.now()).slice(-8) + Math.floor(10 + Math.random() * 90);
 }
 
-// ── 2. 游客免密快速入场 ──────────────────────────────
+    // ── 2. 游客免密快速入场（纯本地处理，绝不存入数据库，不上天梯榜） ──
     if (url.pathname === '/api/auth/guest' && request.method === 'POST') {
-      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
-        const { uid, token } = body;
-        const now = Date.now();
-        const thirtyDays = 30 * 24 * 3600 * 1000;
-
-        if (uid && token) {
-          const user = await env.DB.prepare(
-            'SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at FROM users WHERE uid = ? AND token = ?'
-          ).bind(String(uid), String(token)).first();
-          if (user && (!user.token_expires_at || user.token_expires_at > now)) {
-            return json({ code: 0, data: user });
-          }
-        }
-
-        const newUid = await allocateNextAvailableUid(env);
-        const newToken = generateSecureHex(24);
-        const expiresAt = now + thirtyDays;
         const defaultName = generateRandomNickname();
         const defaultAvatar = generateRandomAvatar();
-
-        await env.DB.prepare(`
-          INSERT INTO users (uid, token, token_expires_at, nickname, avatar, score, wins, total_games)
-          VALUES (?, ?, ?, ?, ?, 1000, 0, 0)
-        `).bind(newUid, newToken, expiresAt, defaultName, defaultAvatar).run();
-
         return json({
           code: 0,
+          msg: '游客身份仅本地可用，未写入数据库',
           data: {
-            uid: newUid,
+            uid: 'guest_' + Math.floor(100000 + Math.random() * 900000),
             username: null,
             nickname: defaultName,
             avatar: defaultAvatar,
             score: 1000,
             wins: 0,
             total_games: 0,
-            token: newToken
+            token: null
           }
         });
       } catch (err) {
@@ -739,12 +716,13 @@ async function allocateNextAvailableUid(env) {
       }
     }
 
-    // ── 7. 全服天梯榜 ───────────────────────────────────
+    // ── 7. 全服天梯榜（仅正式注册账号上榜，游客与未注册用户绝不上榜） ──
     if (url.pathname === '/api/rank' && request.method === 'GET') {
       if (env.DB) {
         const { results } = await env.DB.prepare(`
           SELECT uid, nickname AS name, avatar, score, wins, total_games
           FROM users
+          WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL
           ORDER BY score DESC, wins DESC
           LIMIT 30
         `).all();
