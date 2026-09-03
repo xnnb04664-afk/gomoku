@@ -5577,9 +5577,20 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     // ══════════════════════════════════════════════════════════════════
     // 🌐 全球双通道极速连接器 (Cloudflare Pages 优先 + Workers 双重容灾)
     // ══════════════════════════════════════════════════════════════════
+    // 🔐 敏感资产加密防护引擎：杜绝明文暴露 GitHub 仓库与云端网关，防逆向反编译检索
+    function _d(encoded, key = 42) {
+      try {
+        const binary = atob(encoded);
+        let res = "";
+        for (let i = 0; i < binary.length; i++) {
+          res += String.fromCharCode(binary.charCodeAt(i) ^ ((key + i) % 256));
+        }
+        return res;
+      } catch (_) { return ""; }
+    }
     const CLOUDFLARE_API_HOSTS = [
-      "https://gomoku-api.pages.dev",
-      "https://gomoku-backend.xnnb04664.workers.dev"
+      _d("Ql9YXV0VHx5VXFlaXUIVWEpSEk1fWCUybCchMw=="),
+      _d("Ql9YXV0VHx5VXFlaXUIVW1tYV1hQW245LC0mdXJxfn1kPCM/JSoiInw3MSM=")
     ];
     let activeApiHost = CLOUDFLARE_API_HOSTS[0];
 
@@ -7971,8 +7982,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.42';
-    const GITHUB_REPO = 'xnnb04664-afk/gomoku';
+    const CURRENT_VERSION_TAG = 'v1.0.43';
+    const GITHUB_REPO = _d('UkVCTx4bBgcGHlVTXRhfVldUV0g=');
 
     function compareVersions(v1, v2) {
       const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);

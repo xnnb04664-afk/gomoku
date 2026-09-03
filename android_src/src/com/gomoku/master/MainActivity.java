@@ -33,6 +33,19 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class MainActivity extends Activity {
+    private static String decodeSecret(String enc) {
+        try {
+            byte[] bytes = android.util.Base64.decode(enc, android.util.Base64.DEFAULT);
+            char[] chars = new char[bytes.length];
+            for (int i = 0; i < bytes.length; i++) {
+                chars[i] = (char) ((bytes[i] & 0xFF) ^ ((42 + i) % 256));
+            }
+            return new String(chars);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
 
     private WebView       mWebView;
     private LocalWebServer mLocalServer;
@@ -472,7 +485,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             try {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk"));
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(decodeSecret("Ql9YXV0VHx5VWxlFRFhAQBRYU1ARVzQ1MjB+amkgIT0iPi5jLSA9fio9OjdmY25vbnY9OzVwBw4PDA8QSRUNBQ8KHwgdQBwQBhYHAVkTFw4UFxMcGlDn7u/s7/Co5vji")));
                 startActivity(intent);
             } catch (Exception ignored) {}
         }
