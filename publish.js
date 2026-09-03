@@ -112,16 +112,21 @@ try {
 console.log('>>> [7/7] 正在将最新 APK 发布到 GitHub Releases...');
 const releaseTag = `v${newName}`;
 const releaseApk = path.join(ROOT_DIR, 'gomoku.apk');
+const releaseHtml = path.join(ROOT_DIR, 'gomoku.html');
 fs.copyFileSync(apkPath, releaseApk);
+fs.copyFileSync(singleHtmlPath, releaseHtml);
 
 try {
-  const releaseTitle = `五子棋 ${releaseTag} 官方正式版`;
-  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 正式发布！\n- 📱 原生 Android 满帧体验 (120Hz Canvas离屏位图渲染)\n- 🌐 WebRTC 跨网穿透联机与断线瞬时重连\n- 🎴 9大强力干扰技能卡牌池\n- 🔄 支持手机无缝覆盖安装，保留全部胜率战绩与自定义头像！`;
+  const releaseTitle = `五子棋 ${releaseTag} 官方正式版 (APK + 单文件HTML双发布)`;
+  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n- 📱 原生 Android 极速安装包：\`gomoku.apk\` (1.5MB，闪电安装)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (1.0MB，免安装双击即玩)\n- 🛡️ 官方原厂数字证书自校验防篡改系统\n- 🌐 WebRTC 跨网联机与断线瞬时重连\n- 🎴 9大强力干扰技能卡与全面屏手势舒适避让`;
   
-  execSync(`gh release create ${releaseTag} "gomoku.apk" "五子棋大师_单文件版.html" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
-  console.log(`🎉 GitHub Releases 发布成功: ${releaseTag}`);
+  execSync(`gh release create ${releaseTag} "gomoku.apk" "gomoku.html" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
+  console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {
   console.log('ℹ️ GitHub Release 已存在或创建提示: ' + err.message);
+  try {
+    execSync(`gh release upload ${releaseTag} "gomoku.apk" "gomoku.html" --clobber`, { cwd: ROOT_DIR, stdio: 'inherit' });
+  } catch(_) {}
 } finally {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
