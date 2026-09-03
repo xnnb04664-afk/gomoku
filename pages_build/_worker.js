@@ -141,7 +141,28 @@ export default {
       return json({ status: 'ok', game: '五子棋大师安全架构中枢 v4.0 (自动部署就绪)' });
     }
 
-    // ── 2. 游客免密快速入场 ──────────────────────────────
+    // ── 智能动态 UID 分配引擎（支持 6 位靓号到亿级自动平滑扩容） ──
+async function allocateNextAvailableUid(env) {
+  // 1. 优先分配 6 位普通与靓号 UID (100000 ~ 999999，容量 90 万)
+  for (let i = 0; i < 10; i++) {
+    const candidate = String(Math.floor(100000 + Math.random() * 900000));
+    const exist = await env.DB.prepare("SELECT uid FROM users WHERE uid = ? OR username = ?").bind(candidate, candidate).first();
+    if (!exist) return candidate;
+  }
+  // 2. 用户量激增至百万以上时，全自动自适应扩容至 7 位、8 位、9 位乃至百亿级
+  for (let digits = 7; digits <= 10; digits++) {
+    const min = Math.pow(10, digits - 1);
+    const max = Math.pow(10, digits) - 1;
+    for (let i = 0; i < 6; i++) {
+      const candidate = String(Math.floor(min + Math.random() * (max - min)));
+      const exist = await env.DB.prepare("SELECT uid FROM users WHERE uid = ? OR username = ?").bind(candidate, candidate).first();
+      if (!exist) return candidate;
+    }
+  }
+  return String(Date.now()).slice(-8) + Math.floor(10 + Math.random() * 90);
+}
+
+// ── 2. 游客免密快速入场 ──────────────────────────────
     if (url.pathname === '/api/auth/guest' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
@@ -159,12 +180,7 @@ export default {
           }
         }
 
-        let newUid = String(Math.floor(100000 + Math.random() * 900000));
-        for (let i = 0; i < 5; i++) {
-          const check = await env.DB.prepare('SELECT uid FROM users WHERE uid = ? OR username = ?').bind(newUid, newUid).first();
-          if (!check) break;
-          newUid = String(Math.floor(100000 + Math.random() * 900000));
-        }
+        const newUid = await allocateNextAvailableUid(env);
         const newToken = generateSecureHex(24);
         const expiresAt = now + thirtyDays;
         const defaultName = generateRandomNickname();
@@ -246,7 +262,7 @@ export default {
           }
         }
 
-        const newUid = String(Math.floor(100000 + Math.random() * 900000));
+        const newUid = await allocateNextAvailableUid(env);
         await env.DB.prepare(`
           INSERT INTO users (uid, username, password_hash, salt, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)

@@ -906,6 +906,11 @@
     }
 
     /* --- 🌐 在线联机大厅弹窗 --- */
+    /* 确保二级弹窗（历史战报、天梯榜、登录认证、悔棋）永远置顶浮于个人主页上层 */
+    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal {
+      z-index: 250 !important;
+    }
+
     .online-modal-backdrop {
       position: fixed; inset: 0; background: rgba(0,0,0,0.55);
       display: flex; align-items: center; justify-content: center;
@@ -1693,8 +1698,8 @@
       <div id="viewAuthLogin">
         <div class="auth-input-group">
           <div class="auth-input-label"><span>👤</span> 账号用户名 或 6位数字UID：</div>
-          <input type="text" id="loginUsername" placeholder="输入账号名称或UID (如: 小能 / 661713)" maxlength="32" class="auth-input-box" />
-          <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 提示：输入注册名字（如“小能”）或专属 6 位数字 UID 均可登录</div>
+          <input type="text" id="loginUsername" placeholder="请输入游戏账号名称 或 专属UID" maxlength="32" class="auth-input-box" />
+          <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 提示：输入您注册时的账号名或专属 UID 均可快捷登录</div>
         </div>
 
         <div class="auth-input-group">
@@ -1763,8 +1768,8 @@
         <div id="resetStep1">
           <div class="auth-input-group">
             <div class="auth-input-label"><span>👤</span> 需找回密码的账号名称 或 6位UID：</div>
-            <input type="text" id="resetUsername" placeholder="输入账号名称或UID (如: 小能 / 661713)" maxlength="32" class="auth-input-box" />
-            <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 支持输入用户名或专属 6 位数字 UID 找回</div>
+            <input type="text" id="resetUsername" placeholder="请输入游戏账号名称 或 专属UID" maxlength="32" class="auth-input-box" />
+            <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 支持输入账号名或专属 UID 查询绑定的密保问题</div>
           </div>
           <button class="auth-submit-btn" onclick="fetchSecurityQuestion()" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8); box-shadow:0 3.5px 0 #1e40af;">🔍 下一步：查询我的密保 ➔</button>
         </div>
@@ -5362,38 +5367,51 @@
     }
 
     async function submitLogin() {
-      const u = (document.getElementById('loginUsername').value || '').trim();
-      const p = (document.getElementById('loginPassword').value || '');
-      const errEl = document.getElementById('loginErrorMsg');
+      const u = (document.getElementById("loginUsername").value || "").trim();
+      const p = (document.getElementById("loginPassword").value || "");
+      const errEl = document.getElementById("loginErrorMsg");
+      const btnSubmit = document.getElementById("btnLoginSubmit");
 
       if (!u || !p) {
-        errEl.textContent = '请输入账号与密码';
-        errEl.style.display = 'block';
+        errEl.textContent = "请输入账号与密码";
+        errEl.style.display = "block";
         return;
       }
 
-      errEl.style.display = 'none';
+      errEl.style.display = "none";
+      if (btnSubmit) {
+        btnSubmit.disabled = true;
+        btnSubmit.style.opacity = "0.75";
+        btnSubmit.innerHTML = "<span>⏳ 正在登录验证中...</span>";
+      }
+
       try {
         const res = await safeApiFetch(`/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username: u, password: p })
         });
         const json = await res.json();
         if (json.code === 0 && json.data) {
           applyUserData(json.data);
           p1Name = json.data.nickname || u;
-          localStorage.setItem('gomoku_p1Name', p1Name);
+          localStorage.setItem("gomoku_p1Name", p1Name);
           updatePlayerHeaderUI();
           closeAuthModal();
-          showGameNotice(`🎉 欢迎回来，棋士【${p1Name}】！已切换为正式账号`, true);
+          showGameNotice(`🎉 欢迎回来，棋士【${p1Name}】！已成功登录`, true);
         } else {
-          errEl.textContent = json.msg || '登录失败';
-          errEl.style.display = 'block';
+          errEl.textContent = json.msg || "登录失败，请检查账号或密码";
+          errEl.style.display = "block";
         }
       } catch (err) {
-        errEl.textContent = '网络连接失败: ' + (err.message || '请检查手机网络设置');
-        errEl.style.display = 'block';
+        errEl.textContent = "网络连接失败: " + (err.message || "请检查手机网络设置");
+        errEl.style.display = "block";
+      } finally {
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.style.opacity = "1";
+          btnSubmit.innerHTML = "🚀 立即安全登录";
+        }
       }
     }
 
@@ -5434,16 +5452,23 @@
         return;
       }
 
-      errEl.style.display = 'none';
+      errEl.style.display = "none";
+      const btnReg = document.getElementById("btnRegSubmit");
+      if (btnReg) {
+        btnReg.disabled = true;
+        btnReg.style.opacity = "0.75";
+        btnReg.innerHTML = "<span>⏳ 正在注册并绑定账号...</span>";
+      }
+
       try {
         const res = await safeApiFetch(`/api/auth/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             username: u,
             password: p,
             nickname: p1Name || u,
-            avatar: p1Avatar || '👦',
+            avatar: p1Avatar || "👦",
             uid: currentUserUid,
             token: currentUserToken,
             securityQuestion: q,
@@ -5456,12 +5481,18 @@
           closeAuthModal();
           showGameNotice(`🎉 账号【${u}】注册并绑定成功！战绩积分终身保留`, true);
         } else {
-          errEl.textContent = json.msg || '注册失败';
-          errEl.style.display = 'block';
+          errEl.textContent = json.msg || "注册失败";
+          errEl.style.display = "block";
         }
       } catch (err) {
-        errEl.textContent = '网络连接失败: ' + (err.message || '请检查手机网络设置');
-        errEl.style.display = 'block';
+        errEl.textContent = "网络连接失败: " + (err.message || "请检查手机网络设置");
+        errEl.style.display = "block";
+      } finally {
+        if (btnReg) {
+          btnReg.disabled = false;
+          btnReg.style.opacity = "1";
+          btnReg.innerHTML = "✨ 立即注册并永久绑定战绩";
+        }
       }
     }
 
@@ -7367,7 +7398,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.34';
+    const CURRENT_VERSION_TAG = 'v1.0.35';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -7516,13 +7547,17 @@
       // 对比本地版本
       const hasNewVersion = compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0;
       
+      if (!hasNewVersion && isManual) {
+        showGameNotice(`🎉 检查完成！当前已是最新版 (${CURRENT_VERSION_TAG})，运行顺畅！`, false);
+      }
+
       // 如果有新版本，或者用户手动点击了检查更新，均弹出高颜值更新与进度条弹窗！
       if (hasNewVersion || isManual) {
         const updateModal = document.getElementById('appUpdateModal');
         if (updateModal) {
           const tagEl = document.getElementById('updateTagText');
           if (tagEl) {
-            tagEl.textContent = hasNewVersion ? `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}` : `${CURRENT_VERSION_TAG} (已是最新版)`;
+            tagEl.textContent = hasNewVersion ? `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}` : `${CURRENT_VERSION_TAG} (已是最新正式版)`;
           }
           const notesEl = document.getElementById('updateNotesContent');
           if (notesEl) {
@@ -7568,7 +7603,8 @@
                     if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile) {
                       AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
                     }
-                    setVisualProgress(100, '🎉 更新成功！无需安装，正在秒级载入新版...');
+                    setVisualProgress(100, "🎉 更新成功！已更新至最新版本，正在进入...");
+                    showGameNotice("🎉 更新成功！已成功载入最新版本！", false);
                     setTimeout(() => { location.reload(); }, 1200);
                     return true;
                   }
