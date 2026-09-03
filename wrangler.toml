@@ -1,0 +1,8 @@
+name = "gomoku"
+main = "backend/worker.js"
+compatibility_date = "2024-09-03"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gomoku-db"
+database_id = "4cd53ea1-ef41-450e-843c-b48f6121cf7c"
