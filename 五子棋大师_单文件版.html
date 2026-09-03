@@ -1935,7 +1935,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       <!-- 🚀 官方云端版本检测与在线更新引擎 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.28</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.29</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -4715,10 +4715,11 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         setTimeout(() => {
           if (!hasJoined && p2pChannel === channel) {
             clearInterval(joinReqInterval);
-            restoreBtn();
-            showGameNotice('⚠️ 连接房间超时，请确认房间号是否正确或房主是否在线', true);
+            console.warn('[P2P timeout, switching to MQTT relay room]');
+            showGameNotice('⚡ 正在切换全网高速中继信道接入...', false);
+            joinMqttRoom(code, btn);
           }
-        }, 8000);
+        }, 4500);
       } catch (error) {
         console.warn('[P2P join unavailable, fallback to MQTT]', error);
         p2pChannel = null;
@@ -4767,12 +4768,17 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         }
       }, 1000);
 
+      if (!window.__gomokuMatchSessionUid) {
+        window.__gomokuMatchSessionUid = currentUserUid || localStorage.getItem('gomoku_user_uid') || ('guest_' + Math.floor(100000 + Math.random() * 900000));
+      }
+      const matchUid = window.__gomokuMatchSessionUid;
+
       try {
         const res = await safeApiFetch('/api/match/join', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            uid: currentUserUid || ('guest_' + Date.now()),
+            uid: matchUid,
             nickname: p1Name,
             avatar: p1Avatar,
             score: 1000
@@ -4783,7 +4789,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           if (data.status === 'matched') {
             onMatchFound(data);
           } else {
-            // 定时轮询对手是否加入
+            // 定时轮询对手是否加入（严格使用统一的 matchUid）
             matchPollInterval = setInterval(async () => {
               if (!isMatchmaking) {
                 clearInterval(matchPollInterval);
@@ -4793,7 +4799,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
                 const pRes = await safeApiFetch('/api/match/poll', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ uid: currentUserUid })
+                  body: JSON.stringify({ uid: matchUid })
                 });
                 const pData = await pRes.json();
                 if (pData.code === 0 && pData.status === 'matched') {
@@ -4801,7 +4807,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
                   onMatchFound(pData);
                 }
               } catch(e) {}
-            }, 1500);
+            }, 1200);
           }
         }
       } catch (err) {
@@ -4832,23 +4838,26 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       showGameNotice(`⚔️ 匹配成功！对手【${opp.nickname}】已就位！`, false);
       try { playCardAudioEffect('draw'); } catch(e) {}
 
-      setTimeout(() => {
-        closeOnlineModal();
-        if (data.role === 'host') {
-          // 我作为房主（执黑先行）
-          initHostPeer(data.roomCode, true);
-          myOnlineColor = BLACK;
-          p2Name = opp.nickname;
-          p2Avatar = opp.avatar;
-          updatePlayerHeaderUI();
-          setMode('online');
-        } else {
-          // 我作为客户端（执白后行）
+      if (data.role === 'host') {
+        // 我作为房主（执黑先行）—— 立即在后台初始化信道，确保对手连接时房间已就位！
+        initHostPeer(data.roomCode, true);
+        myOnlineColor = BLACK;
+        p2Name = opp.nickname;
+        p2Avatar = opp.avatar;
+        updatePlayerHeaderUI();
+        setMode('online');
+        setTimeout(() => {
+          closeOnlineModal();
+        }, 1200);
+      } else {
+        // 我作为客户端（执白后行）—— 缓冲 1.2 秒等房主信令就绪后平滑直连
+        setTimeout(() => {
+          closeOnlineModal();
           const codeInput = document.getElementById('inputJoinCode');
           if (codeInput) codeInput.value = data.roomCode;
           joinOnlineRoom();
-        }
-      }, 1500);
+        }, 1200);
+      }
     }
 
     function matchWithAiOpponent() {
@@ -4907,7 +4916,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         await safeApiFetch('/api/match/cancel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: currentUserUid })
+          body: JSON.stringify({ uid: window.__gomokuMatchSessionUid || currentUserUid })
         });
       } catch(e) {}
       showGameNotice('已取消匹配');
@@ -7415,7 +7424,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.28';
+    const CURRENT_VERSION_TAG = 'v1.0.29';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {

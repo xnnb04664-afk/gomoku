@@ -260,7 +260,7 @@ export default {
         if (!username || !password) return json({ code: 1, msg: '请输入账号与密码' });
 
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(String(username).trim()).first();
+        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
         if (!user) {
           return json({ code: 1, msg: '账号或密码不正确' });
         }
@@ -318,7 +318,7 @@ export default {
         const { username } = await request.json().catch(() => ({}));
         if (!username) return json({ code: 1, msg: '请输入要找回的账号' });
 
-        const user = await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE username = ?').bind(String(username).trim()).first();
+        const user = await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
         if (!user) {
           return json({ code: 1, msg: '该账号不存在' });
         }
@@ -352,7 +352,7 @@ export default {
         }
 
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(String(username).trim()).first();
+        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
         if (!user) return json({ code: 1, msg: '账号不存在' });
 
         if (user.reset_locked_until && user.reset_locked_until > now) {
