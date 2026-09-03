@@ -51,7 +51,7 @@ htmlFiles.forEach(f => {
   if (fs.existsSync(fp)) {
     let c = fs.readFileSync(fp, 'utf8');
     c = c.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
-    c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/span>/, `id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v${newName}</span>`);
+    c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/(?:div|span)>/g, `id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v${newName}</div>`);
     fs.writeFileSync(fp, c, 'utf8');
   }
 });

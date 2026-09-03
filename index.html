@@ -1583,7 +1583,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.32</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.54</div>
         </div>
       </div>
 
@@ -3203,18 +3203,36 @@
           }
         });
 
-        // 房主监听客方加入握手（多波段防丢包应答）
+        // 房主监听客方加入握手（多波段防丢包应答 + 第三人满员拦截防串房）
         let hostHandshakeDone = false;
+        let activeGuestUid = null;
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
             const data = JSON.parse(payload.toString());
             if (data.type === 'join_request') {
+              const reqUid = data.uid || data.name || 'guest';
+
+              // 🛡️ 第三人进房拦截：若房间已有客方在对局，且请求者不是当前对局客方，直接回绝人数已满
+              if (hostHandshakeDone && activeGuestUid && reqUid !== activeGuestUid && gameMode === 'online' && !isOver) {
+                try {
+                  client.publish(h2cTopic, JSON.stringify({
+                    type: 'room_full',
+                    targetUid: reqUid,
+                    msg: '该房间已有 2 人正在对弈，人数已满！'
+                  }), { qos: 0 });
+                } catch(_) {}
+                return;
+              }
+
+              activeGuestUid = reqUid;
+
               // 连续回送 join_accepted（0ms, 150ms, 350ms），确保 4G/5G 弱网下对方必能收到
               const sendAccept = () => {
                 try {
                   client.publish(h2cTopic, JSON.stringify({
                     type: 'join_accepted',
+                    targetUid: activeGuestUid,
                     name: p1Name,
                     avatar: p1Avatar
                   }), { qos: 0 });
@@ -3226,9 +3244,6 @@
 
               if (!hostHandshakeDone) {
                 hostHandshakeDone = true;
-                setTimeout(() => {
-                  try { client.removeListener('message', onHostInvite); } catch(_) {}
-                }, 1500);
 
                 conn = new MqttRoomConnection(client, roomCode, 'host');
                 myOnlineColor = BLACK;
@@ -4325,11 +4340,28 @@
           }
         };
 
+        const myJoinUid = getOrCreateMatchUid();
         const onClientInvite = (topic, payload) => {
           if (topic !== h2cTopic) return;
           try {
             const data = JSON.parse(payload.toString());
+
+            // 🛡️ 接收到满员拒绝信号：立即停止重试，给用户明确提示
+            if (data.type === 'room_full') {
+              if (!data.targetUid || data.targetUid === myJoinUid) {
+                clearInterval(joinInterval);
+                clearTimeout(joinTimeout);
+                client.removeListener('message', onClientInvite);
+                restoreBtn();
+                showGameNotice('🚫 该房间已有 2 位棋友正在对弈，人数已满！请让好友新建房间或更换房间码。', true);
+                return;
+              }
+            }
+
             if (data.type === 'join_accepted' && !hasJoined) {
+              if (data.targetUid && data.targetUid !== myJoinUid) {
+                return;
+              }
               hasJoined = true;
               clearInterval(joinInterval);
               clearTimeout(joinTimeout);
@@ -4343,7 +4375,7 @@
               p2Name = data.name || '房主';
               p2Avatar = data.avatar || '👦';
               updatePlayerHeaderUI();
-              showGameNotice('🎉 已切换 MQTT 中继并成功连入！您执白~', false);
+              showGameNotice('🎉 已成功连入好友房间！您执白~', false);
               closeOnlineModal();
               setMode('online');
               setupConn();
@@ -4366,6 +4398,7 @@
             if (hasJoined) return;
             client.publish(c2hTopic, JSON.stringify({
               type: 'join_request',
+              uid: myJoinUid,
               name: p1Name,
               avatar: p1Avatar
             }), { qos: 0 });
@@ -7475,7 +7508,11 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.53';
+    const CURRENT_VERSION_TAG = 'v1.0.54';
+    try {
+      const verEl = document.getElementById('appVersionDisplay');
+      if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
+    } catch(e) {}
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
