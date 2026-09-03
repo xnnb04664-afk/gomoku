@@ -6,10 +6,10 @@
 ## Phases
 
 ### Phase 1: 代码与配置审查
-**Status:** in_progress
+**Status:** completed
 
 ### Phase 2: 本地启动与浏览器联机验证
-**Status:** pending
+**Status:** in_progress
 
 ### Phase 3: 线上只读可用性检查
 **Status:** pending
@@ -18,7 +18,7 @@
 **Status:** pending
 
 ## Next Step
-读取服务器、Worker、网络通信和部署配置，建立审查基线。
+启动本地服务，验证页面加载、控制台错误、静态资源和基础 UI 流程。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

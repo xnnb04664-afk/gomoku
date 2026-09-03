@@ -22,6 +22,7 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.content.SharedPreferences;
 import android.os.StrictMode;
 import android.provider.Settings;
 import android.widget.Toast;
@@ -72,10 +73,23 @@ public class MainActivity extends Activity {
 
         setupWebView();
 
-        // 4. 启动内嵌 HTTP 服务器（localhost:8080）
-        //    目的：让 WebView 从 http://localhost 加载，彻底解除 file:// 协议
-        //    对 WebSocket/WebRTC DataChannel 的各类安全限制，使联机与网页版行为完全一致。
+        // 4. 版本升级时自动清理旧热更新缓存，确保以最新安装包为准
+        int currentCode = 0;
+        try {
+            currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+        } catch (Exception ignored) {}
+        SharedPreferences sp = getSharedPreferences("app_prefs", MODE_PRIVATE);
+        int lastCode = sp.getInt("last_version_code", 0);
         File updateDir = new File(getFilesDir(), "hot_update");
+        if (currentCode > lastCode) {
+            if (updateDir.exists()) {
+                File[] files = updateDir.listFiles();
+                if (files != null) {
+                    for (File f : files) f.delete();
+                }
+            }
+            sp.edit().putInt("last_version_code", currentCode).apply();
+        }
         if (!updateDir.exists()) updateDir.mkdirs();
         mLocalServer = new LocalWebServer(getAssets(), updateDir);
         boolean serverReady = mLocalServer.startAndWait();
