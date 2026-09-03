@@ -1976,7 +1976,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.60</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.61</div>
         </div>
       </div>
 
@@ -4053,7 +4053,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             triggerOnlineReconnect("心跳无响应");
             return;
           }
-          try { conn.send({ type: 'ping' }); } catch(e) {}
+          try { conn.send({ type: 'ping', step: history.length }); } catch(e) {}
         }
       }, 5000);
 
@@ -4080,11 +4080,26 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           return;
         }
         if (data.type === 'ping') {
-          try { conn.send({ type: 'pong' }); } catch(e) {}
+          try { conn.send({ type: 'pong', step: history.length }); } catch(e) {}
+          // 🛡️ 心跳对账：若发现双方步数不一致，房主立即下发全量快照，客方主动请求
+          if (data.step !== undefined && !isOver && data.step !== history.length) {
+            if (myOnlineColor === BLACK) sendFullStateSnapshot();
+            else try { conn.send({ type: 'sync_req' }); } catch(_) {}
+          }
           return;
         }
         if (data.type === 'pong') {
           missedPings = 0;
+          if (data.step !== undefined && !isOver && data.step !== history.length) {
+            if (myOnlineColor === BLACK) sendFullStateSnapshot();
+            else try { conn.send({ type: 'sync_req' }); } catch(_) {}
+          }
+          return;
+        }
+        if (data.type === 'sync_req') {
+          if (myOnlineColor === BLACK) {
+            sendFullStateSnapshot();
+          }
           return;
         }
         if (data.type === 'reconnect_handshake') {
@@ -4094,7 +4109,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           return;
         }
         if (data.type === 'state_snapshot') {
-          // 客方收到全量快照，瞬间恢复局势
+          // 收到全量快照，瞬间恢复局势
           board = data.board;
           history = data.history;
           turn = data.turn;
@@ -4111,6 +4126,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           return;
         }
         if (data.type === 'move') {
+          // 🛡️ 步数连续性校验：若发现步数错位，立即主动请求对账快照
+          if (data.step !== undefined && Math.abs(history.length + 1 - data.step) > 0) {
+            if (myOnlineColor === WHITE) {
+              try { conn.send({ type: 'sync_req' }); } catch(_) {}
+            } else {
+              sendFullStateSnapshot();
+            }
+          }
           makeMove(data.r, data.c, data.p, true);
         } else if (data.type === 'chat') {
           addMessage(2, data.text);
@@ -7581,7 +7604,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       draw();
 
       if (gameMode === 'online' && !fromRemote && conn && conn.open) {
-        conn.send({ type: 'move', r, c, p });
+        conn.send({ type: 'move', r, c, p, step: history.length });
       }
 
       if (checkWin(r, c, p)) {
@@ -8228,7 +8251,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.60';
+    const CURRENT_VERSION_TAG = 'v1.0.61';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
