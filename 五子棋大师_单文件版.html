@@ -1976,7 +1976,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.58</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.59</div>
         </div>
       </div>
 
@@ -5779,21 +5779,27 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         }
       }
 
-      // 2. 仅当没有任何本地凭据时（新设备/新装），才自动分配初始游客 UID
+      }
+
+      // 2. 游客模式：完全本地化，不创建数据库记录，不上天梯榜
+      // 只有注册/登录的真实账号才和服务器交互
       if (!currentUserUid && !currentUsername) {
-        try {
-          const res = await safeApiFetch(`/api/auth/guest`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-          });
-          const json = await res.json();
-          if (json && json.code === 0 && json.data) {
-            applyUserData(json.data);
-          }
-        } catch (e) {
-          console.warn('init guest error:', e);
+        // 从本地 localStorage 读取或生成游客昵称（纯本地，零服务器请求）
+        let guestNick = localStorage.getItem('gomoku_guest_nickname');
+        if (!guestNick) {
+          const prefixes = ['逍遥','灵动','疾风','星月','青云','竹林','傲雪','听雨','落樱','幻影'];
+          const suffixes = ['棋仙','弈客','少侠','神算','隐士','先锋','棋圣','奇才'];
+          guestNick = prefixes[Math.floor(Math.random()*prefixes.length)] +
+                      suffixes[Math.floor(Math.random()*suffixes.length)] +
+                      '_' + Math.floor(10+Math.random()*90);
+          localStorage.setItem('gomoku_guest_nickname', guestNick);
         }
+        if (!p1Name || p1Name === '玩家1') {
+          p1Name = guestNick;
+          localStorage.setItem('gomoku_p1Name', p1Name);
+        }
+        updatePlayerHeaderUI();
+        updateAccountUI();
       }
     }
 
@@ -6307,36 +6313,69 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
     }
 
+    // 🏠 本地战绩存储（游客本地计数，登录后同步）
+    function getLocalStats() {
+      try {
+        const raw = localStorage.getItem('gomoku_local_stats');
+        return raw ? JSON.parse(raw) : { wins: 0, losses: 0, draws: 0 };
+      } catch { return { wins: 0, losses: 0, draws: 0 }; }
+    }
+    function saveLocalStats(stats) {
+      try { localStorage.setItem('gomoku_local_stats', JSON.stringify(stats)); } catch {}
+    }
+    function addLocalResult(isWin, isDraw = false) {
+      const s = getLocalStats();
+      if (isDraw) s.draws++;
+      else if (isWin) s.wins++;
+      else s.losses++;
+      saveLocalStats(s);
+      updateLocalStatsUI(s);
+    }
+    function updateLocalStatsUI(s) {
+      s = s || getLocalStats();
+      const el = document.getElementById('localStatsLabel');
+      if (el) el.textContent = `本局战绩 胜${s.wins} 负${s.losses} 平${s.draws}`;
+    }
+
     async function reportMatchResult(isWin) {
       if (isReportingMatch) return;
       isReportingMatch = true;
       setTimeout(() => { isReportingMatch = false; }, 3000);
 
-      const playerName = (p1Name && p1Name.trim()) ? p1Name.trim() : '小能';
-      let avatarToSend = p1Avatar || '👦';
-      if (typeof currentP1AvatarData !== 'undefined' && currentP1AvatarData && currentP1AvatarData.length < 2000) {
-        avatarToSend = currentP1AvatarData;
+      // 🏠 游客：纯本地存储，不上天梯榜
+      if (!currentUsername) {
+        addLocalResult(isWin);
+        const s = getLocalStats();
+        showGameNotice(isWin
+          ? `🎉 本局胜利！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`
+          : `💔 本局落败！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`, false);
+        return;
       }
 
+      // ☁️ 登录账号：上报天梯榜
       try {
         const res = await safeApiFetch(`/api/report_game`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            playerName: playerName,
-            avatar: avatarToSend,
+            uid: currentUserUid,
+            token: currentUserToken,
             isWin: !!isWin
           })
         });
         const data = await res.json();
         if (data && data.code === 0) {
           const toastMsg = isWin ? `🏆 天梯胜利！积分 +25，战绩已同步云端` : `💔 天梯惜败！积分 -15，战绩已同步云端`;
-          if (typeof showGameNotice === 'function') {
-            showGameNotice(toastMsg, true);
-          }
+          showGameNotice(toastMsg, true);
           setTimeout(() => fetchGlobalLeaderboard(false), 1200);
+        } else if (data && data.code === 403) {
+          // Token 失效，降级本地存储
+          addLocalResult(isWin);
+          showGameNotice('⚠️ 登录已过期，本局战绩暂存本地，请重新登录后同步', true);
         }
       } catch (err) {
+        // 网络异常，降级本地存储
+        addLocalResult(isWin);
         console.warn("上报天梯战绩失败:", err);
       }
     }
@@ -8142,7 +8181,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.58';
+    const CURRENT_VERSION_TAG = 'v1.0.59';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;

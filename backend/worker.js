@@ -260,7 +260,17 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 1, msg: '密码长度须至少 6 位（支持 6~32 位）' });
         }
 
-        const safeUsername = username.trim().replace(/[<>'"`]/g, '');
+        // IP rate limit: max 3 registrations per IP per 24h
+        const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+        try {
+          const oneDayAgo = Date.now() - 86400000;
+          const ipCount = await env.DB.prepare('SELECT COUNT(*) as cnt FROM ip_register_log WHERE ip = ? AND created_at > ?').bind(clientIp, oneDayAgo).first();
+          if (ipCount && ipCount.cnt >= 3) {
+            return json({ code: 429, msg: '\u26a0\ufe0f \u8be5\u7f51\u7edc\u4eca\u65e5\u6ce8\u518c\u8d26\u53f7\u8fc7\u591a\uff0c\u8bf7\u660e\u5929\u518d\u8bd5\uff08\u6bcf\uIP\u6bcf\u5929\u9650\u6ce8\u518c3\u4e2a\u8d26\u53f7\uff09' });
+          }
+        } catch(e) {}
+
+                const safeUsername = username.trim().replace(/[<>'"`]/g, '');
         const safeNick = sanitizeText(nickname, 12) || safeUsername;
         const safeAvatar = sanitizeAvatar(avatar);
 
@@ -291,6 +301,7 @@ async function allocateNextAvailableUid(env) {
               WHERE uid = ?
             `).bind(safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
 
+            try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
             const updated = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(uid).first();
             return json({ code: 0, msg: '账号绑定升级成功！', data: updated });
           }
@@ -302,6 +313,7 @@ async function allocateNextAvailableUid(env) {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
         `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
 
+        try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
         const created = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(newUid).first();
         return json({ code: 0, msg: '注册成功并已自动登录！', data: created });
       } catch (err) {
@@ -720,9 +732,14 @@ async function allocateNextAvailableUid(env) {
         }
 
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT uid, score, last_game_at, token_expires_at FROM users WHERE uid = ? AND token = ?').bind(String(uid), String(token)).first();
+        const user = await env.DB.prepare('SELECT uid, username, score, last_game_at, token_expires_at FROM users WHERE uid = ? AND token = ?').bind(String(uid), String(token)).first();
         if (!user) {
           return json({ code: 403, msg: '未授权：Token 无效或已失效' });
+        }
+
+        // 🛡️ 仅注册账号可上天梯榜，游客只做本地存储
+        if (!user.username) {
+          return json({ code: 403, msg: '游客模式不上天梯榜，请注册账号后参与排名' });
         }
 
         if (user.token_expires_at && user.token_expires_at < now) {
