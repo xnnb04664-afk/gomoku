@@ -1976,7 +1976,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.59</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.60</div>
         </div>
       </div>
 
@@ -2732,6 +2732,22 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag;
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
       document.getElementById('p2NameLabel').textContent = p2DisplayName + p2ColorTag;
+    }
+
+    // 🎯 根据棋子颜色准确获取玩家名称（适配联机执白、联机执黑、人机及同屏模式）
+    function getPlayerNameByColor(color) {
+      if (gameMode === 'online') {
+        if (color === myOnlineColor) {
+          return p1Name || '我';
+        } else {
+          return (p2Name && p2Name.trim()) ? p2Name : '好友';
+        }
+      } else if (gameMode === 'ai') {
+        return color === BLACK ? (p1Name || '玩家') : '大师AI';
+      } else {
+        // 双人同屏 pvp
+        return color === BLACK ? (p1Name || '黑方') : (p2Name || '白方');
+      }
     }
 
     function renderChatHistory() {
@@ -4215,7 +4231,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           winningLine = null;
           for (const s of history) {
             if (checkWin(s.r, s.c, s.p)) {
-              triggerGameEnd(s.p, `对方引爆炸弹洗牌后，【${s.p === BLACK ? p1Name : p2Name}】达成五子连珠！`);
+              triggerGameEnd(s.p, `对方引爆炸弹洗牌后，【${getPlayerNameByColor(s.p)} (${s.p === BLACK ? '黑子' : '白子'})】达成五子连珠！`);
               break;
             }
           }
@@ -4382,7 +4398,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           opponentFreeMove = true;
           turn = enemyColor;
           updateUI();
-          showGameNotice(`💀 空过生效！轮到对手【${turn === BLACK ? p1Name : p2Name}】免费补子并接管回合！`, true);
+          showGameNotice(`💀 空过生效！轮到对手【${getPlayerNameByColor(turn)}】免费补子并接管回合！`, true);
         } else if (gameMode === 'online') {
           turn = enemyColor;
           updateUI();
@@ -4570,7 +4586,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           winningLine = null;
           for (const s of history) {
             if (checkWin(s.r, s.c, s.p)) {
-              triggerGameEnd(s.p, `身份互换后，【${s.p === BLACK ? p1Name : p2Name}】直接达成五子连珠获胜！`);
+              triggerGameEnd(s.p, `身份互换后，【${getPlayerNameByColor(s.p)} (${s.p === BLACK ? '黑子' : '白子'})】直接达成五子连珠获胜！`);
               break;
             }
           }
@@ -4624,7 +4640,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             }
           }
           if (bombWinColor) {
-            triggerGameEnd(bombWinColor, `炸弹洗牌后，【${bombWinColor === BLACK ? p1Name : p2Name}】意外凑成五子连珠获胜！`);
+            triggerGameEnd(bombWinColor, `炸弹洗牌后，【${getPlayerNameByColor(bombWinColor)} (${bombWinColor === BLACK ? '黑子' : '白子'})】意外凑成五子连珠获胜！`);
           }
 
           draw(); updateUI(); persistGameState();
@@ -4878,7 +4894,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         winningLine = null;
         for (const pos of cells) {
           if (checkWin(pos.r, pos.c, myColor)) {
-            triggerGameEnd(myColor, `天命神域助力【${myColor === BLACK ? p1Name : p2Name}】五子连珠获胜！`);
+            triggerGameEnd(myColor, `天命神域助力【${getPlayerNameByColor(myColor)} (${myColor === BLACK ? '黑子' : '白子'})】五子连珠获胜！`);
             break;
           }
         }
@@ -6499,15 +6515,27 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     function triggerGameEnd(winnerColor, customWinReason = '') {
       isOver = true;
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
-      const isPlayerWin = (gameMode === 'ai')
-        ? (winnerColor === BLACK)
-        : (gameMode === 'online' ? (winnerColor === myOnlineColor) : true);
 
-      const winnerName = winnerColor === BLACK
-        ? (p1Name + ' (黑子)')
-        : (gameMode === 'ai' ? '大师AI (白子)' : p2Name + ' (白子)');
+      let isPlayerWin = false;
+      if (gameMode === 'online') {
+        isPlayerWin = (winnerColor === myOnlineColor);
+      } else if (gameMode === 'ai') {
+        isPlayerWin = (winnerColor === BLACK);
+      } else {
+        // 双人同屏 pvp
+        isPlayerWin = (winnerColor === BLACK);
+      }
 
-      if (isPlayerWin) {
+      const colorTag = (winnerColor === BLACK ? '黑子' : '白子');
+      const winnerName = `${getPlayerNameByColor(winnerColor)} (${colorTag})`;
+
+      if (gameMode === 'pvp') {
+        // 👥 双人同屏：两个玩家共用一部手机，始终展示获胜方专属凯旋特效
+        triggerVictoryVFX();
+        playSkillSound('victory');
+        showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
+        setTimeout(() => alert(`🎉 恭喜【${winnerName}】达成五连珠获胜！`), 350);
+      } else if (isPlayerWin) {
         // 🎉 胜利方视角：大调凯旋专属胜利音效 + 金色五彩烟花
         triggerVictoryVFX();
         playSkillSound('victory');
@@ -6520,10 +6548,15 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         showSkillBanner('💔', '【棋局惜败】胜败乃兵家常事！', customWinReason || `【${winnerName}】达成五连珠！胜不骄败不馁，再战一局必定逆袭！`);
         setTimeout(() => alert(`💔 棋局惜败！【${winnerName}】达成五连珠，不要气馁，再接再厉！`), 350);
       }
-      reportMatchResult(isPlayerWin);
+
+      // 仅在 AI 模式与全服联机中上报天梯战绩，双人同屏 pvp 绝不上报天梯
+      if (gameMode === 'online' || gameMode === 'ai') {
+        reportMatchResult(isPlayerWin);
+      }
+
       recordGameHistory({
         mode: gameMode,
-        isWin: isPlayerWin,
+        isWin: (gameMode === 'pvp' ? true : isPlayerWin),
         winnerColor: winnerColor,
         myColor: (gameMode === "online" ? myOnlineColor : BLACK),
         oppName: (gameMode === "ai" ? "大师AI" : (p2Name || "棋友")),
@@ -6942,19 +6975,33 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       const p1Status = document.getElementById('p1Status');
       const p2Status = document.getElementById('p2Status');
       
-      if (turn === BLACK) {
-        p1Status.textContent = '落子中'; p2Status.textContent = '等待';
-        bubble.textContent = (gameMode === 'online' && myOnlineColor !== BLACK) ? '对手回合' : '你的回合';
-        bubble.className = 'turn-bubble';
-        document.getElementById('p1Card').style.opacity = '1';
-        document.getElementById('p2Card').style.opacity = '0.75';
+      // 判断当前是否属于左侧 p1 (本地玩家/黑方) 的回合
+      const isP1Turn = (gameMode === 'online')
+        ? (turn === myOnlineColor)
+        : (turn === BLACK);
+
+      if (isP1Turn) {
+        if (p1Status) p1Status.textContent = '落子中';
+        if (p2Status) p2Status.textContent = '等待';
+        if (bubble) {
+          bubble.textContent = (gameMode === 'pvp') ? '黑方回合' : '你的回合';
+          bubble.className = 'turn-bubble';
+        }
+        const c1 = document.getElementById('p1Card');
+        const c2 = document.getElementById('p2Card');
+        if (c1) c1.style.opacity = '1';
+        if (c2) c2.style.opacity = '0.75';
       } else {
-        p1Status.textContent = '等待';
-        p2Status.textContent = gameMode === 'ai' ? '思考中' : '落子中';
-        bubble.textContent = (gameMode === 'online' && myOnlineColor !== WHITE) ? '对手回合' : (gameMode === 'ai' ? '思考中' : '对手回合');
-        bubble.className = 'turn-bubble right';
-        document.getElementById('p1Card').style.opacity = '0.75';
-        document.getElementById('p2Card').style.opacity = '1';
+        if (p1Status) p1Status.textContent = '等待';
+        if (p2Status) p2Status.textContent = (gameMode === 'ai') ? '思考中' : '落子中';
+        if (bubble) {
+          bubble.textContent = (gameMode === 'pvp') ? '白方回合' : ((gameMode === 'ai') ? '思考中' : '对手回合');
+          bubble.className = 'turn-bubble right';
+        }
+        const c1 = document.getElementById('p1Card');
+        const c2 = document.getElementById('p2Card');
+        if (c1) c1.style.opacity = '0.75';
+        if (c2) c2.style.opacity = '1';
       }
     }
 
@@ -8181,7 +8228,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.59';
+    const CURRENT_VERSION_TAG = 'v1.0.60';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;

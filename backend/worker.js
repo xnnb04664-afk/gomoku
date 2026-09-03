@@ -266,7 +266,7 @@ async function allocateNextAvailableUid(env) {
           const oneDayAgo = Date.now() - 86400000;
           const ipCount = await env.DB.prepare('SELECT COUNT(*) as cnt FROM ip_register_log WHERE ip = ? AND created_at > ?').bind(clientIp, oneDayAgo).first();
           if (ipCount && ipCount.cnt >= 3) {
-            return json({ code: 429, msg: '\u26a0\ufe0f \u8be5\u7f51\u7edc\u4eca\u65e5\u6ce8\u518c\u8d26\u53f7\u8fc7\u591a\uff0c\u8bf7\u660e\u5929\u518d\u8bd5\uff08\u6bcf\uIP\u6bcf\u5929\u9650\u6ce8\u518c3\u4e2a\u8d26\u53f7\uff09' });
+            return json({ code: 429, msg: '⚠️ 该网络今日注册账号过多，请明天再试（每IP每天限注册3个账号）' });
           }
         } catch(e) {}
 
