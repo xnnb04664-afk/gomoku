@@ -149,6 +149,19 @@ export default {
       });
     }
 
+    // ── 0. 官方版本与下载源安全中枢 (公开免客户端私钥拦截，极速检测) ────────
+    if (url.pathname === "/api/version") {
+      return json({
+        code: 0,
+        tag: "v1.0.62",
+        officialRepo: "xnnb04664-afk/gomoku",
+        updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
+        apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
+        htmlDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/五子棋大师_单文件版.html",
+        officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
+      });
+    }
+
     const clientHeader = request.headers.get("X-Gomoku-Client");
     if (request.method !== "OPTIONS" && clientHeader !== "gomoku-app-client-auth") {
       return new Response(JSON.stringify({

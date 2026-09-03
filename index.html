@@ -1587,7 +1587,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.62</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.63</div>
         </div>
       </div>
 
@@ -3720,13 +3720,43 @@
           return;
         }
         if (data.type === 'state_snapshot') {
-          // 收到全量快照，瞬间恢复局势
+          // 🛡️ 收到全量快照：对等双向安全审计与防倒退/防篡改校验
+          if (!data.history || !Array.isArray(data.history)) return;
+
+          // 1. 防倒退校验：如果发来的步数少于本地步数，说明对方因卡顿落后！
+          // 本地绝不倒退，而是立即反向将最新步数补发给对方，拉齐对方进度
+          if (data.history.length < history.length) {
+            console.warn('[state_snapshot] 对方步数落后于我方，反向补发最新一手拉齐对方');
+            const missingMoves = history.slice(data.history.length);
+            missingMoves.forEach(m => {
+              try { conn.send({ type: 'move', r: m.r, c: m.c, p: m.p, step: history.length }); } catch(_) {}
+            });
+            return;
+          }
+
+          // 2. 账本一致性前缀校验：比对双方已共同落子的历史记录（防中途恶意篡改已有棋子）
+          let isHistoryConsistent = true;
+          for (let i = 0; i < history.length; i++) {
+            if (history[i].r !== data.history[i].r || 
+                history[i].c !== data.history[i].c || 
+                history[i].p !== data.history[i].p) {
+              isHistoryConsistent = false;
+              break;
+            }
+          }
+          if (!isHistoryConsistent && history.length > 0) {
+            console.error('[state_snapshot] 检测到棋局历史前缀冲突，已安全拦截异常快照！');
+            showGameNotice("⚠️ 检测到异常棋局数据，已安全拦截并保持当前棋局！", true);
+            return;
+          }
+
+          // 3. 安全核验通过，接纳恢复最新局势
           board = data.board;
           history = data.history;
           turn = data.turn;
           isOver = data.isOver;
-          p2Name = data.p1Name;
-          p2Avatar = data.p1Avatar;
+          p2Name = data.p1Name || p2Name;
+          p2Avatar = data.p1Avatar || p2Avatar;
           if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards;
           if (data.cardUsedStatus) cardUsedStatus = data.cardUsedStatus;
           updatePlayerHeaderUI();
@@ -7862,7 +7892,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.62';
+    const CURRENT_VERSION_TAG = 'v1.0.63';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
