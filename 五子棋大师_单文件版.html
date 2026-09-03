@@ -1935,7 +1935,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       <!-- 🚀 官方云端版本检测与在线更新引擎 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.30</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.31</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -2010,6 +2010,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             <button class="online-action-btn" id="btnStartMatch" onclick="startQuickMatch()" style="background:linear-gradient(135deg, #f59e0b, #d97706); box-shadow:0 3.5px 0 #b45309;">⚡ 开始全服快速匹配</button>
             <button class="online-action-btn" id="btnCancelMatch" onclick="cancelQuickMatch()" style="display:none; background:#f1f5f9; color:#475569; box-shadow:none; border:1.5px solid #cbd5e1;">✕ 取消匹配</button>
           </div>
+          <button class="online-action-btn" id="btnPlayWithAi" onclick="matchWithAiOpponent()" style="display:none; background:linear-gradient(135deg, #10b981, #059669); margin-top:8px; font-size:12.5px; padding:7px 12px; box-shadow:0 3px 0 #047857;">🤖 不想等了？与智能棋友即刻切磋</button>
         </div>
       </div>
 
@@ -4663,9 +4664,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
     }
 
-    async function joinOnlineRoom() {
+    async function joinOnlineRoom(targetCode = null) {
       const codeInput = document.getElementById('inputJoinCode');
-      const code = codeInput ? codeInput.value.trim() : '';
+      const code = (targetCode || (codeInput ? codeInput.value : "")).trim();
+      if (codeInput && targetCode) codeInput.value = targetCode;
       if (!code) return showGameNotice("请输入 6 位房间码！", true);
 
       const btn = document.getElementById('btnConnectRoom');
@@ -4751,6 +4753,19 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     let matchPollInterval = null;
     let matchTimerInterval = null;
     let matchStartTime = 0;
+    let currentActiveMatchUid = "";
+
+    function getOrCreateMatchUid() {
+      let uid = (typeof currentUserUid !== "undefined" && currentUserUid) ? currentUserUid : localStorage.getItem("gomoku_user_uid");
+      if (!uid) {
+        uid = localStorage.getItem("gomoku_temp_match_uid");
+        if (!uid) {
+          uid = "guest_" + Math.floor(100000 + Math.random() * 900000);
+          localStorage.setItem("gomoku_temp_match_uid", uid);
+        }
+      }
+      return uid;
+    }
 
     async function startQuickMatch() {
       if (isMatchmaking) return;
@@ -4860,25 +4875,24 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       showGameNotice(`⚔️ 匹配成功！对手【${opp.nickname}】已就位！`, false);
       try { playCardAudioEffect('draw'); } catch(e) {}
 
-      if (data.role === 'host') {
-        // 我作为房主（执黑先行）—— 立即在后台初始化信道，确保对手连接时房间已就位！
+      if (data.role === "host") {
+        // 我作为房主（执黑先行）—— P2P 与 MQTT 双向双保险同时就绪！
         initHostPeer(data.roomCode, true);
+        initHostMqttPeer(data.roomCode, true);
         myOnlineColor = BLACK;
         p2Name = opp.nickname;
         p2Avatar = opp.avatar;
         updatePlayerHeaderUI();
-        setMode('online');
+        setMode("online", true);
         setTimeout(() => {
           closeOnlineModal();
         }, 1200);
       } else {
-        // 我作为客户端（执白后行）—— 缓冲 1.2 秒等房主信令就绪后平滑直连
+        // 我作为客户端（执白后行）—— 缓冲 1 秒后自动连入
         setTimeout(() => {
           closeOnlineModal();
-          const codeInput = document.getElementById('inputJoinCode');
-          if (codeInput) codeInput.value = data.roomCode;
-          joinOnlineRoom();
-        }, 1200);
+          joinOnlineRoom(data.roomCode);
+        }, 1000);
       }
     }
 
@@ -4935,8 +4949,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       const timerEl = document.getElementById('matchTimerText');
       const vsCard = document.getElementById('matchVsCard');
 
-      if (btnStart) btnStart.style.display = 'block';
-      if (btnCancel) btnCancel.style.display = 'none';
+      const btnPlayAi = document.getElementById("btnPlayWithAi");
+      if (btnPlayAi) btnPlayAi.style.display = "none";
+      if (btnStart) btnStart.style.display = "block";
+      if (btnCancel) btnCancel.style.display = "none";
       if (statusEl) statusEl.textContent = '⚡ 寻找全国实力相当的对手';
       if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
       if (vsCard) vsCard.style.display = 'none';
@@ -7455,7 +7471,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.30';
+    const CURRENT_VERSION_TAG = 'v1.0.31';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
