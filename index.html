@@ -1587,7 +1587,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.57</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.58</div>
         </div>
       </div>
 
@@ -3667,11 +3667,11 @@
 
       conn.on('data', (data) => {
         if (data.type === "leave_room") {
-          showGameNotice(`⚠️ 对手【${data.name || p2Name}】已退出房间，对局结束！`, true);
+          showGameNotice(`⚠️ 对手【${data.name || p2Name}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
           if (conn) { try { conn.close(); } catch(_) {} conn = null; }
           if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
-          setMode("pvp", true);
+          setMode("ai", false);
           return;
         }
         if (data.type === 'ping') {
@@ -7234,11 +7234,11 @@
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
       cancelQuickMatch();
       hideMatchingFloatingBar();
-      setMode("pvp", true);
+      setMode("ai", false);
       resetBoardOnly();
       updatePlayerHeaderUI();
       closeOnlineModal();
-      showGameNotice("🚪 您已退出联机房间，切回双人同屏模式", true);
+      showGameNotice("🚪 您已退出联机房间，已切回人机对弈模式~", false);
     }
 
     // 👤 退出当前账号功能 (切回安全游客模式)
@@ -7753,7 +7753,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.57';
+    const CURRENT_VERSION_TAG = 'v1.0.58';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;

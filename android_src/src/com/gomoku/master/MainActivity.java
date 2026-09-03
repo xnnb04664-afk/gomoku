@@ -172,17 +172,15 @@ public class MainActivity extends Activity {
             currentCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
         } catch (Exception ignored) {}
         SharedPreferences sp = getSharedPreferences("app_prefs", MODE_PRIVATE);
-        int lastCode = sp.getInt("last_version_code", 0);
         File updateDir = new File(getFilesDir(), "hot_update");
-        if (currentCode > lastCode) {
-            if (updateDir.exists()) {
-                File[] files = updateDir.listFiles();
-                if (files != null) {
-                    for (File f : files) f.delete();
-                }
+        // 彻底清理任何旧版本残留的离线缓存，确保覆盖安装后100%秒级展示最新版本
+        if (updateDir.exists()) {
+            File[] files = updateDir.listFiles();
+            if (files != null) {
+                for (File f : files) f.delete();
             }
-            sp.edit().putInt("last_version_code", currentCode).apply();
         }
+        sp.edit().putInt("last_version_code", currentCode).apply();
         if (!updateDir.exists()) updateDir.mkdirs();
         mLocalServer = new LocalWebServer(getAssets(), updateDir);
         boolean serverReady = mLocalServer.startAndWait();
