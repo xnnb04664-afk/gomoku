@@ -178,7 +178,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.81",
+        tag: "v1.0.82",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
@@ -693,6 +693,37 @@ async function allocateNextAvailableUid(env) {
         return json({ code: 1, msg: '查询云端历史战绩异常: ' + err.message }, 500);
       }
     }
+
+    // 3. 清空用户云端全部历史对局战报（保证本地删除与云端100%双向同步）
+    if (url.pathname === '/api/history/clear' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid } = body;
+        if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
+
+        await env.DB.prepare('DELETE FROM game_history WHERE uid = ?').bind(String(uid).trim()).run();
+        return json({ code: 0, msg: '云端历史战报已彻底同步清空！' });
+      } catch (err) {
+        return json({ code: 1, msg: '清空云端战绩异常: ' + err.message }, 500);
+      }
+    }
+
+    // 4. 删除指定单条云端历史对局战报
+    if (url.pathname === '/api/history/delete' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid, id } = body;
+        if (!uid || !id) return json({ code: 1, msg: '缺少参数' });
+
+        await env.DB.prepare('DELETE FROM game_history WHERE uid = ? AND id = ?').bind(String(uid).trim(), parseInt(id, 10)).run();
+        return json({ code: 0, msg: '该条云端战绩已同步删除！' });
+      } catch (err) {
+        return json({ code: 1, msg: '删除云端战绩异常: ' + err.message }, 500);
+      }
+    }
+
 
     // ══════════════════════════════════════════════════════
     // ⚡ 全服实时快速匹配系统 (Cloudflare D1 驱动)

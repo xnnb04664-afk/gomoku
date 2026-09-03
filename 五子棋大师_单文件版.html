@@ -1977,7 +1977,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.81</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.82</div>
         </div>
       </div>
 
@@ -6175,6 +6175,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       updatePlayerHeaderUI();
       updateAccountUI();
       updateHistoryCountUI();
+      syncCloudHistory();
 
       // 双保险：写入 Android 原生持久化存储（不怕清缓存、不怕杀后台）
       if (currentUsername && typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
@@ -7164,6 +7165,22 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
     }
 
+    
+    // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回)
+    async function syncCloudHistory() {
+      if (typeof currentUserUid === "undefined" || !currentUserUid) return;
+      try {
+        const res = await safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`);
+        const json = await res.json();
+        if (json.code === 0 && Array.isArray(json.data)) {
+          const key = getHistoryStorageKey();
+          localStorage.setItem(key, JSON.stringify(json.data));
+          renderHistoryUI();
+          updateHistoryCountUI();
+        }
+      } catch(e) {}
+    }
+
     function openHistoryModal() {
       const modal = document.getElementById("historyModal");
       if (!modal) return;
@@ -7191,13 +7208,24 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     function clearGameHistory() {
-      showCustomConfirm("确定要清空历史对局战报记录吗？", () => {
+      showCustomConfirm("确定要清空历史对局记录吗？\n（本地与云端数据库将彻底双向同步清空）", async () => {
         const key = getHistoryStorageKey();
         localStorage.removeItem(key);
         renderHistoryUI();
         updateHistoryCountUI();
-        showGameNotice("🗑️ 历史对局记录已清空");
-      }, null, { title: '清空战绩', icon: '🗑️', okText: '确认清空', cancelText: '取消' });
+
+        // ☁️ 云端数据库同步清空（确保下次打开绝不会从云端复活）
+        if (typeof currentUserUid !== "undefined" && currentUserUid) {
+          try {
+            await safeApiFetch("/api/history/clear", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uid: currentUserUid })
+            });
+          } catch(e) {}
+        }
+        showGameNotice("🗑️ 历史对局记录已在本地与云端彻底同步清空！");
+      }, null, { title: '清空战绩 (双向同步)', icon: '🗑️', okText: '确认彻底清空', cancelText: '取消' });
     }
 
     function renderHistoryUI() {
@@ -8995,7 +9023,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.81';
+    const CURRENT_VERSION_TAG = 'v1.0.82';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
