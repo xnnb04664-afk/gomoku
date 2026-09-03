@@ -1977,7 +1977,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.68</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.69</div>
         </div>
       </div>
 
@@ -8528,7 +8528,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.68';
+    const CURRENT_VERSION_TAG = 'v1.0.69';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
@@ -8590,9 +8590,15 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       let versionData = null;
 
-      // 0. 优先访问国内极速直连 Cloudflare 官方 API（零延迟、免跨域鉴权拦截）
+      // 0. 优先访问国内极速直连 Cloudflare 官方 API（零延迟、免跨域鉴权拦截，3秒超时防挂起）
       try {
-        const cfRes = await fetch("https://gomoku-api.pages.dev/api/version", { cache: "no-cache" });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const cfRes = await fetch("https://gomoku-api.pages.dev/api/version", {
+          cache: "no-cache",
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
         if (cfRes.ok) {
           const d = await cfRes.json();
           if (d && d.tag) {
@@ -8736,7 +8742,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           btnCancel.style.padding = "8px 0";
         }
         showGameNotice(`当前已是 ${effectiveVersion}，对弈功能正常！`, false);
-        if (updateModal) updateModal.style.display = "flex";
+        openUpdateModal();
         return;
       }
 
@@ -8814,12 +8820,25 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         showGameNotice(`🎉 检查完成！当前已是最新正式版 (${effectiveVersion})！`, false);
       }
 
-      if (updateModal) updateModal.style.display = "flex";
+      openUpdateModal();
+    }
+
+    function openUpdateModal() {
+      const el = document.getElementById('appUpdateModal');
+      if (el) {
+        el.style.display = 'flex';
+        el.classList.add('show');
+      }
     }
 
     function closeUpdateModal() {
       const el = document.getElementById('appUpdateModal');
-      if (el) el.style.display = 'none';
+      if (el) {
+        el.classList.remove('show');
+        setTimeout(() => {
+          el.style.display = 'none';
+        }, 150);
+      }
     }
 
     // 仅在进入游戏 2.5 秒后静默全自动检查一次（杜绝频繁切后台反复触发重复下载）
