@@ -1935,16 +1935,21 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         <div class="avatar-opt" onclick="selectAvatar(this, '🦄')">🦄</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🌸')">🌸</div>
       </div>
-      <!-- 🛡️ 官方 UID 身份与快捷操作条 (精炼紧凑防挤压) -->
-      <div id="userAccountCard" style="background:linear-gradient(135deg, rgba(240,249,255,0.95), rgba(224,242,254,0.95)); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 10px; margin:6px 0; display:flex; justify-content:space-between; align-items:center;">
-        <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
-          <span id="accountStatusIcon" style="font-size:13px;">👤</span>
-          <span id="accountStatusTitle" style="font-size:12px; font-weight:900; color:#0369a1; white-space:nowrap;">游客身份</span>
-          <span id="userUidBadge" style="background:#0284c7; color:#fff; font-size:10px; padding:1px 6px; border-radius:8px; font-weight:800; cursor:pointer; white-space:nowrap;" onclick="copyMyUid()" title="点击复制UID">UID: ------ 📋</span>
+      <!-- 🛡️ 官方 UID 身份与快捷操作条 (双行立体舒展排版，100% 杜绝数字遮挡) -->
+      <div id="userAccountCard" style="background:linear-gradient(135deg, rgba(240,249,255,0.95), rgba(224,242,254,0.95)); border:1.5px solid #38bdf8; border-radius:12px; padding:8px 12px; margin:6px 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+          <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
+            <span id="accountStatusIcon" style="font-size:14px;">👤</span>
+            <span id="accountStatusTitle" style="font-size:12.5px; font-weight:900; color:#0369a1; white-space:nowrap;">游客身份</span>
+          </div>
+          <div style="display:flex; gap:5px; flex-shrink:0;">
+            <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
+            <button type="button" class="btn-chat-tool" id="btnLogoutAction" onclick="confirmLogoutAccount()" style="display:none; background:#ef4444; color:#fff; border-color:#dc2626; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🚪 退出</button>
+          </div>
         </div>
-        <div style="display:flex; gap:5px; flex-shrink:0;">
-          <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
-          <button type="button" class="btn-chat-tool" id="btnLogoutAction" onclick="confirmLogoutAccount()" style="display:none; background:#ef4444; color:#fff; border-color:#dc2626; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🚪 退出</button>
+        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed rgba(56,189,248,0.4); padding-top:5px;">
+          <span id="userUidBadge" style="background:#0284c7; color:#fff; font-size:11px; padding:2px 8px; border-radius:8px; font-weight:800; cursor:pointer; letter-spacing:0.5px; white-space:nowrap;" onclick="copyMyUid()" title="点击复制UID">UID: ------ 📋</span>
+          <span id="accountSubText" style="font-size:10px; color:#0369a1; font-weight:700;">🛡️ 云端永久安全加密</span>
         </div>
       </div>
 
@@ -6173,20 +6178,26 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
 
 
-    // 📜 对局战绩历史管理器
+    // 📜 对局战绩历史管理器 (以用户 UID 实行严格独立隔离存储，杜绝跨账号数据混用与刷分)
+    function getHistoryStorageKey() {
+      return (typeof currentUserUid !== "undefined" && currentUserUid) ? `gomoku_history_${currentUserUid}` : "gomoku_game_history_guest";
+    }
+
     function recordGameHistory(item) {
       try {
-        let list = JSON.parse(localStorage.getItem("gomoku_game_history") || "[]");
+        const key = getHistoryStorageKey();
+        let list = JSON.parse(localStorage.getItem(key) || "[]");
         list.unshift(item);
         if (list.length > 30) list = list.slice(0, 30);
-        localStorage.setItem("gomoku_game_history", JSON.stringify(list));
+        localStorage.setItem(key, JSON.stringify(list));
         updateHistoryCountUI();
       } catch(e) {}
     }
 
     function updateHistoryCountUI() {
       try {
-        const list = JSON.parse(localStorage.getItem("gomoku_game_history") || "[]");
+        const key = getHistoryStorageKey();
+        const list = JSON.parse(localStorage.getItem(key) || "[]");
         const countEl = document.getElementById("historyStatCount");
         if (countEl) countEl.textContent = `${list.length} 局战绩`;
       } catch(e) {}
@@ -6206,7 +6217,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     function clearGameHistory() {
       if (confirm("确定要清空历史对局战报记录吗？")) {
-        localStorage.removeItem("gomoku_game_history");
+        const key = getHistoryStorageKey();
+        localStorage.removeItem(key);
         renderHistoryUI();
         updateHistoryCountUI();
         showGameNotice("🗑️ 历史对局记录已清空");
@@ -6220,7 +6232,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       let list = [];
       try {
-        list = JSON.parse(localStorage.getItem("gomoku_game_history") || "[]");
+        const key = getHistoryStorageKey();
+        list = JSON.parse(localStorage.getItem(key) || "[]");
       } catch(e) {}
 
       if (list.length === 0) {
@@ -7454,11 +7467,17 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       localStorage.removeItem("gomoku_user_username");
       localStorage.removeItem("gomoku_user_token");
 
+      // 重置本地临时分数和战绩徽标，杜绝跨账号复制数据漏洞
+      const badge = document.getElementById("myLadderBadge");
+      if (badge) badge.textContent = "1000 分";
+      const countEl = document.getElementById("historyStatCount");
+      if (countEl) countEl.textContent = "0 局战绩";
+
       if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.clearUserLogin) {
         try { AndroidNativeApp.clearUserLogin(); } catch(e) {}
       }
 
-      // 获取全新游客身份
+      // 分配全新的纯净游客身份
       try {
         const res = await safeApiFetch("/api/auth/guest", {
           method: "POST",
@@ -7474,8 +7493,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
 
       updateAccountUI();
+      updateHistoryCountUI();
       closeAuthModal();
-      showGameNotice(`🚪 已成功退出账号【${oldName}】，已切换为游客身份`, true);
+      showGameNotice(`🚪 已退出账号【${oldName}】，战绩已在云端安全归档`, true);
     }
 
     function resetBoardOnly() {
@@ -7887,7 +7907,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.36';
+    const CURRENT_VERSION_TAG = 'v1.0.37';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
