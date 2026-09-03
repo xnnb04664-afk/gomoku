@@ -157,7 +157,12 @@ export default {
           }
         }
 
-        const newUid = String(Math.floor(100000 + Math.random() * 900000));
+        let newUid = String(Math.floor(100000 + Math.random() * 900000));
+        for (let i = 0; i < 5; i++) {
+          const check = await env.DB.prepare('SELECT uid FROM users WHERE uid = ? OR username = ?').bind(newUid, newUid).first();
+          if (!check) break;
+          newUid = String(Math.floor(100000 + Math.random() * 900000));
+        }
         const newToken = generateSecureHex(24);
         const expiresAt = now + thirtyDays;
         const defaultName = generateRandomNickname();
@@ -207,7 +212,7 @@ export default {
         const safeNick = sanitizeText(nickname, 12) || safeUsername;
         const safeAvatar = sanitizeAvatar(avatar);
 
-        const exist = await env.DB.prepare('SELECT uid FROM users WHERE username = ?').bind(safeUsername).first();
+        const exist = await env.DB.prepare('SELECT uid FROM users WHERE username = ? OR uid = ?').bind(safeUsername, safeUsername).first();
         if (exist) {
           return json({ code: 1, msg: '该账号名称已被注册，请换一个' });
         }
