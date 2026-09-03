@@ -1588,7 +1588,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.76</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.77</div>
         </div>
       </div>
 
@@ -2847,57 +2847,54 @@
       [1, -2], [1, 2], [2, -1], [2, 1]
     ];
 
+    // 🚀 【C++级别极致性能】定型数组位运算棋型哈希置换表 (Zero-GC / 0内存分配)
+    // 9个交点，每点2位 (00: 空, 01: 己方, 10: 敌方/边界)，共 2^18 = 262,144 种空间
+    const BITWISE_PATTERN_TABLE = new Uint8Array(262144);
+    (function initBitwisePatternTable() {
+      for (let key = 0; key < 262144; key++) {
+        let s = '';
+        for (let pos = 8; pos >= 0; pos--) {
+          const val = (key >> (pos * 2)) & 3;
+          if (val === 1) s += '1';
+          else if (val === 0) s += '0';
+          else s += '2';
+        }
+        let res = 0;
+        if (s.includes('11111')) res = 1;
+        else if (s.includes('011110')) res = 2;
+        else if (s.includes('211110') || s.includes('011112') || s.includes('10111') || s.includes('11011') || s.includes('11101')) res = 3;
+        else if (s.includes('01110') || s.includes('010110') || s.includes('011010')) res = 4;
+        else if (s.includes('211100') || s.includes('001112') || s.includes('210110') || s.includes('011012') || s.includes('211010') || s.includes('010112') || s.includes('10011') || s.includes('11001') || s.includes('10101') || s.includes('2011102')) res = 5;
+        else if (s.includes('001100') || s.includes('010100') || s.includes('001010') || s.includes('010010')) res = 6;
+        else if (s.includes('211000') || s.includes('000112') || s.includes('210100') || s.includes('001012') || s.includes('201010') || s.includes('010102') || s.includes('10001')) res = 7;
+        BITWISE_PATTERN_TABLE[key] = res;
+      }
+    })();
+
     function countPointPatterns(boardState, r, c, color) {
       const dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
       let five = 0, flex4 = 0, block4 = 0, flex3 = 0, block3 = 0, flex2 = 0, block2 = 0;
 
       for (let d = 0; d < 4; d++) {
         const dr = dirs[d][0], dc = dirs[d][1];
-        let line = [];
+        let key = 0;
         for (let i = -4; i <= 4; i++) {
           const nr = r + i * dr, nc = c + i * dc;
-          if (nr < 0 || nr >= 15 || nc < 0 || nc >= 15) {
-            line.push(3);
-          } else if (i === 0) {
-            line.push(color);
-          } else {
-            line.push(boardState[nr][nc]);
+          let val = 2;
+          if (nr >= 0 && nr < 15 && nc >= 0 && nc < 15) {
+            const cell = (i === 0) ? color : boardState[nr][nc];
+            val = (cell === color) ? 1 : (cell === EMPTY ? 0 : 2);
           }
+          key = (key << 2) | val;
         }
-
-        let s = "";
-        for (let i = 0; i < line.length; i++) {
-          if (line[i] === color) s += "1";
-          else if (line[i] === EMPTY) s += "0";
-          else s += "2";
-        }
-
-        if (s.includes("11111")) { five++; continue; }
-        if (s.includes("011110")) { flex4++; continue; }
-        if (
-          s.includes("211110") || s.includes("011112") ||
-          s.includes("10111") || s.includes("11011") || s.includes("11101")
-        ) { block4++; continue; }
-        if (
-          s.includes("01110") || s.includes("010110") || s.includes("011010")
-        ) { flex3++; continue; }
-        if (
-          s.includes("211100") || s.includes("001112") ||
-          s.includes("210110") || s.includes("011012") ||
-          s.includes("211010") || s.includes("010112") ||
-          s.includes("10011") || s.includes("11001") || s.includes("10101") ||
-          s.includes("2011102")
-        ) { block3++; continue; }
-        if (
-          s.includes("001100") || s.includes("010100") || s.includes("001010") ||
-          s.includes("010010")
-        ) { flex2++; continue; }
-        if (
-          s.includes("211000") || s.includes("000112") ||
-          s.includes("210100") || s.includes("001012") ||
-          s.includes("201010") || s.includes("010102") ||
-          s.includes("10001")
-        ) { block2++; continue; }
+        const type = BITWISE_PATTERN_TABLE[key];
+        if (type === 1) five++;
+        else if (type === 2) flex4++;
+        else if (type === 3) block4++;
+        else if (type === 4) flex3++;
+        else if (type === 5) block3++;
+        else if (type === 6) flex2++;
+        else if (type === 7) block2++;
       }
 
       return { five, flex4, block4, flex3, block3, flex2, block2 };
@@ -2994,7 +2991,7 @@
     }
 
     // 深度 5 步算杀：VCF + VCT 混合杀法
-    function searchForcedWin(boardState, color, depth = 4) {
+    function searchForcedWin(boardState, color, depth = 6) {
       if (depth <= 0) return null;
       const opp = color === BLACK ? WHITE : BLACK;
       
@@ -8178,7 +8175,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.76';
+    const CURRENT_VERSION_TAG = 'v1.0.77';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
