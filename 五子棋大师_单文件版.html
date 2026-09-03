@@ -474,13 +474,17 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     body.theme-clean-ios .main-chat-box { background: #ffffff; border-color: #e5e5ea; }
 
 
-    /* 纯净漂浮白云 */
+    /* 纯净漂浮白云 (置底并彻底禁用触控拦截，绝不遮挡任何按键) */
+    .cloud, .cloud::before, .cloud::after {
+      pointer-events: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+    }
     .cloud {
       position: fixed;
       background: rgba(255, 255, 255, 0.75);
       border-radius: 50px;
-      pointer-events: none;
-      z-index: 1;
+      z-index: -1 !important;
       filter: blur(1px);
     }
     .cloud::before, .cloud::after {
@@ -490,14 +494,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       border-radius: 50%;
     }
     .cloud-1 {
-      top: 6%; left: -20px; width: 110px; height: 32px;
+      top: 3%; left: -20px; width: 110px; height: 32px;
       animation: floatCloud 28s linear infinite alternate;
     }
     .cloud-1::before { width: 44px; height: 44px; top: -18px; left: 22px; }
     .cloud-1::after { width: 30px; height: 30px; top: -12px; left: 56px; }
 
     .cloud-2 {
-      top: 16%; right: -30px; width: 140px; height: 38px; opacity: 0.65;
+      top: 5%; right: -30px; width: 130px; height: 36px; opacity: 0.55;
       animation: floatCloud2 34s linear infinite alternate;
     }
     .cloud-2::before { width: 50px; height: 50px; top: -20px; left: 28px; }
@@ -1574,12 +1578,12 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     /* 🎨 手绘果冻风通用确认模态弹窗 (彻底替代丑陋的系统 confirm) */
     .custom-confirm-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.62);
+      position: fixed; inset: 0; background: rgba(0,0,0,0.68);
       display: flex; align-items: center; justify-content: center;
-      z-index: 250; opacity: 0; pointer-events: none; transition: opacity 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      z-index: 999999 !important; opacity: 0; pointer-events: none; transition: opacity 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
       backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
     }
-    .custom-confirm-backdrop.show { opacity: 1; pointer-events: auto; }
+    .custom-confirm-backdrop.show { opacity: 1 !important; pointer-events: auto !important; }
     .custom-confirm-card {
       background: #fffdf5; border: 3.5px solid var(--border-dark);
       border-radius: 24px; width: 88%; max-width: 320px; padding: 22px 18px 18px 18px;
@@ -1801,7 +1805,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
   </div>
 
     <!-- 🌐 联机对战常驻房间状态条 (含一键退出房间按键) -->
-  <div id="onlineRoomTopBar" style="display:none; justify-content:space-between; align-items:center; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border-radius:12px; padding:5px 12px; margin:4px auto; max-width:460px; width:92%; border:1.5px solid #f59e0b; box-shadow:0 3px 10px rgba(0,0,0,0.25);">
+  <div id="onlineRoomTopBar" style="display:none; position:relative; z-index:20 !important; justify-content:space-between; align-items:center; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border-radius:12px; padding:5px 12px; margin:4px auto; max-width:460px; width:92%; border:1.5px solid #f59e0b; box-shadow:0 3px 10px rgba(0,0,0,0.25);">
     <div style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:800;">
       <span style="color:#10b981; font-size:14px; animation:pulse 1.5s infinite;">●</span>
       <span>联机房间: <span id="onlineRoomCodeLabel" style="color:#f59e0b; font-family:monospace; font-weight:900;">------</span></span>
@@ -1972,7 +1976,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.56</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.57</div>
         </div>
       </div>
 
@@ -2472,6 +2476,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       document.getElementById('customConfirmText').textContent = text;
       document.getElementById('customConfirmTitle').textContent = options.title || '操作确认';
       document.getElementById('customConfirmIcon').textContent = options.icon || '🐾';
+      const okBtn = document.getElementById('btnConfirmOk');
+      if (okBtn) okBtn.textContent = options.okText || '确定';
+      const cancelBtn = document.getElementById('btnConfirmCancel');
+      if (cancelBtn) cancelBtn.textContent = options.cancelText || '取消';
       customConfirmCallback = { onOk, onCancel };
       modal.classList.add('show');
     }
@@ -4126,8 +4134,15 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             showGameNotice("❌ 对手拒绝了重开申请，继续当前对局！", true);
           }
         } else if (data.type === 'restart') {
-          resetBoardOnly();
-          showGameNotice("🔄 对方重新开启了新对局！", false);
+          // 兼容旧版客户端指令：弹出协商弹窗，严禁单方面清空棋盘
+          showCustomConfirm(`【${data.name || p2Name}】向您发起重新开局申请，是否同意重开？`, () => {
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true });
+            resetBoardOnly();
+            showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
+          }, () => {
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false });
+            showGameNotice("已拒绝对手的重开申请，继续本局", false);
+          }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
         } else if (data.type === "skill_use") {
           alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
         } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
@@ -7673,31 +7688,18 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       persistGameState();
     }
 
-    // 🚫 禁止移动端快速双击底部按键引起的页面视口抖动
-    let lastBottomBtnTouch = 0;
-    document.addEventListener("touchend", (e) => {
-      const btn = e.target.closest(".bottom-controls, .btn-ctrl");
-      if (btn) {
-        const now = Date.now();
-        if (now - lastBottomBtnTouch < 320) {
-          e.preventDefault();
-        }
-        lastBottomBtnTouch = now;
-      }
-    }, { passive: false });
-
     document.getElementById('btnRestart').onclick = (e) => {
       if (e && e.currentTarget) e.currentTarget.blur();
 
       if (gameMode === 'online') {
         if (!conn || !conn.open) {
+          showGameNotice("⚠️ 当前联机已中断，直接重置棋盘", true);
           resetBoardOnly();
           return;
         }
-        showCustomConfirm("确定要向对手申请【重新开局】吗？\n双方都同意后，棋盘才会重置开启新对局。", () => {
-          conn.send({ type: 'restart_req', name: p1Name });
-          showGameNotice("📡 已向对手发送重开申请，等待对方同意...", false);
-        }, null, { title: '申请重新开局', icon: '🔄', okText: '发送重开申请', cancelText: '取消' });
+        // 🚀 联机模式：点击重开直接向对手发送申请，必须经过对方同意才能重开
+        conn.send({ type: 'restart_req', name: p1Name });
+        showGameNotice("📡 已向对手发送重新开局申请，等待对方同意...", false);
       } else if (gameMode === 'ai') {
         if (history.length > 0 && !isOver) {
           showCustomConfirm("当前正在与大师AI对弈中，确定要重开一局吗？", () => {
@@ -8140,7 +8142,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.56';
+    const CURRENT_VERSION_TAG = 'v1.0.57';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
