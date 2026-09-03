@@ -16,7 +16,7 @@ export default {
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client',
     };
 
     if (request.method === 'OPTIONS') {
@@ -136,9 +136,13 @@ export default {
       }
     }
 
-    // ── 1. 状态检查 ──────────────────────────────────────
-    if (url.pathname === '/') {
-      return json({ status: 'ok', game: '五子棋大师安全架构中枢 v4.0 (自动部署就绪)' });
+    // 🛡️ 隐形伪装防护：严禁浏览器直接访问与爬虫探测，未携带客户端通行证一律伪装为 404 Nginx 离线页面
+    const clientHeader = request.headers.get("X-Gomoku-Client");
+    if (url.pathname === "/" || (request.method !== "OPTIONS" && clientHeader !== "gomoku-app-client-auth")) {
+      return new Response('<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style="font-family:sans-serif;text-align:center;padding:120px 20px;"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style="color:#888;font-size:12px;">nginx</div></body></html>', {
+        status: 404,
+        headers: { "Content-Type": "text/html; charset=utf-8" }
+      });
     }
 
     // ── 智能动态 UID 分配引擎（支持 6 位靓号到亿级自动平滑扩容） ──

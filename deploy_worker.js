@@ -15,7 +15,7 @@ const workerCode = fs.readFileSync(workerPath, "utf8");
 
 // Ensure pages_build exists
 if (!fs.existsSync("pages_build")) fs.mkdirSync("pages_build");
-fs.writeFileSync("pages_build/index.html", "<h1>Gomoku Backend API Ready</h1>", "utf8");
+fs.writeFileSync("pages_build/index.html", "<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style=\"font-family:sans-serif;text-align:center;padding:120px 20px;\"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style=\"color:#888;font-size:12px;\">nginx</div></body></html>", "utf8");
 fs.writeFileSync("pages_build/_worker.js", workerCode, "utf8");
 
 async function deploy() {
