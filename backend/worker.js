@@ -153,7 +153,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.64",
+        tag: "v1.0.65",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
@@ -759,24 +759,37 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 401, msg: '登录凭证已过期，请重新登录' });
         }
 
-        if (user.last_game_at && (now - user.last_game_at < 15000)) {
+        if (user.last_game_at && (now - user.last_game_at < 3000)) {
           return json({ code: 429, msg: '对局结算过于频繁，请稍候再试' });
         }
 
+        const oldScore = (typeof user.score === 'number') ? user.score : 1000;
         const scoreDelta = isWin ? 25 : -15;
+        const newScore = Math.max(0, oldScore + scoreDelta);
 
         await env.DB.prepare(`
           UPDATE users
-          SET score = MAX(0, score + ?),
+          SET score = ?,
               wins = wins + ?,
               total_games = total_games + 1,
               last_game_at = ?,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(scoreDelta, isWin ? 1 : 0, now, uid).run();
+        `).bind(newScore, isWin ? 1 : 0, now, uid).run();
 
         const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(uid).first();
-        return json({ code: 0, msg: '战绩安全归档成功', data: updated });
+        return json({
+          code: 0,
+          msg: '战绩安全归档成功',
+          data: {
+            score: updated.score,
+            wins: updated.wins,
+            total_games: updated.total_games,
+            oldScore,
+            newScore: updated.score,
+            scoreDelta
+          }
+        });
       } catch (err) {
         return json({ code: 1, msg: '结算异常: ' + err.message }, 500);
       }

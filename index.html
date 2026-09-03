@@ -1587,7 +1587,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.64</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.65</div>
         </div>
       </div>
 
@@ -1990,6 +1990,61 @@
     </div>
   </div>
 
+  <!-- 🏆 对局终局结算与积分战报模态弹窗 (彻底替换系统 alert，直观呈现加减积分与战报) -->
+  <div class="custom-confirm-backdrop" id="gameResultModal" style="display:none; z-index: 100004;" onclick="if(event.target===this)closeGameResultModal()">
+    <div class="custom-confirm-card" style="max-width:320px; text-align:center; padding:18px 16px;">
+      <div id="resultModalIcon" style="font-size:46px; margin-bottom:4px; line-height:1;">👑</div>
+      <div id="resultModalTitle" style="font-size:18px; font-weight:900; color:#2d3436; margin-bottom:4px;">五子连珠 · 绝杀获胜！</div>
+      <div id="resultModalSub" style="font-size:11.5px; font-weight:800; color:#64748b; margin-bottom:12px;">恭喜获得本局胜利！</div>
+
+      <!-- 🌟 正式账号：天梯排位积分结算卡片 -->
+      <div id="resultScoreCard" style="background:linear-gradient(135deg, #f0fdf4, #dcfce7); border:1.5px solid #86efac; border-radius:12px; padding:10px 12px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size:11px; font-weight:900; color:#166534;">🏆 天梯排位结算</span>
+          <span id="resultScoreDeltaTag" style="font-size:13.5px; font-weight:900; color:#15803d; background:#bbf7d0; padding:2px 8px; border-radius:6px;">+25 分</span>
+        </div>
+        <div style="display:flex; justify-content:space-around; align-items:center; padding:4px 0;">
+          <div style="text-align:center;">
+            <div style="font-size:10px; color:#64748b; font-weight:700;">对局前积分</div>
+            <div id="resultOldScore" style="font-size:13px; font-weight:900; color:#334155;">1000</div>
+          </div>
+          <div style="font-size:16px; color:#10b981; font-weight:900;">➔</div>
+          <div style="text-align:center;">
+            <div style="font-size:10px; color:#15803d; font-weight:800;">最新天梯分</div>
+            <div id="resultNewScore" style="font-size:16px; font-weight:900; color:#15803d;">1025 分</div>
+          </div>
+        </div>
+        <div id="resultStatsSub" style="font-size:10px; color:#166534; margin-top:5px; font-weight:700;">战绩已实时同步至全服天梯榜</div>
+      </div>
+
+      <!-- 👤 游客专属提示卡片 (仅游客未登录时展示) -->
+      <div id="resultGuestCard" style="display:none; background:#f8fafc; border:1.5px dashed #cbd5e1; border-radius:12px; padding:10px; margin-bottom:12px;">
+        <div style="font-size:11.5px; font-weight:900; color:#475569; margin-bottom:4px;">👤 游客模式对局</div>
+        <div id="resultGuestStatsText" style="font-size:11px; color:#64748b; margin-bottom:6px; font-weight:800;">当前本地战绩: 1 胜 0 负</div>
+        <div style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:8px;">游客战绩仅保存在当前手机。登录正式账号即可激活天梯排位积分并在排行榜留名！</div>
+        <button type="button" onclick="closeGameResultModal(); openAuthModal('login');" style="background:#0284c7; color:#fff; border:none; padding:4px 10px; border-radius:7px; font-size:11px; font-weight:900; cursor:pointer;">🔑 登录/绑定账号激活积分</button>
+      </div>
+
+      <!-- 👥 双人同屏提示卡片 -->
+      <div id="resultPvpCard" style="display:none; background:#f1f5f9; border:1.5px solid #cbd5e1; border-radius:12px; padding:8px 10px; margin-bottom:12px; font-size:11px; color:#475569; font-weight:800;">
+        👥 双人同屏娱乐对战，不计入天梯积分
+      </div>
+
+      <!-- 操作按钮 -->
+      <div style="display:flex; flex-direction:column; gap:7px;">
+        <button type="button" class="btn-confirm-ok" onclick="restartGameFromResultModal()" style="padding:9px 0; border-radius:10px; font-weight:900; font-size:13px; background:#10b981; border-color:#059669; box-shadow:0 3px 0 #047857; color:#fff; cursor:pointer;">
+          🔄 再战一局
+        </button>
+        <button type="button" class="btn-confirm-cancel" onclick="openLeaderboardFromResultModal()" style="padding:7px 0; border-radius:10px; font-weight:800; font-size:12px; background:#e0f2fe; color:#0369a1; border-color:#bae6fd; cursor:pointer;">
+          🏆 查看全服天梯榜
+        </button>
+        <button type="button" class="btn-confirm-cancel" onclick="closeGameResultModal()" style="padding:5px 0; border-radius:10px; font-size:11px; background:#f1f5f9; color:#64748b; border:none; cursor:pointer;">
+          返回棋盘复盘
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- 🐾 手绘果冻风通用确认模态弹窗 (彻底杜绝系统丑陋的白色原生弹窗) -->
   <div class="custom-confirm-backdrop" id="customConfirmModal" onclick="if(event.target===this)closeCustomConfirm(false)">
     <div class="custom-confirm-card">
@@ -2340,7 +2395,8 @@
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
 
-      document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag;
+      const scoreSuffix = currentUsername ? ` (${currentUserScore}分)` : '';
+      document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag + scoreSuffix;
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
       document.getElementById('p2NameLabel').textContent = p2DisplayName + p2ColorTag;
     }
@@ -5428,6 +5484,14 @@
     // ══════════════════════════════════════════════════════════════════
     let currentUserUid = localStorage.getItem('gomoku_user_uid') || '';
     let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
+    let currentUserScore = parseInt(localStorage.getItem('gomoku_user_score') || '1000', 10);
+
+    function updateLadderBadgeUI(score) {
+      if (typeof score === 'number') currentUserScore = score;
+      const badge = document.getElementById('myLadderBadge');
+      if (badge) badge.textContent = `${currentUserScore} 分`;
+      updatePlayerHeaderUI();
+    }
     let currentUsername = localStorage.getItem('gomoku_user_username') || '';
 
     // 🛡️ 尝试从 Android 原生 SharedPreferences 读取免登双保险备份
@@ -5550,8 +5614,9 @@
 
       // 同步天梯分与段位
       if (typeof data.score === "number") {
-        const badge = document.getElementById("myLadderBadge");
-        if (badge) badge.textContent = `${data.score} 分`;
+        currentUserScore = data.score;
+        localStorage.setItem("gomoku_user_score", currentUserScore);
+        updateLadderBadgeUI(currentUserScore);
       }
 
       updateAccountUI();
@@ -6042,12 +6107,13 @@
     async function reportMatchResult(isWin) {
       if (isReportingMatch) return;
       isReportingMatch = true;
-      setTimeout(() => { isReportingMatch = false; }, 3000);
+      setTimeout(() => { isReportingMatch = false; }, 2000);
 
       // 🏠 游客：纯本地存储，不上天梯榜
       if (!currentUsername) {
         addLocalResult(isWin);
         const s = getLocalStats();
+        updateGameResultModalGuest(s);
         showGameNotice(isWin
           ? `🎉 本局胜利！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`
           : `💔 本局落败！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`, false);
@@ -6066,17 +6132,28 @@
           })
         });
         const data = await res.json();
-        if (data && data.code === 0) {
-          const toastMsg = isWin ? `🏆 天梯胜利！积分 +25，战绩已同步云端` : `💔 天梯惜败！积分 -15，战绩已同步云端`;
+        if (data && data.code === 0 && data.data) {
+          const oldScore = (typeof data.data.oldScore === 'number') ? data.data.oldScore : currentUserScore;
+          const newScore = data.data.newScore;
+          const delta = data.data.scoreDelta || (isWin ? 25 : -15);
+          
+          currentUserScore = newScore;
+          localStorage.setItem('gomoku_user_score', currentUserScore);
+          updateLadderBadgeUI(currentUserScore);
+          updateGameResultModalScore({ isWin, oldScore, newScore, delta, data: data.data });
+
+          const toastMsg = isWin ? `🏆 天梯胜利！积分 +25 (${newScore}分)，已同步云端` : `💔 天梯惜败！积分 -15 (${newScore}分)，已同步云端`;
           showGameNotice(toastMsg, true);
-          setTimeout(() => fetchGlobalLeaderboard(false), 1200);
+          setTimeout(() => fetchGlobalLeaderboard(false), 800);
         } else if (data && data.code === 403) {
-          // Token 失效，降级本地存储
           addLocalResult(isWin);
+          const s = getLocalStats();
+          updateGameResultModalGuest(s, '登录已过期，请重新登录同步天梯分');
           showGameNotice('⚠️ 登录已过期，本局战绩暂存本地，请重新登录后同步', true);
+        } else if (data && data.code === 429) {
+          console.log('对局结算过于频繁，冷却中');
         }
       } catch (err) {
-        // 网络异常，降级本地存储
         addLocalResult(isWin);
         console.warn("上报天梯战绩失败:", err);
       }
@@ -6107,6 +6184,139 @@
         localStorage.setItem(key, JSON.stringify(list));
         updateHistoryCountUI();
       } catch(e) {}
+    }
+
+
+    // 🏆 对局终局战报与积分变动弹窗控制器
+    function showGameResultModal({ isPvp, isWin, winnerName }) {
+      const modal = document.getElementById('gameResultModal');
+      if (!modal) return;
+
+      const iconEl = document.getElementById('resultModalIcon');
+      const titleEl = document.getElementById('resultModalTitle');
+      const subEl = document.getElementById('resultModalSub');
+      const scoreCard = document.getElementById('resultScoreCard');
+      const guestCard = document.getElementById('resultGuestCard');
+      const pvpCard = document.getElementById('resultPvpCard');
+
+      if (isPvp) {
+        if (iconEl) iconEl.textContent = '👑';
+        if (titleEl) titleEl.textContent = '五子连珠 · 对局结束！';
+        if (subEl) subEl.textContent = `恭喜【${winnerName}】达成五连珠，获得胜利！`;
+        if (scoreCard) scoreCard.style.display = 'none';
+        if (guestCard) guestCard.style.display = 'none';
+        if (pvpCard) pvpCard.style.display = 'block';
+      } else if (isWin) {
+        if (iconEl) iconEl.textContent = '👑';
+        if (titleEl) titleEl.textContent = '五子连珠 · 绝杀获胜！';
+        if (subEl) subEl.textContent = `恭喜【${p1Name}】技高一筹，勇夺对局胜利！`;
+        if (pvpCard) pvpCard.style.display = 'none';
+
+        if (currentUsername) {
+          if (scoreCard) {
+            scoreCard.style.display = 'block';
+            scoreCard.style.background = 'linear-gradient(135deg, #f0fdf4, #dcfce7)';
+            scoreCard.style.borderColor = '#86efac';
+          }
+          if (guestCard) guestCard.style.display = 'none';
+          const deltaTag = document.getElementById('resultScoreDeltaTag');
+          if (deltaTag) {
+            deltaTag.textContent = '+25 分';
+            deltaTag.style.color = '#15803d';
+            deltaTag.style.background = '#bbf7d0';
+          }
+          const oldScoreEl = document.getElementById('resultOldScore');
+          if (oldScoreEl) oldScoreEl.textContent = currentUserScore;
+          const newScoreEl = document.getElementById('resultNewScore');
+          if (newScoreEl) newScoreEl.textContent = (currentUserScore + 25) + ' 分';
+        } else {
+          if (scoreCard) scoreCard.style.display = 'none';
+          if (guestCard) guestCard.style.display = 'block';
+        }
+      } else {
+        if (iconEl) iconEl.textContent = '💔';
+        if (titleEl) titleEl.textContent = '棋局惜败 · 胜败常事！';
+        if (subEl) subEl.textContent = `【${winnerName}】达成五连珠，再战一局必定逆袭！`;
+        if (pvpCard) pvpCard.style.display = 'none';
+
+        if (currentUsername) {
+          if (scoreCard) {
+            scoreCard.style.display = 'block';
+            scoreCard.style.background = 'linear-gradient(135deg, #fff7ed, #ffedd5)';
+            scoreCard.style.borderColor = '#fdba74';
+          }
+          if (guestCard) guestCard.style.display = 'none';
+          const deltaTag = document.getElementById('resultScoreDeltaTag');
+          if (deltaTag) {
+            deltaTag.textContent = '-15 分';
+            deltaTag.style.color = '#c2410c';
+            deltaTag.style.background = '#fed7aa';
+          }
+          const oldScoreEl = document.getElementById('resultOldScore');
+          if (oldScoreEl) oldScoreEl.textContent = currentUserScore;
+          const newScoreEl = document.getElementById('resultNewScore');
+          if (newScoreEl) newScoreEl.textContent = Math.max(0, currentUserScore - 15) + ' 分';
+        } else {
+          if (scoreCard) scoreCard.style.display = 'none';
+          if (guestCard) guestCard.style.display = 'block';
+        }
+      }
+
+      modal.style.display = 'flex';
+      modal.classList.add('show');
+    }
+
+    function updateGameResultModalScore({ isWin, oldScore, newScore, delta, data }) {
+      const oldScoreEl = document.getElementById('resultOldScore');
+      if (oldScoreEl) oldScoreEl.textContent = oldScore;
+      const newScoreEl = document.getElementById('resultNewScore');
+      if (newScoreEl) newScoreEl.textContent = newScore + ' 分';
+      const deltaTag = document.getElementById('resultScoreDeltaTag');
+      if (deltaTag) {
+        deltaTag.textContent = (delta >= 0 ? `+${delta}` : delta) + ' 分';
+        deltaTag.style.color = delta >= 0 ? '#15803d' : '#c2410c';
+        deltaTag.style.background = delta >= 0 ? '#bbf7d0' : '#fed7aa';
+      }
+      const statsSub = document.getElementById('resultStatsSub');
+      if (statsSub && data) {
+        const total = data.total_games || 1;
+        const wins = data.wins || 0;
+        const rate = Math.round((wins / total) * 100);
+        statsSub.textContent = `云端天梯战绩: ${wins}胜/${total}局 (胜率${rate}%) · 已实时入榜`;
+      }
+    }
+
+    function updateGameResultModalGuest(stats, customTip) {
+      const guestCard = document.getElementById('resultGuestCard');
+      const statsText = document.getElementById('resultGuestStatsText');
+      if (guestCard) guestCard.style.display = 'block';
+      if (statsText && stats) {
+        statsText.textContent = customTip || `当前本地战绩: ${stats.wins || 0} 胜 ${stats.losses || 0} 负`;
+      }
+    }
+
+    function closeGameResultModal() {
+      const modal = document.getElementById('gameResultModal');
+      if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('show');
+      }
+    }
+
+    function restartGameFromResultModal() {
+      closeGameResultModal();
+      if (typeof restartMatch === 'function') {
+        restartMatch();
+      } else if (typeof resetGame === 'function') {
+        resetGame();
+      } else {
+        location.reload();
+      }
+    }
+
+    function openLeaderboardFromResultModal() {
+      closeGameResultModal();
+      openLeaderboardModal();
     }
 
     function updateHistoryCountUI() {
@@ -6220,19 +6430,19 @@
         triggerVictoryVFX();
         playSkillSound('victory');
         showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
-        setTimeout(() => alert(`🎉 恭喜【${winnerName}】达成五连珠获胜！`), 350);
+        setTimeout(() => showGameResultModal({ isPvp: true, winnerName }), 350);
       } else if (isPlayerWin) {
         // 🎉 胜利方视角：大调凯旋专属胜利音效 + 金色五彩烟花
         triggerVictoryVFX();
         playSkillSound('victory');
         showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
-        setTimeout(() => alert(`🎉 恭喜【${winnerName}】达成五连珠获胜！`), 350);
+        setTimeout(() => showGameResultModal({ isWin: true, winnerName }), 350);
       } else {
         // 💔 失败方视角：小调幽默哀叹专属失败音效 + 局势震颤
         triggerBoardShake(false);
         playSkillSound('defeat');
         showSkillBanner('💔', '【棋局惜败】胜败乃兵家常事！', customWinReason || `【${winnerName}】达成五连珠！胜不骄败不馁，再战一局必定逆袭！`);
-        setTimeout(() => alert(`💔 棋局惜败！【${winnerName}】达成五连珠，不要气馁，再接再厉！`), 350);
+        setTimeout(() => showGameResultModal({ isWin: false, winnerName }), 350);
       }
 
       // 仅在 AI 模式与全服联机中上报天梯战绩，双人同屏 pvp 绝不上报天梯
@@ -7914,7 +8124,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.64';
+    const CURRENT_VERSION_TAG = 'v1.0.65';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
