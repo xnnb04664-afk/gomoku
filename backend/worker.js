@@ -153,7 +153,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.67",
+        tag: "v1.0.68",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
@@ -334,7 +334,7 @@ async function allocateNextAvailableUid(env) {
       }
     }
 
-    // ── 3.5 用户资料更新（保存头像与昵称至云端账号） ───────
+    // ── 3.5 用户资料更新（昵称即账号名，改昵称即改账号名） ───────
     if (url.pathname === '/api/user/update_profile' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
@@ -342,21 +342,40 @@ async function allocateNextAvailableUid(env) {
         const { uid, nickname, avatar } = body;
         if (!uid) return json({ code: 1, msg: '缺少 uid' });
 
-        const user = await env.DB.prepare('SELECT uid FROM users WHERE uid = ?').bind(String(uid)).first();
+        const user = await env.DB.prepare('SELECT uid, username, nickname, avatar FROM users WHERE uid = ?').bind(String(uid)).first();
         if (!user) return json({ code: 1, msg: '用户不存在' });
 
-        const safeNick = nickname ? sanitizeText(nickname, 12) : null;
+        const safeNick = nickname ? sanitizeText(nickname, 16) : null;
         const safeAvatar = avatar ? sanitizeAvatar(avatar) : null;
 
+        if (safeNick) {
+          // 检查该账号名/昵称是否已被其他注册用户占用
+          const exist = await env.DB.prepare('SELECT uid FROM users WHERE (username = ? OR nickname = ?) AND uid != ?').bind(safeNick, safeNick, String(uid)).first();
+          if (exist) {
+            return json({ code: 1, msg: '该账号名称已被其他玩家占用，请换一个' });
+          }
+        }
+
+        // 🌟 核心：昵称即账号名，改昵称就是改账号名！同时更新 username 与 nickname
         if (safeNick && safeAvatar) {
-          await env.DB.prepare('UPDATE users SET nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeAvatar, String(uid)).run();
+          await env.DB.prepare('UPDATE users SET username = ?, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeNick, safeAvatar, String(uid)).run();
         } else if (safeNick) {
-          await env.DB.prepare('UPDATE users SET nickname = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, String(uid)).run();
+          await env.DB.prepare('UPDATE users SET username = ?, nickname = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeNick, String(uid)).run();
         } else if (safeAvatar) {
           await env.DB.prepare('UPDATE users SET avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeAvatar, String(uid)).run();
         }
 
-        return json({ code: 0, msg: '资料已成功同步到云端账号！', data: { nickname: safeNick, avatar: safeAvatar } });
+        const finalName = safeNick || user.username || user.nickname;
+        return json({
+          code: 0,
+          msg: '账号与昵称已成功同步更新！',
+          data: {
+            uid: String(uid),
+            username: finalName,
+            nickname: finalName,
+            avatar: safeAvatar || user.avatar
+          }
+        });
       } catch (err) {
         return json({ code: 1, msg: '资料更新异常: ' + err.message }, 500);
       }

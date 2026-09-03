@@ -1907,8 +1907,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         <button class="btn-upload-photo" onclick="triggerPhotoUpload()">📷 从手机相册选真实照片</button>
       </div>
 
-      <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:4px;">自定义您的游戏昵称：</div>
-      <input type="text" class="name-input-box" id="inputProfileName" placeholder="最多10个字符" maxlength="10" />
+      <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:4px;">自定义您的账号与对局昵称：</div>
+      <input type="text" class="name-input-box" id="inputProfileName" placeholder="最多12个字符" maxlength="12" />
+      <div style="font-size:10px; color:#0284c7; font-weight:700; margin:2px 0 6px 0;">💡 昵称即账号名，修改后登录账号与全服天梯将同步变更</div>
 
       <!-- 🌟 专属二次元唯美动漫头像（情侣对弈） -->
       <div style="font-size:12px; font-weight:900; color:#e056fd; margin:6px 0 4px 0; display:flex; align-items:center; gap:4px;">
@@ -1976,7 +1977,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.67</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.68</div>
         </div>
       </div>
 
@@ -3072,7 +3073,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     async function saveProfile() {
       const nameInput = document.getElementById('inputProfileName').value.trim();
-      if (!nameInput) return showGameNotice('⚠️ 昵称不能为空哦！', true);
+      if (!nameInput) return showGameNotice('⚠️ 账号昵称不能为空哦！', true);
 
       if (editingPlayer === 1) {
         p1Name = nameInput;
@@ -3080,7 +3081,16 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         localStorage.setItem('gomoku_p1Name', p1Name);
         localStorage.setItem('gomoku_p1Avatar', p1Avatar);
 
-        // 🌟 核心同步：如果已登录，立即将新昵称和头像同步到云端数据库与全服天梯榜！
+        // 🌟 核心要求：昵称就是账号名，改昵称就是改账号名！
+        if (currentUsername || currentUserUid) {
+          currentUsername = p1Name;
+          localStorage.setItem('gomoku_user_username', currentUsername);
+          if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
+            try { AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar); } catch(e) {}
+          }
+        }
+
+        // 🌟 同步到云端数据库：修改 username 和 nickname
         if (currentUserUid) {
           try {
             safeApiFetch('/api/user/update_profile', {
@@ -3094,8 +3104,15 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
               })
             }).then(r => r.json()).then(res => {
               if (res && res.code === 0) {
-                console.log('[saveProfile] 云端天梯榜昵称已成功同步:', p1Name);
+                console.log('[saveProfile] 账号名与天梯榜已同步:', p1Name);
+                if (res.data) {
+                  applyUserData(res.data);
+                }
+                updateAccountUI();
                 fetchLeaderboard(false);
+                showGameNotice('🎉 账号名与昵称已成功同步更新！', false);
+              } else if (res && res.msg) {
+                showGameNotice('⚠️ ' + res.msg, true);
               }
             }).catch(e => console.warn('[saveProfile sync error]', e));
           } catch(e) {}
@@ -3109,8 +3126,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       updatePlayerHeaderUI();
       updateAccountUI();
-      closeProfileModal();
-      showGameNotice('🎉 个人档案已保存，天梯榜与对局昵称已同步！');
+
+      // 🌟 用户明确要求：在主页保存并应用之后不退出，就保持当前页面！
+      // 绝不调用 closeProfileModal()，保持当前弹窗开启状态
+      showGameNotice('🎉 保存成功！当前账号与昵称已应用', false);
 
       // 保存时再做一次完整同步（确保对方数据最终一致）
       if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
@@ -6023,8 +6042,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       const btnLogout = document.getElementById("btnLogoutAction");
       if (currentUsername) {
         if (icon) icon.textContent = "✅";
-        if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${currentUsername}</span> <span style="font-size:11px; color:#64748b; font-weight:normal;">(昵称: ${p1Name})</span>`;
-        if (subText) subText.innerHTML = `天梯展示昵称: <b style="color:#10b981;">${p1Name}</b> · 登录可用账号或昵称`;
+        if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${currentUsername}</span>`;
+        if (subText) subText.innerHTML = `账号名与天梯展示完全统一 · 随时可改`;
         if (btnAuth) {
           btnAuth.textContent = "🔄 切换";
           btnAuth.onclick = () => openAuthModal("login");
@@ -8509,7 +8528,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.67';
+    const CURRENT_VERSION_TAG = 'v1.0.68';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
