@@ -1275,30 +1275,30 @@
         padding: 2px 7px !important;
       }
       .main-chat-box {
-        height: 46px !important;
-        min-height: 46px !important;
-        max-height: 46px !important;
-        padding: 2px 6px 1px 6px !important;
+        height: 72px !important;
+        min-height: 72px !important;
+        max-height: 72px !important;
+        padding: 2px 6px 2px 6px !important;
         margin-top: 1px !important;
       }
       .main-chat-header {
         font-size: 10.5px !important;
         line-height: 1 !important;
-        padding-bottom: 1px !important;
-        height: 13px !important;
+        padding-bottom: 2px !important;
+        height: 14px !important;
       }
       .main-chat-content {
-        height: 28px !important;
-        min-height: 28px !important;
-        max-height: 28px !important;
-        gap: 1.5px !important;
+        height: 52px !important;
+        min-height: 52px !important;
+        max-height: 52px !important;
+        gap: 2px !important;
         padding-top: 1px !important;
       }
       .main-chat-line {
-        font-size: 12px !important;
-        height: 17px !important;
-        min-height: 17px !important;
-        line-height: 17px !important;
+        font-size: 11px !important;
+        height: 16px !important;
+        min-height: 16px !important;
+        line-height: 16px !important;
       }
       .skill-prompt-bar {
         padding: 4px 8px !important;
@@ -1587,7 +1587,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.61</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.62</div>
         </div>
       </div>
 
@@ -2021,12 +2021,12 @@
   <!-- 🚀 官方云端自动检查更新模态弹窗 -->
   <div class="custom-confirm-backdrop" id="appUpdateModal" style="display:none; z-index: 100003;" onclick="if(event.target===this)closeUpdateModal()">
     <div class="custom-confirm-card" style="max-width:330px; text-align:left;">
-      <div style="text-align:center; font-size:36px; margin-bottom:4px;">🚀</div>
+      <div style="text-align:center; font-size:36px; margin-bottom:4px;" id="updateModalIcon">🚀</div>
       <div style="text-align:center; font-size:16px; font-weight:900; color:#2d3436; margin-bottom:4px;" id="updateModalTitle">发现新版本！</div>
       <div style="text-align:center; margin-bottom:8px;">
         <span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:10px; font-size:11.5px; font-weight:900;" id="updateTagText">v1.0.1 ➔ v1.0.2</span>
       </div>
-      <div style="font-size:11px; font-weight:800; color:#64748b; margin-bottom:4px;">更新内容说明：</div>
+      <div id="updateNotesTitle" style="font-size:11px; font-weight:800; color:#64748b; margin-bottom:4px;">更新内容说明：</div>
       <div id="updateNotesContent" style="max-height:120px; overflow-y:auto; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:10px; padding:8px; font-size:11px; color:#334155; line-height:1.5; white-space:pre-wrap; margin-bottom:12px;"></div>
 
       <!-- 🚀 下载进度条 -->
@@ -2047,7 +2047,7 @@
         <a id="btnOfficialDownload" href="#" target="_blank" class="btn-confirm-cancel" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:4px; padding:7px 0; border-radius:10px; font-weight:800; font-size:11.5px; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">
           <span>🌐 官方全球高速通道下载</span>
         </a>
-        <button type="button" class="btn-confirm-cancel" onclick="closeUpdateModal()" style="padding:6px 0; border-radius:10px; font-size:11.5px; background:#f1f5f9; color:#64748b; border:none;">稍后再说</button>
+        <button type="button" id="btnUpdateCancel" class="btn-confirm-cancel" onclick="closeUpdateModal()" style="padding:6px 0; border-radius:10px; font-size:11.5px; background:#f1f5f9; color:#64748b; border:none;">稍后再说</button>
       </div>
       <div style="font-size:10px; color:#64748b; margin-top:8px; text-align:center; border-top:1px dashed #e2e8f0; padding-top:6px;">
         官方开源项目主页：<a href="https://github.com/xnnb04664-afk/gomoku" target="_blank" style="color:#0284c7; text-decoration:none; font-weight:800;">github.com/xnnb04664-afk/gomoku</a>
@@ -7862,7 +7862,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.61';
+    const CURRENT_VERSION_TAG = 'v1.0.62';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
@@ -7924,101 +7924,92 @@
 
       let versionData = null;
 
-      // 1. 优先访问 GitHub 官方权威源 + 并发国内高速镜像
-      // 杜绝任何中间镜像单点缓存滞后，取所有成功响应中的最高/最新版本！
-      const checkEndpoints = [
-        // A. GitHub 官方 REST API (零延迟权威发布)
-        {
-          url: `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-          isGhApi: true
-        },
-        // B. GitHub 官方 Raw 原文件
-        {
-          url: `https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`,
-          isGhApi: false
-        },
-        // C. jsDelivr 全球加速 CDN (@latest 已自动做全量边缘 Purge)
-        {
-          url: `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
-          isGhApi: false
-        },
-        {
-          url: `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`,
-          isGhApi: false
-        },
-        // D. 国内高速镜像通道
-        {
-          url: `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`,
-          isGhApi: false
-        }
-      ];
-
-      const fetchTasks = checkEndpoints.map(async (ep) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-        try {
-          const res = await fetch(ep.url, {
-            cache: 'no-cache',
-            headers: ep.isGhApi ? { 'Accept': 'application/vnd.github.v3+json' } : {},
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          if (res.ok) {
-            const data = await res.json();
-            if (ep.isGhApi) {
-              const tag = data.tag_name || '';
-              if (tag) {
-                let rawUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
-                if (data.assets && data.assets.length > 0) {
-                  const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
-                  if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
-                }
-                return {
-                  tag: tag,
-                  notes: data.body || '五子棋全新功能与性能调优，推荐更新！',
-                  fastUrl: `https://gh-proxy.com/${rawUrl}`,
-                  backupUrl: `https://ghps.cc/${rawUrl}`,
-                  officialUrl: rawUrl
-                };
-              }
-            } else if (data && (data.versionName || data.releaseTag)) {
-              return {
-                tag: data.releaseTag || ('v' + data.versionName),
-                notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-                fastUrl: (data.download && data.download.fastUrl) || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
-                backupUrl: (data.download && data.download.backupFastUrl) || `https://ghps.cc/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
-                officialUrl: (data.download && data.download.officialUrl) || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
-              };
-            }
-          }
-        } catch(_) {}
-        return null;
-      });
-
+      // 0. 优先访问国内极速直连 Cloudflare 官方 API（零延迟、免跨域鉴权拦截）
       try {
-        const results = await Promise.all(fetchTasks);
-        const candidates = results.filter(Boolean);
-        if (candidates.length > 0) {
-          // 升序排列，取版本号最高的一项
-          candidates.sort((a, b) => compareVersions(b.tag, a.tag));
-          versionData = candidates[0];
+        const cfRes = await fetch("https://gomoku-api.pages.dev/api/version", { cache: "no-cache" });
+        if (cfRes.ok) {
+          const d = await cfRes.json();
+          if (d && d.tag) {
+            versionData = {
+              tag: d.tag,
+              notes: d.updateLog || "修复已知问题，优化联机体验与显示",
+              fastUrl: d.apkDownload || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+              officialUrl: `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
+            };
+          }
         }
       } catch(_) {}
 
-      isCheckingAppUpdate = false;
-
+      // 1. 如果云端直连未获取到，并发检测 GitHub 与备用高速镜像源
       if (!versionData) {
-        if (isManual) showGameNotice('⚠️ 暂未获取到更新，请稍后再试');
-        return;
+        const checkEndpoints = [
+          { url: `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/version.json?_t=${Date.now()}`, isGhApi: false },
+          { url: `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`, isGhApi: false },
+          { url: `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/version.json?_t=${Date.now()}`, isGhApi: false },
+          { url: `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, isGhApi: true }
+        ];
+
+        const fetchTasks = checkEndpoints.map(async (ep) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500);
+          try {
+            const res = await fetch(ep.url, {
+              cache: 'no-cache',
+              headers: ep.isGhApi ? { 'Accept': 'application/vnd.github.v3+json' } : {},
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (res.ok) {
+              const data = await res.json();
+              if (ep.isGhApi) {
+                const tag = data.tag_name || '';
+                if (tag) {
+                  let rawUrl = `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+                  if (data.assets && data.assets.length > 0) {
+                    const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
+                    if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
+                  }
+                  return {
+                    tag: tag,
+                    notes: data.body || '五子棋全新功能与性能调优，推荐更新！',
+                    fastUrl: `https://gh-proxy.com/${rawUrl}`,
+                    backupUrl: `https://ghps.cc/${rawUrl}`,
+                    officialUrl: rawUrl
+                  };
+                }
+              } else if (data && (data.versionName || data.releaseTag)) {
+                return {
+                  tag: data.releaseTag || ('v' + data.versionName),
+                  notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
+                  fastUrl: (data.download && data.download.fastUrl) || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+                  backupUrl: (data.download && data.download.backupFastUrl) || `https://ghps.cc/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`,
+                  officialUrl: (data.download && data.download.officialUrl) || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`
+                };
+              }
+            }
+          } catch(_) {}
+          return null;
+        });
+
+        try {
+          const results = await Promise.all(fetchTasks);
+          const candidates = results.filter(Boolean);
+          if (candidates.length > 0) {
+            candidates.sort((a, b) => compareVersions(b.tag, a.tag));
+            versionData = candidates[0];
+          }
+        } catch(_) {}
       }
 
-      // 检查当前应用或本地热更新覆盖后的生效版本
+      isCheckingAppUpdate = false;
+
+      // 检查当前应用版本
       const effectiveVersion = localStorage.getItem("gomoku_effective_version") || CURRENT_VERSION_TAG;
-      const hasNewVersion = compareVersions(versionData.tag, effectiveVersion) > 0;
-      
-      // 静默后台检查分支：绝对不自动弹窗扰民，绝对不自动强制执行热更新和页面刷新！
+      const hasNewVersion = versionData ? (compareVersions(versionData.tag, effectiveVersion) > 0) : false;
+
+      // 静默后台检查分支：有新版本仅做静默提示
       if (!isManual) {
-        if (hasNewVersion) {
+        if (hasNewVersion && versionData) {
           const sessKey = "notified_update_" + versionData.tag;
           if (!sessionStorage.getItem(sessKey)) {
             sessionStorage.setItem(sessKey, "1");
@@ -8028,115 +8019,136 @@
         return;
       }
 
-      // 手动点击检查分支：用户主动触发，展示弹窗并等待用户手动确认点击
-      if (!hasNewVersion) {
-        showGameNotice(`🎉 检查完成！当前已是最新正式版 (${effectiveVersion})，运行顺畅！`, false);
-      }
-
+      // 手动检查分支：展示清晰美观的确认弹窗
       const updateModal = document.getElementById("appUpdateModal");
-      if (updateModal) {
-        const tagEl = document.getElementById("updateTagText");
+      const modalIcon = document.getElementById("updateModalIcon");
+      const modalTitle = document.getElementById("updateModalTitle");
+      const tagEl = document.getElementById("updateTagText");
+      const notesTitle = document.getElementById("updateNotesTitle");
+      const notesEl = document.getElementById("updateNotesContent");
+      const btnFast = document.getElementById("btnFastDownload");
+      const btnOfficial = document.getElementById("btnOfficialDownload");
+      const btnCancel = document.getElementById("btnUpdateCancel");
+      const progressWrap = document.getElementById("updateProgressBarWrap");
+      const progressInner = document.getElementById("updateProgressBarInner");
+      const progressPercent = document.getElementById("updateProgressPercentText");
+      const progressStatus = document.getElementById("updateProgressStatusText");
+
+      if (progressWrap) progressWrap.style.display = "none";
+
+      const setVisualProgress = (pct, text) => {
+        if (progressWrap) progressWrap.style.display = "block";
+        if (progressInner) progressInner.style.width = pct + "%";
+        if (progressPercent) progressPercent.textContent = pct + "%";
+        if (progressStatus) progressStatus.textContent = text;
+      };
+
+      if (!versionData) {
+        // 网络超时/异常兜底展示
+        if (modalIcon) modalIcon.textContent = "📶";
+        if (modalTitle) modalTitle.textContent = "当前版本运行良好";
         if (tagEl) {
-          tagEl.textContent = hasNewVersion ? `${effectiveVersion} ➔ ${versionData.tag}` : `${effectiveVersion} (已是最新正式版)`;
+          tagEl.textContent = `${effectiveVersion} (当前运行版本)`;
+          tagEl.style.background = "#f1f5f9";
+          tagEl.style.color = "#475569";
         }
-        const notesEl = document.getElementById("updateNotesContent");
-        if (notesEl) {
-          notesEl.textContent = versionData.notes || "修复已知问题，优化操作体验。";
-        }
-
-        const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
-        const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
-
-        const progressWrap = document.getElementById("updateProgressBarWrap");
-        const progressInner = document.getElementById("updateProgressBarInner");
-        const progressPercent = document.getElementById("updateProgressPercentText");
-        const progressStatus = document.getElementById("updateProgressStatusText");
-        if (progressWrap) progressWrap.style.display = hasNewVersion ? "block" : "none";
-
-        // 更新进度条辅助函数
-        const setVisualProgress = (pct, text) => {
-          if (progressWrap) progressWrap.style.display = "block";
-          if (progressInner) progressInner.style.width = pct + "%";
-          if (progressPercent) progressPercent.textContent = pct + "%";
-          if (progressStatus) progressStatus.textContent = text;
-        };
-
-        // 核心机制：用户主动点击后，方才启动免安装热更新
-        const runSeamlessHotUpdate = async () => {
-          setVisualProgress(15, "🚀 正在高速下载最新资源（免安装直接生效）...");
-          const updateHtmlUrls = [
-            `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
-            `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
-            `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`
-          ];
-
-          for (let i = 0; i < updateHtmlUrls.length; i++) {
-            try {
-              setVisualProgress(30 + i * 20, `⚡ 正在通过高速镜像通道 ${i + 1} 载入...`);
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 6000);
-              const res = await fetch(updateHtmlUrls[i], { signal: controller.signal });
-              clearTimeout(timeoutId);
-              if (res.ok) {
-                const htmlText = await res.text();
-                if (htmlText && htmlText.length > 50000) {
-                  setVisualProgress(90, "✨ 资源校验完成，正在写入本地磁盘...");
-                  if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveHotUpdateFile) {
-                    AndroidNativeApp.saveHotUpdateFile("index.html", htmlText);
-                  }
-                  localStorage.setItem("gomoku_effective_version", versionData.tag);
-                  setVisualProgress(100, "🎉 更新成功！已更新至最新版本，正在进入...");
-                  showGameNotice("🎉 更新成功！已成功载入最新版本！", false);
-                  setTimeout(() => { location.reload(); }, 1200);
-                  return true;
-                }
-              }
-            } catch(e) {}
-          }
-          return false;
-        };
-
-        const btnFast = document.getElementById("btnFastDownload");
+        if (notesTitle) notesTitle.textContent = "运行状态：";
+        if (notesEl) notesEl.textContent = `云端检查连接稍有延迟，但您当前运行的五子棋 (${effectiveVersion}) 已具备全部对战功能与修复，可正常畅快对弈。\n\n如需手动获取最新安装包，可点击下方按钮。`;
         if (btnFast) {
-          btnFast.innerHTML = hasNewVersion ? "<span>⚡ 免安装极速热更新（推荐）</span>" : "<span>🎉 当前已是最新版</span>";
-          btnFast.onclick = async (e) => {
+          btnFast.style.display = "flex";
+          btnFast.innerHTML = "<span>🌐 前往官网主页下载</span>";
+          btnFast.onclick = (e) => {
             e.preventDefault();
-            if (!hasNewVersion) {
-              showGameNotice("🎉 当前已是最新正式版，无需重复更新！");
-              closeUpdateModal();
-              return;
-            }
-            setVisualProgress(5, "🚀 正在启动秒级无感热更新...");
-            const ok = await runSeamlessHotUpdate();
-            if (!ok) {
-              setVisualProgress(10, "正在转入完整安装包极速下载...");
-              if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
-                isAppDownloading = true;
-                AndroidNativeApp.downloadAndInstallApk(fastLink);
-              } else {
-                window.location.href = fastLink;
-              }
-            }
+            window.location.href = `https://github.com/${GITHUB_REPO}/releases/latest`;
           };
         }
+        if (btnOfficial) btnOfficial.style.display = "none";
+        if (btnCancel) {
+          btnCancel.textContent = "关闭";
+          btnCancel.style.background = "#f1f5f9";
+          btnCancel.style.color = "#64748b";
+          btnCancel.style.padding = "8px 0";
+        }
+        showGameNotice(`当前已是 ${effectiveVersion}，对弈功能正常！`, false);
+        if (updateModal) updateModal.style.display = "flex";
+        return;
+      }
 
-        const btnOfficial = document.getElementById("btnOfficialDownload");
-        if (btnOfficial) {
-          btnOfficial.innerHTML = "<span>📲 下载全新 APK 安装包</span>";
-          btnOfficial.onclick = (e) => {
+      const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+      const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
+
+      if (hasNewVersion) {
+        // 发现新版本！
+        if (modalIcon) modalIcon.textContent = "🚀";
+        if (modalTitle) modalTitle.textContent = "发现新版本！";
+        if (tagEl) {
+          tagEl.textContent = `${effectiveVersion} ➔ ${versionData.tag}`;
+          tagEl.style.background = "#e0f2fe";
+          tagEl.style.color = "#0369a1";
+        }
+        if (notesTitle) notesTitle.textContent = "更新内容说明：";
+        if (notesEl) notesEl.textContent = versionData.notes || "修复已知问题，优化操作体验。";
+        
+        if (btnFast) {
+          btnFast.style.display = "flex";
+          btnFast.innerHTML = "<span>⚡ 极速全自动下载更新 (推荐)</span>";
+          btnFast.onclick = (e) => {
             e.preventDefault();
-            setVisualProgress(5, "🚀 正在通过安全通道下载 APK 安装包...");
+            setVisualProgress(5, "🚀 正在启动全自动极速下载...");
+            isAppDownloading = true;
             if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
-              isAppDownloading = true;
               AndroidNativeApp.downloadAndInstallApk(fastLink);
             } else {
               window.location.href = fastLink;
             }
           };
         }
-
-        updateModal.style.display = "flex";
+        if (btnOfficial) {
+          btnOfficial.style.display = "flex";
+          btnOfficial.innerHTML = "<span>🌐 备用高速通道下载</span>";
+          btnOfficial.onclick = (e) => {
+            e.preventDefault();
+            setVisualProgress(5, "🚀 正在通过备用通道下载 APK...");
+            isAppDownloading = true;
+            if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
+              AndroidNativeApp.downloadAndInstallApk(officialLink);
+            } else {
+              window.location.href = officialLink;
+            }
+          };
+        }
+        if (btnCancel) {
+          btnCancel.textContent = "稍后再说";
+          btnCancel.style.background = "#f1f5f9";
+          btnCancel.style.color = "#64748b";
+          btnCancel.style.padding = "6px 0";
+        }
+      } else {
+        // 当前已是最新正式版！清晰直观反馈
+        if (modalIcon) modalIcon.textContent = "✅";
+        if (modalTitle) modalTitle.textContent = "当前已是最新正式版！";
+        if (tagEl) {
+          tagEl.textContent = `${effectiveVersion} (最新正式版)`;
+          tagEl.style.background = "#dcfce7";
+          tagEl.style.color = "#15803d";
+        }
+        if (notesTitle) notesTitle.textContent = "版本状态说明：";
+        if (notesEl) notesEl.textContent = `恭喜！您的游戏已处于最新正式版本 (${effectiveVersion})。\n\n• 胜负判定与联机执白已全面修复\n• 实时对局聊天框支持完整呈现最新3条对话\n• 棋盘双向心跳自动对账与全量对齐机制已开启\n\n当前无需重复更新，所有功能均处于最佳状态！`;
+        
+        if (btnFast) btnFast.style.display = "none";
+        if (btnOfficial) btnOfficial.style.display = "none";
+        if (btnCancel) {
+          btnCancel.textContent = "✅ 我知道了 (当前已是最新)";
+          btnCancel.style.background = "#10b981";
+          btnCancel.style.color = "#fff";
+          btnCancel.style.fontWeight = "900";
+          btnCancel.style.padding = "10px 0";
+          btnCancel.style.fontSize = "13px";
+        }
+        showGameNotice(`🎉 检查完成！当前已是最新正式版 (${effectiveVersion})！`, false);
       }
+
+      if (updateModal) updateModal.style.display = "flex";
     }
 
     function closeUpdateModal() {

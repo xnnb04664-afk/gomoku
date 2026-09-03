@@ -74,6 +74,15 @@ const vJson = {
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
 console.log('📌 已同步更新 version.json (国内极速直连数据源)');
 
+// 同步更新 backend/worker.js 中的版本号
+const workerJsPath = path.join(ROOT_DIR, 'backend', 'worker.js');
+if (fs.existsSync(workerJsPath)) {
+  let wCode = fs.readFileSync(workerJsPath, 'utf8');
+  wCode = wCode.replace(/tag:\s*["']v[\d\.]+["']/, `tag: "v${newName}"`);
+  fs.writeFileSync(workerJsPath, wCode, 'utf8');
+  console.log(`📌 已同步更新 backend/worker.js 版本为 v${newName}`);
+}
+
 // 3. 打包单文件离线网页版
 console.log('>>> [3/7] 正在构建最新单文件离线旗舰版...');
 execSync('node bundle_single_file.js', { cwd: ROOT_DIR, stdio: 'inherit' });
@@ -134,14 +143,13 @@ try {
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
 }
 
-// 刷新 jsDelivr 全球边缘缓存
-console.log('>>> 正在刷新 CDN 缓存，确保全球毫秒级获取最新版本...');
+// 同步部署线上最新 Worker 与 Pages 官方安全接口
+console.log('>>> 正在同步部署 Cloudflare Pages & Worker 官方安全中枢...');
 try {
-  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@master/version.json"`, { timeout: 4000 });
-  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@latest/version.json"`, { timeout: 4000 });
-  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@master/index.html"`, { timeout: 4000 });
-  execSync(`curl -s "https://purge.jsdelivr.net/gh/xnnb04664-afk/gomoku@latest/index.html"`, { timeout: 4000 });
-} catch(ignored) {}
+  execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+} catch(e) {
+  console.warn('Worker 部署提示:', e.message);
+}
 
 console.log('======================================================');
 console.log(`✨ 全部发布流程圆满成功！版本: v${newName}`);
