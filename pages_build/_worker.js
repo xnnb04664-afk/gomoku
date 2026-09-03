@@ -86,6 +86,28 @@ export default {
     if (env.DB) {
       try {
         await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            is_win INTEGER NOT NULL,
+            winner_color INTEGER NOT NULL,
+            my_color INTEGER NOT NULL,
+            opp_name TEXT,
+            opp_avatar TEXT,
+            moves_count INTEGER DEFAULT 0,
+            moves_data TEXT,
+            board_data TEXT,
+            time TEXT,
+            date TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+        try {
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_history_uid ON game_history(uid)`).run();
+        } catch(e) {}
+
+        await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS users (
             uid TEXT PRIMARY KEY,
             username TEXT UNIQUE,
@@ -156,7 +178,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.79",
+        tag: "v1.0.80",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
@@ -586,6 +608,92 @@ async function allocateNextAvailableUid(env) {
     }
 
     
+
+    // ══════════════════════════════════════════════════════
+    // 📜 历史对局战报与全盘谱录云端存取系统 (Cloudflare D1 驱动)
+    // ══════════════════════════════════════════════════════
+
+    // 1. 上报并云端持久化单局战报（包含全盘走法谱与终局状态）
+    if (url.pathname === '/api/history/record' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid, mode, isWin, winnerColor, myColor, oppName, oppAvatar, moves, movesData, boardData, time, date } = body;
+        if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
+
+        const cleanUid = String(uid).trim();
+        const movesJson = typeof movesData === 'string' ? movesData : JSON.stringify(movesData || []);
+        const boardJson = typeof boardData === 'string' ? boardData : JSON.stringify(boardData || []);
+
+        await env.DB.prepare(`
+          INSERT INTO game_history (
+            uid, mode, is_win, winner_color, my_color, opp_name, opp_avatar, moves_count, moves_data, board_data, time, date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          cleanUid,
+          String(mode || 'ai'),
+          isWin ? 1 : 0,
+          parseInt(winnerColor || 1, 10),
+          parseInt(myColor || 1, 10),
+          String(oppName || '对手').slice(0, 32),
+          String(oppAvatar || '🤖').slice(0, 100),
+          parseInt(moves || 0, 10),
+          movesJson,
+          boardJson,
+          String(time || '').slice(0, 20),
+          String(date || '').slice(0, 20)
+        ).run();
+
+        // 仅保留该用户最新 30 局，自动裁剪超额历史
+        try {
+          await env.DB.prepare(`
+            DELETE FROM game_history
+            WHERE uid = ? AND id NOT IN (
+              SELECT id FROM game_history WHERE uid = ? ORDER BY id DESC LIMIT 30
+            )
+          `).bind(cleanUid, cleanUid).run();
+        } catch(_) {}
+
+        return json({ code: 0, msg: '对局历史战报与棋局谱已成功同步至云端！' });
+      } catch (err) {
+        return json({ code: 1, msg: '云端同步战绩异常: ' + err.message }, 500);
+      }
+    }
+
+    // 2. 查询用户云端历史对局战报列表（支持换机/重装后一键恢复）
+    if (url.pathname === '/api/history/list' && request.method === 'GET') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const uid = url.searchParams.get('uid');
+        if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
+
+        const rows = await env.DB.prepare(`
+          SELECT id, uid, mode, is_win as isWin, winner_color as winnerColor, my_color as myColor,
+                 opp_name as oppName, opp_avatar as oppAvatar, moves_count as moves,
+                 moves_data as movesData, board_data as boardData, time, date, created_at
+          FROM game_history
+          WHERE uid = ?
+          ORDER BY id DESC
+          LIMIT 30
+        `).bind(String(uid).trim()).all();
+
+        const list = (rows.results || []).map(r => ({
+          ...r,
+          isWin: r.isWin === 1,
+          movesData: (() => {
+            try { return JSON.parse(r.movesData); } catch(e) { return []; }
+          })(),
+          boardData: (() => {
+            try { return JSON.parse(r.boardData); } catch(e) { return null; }
+          })()
+        }));
+
+        return json({ code: 0, data: list });
+      } catch (err) {
+        return json({ code: 1, msg: '查询云端历史战绩异常: ' + err.message }, 500);
+      }
+    }
+
     // ══════════════════════════════════════════════════════
     // ⚡ 全服实时快速匹配系统 (Cloudflare D1 驱动)
     // ══════════════════════════════════════════════════════

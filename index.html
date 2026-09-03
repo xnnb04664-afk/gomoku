@@ -1588,7 +1588,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.80</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.81</div>
         </div>
       </div>
 
@@ -8606,7 +8606,7 @@
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.80';
+    const CURRENT_VERSION_TAG = 'v1.0.81';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
@@ -8847,43 +8847,54 @@
             btnFast.innerHTML = "<span>⚡ 免安装一键秒更 (推荐·2秒无感)</span>";
             btnFast.onclick = async (e) => {
               e.preventDefault();
-              setVisualProgress(15, "🚀 正在通过高速 CDN 拉取最新版本...");
+              if (btnFast.disabled) return;
+              btnFast.disabled = true;
+              btnFast.style.opacity = "0.8";
+              btnFast.innerHTML = "<span>⏳ 正在多路高速竞速下载...</span>";
+              setVisualProgress(15, "🚀 正在启动 4 路极速 CDN 并发竞速...");
               isAppDownloading = true;
+
               try {
+                // ⚡ 4 路高可用 CDN 镜像并发竞速（彻底消灭单点阻塞，哪个最快就用哪个，1次点击秒成！）
                 const hotUrls = [
-                  "https://gh-proxy.com/https://raw.githubusercontent.com/" + GITHUB_REPO + "/master/index.html?_t=" + Date.now(),
-                  "https://raw.githubusercontent.com/" + GITHUB_REPO + "/master/index.html?_t=" + Date.now()
+                  "https://cdn.jsdelivr.net/gh/" + GITHUB_REPO + "@master/index.html?_t=" + Date.now(),
+                  "https://fastly.jsdelivr.net/gh/" + GITHUB_REPO + "@master/index.html?_t=" + Date.now(),
+                  "https://gh-proxy.com/https://github.com/" + GITHUB_REPO + "/releases/latest/download/gomoku.html?_t=" + Date.now(),
+                  "https://gh-proxy.com/https://raw.githubusercontent.com/" + GITHUB_REPO + "/master/index.html?_t=" + Date.now()
                 ];
-                let newHtml = null;
-                for (const hUrl of hotUrls) {
-                  try {
-                    setVisualProgress(35, "📥 正在极速接收最新核心代码...");
-                    const res = await fetch(hUrl);
-                    if (res.ok) {
+
+                const fetchCandidate = (url, timeoutMs = 7000) => {
+                  const controller = new AbortController();
+                  const tId = setTimeout(() => controller.abort(), timeoutMs);
+                  return fetch(url, { signal: controller.signal, cache: 'no-cache' })
+                    .then(async (res) => {
+                      clearTimeout(tId);
+                      if (!res.ok) throw new Error("HTTP " + res.status);
                       const txt = await res.text();
-                      if (txt && txt.includes("五子棋") && txt.length > 50000) {
-                        newHtml = txt;
-                        break;
+                      if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
+                        throw new Error("Invalid html payload");
                       }
-                    }
-                  } catch(_) {}
+                      return txt;
+                    });
+                };
+
+                setVisualProgress(35, "📥 正在极速接收最新代码包 (毫秒级直连)...");
+                const newHtml = await Promise.any(hotUrls.map(u => fetchCandidate(u)));
+
+                setVisualProgress(80, "💾 正在极速写入本地沙盒存储...");
+                const ok = AndroidNativeApp.saveHotUpdateFile("index.html", newHtml);
+                if (ok) {
+                  setVisualProgress(100, "🎉 免安装秒更成功！正在重载进入新版...");
+                  showGameNotice("🎉 更新成功！即将无缝重载进入最新版", false);
+                  setTimeout(() => {
+                    window.location.reload();
+                  }, 800);
+                  return;
                 }
-                if (newHtml) {
-                  setVisualProgress(80, "💾 正在写入本地沙盒存储...");
-                  const ok = AndroidNativeApp.saveHotUpdateFile("index.html", newHtml);
-                  if (ok) {
-                    setVisualProgress(100, "🎉 免安装秒更成功！正在重载应用...");
-                    showGameNotice("🎉 更新成功！即将无缝进入最新版", false);
-                    setTimeout(() => {
-                      window.location.reload();
-                    }, 1200);
-                    return;
-                  }
-                }
-                throw new Error("热更新写入异常，自动转入 APK 完整下载通道");
+                throw new Error("沙盒写入失败");
               } catch(err) {
-                console.warn('[HotUpdate Fallback]', err);
-                setVisualProgress(50, "🔄 正在转入完整 APK 安装通道...");
+                console.warn('[HotUpdate Concurrent Fallback]', err);
+                setVisualProgress(50, "🔄 自动转入 APK 完整通道下载...");
                 if (AndroidNativeApp.downloadAndInstallApk) {
                   AndroidNativeApp.downloadAndInstallApk(fastLink);
                 }
