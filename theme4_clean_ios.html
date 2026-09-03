@@ -4348,19 +4348,8 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.43';
-        // 🔐 敏感资产加密防护引擎：杜绝明文暴露 GitHub 仓库与云端网关，防逆向反编译检索
-    function _d(encoded, key = 42) {
-      try {
-        const binary = atob(encoded);
-        let res = "";
-        for (let i = 0; i < binary.length; i++) {
-          res += String.fromCharCode(binary.charCodeAt(i) ^ ((key + i) % 256));
-        }
-        return res;
-      } catch (_) { return ""; }
-    }
-    const GITHUB_REPO = _d('UkVCTx4bBgcGHlVTXRhfVldUV0g=');
+    const CURRENT_VERSION_TAG = 'v1.0.44';
+        const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
       const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
