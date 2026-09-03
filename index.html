@@ -1404,6 +1404,15 @@
     <button onclick="cancelQuickMatch()" style="background:rgba(255,255,255,0.15); color:#cbd5e1; border:none; border-radius:12px; padding:3px 7px; font-size:11px; font-weight:900; cursor:pointer;">✕ 取消</button>
   </div>
 
+    <!-- 🌐 联机对战常驻房间状态条 (含一键退出房间按键) -->
+  <div id="onlineRoomTopBar" style="display:none; justify-content:space-between; align-items:center; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border-radius:12px; padding:5px 12px; margin:4px auto; max-width:460px; width:92%; border:1.5px solid #f59e0b; box-shadow:0 3px 10px rgba(0,0,0,0.25);">
+    <div style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:800;">
+      <span style="color:#10b981; font-size:14px; animation:pulse 1.5s infinite;">●</span>
+      <span>联机房间: <span id="onlineRoomCodeLabel" style="color:#f59e0b; font-family:monospace; font-weight:900;">------</span></span>
+    </div>
+    <button onclick="confirmLeaveOnlineRoom()" style="background:linear-gradient(135deg, #ef4444, #dc2626); color:#fff; border:none; border-radius:8px; padding:4px 10px; font-size:11px; font-weight:900; cursor:pointer; box-shadow:0 2px 4px rgba(239,68,68,0.4);">🚪 退出房间</button>
+  </div>
+
   <!-- 手机全屏最大化棋盘容器 -->
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
@@ -1544,7 +1553,10 @@
           <span id="accountStatusTitle" style="font-size:12px; font-weight:900; color:#0369a1; white-space:nowrap;">游客身份</span>
           <span id="userUidBadge" style="background:#0284c7; color:#fff; font-size:10px; padding:1px 6px; border-radius:8px; font-weight:800; cursor:pointer; white-space:nowrap;" onclick="copyMyUid()" title="点击复制UID">UID: ------ 📋</span>
         </div>
-        <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer; flex-shrink:0;">🔑 登录/注册</button>
+        <div style="display:flex; gap:5px; flex-shrink:0;">
+          <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
+          <button type="button" class="btn-chat-tool" id="btnLogoutAction" onclick="confirmLogoutAccount()" style="display:none; background:#ef4444; color:#fff; border-color:#dc2626; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🚪 退出</button>
+        </div>
       </div>
 
       <!-- 🎮 三合一核心功能快捷卡片 (天梯榜 + 历史战报 + 版本更新) -->
@@ -1643,7 +1655,10 @@
           <span id="roomStatusBadge" style="font-size:13.5px; color:#f59e0b; font-weight:900;">🟡 正在连入信令网络...</span>
           <span style="font-size:13px; color:#3b82f6; font-weight:900; cursor:pointer; text-decoration:underline;" onclick="refreshNewRoomCode()">🔄 换个房间码</span>
         </div>
-        <button class="online-action-btn" onclick="copyRoomCode()">📋 一键复制房间码</button>
+        <div style="display:flex; gap:8px;">
+          <button class="online-action-btn" onclick="copyRoomCode()" style="flex:2;">📋 一键复制房间码</button>
+          <button class="online-action-btn" onclick="leaveOnlineRoom(true); closeOnlineModal();" style="flex:1; background:#ef4444; box-shadow:0 3.5px 0 #b91c1c;">🚪 退出房间</button>
+        </div>
       </div>
 
       <div id="viewJoinRoom" style="display:none;">
@@ -2232,14 +2247,18 @@
     function updatePlayerHeaderUI() {
       const btnLeave = document.getElementById("btnLeaveRoom");
       const btnOnline = document.getElementById("btnOnline");
-      if (btnLeave && btnOnline) {
-        if (gameMode === "online") {
-          btnLeave.style.display = "block";
-          btnOnline.style.display = "none";
-        } else {
-          btnLeave.style.display = "none";
-          btnOnline.style.display = "block";
-        }
+      const topRoomBar = document.getElementById("onlineRoomTopBar");
+      const topRoomCode = document.getElementById("onlineRoomCodeLabel");
+
+      if (gameMode === "online") {
+        if (btnLeave) btnLeave.style.display = "block";
+        if (btnOnline) btnOnline.style.display = "none";
+        if (topRoomBar) topRoomBar.style.display = "flex";
+        if (topRoomCode) topRoomCode.textContent = currentRoomCode || "对战中";
+      } else {
+        if (btnLeave) btnLeave.style.display = "none";
+        if (btnOnline) btnOnline.style.display = "block";
+        if (topRoomBar) topRoomBar.style.display = "none";
       }
       let p1ColorTag = ' (●黑子)';
       let p2ColorTag = ' (○白子)';
@@ -5273,21 +5292,28 @@
         uidBadge.textContent = `UID: ${currentUserUid} 📋`;
       }
 
+      const btnLogout = document.getElementById("btnLogoutAction");
       if (currentUsername) {
-        if (icon) icon.textContent = '✅';
+        if (icon) icon.textContent = "✅";
         if (title) title.textContent = `正式账号: ${currentUsername}`;
-        if (subText) subText.textContent = '账号安全受保护，换设备登录即可找回积分！';
+        if (subText) subText.textContent = "账号安全受保护，换设备登录即可找回积分！";
         if (btnAuth) {
-          btnAuth.textContent = '🔄 切换账号';
-          btnAuth.onclick = () => openAuthModal('login');
+          btnAuth.textContent = "🔄 切换";
+          btnAuth.onclick = () => openAuthModal("login");
+        }
+        if (btnLogout) {
+          btnLogout.style.display = "inline-block";
         }
       } else {
-        if (icon) icon.textContent = '👤';
-        if (title) title.textContent = '游客身份 (未绑定)';
-        if (subText) subText.textContent = '注册绑定账号密码，换手机重装不丢积分！';
+        if (icon) icon.textContent = "👤";
+        if (title) title.textContent = "游客身份 (未绑定)";
+        if (subText) subText.textContent = "注册绑定账号密码，换手机重装不丢积分！";
         if (btnAuth) {
-          btnAuth.textContent = '🔑 登录/注册';
-          btnAuth.onclick = () => openAuthModal('login');
+          btnAuth.textContent = "🔑 登录/注册";
+          btnAuth.onclick = () => openAuthModal("login");
+        }
+        if (btnLogout) {
+          btnLogout.style.display = "none";
         }
       }
     }
@@ -6989,6 +7015,80 @@
       });
     }
 
+    // 🚪 退出联机房间功能 (彻底断开连接并还原棋盘)
+    function confirmLeaveOnlineRoom() {
+      if (confirm("确定要退出当前联机房间吗？退出后将切回单机模式。")) {
+        leaveOnlineRoom(true);
+      }
+    }
+
+    function leaveOnlineRoom(sendNotice = true) {
+      if (sendNotice && conn && conn.open) {
+        try { conn.send({ type: "leave_room", name: p1Name }); } catch(_) {}
+      }
+      if (conn) {
+        try { conn.close(); } catch(_) {}
+        conn = null;
+      }
+      if (p2pChannel) {
+        try { p2pChannel.close(); } catch(_) {}
+        p2pChannel = null;
+      }
+      if (peer && !peer.destroyed) {
+        try { peer.destroy(); } catch(_) {}
+        peer = null;
+      }
+      if (onlineHeartbeatTimer) {
+        clearInterval(onlineHeartbeatTimer);
+        onlineHeartbeatTimer = null;
+      }
+      currentRoomCode = null;
+      cancelQuickMatch();
+      hideMatchingFloatingBar();
+      setMode("pvp", true);
+      resetBoardOnly();
+      updatePlayerHeaderUI();
+      showGameNotice("🚪 您已退出联机房间，切回双人同屏模式", true);
+    }
+
+    // 👤 退出当前账号功能 (切回安全游客模式)
+    function confirmLogoutAccount() {
+      if (!currentUsername) return;
+      if (confirm(`确定要退出账号【${currentUsername}】吗？\n退出后将切换为游客模式，随时可重新输入密码登录。`)) {
+        logoutAccount();
+      }
+    }
+
+    async function logoutAccount() {
+      const oldName = currentUsername;
+      currentUsername = "";
+      localStorage.removeItem("gomoku_user_username");
+      localStorage.removeItem("gomoku_user_token");
+
+      if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.clearUserLogin) {
+        try { AndroidNativeApp.clearUserLogin(); } catch(e) {}
+      }
+
+      // 获取全新游客身份
+      try {
+        const res = await safeApiFetch("/api/auth/guest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        const json = await res.json();
+        if (json && json.code === 0 && json.data) {
+          applyUserData(json.data);
+        }
+      } catch(e) {
+        updateAccountUI();
+      }
+
+      updateAccountUI();
+      closeAuthModal();
+      showGameNotice(`🚪 已成功退出账号【${oldName}】，已切换为游客身份`, true);
+    }
+
     function resetBoardOnly() {
       board = Array.from({length: 15}, () => Array(15).fill(0));
       turn = BLACK; history = []; isOver = false; winningLine = null;
@@ -7398,7 +7498,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.35';
+    const CURRENT_VERSION_TAG = 'v1.0.36';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
