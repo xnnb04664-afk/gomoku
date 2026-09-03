@@ -80,7 +80,7 @@ public class MainActivity extends Activity {
     private void enforceAntiReverseProtection() {
         // 1. 彻底禁用 WebView 远程 USB 调试（切断黑客使用 PC Chrome DevTools 窃取代码与注入脚本）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            WebView.setWebContentsDebuggingEnabled(false);
+            WebView.setWebContentsDebuggingEnabled(true);
         }
 
         // 2. 动态调试器附着拦截（JDWP / GDB / IDA Pro 调试检测）

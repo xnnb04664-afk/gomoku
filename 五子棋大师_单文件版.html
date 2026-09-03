@@ -4123,6 +4123,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           showSkillBanner('👑', '对方发动【天命降临】！', '2×2 区域瞬间天降 4 颗连星！');
           draw(); updateUI(); persistGameState();
         }
+      }
       });
     }
 
@@ -5252,7 +5253,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       cvs.width = cWidth * dpr; cvs.height = cHeight * dpr;
       cvs.style.width = cWidth + 'px'; cvs.style.height = cHeight + 'px';
 
-      ctx.resetTransform(); ctx.scale(dpr, dpr);
+      if (ctx.resetTransform) ctx.resetTransform(); else ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr, dpr);
       
       // 手机端将内边距压缩到 2.2%（原 4.5%），棋盘网格扩展铺满 96% 屏幕宽！
       paddingX = cWidth * (isMobile ? 0.022 : 0.038); 
