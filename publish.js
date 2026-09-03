@@ -84,7 +84,7 @@ execSync('node build_apk.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 5. 校验产物
 const apkPath = path.join(ROOT_DIR, '五子棋.apk');
-const singleHtmlPath = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
+const singleHtmlPath = path.join(ROOT_DIR, 'gomoku.html');
 
 if (!fs.existsSync(apkPath) || !fs.existsSync(singleHtmlPath)) {
   console.error('❌ 打包校验未通过，产物缺失！');
@@ -124,6 +124,7 @@ try {
   console.log('ℹ️ GitHub Release 已存在或创建提示: ' + err.message);
 } finally {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
+  if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
 }
 
 // 刷新 jsDelivr 全球边缘缓存
