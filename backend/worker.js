@@ -183,7 +183,7 @@ export default {
         const passwordHash = await hashWithSalt(password, salt);
         const newToken = generateSecureHex(24);
 
-        const safeQ = sanitizeText(securityQuestion, 30) || '你的出生城市是？';
+        const safeQ = sanitizeText(securityQuestion, 60) || '你最喜欢的人是谁？';
         const cleanAnswer = (securityAnswer && typeof securityAnswer === 'string') ? securityAnswer.trim().toLowerCase() : '';
         const secSalt = generateSecureHex(16);
         const secAnswerHash = cleanAnswer ? await hashWithSalt(cleanAnswer, secSalt) : null;

@@ -23,3 +23,11 @@
 - Worker 在每次请求中执行建表/逐列迁移检查，增加请求延迟，并可能产生并发迁移竞态。
 - CORS 为 `*`，同时允许 `Authorization`；对公开读取接口方便，但对带身份的跨域 API 边界较宽。
 - P2P 信令和兜底数据使用公开 MQTT 主题，房间码仅 6 位；消息没有额外鉴权/加密，知道房间码即可尝试订阅/注入。
+
+## 测试结果
+
+- `check_inline_syntax.js` 当前复跑通过：6 个 HTML 文件的内联脚本语法检查通过。
+- 本地浏览器页面可加载，标题、PeerJS、MQTT 和联机按钮存在。
+- 现有联机冒烟测试第一次遇到 Windows GBK 输出表情导致的 `UnicodeEncodeError`，改用 UTF-8 后继续执行。
+- 浏览器曾报告 `Unexpected token '}'` 与 `openOnlineModal is not defined`；需用带 URL/行号的自定义监听复现确认是否为缓存或动态脚本问题。
+- 现有测试访问两个公开 MQTT Broker 时均被当前沙箱拦截，不能作为线上可用性结论。

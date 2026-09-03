@@ -905,6 +905,165 @@
     }
     .online-modal-backdrop.show { opacity: 1; pointer-events: auto; }
 
+    
+    /* ✨ 五子棋专属高颜值账号通行证弹窗 (彻底杜绝系统级丑陋弹窗) */
+    .auth-modal-card {
+      background: #fffdf7;
+      border: 3.5px solid var(--border-dark);
+      border-radius: 22px;
+      width: 90%;
+      max-width: 345px;
+      padding: 16px 14px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+      position: relative;
+      box-sizing: border-box;
+      transform: scale(0.9);
+      transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    #authModal.show .auth-modal-card {
+      transform: scale(1);
+    }
+
+    /* 药丸式导航选项卡，单行永不折行 */
+    .auth-tab-pill-wrap {
+      display: flex;
+      background: #f1f5f9;
+      padding: 3px;
+      border-radius: 12px;
+      margin-bottom: 12px;
+      gap: 4px;
+      border: 1.5px solid #e2e8f0;
+    }
+    .auth-tab-pill {
+      flex: 1;
+      padding: 7px 0;
+      border-radius: 10px;
+      border: none;
+      background: transparent;
+      font-size: 12.5px;
+      font-weight: 900;
+      color: #64748b;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .auth-tab-pill.active {
+      background: #fff;
+      color: #0f172a;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    /* 游戏风格专属输入框 */
+    .auth-input-group {
+      margin-bottom: 9px;
+      text-align: left;
+    }
+    .auth-input-label {
+      font-size: 11px;
+      font-weight: 800;
+      color: #475569;
+      margin-bottom: 3px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .auth-input-box {
+      width: 100%;
+      box-sizing: border-box;
+      background: #fff;
+      border: 2px solid #cbd5e1;
+      border-radius: 11px;
+      padding: 8px 11px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #1e293b;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .auth-input-box:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
+
+    /* 自定义密保下拉选择器 (杜绝安卓系统级原生弹窗) */
+    .custom-q-selector-wrap {
+      position: relative;
+      width: 100%;
+    }
+    .custom-q-trigger {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      box-sizing: border-box;
+      background: #fff;
+      border: 2px solid #cbd5e1;
+      border-radius: 11px;
+      padding: 8px 11px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #1e293b;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+    }
+    .custom-q-trigger:active {
+      background: #f8fafc;
+    }
+    .custom-q-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: #fff;
+      border: 2px solid #94a3b8;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.18);
+      z-index: 100;
+      max-height: 180px;
+      overflow-y: auto;
+      padding: 4px;
+    }
+    .custom-q-opt {
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #334155;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.15s;
+    }
+    .custom-q-opt:active {
+      background: #e0f2fe;
+      color: #0284c7;
+    }
+    .custom-q-opt.custom-highlight {
+      color: #8b5cf6;
+      border-top: 1px dashed #e2e8f0;
+      margin-top: 2px;
+      font-weight: 900;
+    }
+
+    /* 甜点质感游戏大按钮 */
+    .auth-submit-btn {
+      width: 100%;
+      padding: 9px 0;
+      border-radius: 13px;
+      border: none;
+      font-size: 13.5px;
+      font-weight: 900;
+      color: #fff;
+      cursor: pointer;
+      background: linear-gradient(135deg, #10b981, #059669);
+      box-shadow: 0 3.5px 0 #047857;
+      transition: transform 0.1s, box-shadow 0.1s;
+    }
+    .auth-submit-btn:active {
+      transform: translateY(2px);
+      box-shadow: 0 1.5px 0 #047857;
+    }
+
     /* 🏆 天梯榜与安全账号认证弹窗顶层置顶层叠与显隐修复 */
     #authModal, #leaderboardModal {
       z-index: 100010 !important;
@@ -1338,7 +1497,7 @@
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.21</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.22</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1418,92 +1577,128 @@
       <button class="btn-chat-tool" style="margin-top:10px; width:100%; padding:8px;" onclick="closeOnlineModal()">关闭窗口</button>
     </div>
   </div>
-  <!-- 🔑 高安全账号认证中心弹窗 (登录 / 注册 / 密保找回) -->
+    <!-- 🔑 高颜值游戏账号通行证弹窗 (登录 / 注册 / 自定义密保找回) -->
   <div class="online-modal-backdrop" id="authModal" onclick="closeAuthModal()">
-    <div class="online-modal-card" style="max-width:380px; width:92%; padding:16px; box-sizing:border-box;" onclick="event.stopPropagation()">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1.5px solid rgba(0,0,0,0.08); padding-bottom:8px;">
+    <div class="auth-modal-card" onclick="event.stopPropagation()">
+      <!-- 弹窗顶栏 -->
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1.5px solid rgba(0,0,0,0.06); padding-bottom:8px;">
         <div style="text-align:left;">
-          <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
-            <span>🛡️ 云端账号安全中心</span>
+          <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:6px;">
+            <span>✨ 五子棋云端通行证</span>
           </div>
-          <div style="font-size:10px; color:#64748b; font-weight:700;">支持跨设备继承积分 · 密保防盗保护</div>
+          <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">免手机号 · 自定义密保 · 积分终身不丢</div>
         </div>
-        <button onclick="closeAuthModal()" style="background:none; border:none; font-size:18px; cursor:pointer; color:#64748b; font-weight:900; padding:2px 6px;">✕</button>
+        <button type="button" onclick="closeAuthModal()" style="background:#f1f5f9; border:none; width:28px; height:28px; border-radius:50%; font-size:14px; cursor:pointer; color:#64748b; font-weight:900; display:flex; align-items:center; justify-content:center; padding:0;">✕</button>
       </div>
 
-      <!-- 选项卡切换 -->
-      <div class="online-tab-row" style="margin-bottom:12px;">
-        <button class="online-tab-btn active" id="tabAuthLogin" onclick="switchAuthTab('login')">🔑 账号登录</button>
-        <button class="online-tab-btn" id="tabAuthRegister" onclick="switchAuthTab('register')">📝 注册账号</button>
-        <button class="online-tab-btn" id="tabAuthReset" onclick="switchAuthTab('reset')">🛡️ 找回密码</button>
+      <!-- 选项卡切换 (纯正单行胶囊，绝不折行) -->
+      <div class="auth-tab-pill-wrap">
+        <button class="auth-tab-pill active" id="tabAuthLogin" onclick="switchAuthTab('login')">🔑 账号登录</button>
+        <button class="auth-tab-pill" id="tabAuthRegister" onclick="switchAuthTab('register')">✨ 注册绑定</button>
+        <button class="auth-tab-pill" id="tabAuthReset" onclick="switchAuthTab('reset')">🛡️ 找回密码</button>
       </div>
 
       <!-- 选项卡 1：账号登录 -->
       <div id="viewAuthLogin">
-        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">账号 / 用户名：</div>
-        <input type="text" id="loginUsername" placeholder="输入您的注册账号" maxlength="20" class="name-input-box" style="margin-bottom:8px;" />
+        <div class="auth-input-group">
+          <div class="auth-input-label"><span>👤</span> 游戏账号：</div>
+          <input type="text" id="loginUsername" placeholder="输入您的注册账号" maxlength="20" class="auth-input-box" />
+        </div>
 
-        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">登录密码：</div>
-        <input type="password" id="loginPassword" placeholder="输入密码" maxlength="32" class="name-input-box" style="margin-bottom:12px;" />
+        <div class="auth-input-group">
+          <div class="auth-input-label"><span>🔒</span> 登录密码：</div>
+          <input type="password" id="loginPassword" placeholder="输入密码" maxlength="32" class="auth-input-box" />
+        </div>
 
-        <div id="loginErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;"></div>
+        <div id="loginErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
 
-        <button class="online-action-btn" onclick="submitLogin()" id="btnLoginSubmit" style="width:100%; margin-bottom:8px;">🚀 立即安全登录</button>
-        <div style="text-align:right;">
-          <span style="font-size:11px; color:#0284c7; font-weight:800; cursor:pointer;" onclick="switchAuthTab('reset')">忘记密码？通过密保找回 ➔</span>
+        <button class="auth-submit-btn" onclick="submitLogin()" id="btnLoginSubmit" style="background:linear-gradient(135deg, #0284c7, #0369a1); box-shadow:0 3.5px 0 #075985;">🚀 立即安全登录</button>
+        
+        <div style="text-align:right; margin-top:10px;">
+          <span style="font-size:11.5px; color:#0284c7; font-weight:800; cursor:pointer;" onclick="switchAuthTab('reset')">忘记密码？通过密保找回 ➔</span>
         </div>
       </div>
 
-      <!-- 选项卡 2：注册账号 -->
+      <!-- 选项卡 2：注册账号 (含自定义非隐私密保) -->
       <div id="viewAuthRegister" style="display:none;">
-        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">新账号用户名（3~20位字母数字）：</div>
-        <input type="text" id="regUsername" placeholder="如: myname2026" maxlength="20" class="name-input-box" style="margin-bottom:6px;" />
+        <div class="auth-input-group">
+          <div class="auth-input-label"><span>👤</span> 账号用户名（3~20位中英文数字）：</div>
+          <input type="text" id="regUsername" placeholder="设置账号名称" maxlength="20" class="auth-input-box" />
+        </div>
 
-        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">设置密码（4~32位）：</div>
-        <input type="password" id="regPassword" placeholder="设置您的防盗密码" maxlength="32" class="name-input-box" style="margin-bottom:6px;" />
+        <div class="auth-input-group">
+          <div class="auth-input-label"><span>🔒</span> 设置防盗密码（4~32位）：</div>
+          <input type="password" id="regPassword" placeholder="输入密码" maxlength="32" class="auth-input-box" />
+        </div>
 
-        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">🛡️ 密保安全问题（用于忘记密码时快速找回）：</div>
-        <select id="regSecurityQ" class="name-input-box" style="margin-bottom:6px; font-size:11px; font-weight:800; padding:6px;">
-          <option value="你出生的城市是？">你出生的城市是？</option>
-          <option value="你最喜欢的棋手或动漫角色？">你最喜欢的棋手或动漫角色？</option>
-          <option value="你小学的全名是？">你小学的全名是？</option>
-          <option value="你母亲的姓氏是？">你母亲的姓氏是？</option>
-        </select>
+        <!-- 🛡️ 自定义高颜值密保选择器（无原生系统弹窗，纯游戏组件） -->
+        <div class="auth-input-group" style="position:relative;">
+          <div class="auth-input-label"><span>🛡️</span> 专属密保问题（用于随时重置密码）：</div>
+          
+          <div class="custom-q-selector-wrap">
+            <div class="custom-q-trigger" id="customQTrigger" onclick="toggleQDropdown(event)">
+              <span id="selectedQDisplay">❤️ 你最喜欢的人是谁？</span>
+              <span style="font-size:10px; color:#64748b; margin-left:6px;">▼</span>
+            </div>
+            
+            <div class="custom-q-dropdown" id="qDropdownMenu" style="display:none;">
+              <div class="custom-q-opt" onclick="pickSecurityQ('❤️ 你最喜欢的人是谁？')">❤️ 你最喜欢的人是谁？</div>
+              <div class="custom-q-opt" onclick="pickSecurityQ('🐱 你的第一只宠物叫什么名字？')">🐱 你的第一只宠物叫什么名字？</div>
+              <div class="custom-q-opt" onclick="pickSecurityQ('🎮 你最难忘的童年游戏是什么？')">🎮 你最难忘的童年游戏是什么？</div>
+              <div class="custom-q-opt" onclick="pickSecurityQ('🍉 你最爱吃的美食或甜品是什么？')">🍉 你最爱吃的美食或甜品是什么？</div>
+              <div class="custom-q-opt" onclick="pickSecurityQ('⭐ 你的幸运数字或秘密暗号？')">⭐ 你的幸运数字或秘密暗号？</div>
+              <div class="custom-q-opt custom-highlight" onclick="pickSecurityQ('custom')">✏️ [自定义问题] 自己写一道题...</div>
+            </div>
+          </div>
 
-        <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">密保答案（防盗加密存储）：</div>
-        <input type="text" id="regSecurityA" placeholder="填写答案 (请牢记)" maxlength="20" class="name-input-box" style="margin-bottom:12px;" />
+          <div id="customQInputRow" style="display:none; margin-top:6px;">
+            <input type="text" id="regCustomSecurityQ" placeholder="✍️ 编写你的专属问题 (如: 我最爱的动漫)" maxlength="30" class="auth-input-box" style="border-color:#8b5cf6;" />
+          </div>
+        </div>
 
-        <div id="regErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;"></div>
+        <div class="auth-input-group">
+          <div class="auth-input-label"><span>🔑</span> 密保答案（防盗加密存储）：</div>
+          <input type="text" id="regSecurityA" placeholder="填写答案并请牢记" maxlength="25" class="auth-input-box" />
+        </div>
 
-        <button class="online-action-btn" onclick="submitRegister()" id="btnRegSubmit" style="width:100%;">📝 确认注册并绑定战绩</button>
+        <div id="regErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
+
+        <button class="auth-submit-btn" onclick="submitRegister()" id="btnRegSubmit">✨ 立即注册并永久绑定战绩</button>
       </div>
 
       <!-- 选项卡 3：密保找回密码 -->
       <div id="viewAuthReset" style="display:none;">
         <div id="resetStep1">
-          <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">输入需要找回的账号：</div>
-          <input type="text" id="resetUsername" placeholder="输入您的注册账号" maxlength="20" class="name-input-box" style="margin-bottom:10px;" />
-          <button class="online-action-btn" onclick="fetchSecurityQuestion()" style="width:100%;">下一步：查询密保问题 ➔</button>
+          <div class="auth-input-group">
+            <div class="auth-input-label"><span>👤</span> 需要找回密码的账号：</div>
+            <input type="text" id="resetUsername" placeholder="输入您的注册账号" maxlength="20" class="auth-input-box" />
+          </div>
+          <button class="auth-submit-btn" onclick="fetchSecurityQuestion()" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8); box-shadow:0 3.5px 0 #1e40af;">🔍 下一步：查询我的密保 ➔</button>
         </div>
 
         <div id="resetStep2" style="display:none;">
-          <div style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; padding:6px 10px; margin-bottom:8px; text-align:left;">
-            <div style="font-size:10px; color:#0369a1; font-weight:800;">您的密保安全问题：</div>
-            <div id="displaySecurityQ" style="font-size:12px; font-weight:900; color:#0c4a6e; margin-top:2px;">-</div>
+          <div style="background:#f0f9ff; border:1.5px solid #bae6fd; border-radius:12px; padding:8px 12px; margin-bottom:10px; text-align:left;">
+            <div style="font-size:10.5px; color:#0369a1; font-weight:800;">您的专属密保问题：</div>
+            <div id="displaySecurityQ" style="font-size:13px; font-weight:900; color:#0c4a6e; margin-top:3px;">-</div>
           </div>
 
-          <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">输入密保答案：</div>
-          <input type="text" id="resetAnswer" placeholder="输入您之前填写的密保答案" maxlength="20" class="name-input-box" style="margin-bottom:6px;" />
+          <div class="auth-input-group">
+            <div class="auth-input-label"><span>🔑</span> 输入密保答案：</div>
+            <input type="text" id="resetAnswer" placeholder="输入当时设置的密保答案" maxlength="25" class="auth-input-box" />
+          </div>
 
-          <div style="font-size:11px; font-weight:800; color:#475569; margin-bottom:3px; text-align:left;">输入新密码：</div>
-          <input type="password" id="resetNewPwd" placeholder="设置新密码 (4~32位)" maxlength="32" class="name-input-box" style="margin-bottom:12px;" />
+          <div class="auth-input-group">
+            <div class="auth-input-label"><span>🔒</span> 设置新密码（4~32位）：</div>
+            <input type="password" id="resetNewPwd" placeholder="输入新密码" maxlength="32" class="auth-input-box" />
+          </div>
 
-          <button class="online-action-btn" onclick="submitResetPassword()" style="width:100%;">🛡️ 验证密保并重置密码</button>
+          <button class="auth-submit-btn" onclick="submitResetPassword()" style="background:linear-gradient(135deg, #10b981, #059669); box-shadow:0 3.5px 0 #047857;">🛡️ 验证密保并重置密码</button>
         </div>
 
-        <div id="resetErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-top:8px; text-align:left; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;"></div>
+        <div id="resetErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-top:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
       </div>
     </div>
+  </div>
   </div>
 
 
@@ -4532,6 +4727,44 @@
       });
     }
 
+    
+    let selectedSecurityQValue = '❤️ 你最喜欢的人是谁？';
+
+    function toggleQDropdown(e) {
+      if (e) e.stopPropagation();
+      const menu = document.getElementById('qDropdownMenu');
+      if (!menu) return;
+      menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'block' : 'none';
+    }
+
+    function pickSecurityQ(val) {
+      selectedSecurityQValue = val;
+      const display = document.getElementById('selectedQDisplay');
+      const customRow = document.getElementById('customQInputRow');
+      const menu = document.getElementById('qDropdownMenu');
+      if (menu) menu.style.display = 'none';
+
+      if (val === 'custom') {
+        if (display) display.textContent = '✏️ [自定义] 自己出题...';
+        if (customRow) customRow.style.display = 'block';
+        const customInput = document.getElementById('regCustomSecurityQ');
+        if (customInput) customInput.focus();
+      } else {
+        if (display) display.textContent = val;
+        if (customRow) customRow.style.display = 'none';
+      }
+    }
+
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('qDropdownMenu');
+      if (menu && menu.style.display === 'block') {
+        const trigger = document.getElementById('customQTrigger');
+        if (trigger && !trigger.contains(e.target) && !menu.contains(e.target)) {
+          menu.style.display = 'none';
+        }
+      }
+    });
+
     function openAuthModal(tab = 'login') {
       const modal = document.getElementById('authModal');
       if (modal) {
@@ -4598,7 +4831,16 @@
     async function submitRegister() {
       const u = (document.getElementById('regUsername').value || '').trim();
       const p = (document.getElementById('regPassword').value || '');
-      const q = document.getElementById('regSecurityQ').value;
+      let q = selectedSecurityQValue;
+      if (q === 'custom') {
+        q = (document.getElementById('regCustomSecurityQ').value || '').trim();
+        if (!q) {
+          const errEl = document.getElementById('regErrorMsg');
+          errEl.textContent = '请填写您自己编写的专属密保问题';
+          errEl.style.display = 'block';
+          return;
+        }
+      }
       const a = (document.getElementById('regSecurityA').value || '').trim();
       const errEl = document.getElementById('regErrorMsg');
 
@@ -6435,7 +6677,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.21';
+    const CURRENT_VERSION_TAG = 'v1.0.22';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
