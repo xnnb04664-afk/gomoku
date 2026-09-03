@@ -159,6 +159,18 @@ export default {
       });
     }
 
+    // ── 0. 官方版本与下载源安全中枢 (不可篡改权威下发) ────────
+    if (url.pathname === "/api/version") {
+      return json({
+        code: 0,
+        tag: "v1.0.45",
+        officialRepo: "xnnb04664-afk/gomoku",
+        apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
+        htmlDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/五子棋大师_单文件版.html",
+        officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
+      });
+    }
+
     // ── 智能动态 UID 分配引擎（支持 6 位靓号到亿级自动平滑扩容） ──
 async function allocateNextAvailableUid(env) {
   // 1. 优先分配 6 位普通与靓号 UID (100000 ~ 999999，容量 90 万)

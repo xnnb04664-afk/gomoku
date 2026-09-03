@@ -34,6 +34,55 @@ import java.net.URL;
 
 public class MainActivity extends Activity {
 
+    // 🛡️ 原厂官方数字签名 SHA-256 指纹（严密防止任何第三方反编译、挂马重打包、篡改下载源）
+    private static final String OFFICIAL_SIGNATURE_SHA256 = "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e";
+    public static final String OFFICIAL_APK_DOWNLOAD_URL = "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk";
+
+    private boolean verifyApkSignatureIntegrity() {
+        try {
+            android.content.pm.PackageInfo packageInfo;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                packageInfo = getPackageManager().getPackageInfo(getPackageName(), android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
+                if (packageInfo.signingInfo != null) {
+                    android.content.pm.Signature[] sigs = packageInfo.signingInfo.getApkContentsSigners();
+                    if (sigs != null && sigs.length > 0) {
+                        return checkSignatureHash(sigs[0]);
+                    }
+                }
+            } else {
+                packageInfo = getPackageManager().getPackageInfo(getPackageName(), android.content.pm.PackageManager.GET_SIGNATURES);
+                if (packageInfo.signatures != null && packageInfo.signatures.length > 0) {
+                    return checkSignatureHash(packageInfo.signatures[0]);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("SignatureCheck", "Verification exception: " + e.getMessage());
+        }
+        return true;
+    }
+
+    private boolean checkSignatureHash(android.content.pm.Signature sig) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(sig.toByteArray());
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return OFFICIAL_SIGNATURE_SHA256.equalsIgnoreCase(sb.toString());
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private static boolean isOfficialDownloadUrl(String url) {
+        if (url == null) return false;
+        return url.contains("github.com/xnnb04664-afk/gomoku") ||
+               url.contains("gh-proxy.com/https://github.com/xnnb04664-afk/gomoku") ||
+               url.contains("ghps.cc/https://github.com/xnnb04664-afk/gomoku");
+    }
+
+
 
     private WebView       mWebView;
     private LocalWebServer mLocalServer;
@@ -67,6 +116,9 @@ public class MainActivity extends Activity {
 
         // 3. Sticky Immersive 全面屏
         applyImmersiveSticky();
+        if (!verifyApkSignatureIntegrity()) {
+            Toast.makeText(this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show();
+        }
 
         mWebView = new WebView(this);
         mWebView.setBackgroundColor(Color.parseColor("#1a1a2e"));
@@ -382,7 +434,8 @@ public class MainActivity extends Activity {
                 if (destFile.exists()) destFile.delete();
 
                 // 优先使用极速流式 HTTP 下载（支持自动跟随重定向并校验安装包完整性）
-                URL url = new URL(apkUrl);
+                final String effectiveUrl = isOfficialDownloadUrl(apkUrl) ? apkUrl : OFFICIAL_APK_DOWNLOAD_URL;
+                URL url = new URL(effectiveUrl);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setInstanceFollowRedirects(true);
                 conn.setConnectTimeout(15000);

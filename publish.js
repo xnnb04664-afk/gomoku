@@ -118,7 +118,7 @@ try {
   const releaseTitle = `五子棋 ${releaseTag} 官方正式版`;
   const releaseNotes = `### 🚀 五子棋 ${releaseTag} 正式发布！\n- 📱 原生 Android 满帧体验 (120Hz Canvas离屏位图渲染)\n- 🌐 WebRTC 跨网穿透联机与断线瞬时重连\n- 🎴 9大强力干扰技能卡牌池\n- 🔄 支持手机无缝覆盖安装，保留全部胜率战绩与自定义头像！`;
   
-  execSync(`gh release create ${releaseTag} "gomoku.apk" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
+  execSync(`gh release create ${releaseTag} "gomoku.apk" "五子棋大师_单文件版.html" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功: ${releaseTag}`);
 } catch(err) {
   console.log('ℹ️ GitHub Release 已存在或创建提示: ' + err.message);
