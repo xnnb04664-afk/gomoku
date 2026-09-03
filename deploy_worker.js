@@ -1,5 +1,6 @@
 ﻿const fs = require("fs");
 const path = require("path");
+const { execSync } = require("child_process");
 
 const configPath = path.join(__dirname, ".cloudflare_config.json");
 if (!fs.existsSync(configPath)) {
@@ -12,8 +13,13 @@ const { accountId, deployToken, d1DatabaseId, scriptName } = JSON.parse(fs.readF
 const workerPath = path.join(__dirname, "backend", "worker.js");
 const workerCode = fs.readFileSync(workerPath, "utf8");
 
+// Ensure pages_build exists
+if (!fs.existsSync("pages_build")) fs.mkdirSync("pages_build");
+fs.writeFileSync("pages_build/index.html", "<h1>Gomoku Backend API Ready</h1>", "utf8");
+fs.writeFileSync("pages_build/_worker.js", workerCode, "utf8");
+
 async function deploy() {
-  console.log("Deploying worker directly to Cloudflare via API...");
+  console.log(">>> [1/2] 正在部署到 Cloudflare Workers (脚本: " + scriptName + ")...");
   
   const form = new FormData();
   const metadata = {
@@ -43,9 +49,20 @@ async function deploy() {
 
   const data = await res.json();
   if (data.success) {
-    console.log("✅ Cloudflare Worker deployed successfully!");
+    console.log("✅ [1/2] Cloudflare Worker deployed successfully!");
   } else {
-    console.error("Deploy error:", data.errors);
+    console.error("Deploy Worker error:", data.errors);
+  }
+
+  console.log(">>> [2/2] 正在部署到 Cloudflare Pages (国内极速直连: gomoku-api.pages.dev)...");
+  try {
+    const out = execSync("npx wrangler pages deploy pages_build --project-name gomoku-api --branch main --commit-dirty=true", {
+      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken },
+      encoding: "utf8"
+    });
+    console.log("✅ [2/2] Cloudflare Pages deployed successfully!");
+  } catch(e) {
+    console.warn("Pages deploy warning:", e.stdout || e.message);
   }
 }
 
