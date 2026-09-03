@@ -361,7 +361,64 @@ node publish.js
 ```
 
 ---
+
+## 八、Cloudflare 云端中枢与账号控制体系交接 (Cloudflare Backend & Control Handover)
+
+项目后端的全套云原生服务（分布式 D1 数据库、Worker 业务网关、Pages 国内加速镜像）均部署在 Cloudflare 官方基础设施上，已完全实现**全自动鉴权与开发者 CLI 掌控**。
+
+### 1. ☁️ 核心云端资产清单
+- **Cloudflare Account ID**：`d3d45abb414d31df16085961b1161ab2`
+- **Worker 生产网关**：`gomoku-backend`（承载全服玩家注册、登录验证、ELO 积分算分、战绩云端持久化）
+- **Pages 国内加速镜像**：`https://gomoku-api.pages.dev`（双路容灾镜像节点）
+- **D1 分布式 SQLite 数据库**：
+  - **Database ID**：`4cd53ea1-ef41-450e-843c-b48f6121cf7c`
+  - **核心数据表**：
+    - `users`：全服玩家 UID、用户名、加盐 Hash 密码、ELO 天梯分、胜平负总场次、自选头像数据；
+    - `game_history`：全服每局对局历史、对弈时间、对手类型、胜负结果与落子步数（支持玩家主动抹除）；
+    - `matchmaking`：在线对战撮合队列。
+
+### 2. 🔑 鉴权令牌与本地配置文件安全机制
+- **配置文件路径**：项目根目录下的 `.cloudflare_config.json`；
+- **文件结构示例**：
+  ```json
+  {
+    "accountId": "d3d45abb414d31df16085961b1161ab2",
+    "deployToken": "<仅保存在本机 .cloudflare_config.json，严禁写入文档或提交仓库>",
+    "d1DatabaseId": "4cd53ea1-ef41-450e-843c-b48f6121cf7c",
+    "scriptName": "gomoku-backend"
+  }
+  ```
+- **安全隔离规范**：
+  - 为防止 Token 意外泄露到公共代码仓库，`.cloudflare_config.json` 受到 `.gitignore` 的严格保护，**绝不提交至 GitHub**；
+  - **当前机器上该文件永久存在且完整**，任何在此电脑上启动的后续 AI、发布脚本（`publish.js`）与运维工具（`admin.js`、`deploy_worker.js`）均已具备 100% 完整的控制权限，**无需手动登录网页版 Cloudflare 控制台**。
+
+### 3. 🛠️ 开发者专属管理运维工具 (`admin.js`)
+项目根目录配备了开箱即用的命令行全能管理中枢 `admin.js`，下一任 AI 或开发者可直接在终端中掌控全服数据：
+
+- **查看全服所有注册玩家与天梯排位**：
+  ```bash
+  node admin.js users
+  ```
+- **查询指定玩家详细战绩与账号详情**：
+  ```bash
+  node admin.js user <UID 或 账号用户名>
+  # 示例：node admin.js user 661713
+  ```
+- **开发者为指定玩家重置密码**：
+  ```bash
+  node admin.js set-pwd <UID 或 账号用户名> <新密码>
+  # 示例：node admin.js set-pwd 661713 123456
+  ```
+- **执行任意自定义 D1 SQL 查询**：
+  ```bash
+  node admin.js sql "SELECT uid, username, rating, win_count FROM users ORDER BY rating DESC LIMIT 10;"
+  ```
+- **手动触发 Worker 部署**：
+  ```bash
+  node deploy_worker.js
+  ```
+
+---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.85 (Build 86)*  
-*当前工程状态：工程结构深度瘦身完成（删除全部无用调试文件与冗余脚本），手机真机联调验证完美通过，全套自动化构建与全平台发版管道运行顺畅。*
-
+*当前工程状态：全量代码、构建管线、真机联调与 Cloudflare 云端控制体系交接 100% 就绪。*
