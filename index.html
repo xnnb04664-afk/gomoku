@@ -662,6 +662,9 @@
       z-index: 10;
       padding: 1px 2px env(safe-area-inset-bottom, 2px) 2px;
       flex-shrink: 0;
+      touch-action: manipulation !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
     }
     .btn-ctrl {
       padding: 8px 1px;
@@ -677,11 +680,16 @@
       align-items: center;
       justify-content: center;
       gap: 3px;
-      transition: all 0.1s;
       white-space: nowrap;
+      touch-action: manipulation !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+      -webkit-tap-highlight-color: transparent !important;
+      outline: none !important;
+      transform: translateZ(0);
     }
     .btn-ctrl:hover { background: #ffe3a3; }
-    .btn-ctrl:active { filter: brightness(0.92); opacity: 0.95; transform: none !important; }
+    .btn-ctrl:active { filter: brightness(0.94); transform: translateZ(0) !important; }
     .btn-ctrl.btn-primary {
       background: linear-gradient(135deg, #10b981 0%, #059669 100%);
       color: #fff;
@@ -2738,12 +2746,13 @@
       if (oppPat.flex3 >= 2) return 7500000;
       if (myPat.block4 > 0) return 5500000 + myScore;
       if (oppPat.block4 > 0) return 5000000 + oppScore;
-      if (myPat.flex3 > 0) return 3500000 + myScore;
-      if (oppPat.flex3 > 0) return 3000000 + oppScore * 1.25;
+      // ⚔️ 攻防权重全面激进升级：鼓励主动进攻做棋，摆脱过度被动防守
+      if (myPat.flex3 > 0) return 4500000 + myScore * 1.4;
+      if (oppPat.flex3 > 0) return 3000000 + oppScore * 0.95;
 
       const baguaBonus = getBaguaDefenseBonus(boardState, r, c, aiColor);
-      const posVal = POS_WEIGHT[r][c] * 15;
-      return myScore * 1.2 + oppScore * 1.05 + posVal + baguaBonus;
+      const posVal = POS_WEIGHT[r][c] * 18;
+      return myScore * 1.6 + oppScore * 0.85 + posVal + baguaBonus;
     }
 
     function getCandidateMoves(boardState, aiColor, maxCandidates = 16) {
@@ -2880,7 +2889,8 @@
                 const worstOppThreat = oppResponses.length > 0 ? oppResponses[0].score : 0;
                 board[move.r][move.c] = EMPTY;
 
-                const netScore = move.score - worstOppThreat * 0.85;
+                // 降低对敌方潜在反击的顾虑系数（0.85 -> 0.45），让 AI 大胆展开攻势抢占先手
+                const netScore = move.score - worstOppThreat * 0.45;
                 if (netScore > bestNetScore) {
                   bestNetScore = netScore;
                   bestMove = move;
@@ -4461,31 +4471,40 @@
       if (vsCard) vsCard.style.display = 'none';
       if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
 
-      // 实时计时器
+      // 实时计时器 (纯真人全服匹配，绝不自动转假人)
       matchTimerInterval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - matchStartTime) / 1000);
-        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
-        const s = String(elapsed % 60).padStart(2, '0');
-        const timerEl = document.getElementById('matchTimerText');
-        if (timerEl) timerEl.textContent = `正在匹配：${m}:${s}`;
+        const m = String(Math.floor(elapsed / 60)).padStart(2, "0");
+        const s = String(elapsed % 60).padStart(2, "0");
+        const timerEl = document.getElementById("matchTimerText");
+        if (timerEl) timerEl.textContent = "正在全服搜寻：" + m + ":" + s;
+
+        const floatTimer = document.getElementById("matchingFloatingTimer");
+        if (floatTimer) floatTimer.textContent = "正在全服匹配：" + m + ":" + s;
 
         const statusEl = document.getElementById("matchStatusText");
         if (statusEl) {
-          if (elapsed < 5) statusEl.textContent = "🔍 正在全服搜寻实力相当的对手...";
-          else if (elapsed < 10) statusEl.textContent = "⚡ 正在扩大搜寻范围，邀请全国棋友...";
-          else statusEl.textContent = "⚔️ 即将为您安排天梯棋友切磋...";
+          if (elapsed < 8) statusEl.textContent = "🔍 正在全服搜寻实力相当的真实对手...";
+          else if (elapsed < 20) statusEl.textContent = "⚡ 正在扩大搜寻范围，邀请全国在线棋友...";
+          else if (elapsed < 40) statusEl.textContent = "🌐 持续全网搜寻中，随时为您秒级接通...";
+          else statusEl.textContent = "☕ 正在全服耐心等候棋友，可关闭界面保持挂起...";
         }
 
-        // 12秒若未匹配到其他在线真人：安排全服智能天梯棋友切磋，绝不让玩家卡死干等
-        if (elapsed >= 12 && isMatchmaking) {
-          matchWithAiOpponent();
+        // 超过 8 秒后，提供可选的“与智能棋友切磋”按钮（完全由玩家主动选择，绝不强行匹配假人）
+        const btnPlayAi = document.getElementById("btnPlayWithAi");
+        if (elapsed >= 8 && btnPlayAi && isMatchmaking) {
+          btnPlayAi.style.display = "block";
+        }
+
+        // 达到 1 小时 (3600秒) 上限保护
+        if (elapsed >= 3600 && isMatchmaking) {
+          cancelQuickMatch();
+          showGameNotice("⏰ 匹配已满 1 小时，已自动结束本次搜寻", true);
         }
       }, 1000);
 
-      if (!window.__gomokuMatchSessionUid) {
-        window.__gomokuMatchSessionUid = currentUserUid || localStorage.getItem('gomoku_user_uid') || ('guest_' + Math.floor(100000 + Math.random() * 900000));
-      }
-      const matchUid = window.__gomokuMatchSessionUid;
+      currentActiveMatchUid = getOrCreateMatchUid();
+      const matchUid = currentActiveMatchUid;
 
       try {
         const res = await safeApiFetch('/api/match/join', {
@@ -6885,6 +6904,19 @@
       persistGameState();
     }
 
+    // 🚫 禁止移动端快速双击底部按键引起的页面视口抖动
+    let lastBottomBtnTouch = 0;
+    document.addEventListener("touchend", (e) => {
+      const btn = e.target.closest(".bottom-controls, .btn-ctrl");
+      if (btn) {
+        const now = Date.now();
+        if (now - lastBottomBtnTouch < 320) {
+          e.preventDefault();
+        }
+        lastBottomBtnTouch = now;
+      }
+    }, { passive: false });
+
     document.getElementById('btnRestart').onclick = (e) => {
       if (e && e.currentTarget) e.currentTarget.blur();
       resetBoardOnly();
@@ -7269,7 +7301,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.32';
+    const CURRENT_VERSION_TAG = 'v1.0.33';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
