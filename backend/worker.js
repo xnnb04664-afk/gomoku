@@ -158,17 +158,17 @@ export default {
         const body = await request.json().catch(() => ({}));
         const { username, password, nickname, avatar, uid, token, securityQuestion, securityAnswer } = body;
 
-        if (!username || typeof username !== 'string' || username.trim().length < 3 || username.trim().length > 20) {
-          return json({ code: 1, msg: '账号长度须在 3~20 个字符' });
+        if (!username || typeof username !== 'string' || !username.trim()) {
+          return json({ code: 1, msg: '请输入有效的账号名称' });
         }
-        if (!password || typeof password !== 'string' || password.length < 4 || password.length > 32) {
-          return json({ code: 1, msg: '密码长度须在 4~32 个字符' });
+        if (username.trim().length > 32) {
+          return json({ code: 1, msg: '账号名称长度最多 32 个字符' });
         }
-        if (!/^[a-zA-Z0-9_\-\u4e00-\u9fa5]+$/.test(username.trim())) {
-          return json({ code: 1, msg: '账号仅限中英文、数字、下划线' });
+        if (!password || typeof password !== 'string' || password.length < 6 || password.length > 32) {
+          return json({ code: 1, msg: '密码长度须至少 6 位（支持 6~32 位）' });
         }
 
-        const safeUsername = username.trim();
+        const safeUsername = username.trim().replace(/[<>'"`]/g, '');
         const safeNick = sanitizeText(nickname, 12) || safeUsername;
         const safeAvatar = sanitizeAvatar(avatar);
 
@@ -312,8 +312,8 @@ export default {
         if (!username || !securityAnswer || !newPassword) {
           return json({ code: 1, msg: '请完整填写账号、密保答案与新密码' });
         }
-        if (newPassword.length < 4 || newPassword.length > 32) {
-          return json({ code: 1, msg: '新密码长度须在 4~32 位' });
+        if (newPassword.length < 6 || newPassword.length > 32) {
+          return json({ code: 1, msg: '新密码长度须至少 6 位（支持 6~32 位）' });
         }
 
         const now = Date.now();

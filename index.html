@@ -1497,7 +1497,7 @@
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.22</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.23</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1622,13 +1622,13 @@
       <!-- 选项卡 2：注册账号 (含自定义非隐私密保) -->
       <div id="viewAuthRegister" style="display:none;">
         <div class="auth-input-group">
-          <div class="auth-input-label"><span>👤</span> 账号用户名（3~20位中英文数字）：</div>
-          <input type="text" id="regUsername" placeholder="设置账号名称" maxlength="20" class="auth-input-box" />
+          <div class="auth-input-label"><span>👤</span> 自定义账号用户名（无限制，支持任何名字）：</div>
+          <input type="text" id="regUsername" placeholder="设置你的专属账号 (支持中英文/符号/数字)" maxlength="32" class="auth-input-box" />
         </div>
 
         <div class="auth-input-group">
-          <div class="auth-input-label"><span>🔒</span> 设置防盗密码（4~32位）：</div>
-          <input type="password" id="regPassword" placeholder="输入密码" maxlength="32" class="auth-input-box" />
+          <div class="auth-input-label"><span>🔒</span> 设置防盗密码（至少 6 位）：</div>
+          <input type="password" id="regPassword" placeholder="设置密码 (至少 6 位)" maxlength="32" class="auth-input-box" />
         </div>
 
         <!-- 🛡️ 自定义高颜值密保选择器（无原生系统弹窗，纯游戏组件） -->
@@ -1688,8 +1688,8 @@
           </div>
 
           <div class="auth-input-group">
-            <div class="auth-input-label"><span>🔒</span> 设置新密码（4~32位）：</div>
-            <input type="password" id="resetNewPwd" placeholder="输入新密码" maxlength="32" class="auth-input-box" />
+            <div class="auth-input-label"><span>🔒</span> 设置新密码（至少 6 位）：</div>
+            <input type="password" id="resetNewPwd" placeholder="输入新密码 (至少 6 位)" maxlength="32" class="auth-input-box" />
           </div>
 
           <button class="auth-submit-btn" onclick="submitResetPassword()" style="background:linear-gradient(135deg, #10b981, #059669); box-shadow:0 3.5px 0 #047857;">🛡️ 验证密保并重置密码</button>
@@ -1698,7 +1698,6 @@
         <div id="resetErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-top:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
       </div>
     </div>
-  </div>
   </div>
 
 
@@ -4844,13 +4843,18 @@
       const a = (document.getElementById('regSecurityA').value || '').trim();
       const errEl = document.getElementById('regErrorMsg');
 
-      if (!u || u.length < 3) {
-        errEl.textContent = '账号名称长度至少 3 位';
+      if (!u) {
+        errEl.textContent = '请输入账号名称';
         errEl.style.display = 'block';
         return;
       }
-      if (!p || p.length < 4) {
-        errEl.textContent = '密码长度至少 4 位';
+      if (u.length > 32) {
+        errEl.textContent = '账号名称长度最多 32 个字符';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (!p || p.length < 6) {
+        errEl.textContent = '密码长度至少 6 位';
         errEl.style.display = 'block';
         return;
       }
@@ -4934,8 +4938,8 @@
         errEl.style.display = 'block';
         return;
       }
-      if (!np || np.length < 4) {
-        errEl.textContent = '新密码长度至少 4 位';
+      if (!np || np.length < 6) {
+        errEl.textContent = '新密码长度至少 6 位';
         errEl.style.display = 'block';
         return;
       }
@@ -6677,7 +6681,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.22';
+    const CURRENT_VERSION_TAG = 'v1.0.23';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -6824,63 +6828,43 @@
       }
 
       // 对比本地版本
-      if (compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0) {
-        // ✨ 全自动更新核心机制：发现新版本立即自动启动静默更新
-        showGameNotice(`🚀 发现新版本 ${versionData.tag}，已启动全自动更新...`, false);
-
-        // 1. 若在 Android 原生运行环境下：
-        if (typeof AndroidNativeApp !== 'undefined') {
-          // A. 优先尝试秒级无感 HTML 热更新
-          if (AndroidNativeApp.saveHotUpdateFile) {
-            const updateHtmlUrls = [
-              `https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`,
-              `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
-              `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`
-            ];
-
-            for (const uUrl of updateHtmlUrls) {
-              try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 6000);
-                const res = await fetch(uUrl, { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (res.ok) {
-                  const htmlText = await res.text();
-                  if (htmlText && htmlText.length > 50000) {
-                    AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
-                    showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
-                    setTimeout(() => { location.reload(); }, 1000);
-                    return;
-                  }
-                }
-              } catch(err) {}
-            }
-          }
-
-          // B. 原生 APK 全自动下载与安装（防重入，下载完成自动弹出安装）
-          if (AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
-            isAppDownloading = true;
-            const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
-            AndroidNativeApp.downloadAndInstallApk(fastLink);
-            showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
-          }
-        }
-
+      const hasNewVersion = compareVersions(versionData.tag, CURRENT_VERSION_TAG) > 0;
+      
+      // 如果有新版本，或者用户手动点击了检查更新，均弹出高颜值更新与进度条弹窗！
+      if (hasNewVersion || isManual) {
         const updateModal = document.getElementById('appUpdateModal');
         if (updateModal) {
-          document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}`;
-          document.getElementById('updateNotesContent').textContent = versionData.notes;
+          const tagEl = document.getElementById('updateTagText');
+          if (tagEl) {
+            tagEl.textContent = hasNewVersion ? `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}` : `${CURRENT_VERSION_TAG} (已是最新版)`;
+          }
+          const notesEl = document.getElementById('updateNotesContent');
+          if (notesEl) {
+            notesEl.textContent = versionData.notes || '修复已知问题，优化操作体验。';
+          }
 
           const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
           const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
 
+          // 无论在什么环境下，立即呈现进度条！
+          const progressWrap = document.getElementById('updateProgressBarWrap');
+          const progressInner = document.getElementById('updateProgressBarInner');
+          const progressPercent = document.getElementById('updateProgressPercentText');
+          const progressStatus = document.getElementById('updateProgressStatusText');
+          if (progressWrap) progressWrap.style.display = 'block';
+          if (progressInner) progressInner.style.width = '0%';
+          if (progressPercent) progressPercent.textContent = '0%';
+          if (progressStatus) progressStatus.textContent = '🚀 正在启动高速通道准备下载...';
+
           const btnFast = document.getElementById('btnFastDownload');
           if (btnFast) {
             btnFast.href = fastLink;
-            btnFast.innerHTML = '<span>⚡ 正在全自动高速下载中...</span>';
+            btnFast.innerHTML = '<span>⚡ 立即下载/重新下载最新安装包</span>';
             btnFast.onclick = (e) => {
               if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
                 e.preventDefault();
+                isAppDownloading = true;
+                if (progressStatus) progressStatus.textContent = '🚀 正在极速下载安装包...';
                 AndroidNativeApp.downloadAndInstallApk(fastLink);
               }
             };
@@ -6892,16 +6876,19 @@
             btnOfficial.onclick = (e) => {
               if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
                 e.preventDefault();
+                isAppDownloading = true;
                 AndroidNativeApp.downloadAndInstallApk(officialLink);
-                closeUpdateModal();
               }
             };
           }
+
           updateModal.style.display = 'flex';
-        }
-      } else {
-        if (isManual) {
-          showGameNotice(`✨ 当前已是最新版本 (${CURRENT_VERSION_TAG})，全自动更新守护中~`);
+
+          // 如果有新版本且在安卓内，自动触发下载以联动进度条
+          if (hasNewVersion && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
+            isAppDownloading = true;
+            AndroidNativeApp.downloadAndInstallApk(fastLink);
+          }
         }
       }
     }
