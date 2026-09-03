@@ -320,11 +320,9 @@ public class MainActivity extends Activity {
         if (!destDir.exists()) destDir.mkdirs();
         final File destFile = new File(destDir, "gomoku_latest.apk");
 
-        // 若 10 分钟内已下载过完整安装包 (>1MB)，直接呼起安装，绝不重复下载
-        if (destFile.exists() && destFile.length() > 1000000 && (System.currentTimeMillis() - destFile.lastModified() < 600000)) {
-            notifyWebProgress(100, "done");
-            runOnUiThread(() -> installDownloadedApk(destFile));
-            return;
+        // 每次重新下载前清理旧缓存，确保进度条 100% 完整展示
+        if (destFile.exists()) {
+            destFile.delete();
         }
 
         // 防重入锁：已有后台下载正在进行时，杜绝重复并发下载导致文件冲突
@@ -420,12 +418,18 @@ public class MainActivity extends Activity {
                 }
             }
 
+            // 跨进程安全授权：使用 ContentProvider 生成 content:// 链接，彻底杜绝系统级【安装包不存在】报错
+            Uri contentUri = Uri.parse("content://" + getPackageName() + ".fileprovider/download/gomoku_latest.apk");
             Intent installIntent = new Intent(Intent.ACTION_VIEW);
-            installIntent.setDataAndType(Uri.fromFile(apkFile), "application/vnd.android.package-archive");
+            installIntent.setDataAndType(contentUri, "application/vnd.android.package-archive");
             installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                java.lang.reflect.Method m = StrictMode.class.getMethod("disableDeathOnFileUriExposure");
+                m.invoke(null);
+            } catch (Exception ignored) {}
             startActivity(installIntent);
-            Toast.makeText(MainActivity.this, "🎉 下载完成，请在手机弹窗点击【安装/更新】！", Toast.LENGTH_LONG).show();
+            Toast.makeText(MainActivity.this, "🎉 正在唤起系统安装更新，请点击确认！", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             try {

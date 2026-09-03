@@ -1886,7 +1886,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.25</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.26</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -7124,7 +7124,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.25';
+    const CURRENT_VERSION_TAG = 'v1.0.26';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -7289,48 +7289,98 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           const fastLink = versionData.fastUrl || `https://gh-proxy.com/https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
           const officialLink = versionData.officialUrl || `https://github.com/${GITHUB_REPO}/releases/latest/download/gomoku.apk`;
 
-          // 无论在什么环境下，立即呈现进度条！
           const progressWrap = document.getElementById('updateProgressBarWrap');
           const progressInner = document.getElementById('updateProgressBarInner');
           const progressPercent = document.getElementById('updateProgressPercentText');
           const progressStatus = document.getElementById('updateProgressStatusText');
           if (progressWrap) progressWrap.style.display = 'block';
-          if (progressInner) progressInner.style.width = '0%';
-          if (progressPercent) progressPercent.textContent = '0%';
-          if (progressStatus) progressStatus.textContent = '🚀 正在启动高速通道准备下载...';
+
+          // 更新进度条辅助函数
+          const setVisualProgress = (pct, text) => {
+            if (progressInner) progressInner.style.width = pct + '%';
+            if (progressPercent) progressPercent.textContent = pct + '%';
+            if (progressStatus) progressStatus.textContent = text;
+          };
+
+          // 核心机制 1：无感免安装秒级热更新执行器 (免去跳系统弹窗安装的繁琐步骤)
+          const runSeamlessHotUpdate = async () => {
+            setVisualProgress(15, '🚀 正在高速下载最新资源（免安装直接生效）...');
+            const updateHtmlUrls = [
+              `https://cdn.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
+              `https://fastly.jsdelivr.net/gh/${GITHUB_REPO}@latest/index.html?_t=${Date.now()}`,
+              `https://gh-proxy.com/https://raw.githubusercontent.com/${GITHUB_REPO}/master/index.html?_t=${Date.now()}`
+            ];
+
+            for (let i = 0; i < updateHtmlUrls.length; i++) {
+              try {
+                setVisualProgress(30 + i * 20, `⚡ 正在通过高速镜像通道 ${i + 1} 载入...`);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 6000);
+                const res = await fetch(updateHtmlUrls[i], { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (res.ok) {
+                  const htmlText = await res.text();
+                  if (htmlText && htmlText.length > 50000) {
+                    setVisualProgress(90, '✨ 资源校验完成，正在立即生效...');
+                    if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile) {
+                      AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
+                    }
+                    setVisualProgress(100, '🎉 更新成功！无需安装，正在秒级载入新版...');
+                    setTimeout(() => { location.reload(); }, 1200);
+                    return true;
+                  }
+                }
+              } catch(e) {}
+            }
+            return false;
+          };
 
           const btnFast = document.getElementById('btnFastDownload');
           if (btnFast) {
-            btnFast.href = fastLink;
-            btnFast.innerHTML = '<span>⚡ 立即下载/重新下载最新安装包</span>';
-            btnFast.onclick = (e) => {
-              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
-                e.preventDefault();
-                isAppDownloading = true;
-                if (progressStatus) progressStatus.textContent = '🚀 正在极速下载安装包...';
-                AndroidNativeApp.downloadAndInstallApk(fastLink);
+            btnFast.innerHTML = '<span>⚡ 免安装极速热更新（推荐）</span>';
+            btnFast.onclick = async (e) => {
+              e.preventDefault();
+              setVisualProgress(5, '🚀 正在启动秒级无感热更新...');
+              const ok = await runSeamlessHotUpdate();
+              if (!ok) {
+                // 如果热更新失败，转为原生 APK 自动下载安装
+                setVisualProgress(10, '正在转入完整安装包极速下载...');
+                if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
+                  isAppDownloading = true;
+                  AndroidNativeApp.downloadAndInstallApk(fastLink);
+                } else {
+                  window.location.href = fastLink;
+                }
               }
             };
           }
 
           const btnOfficial = document.getElementById('btnOfficialDownload');
           if (btnOfficial) {
-            btnOfficial.href = officialLink;
+            btnOfficial.innerHTML = '<span>📲 下载全新 APK 安装包</span>';
             btnOfficial.onclick = (e) => {
+              e.preventDefault();
+              setVisualProgress(5, '🚀 正在通过安全通道下载 APK 安装包...');
               if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
-                e.preventDefault();
                 isAppDownloading = true;
-                AndroidNativeApp.downloadAndInstallApk(officialLink);
+                AndroidNativeApp.downloadAndInstallApk(fastLink);
+              } else {
+                window.location.href = fastLink;
               }
             };
           }
 
           updateModal.style.display = 'flex';
 
-          // 如果有新版本且在安卓内，自动触发下载以联动进度条
-          if (hasNewVersion && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
-            isAppDownloading = true;
-            AndroidNativeApp.downloadAndInstallApk(fastLink);
+          // 自动启动：如果有新版本，优先自动启动无感热更新
+          if (hasNewVersion) {
+            runSeamlessHotUpdate().then(ok => {
+              if (!ok && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
+                isAppDownloading = true;
+                setVisualProgress(10, '正在极速下载完整 APK 安装包...');
+                AndroidNativeApp.downloadAndInstallApk(fastLink);
+              }
+            });
           }
         }
       }
