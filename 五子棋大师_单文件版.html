@@ -1972,7 +1972,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.55</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.56</div>
         </div>
       </div>
 
@@ -4109,9 +4109,25 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           } else {
             alert("❌ 对方拒绝了您的悔棋申请！");
           }
+        } else if (data.type === 'restart_req') {
+          showCustomConfirm(`【${data.name || p2Name}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true });
+            resetBoardOnly();
+            showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
+          }, () => {
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false });
+            showGameNotice("已拒绝对手的重开申请，继续本局", false);
+          }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
+        } else if (data.type === 'restart_res') {
+          if (data.agree) {
+            resetBoardOnly();
+            showGameNotice("🎉 对手同意了您的重开申请，新对局已开启！", false);
+          } else {
+            showGameNotice("❌ 对手拒绝了重开申请，继续当前对局！", true);
+          }
         } else if (data.type === 'restart') {
           resetBoardOnly();
-          alert("🔄 对方重新开启了新对局！");
+          showGameNotice("🔄 对方重新开启了新对局！", false);
         } else if (data.type === "skill_use") {
           alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
         } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
@@ -6359,13 +6375,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     function clearGameHistory() {
-      if (confirm("确定要清空历史对局战报记录吗？")) {
+      showCustomConfirm("确定要清空历史对局战报记录吗？", () => {
         const key = getHistoryStorageKey();
         localStorage.removeItem(key);
         renderHistoryUI();
         updateHistoryCountUI();
         showGameNotice("🗑️ 历史对局记录已清空");
-      }
+      }, null, { title: '清空战绩', icon: '🗑️', okText: '确认清空', cancelText: '取消' });
     }
 
     function renderHistoryUI() {
@@ -7563,9 +7579,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     // 🚪 退出联机房间功能 (彻底断开连接并还原棋盘)
     function confirmLeaveOnlineRoom() {
-      if (confirm("确定要退出当前联机房间吗？退出后将切回单机模式。")) {
+      showCustomConfirm("确定要退出当前联机房间吗？\n退出后将解散对战并切回单机模式。", () => {
         leaveOnlineRoom(true);
-      }
+      }, null, { title: '退出联机房间', icon: '🚪', okText: '确认退出', cancelText: '取消' });
     }
 
     function leaveOnlineRoom(sendNotice = true) {
@@ -7595,15 +7611,16 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       setMode("pvp", true);
       resetBoardOnly();
       updatePlayerHeaderUI();
+      closeOnlineModal();
       showGameNotice("🚪 您已退出联机房间，切回双人同屏模式", true);
     }
 
     // 👤 退出当前账号功能 (切回安全游客模式)
     function confirmLogoutAccount() {
       if (!currentUsername) return;
-      if (confirm(`确定要退出账号【${currentUsername}】吗？\n退出后将切换为游客模式，随时可重新输入密码登录。`)) {
+      showCustomConfirm(`确定要退出账号【${currentUsername}】吗？\n退出后将切换为游客模式，随时可重新输入密码登录。`, () => {
         logoutAccount();
-      }
+      }, null, { title: '退出当前账号', icon: '👤', okText: '确认退出', cancelText: '取消' });
     }
 
     async function logoutAccount() {
@@ -7671,8 +7688,29 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     document.getElementById('btnRestart').onclick = (e) => {
       if (e && e.currentTarget) e.currentTarget.blur();
-      resetBoardOnly();
-      if (gameMode === 'online' && conn && conn.open) conn.send({ type: 'restart' });
+
+      if (gameMode === 'online') {
+        if (!conn || !conn.open) {
+          resetBoardOnly();
+          return;
+        }
+        showCustomConfirm("确定要向对手申请【重新开局】吗？\n双方都同意后，棋盘才会重置开启新对局。", () => {
+          conn.send({ type: 'restart_req', name: p1Name });
+          showGameNotice("📡 已向对手发送重开申请，等待对方同意...", false);
+        }, null, { title: '申请重新开局', icon: '🔄', okText: '发送重开申请', cancelText: '取消' });
+      } else if (gameMode === 'ai') {
+        if (history.length > 0 && !isOver) {
+          showCustomConfirm("当前正在与大师AI对弈中，确定要重开一局吗？", () => {
+            resetBoardOnly();
+            showGameNotice("🔄 已重开新对局，大师AI已就绪~", false);
+          }, null, { title: '重开对局', icon: '🔄', okText: '确认重开', cancelText: '继续对弈' });
+        } else {
+          resetBoardOnly();
+        }
+      } else {
+        // 双人同屏对战模式
+        resetBoardOnly();
+      }
     };
 
     function doUndo() {
@@ -8102,7 +8140,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.55';
+    const CURRENT_VERSION_TAG = 'v1.0.56';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
