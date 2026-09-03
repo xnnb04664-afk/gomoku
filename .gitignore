@@ -3,6 +3,7 @@ android_build_tmp/
 .DS_Store
 Thumbs.db
 *.log
-
 .cloudflare_config.json
-
+.wrangler/
+gomoku.html
+gomoku.apk

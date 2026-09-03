@@ -9,6 +9,10 @@
  * 6. 【防 SQL 注入】所有查询全部采用参数化绑定（Prepared Statements）
  */
 
+let isDbInitialized = false;
+let cachedLeaderboard = null;
+let lastLeaderboardTime = 0;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);

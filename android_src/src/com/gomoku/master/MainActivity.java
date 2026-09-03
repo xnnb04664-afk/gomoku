@@ -427,6 +427,18 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= TRIM_MEMORY_MODERATE) {
+            if (mWebView != null) {
+                mWebView.clearCache(false);
+                mWebView.freeMemory();
+            }
+            System.gc();
+        }
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         if (mWebView != null) {
