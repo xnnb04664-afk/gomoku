@@ -189,6 +189,45 @@ public class MainActivity extends Activity {
             public void downloadAndInstallApk(String apkUrl) {
                 startApkDownload(apkUrl);
             }
+
+            @android.webkit.JavascriptInterface
+            public void saveUserLogin(String uid, String username, String token, String nickname, String avatar) {
+                try {
+                    getSharedPreferences("app_user_login", MODE_PRIVATE).edit()
+                        .putString("uid", uid != null ? uid : "")
+                        .putString("username", username != null ? username : "")
+                        .putString("token", token != null ? token : "")
+                        .putString("nickname", nickname != null ? nickname : "")
+                        .putString("avatar", avatar != null ? avatar : "")
+                        .apply();
+                } catch (Exception ignored) {}
+            }
+
+            @android.webkit.JavascriptInterface
+            public String getUserLoginJson() {
+                try {
+                    SharedPreferences sp = getSharedPreferences("app_user_login", MODE_PRIVATE);
+                    String username = sp.getString("username", "");
+                    String uid = sp.getString("uid", "");
+                    if (username.isEmpty() && uid.isEmpty()) return "";
+                    org.json.JSONObject obj = new org.json.JSONObject();
+                    obj.put("uid", uid);
+                    obj.put("username", username);
+                    obj.put("token", sp.getString("token", ""));
+                    obj.put("nickname", sp.getString("nickname", ""));
+                    obj.put("avatar", sp.getString("avatar", ""));
+                    return obj.toString();
+                } catch (Exception e) {
+                    return "";
+                }
+            }
+
+            @android.webkit.JavascriptInterface
+            public void clearUserLogin() {
+                try {
+                    getSharedPreferences("app_user_login", MODE_PRIVATE).edit().clear().apply();
+                } catch (Exception ignored) {}
+            }
         }, "AndroidNativeApp");
 
         // 页面导航保持在 WebView 内部；外链 APK 自动下载安装

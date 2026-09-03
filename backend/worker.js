@@ -220,7 +220,7 @@ export default {
         }
 
         const now = Date.now();
-        const expiresAt = now + 30 * 24 * 3600 * 1000;
+        const expiresAt = now + 365 * 24 * 3600 * 1000;
         const salt = generateSecureHex(16);
         const passwordHash = await hashWithSalt(password, salt);
         const newToken = generateSecureHex(24);
@@ -287,6 +287,74 @@ export default {
       }
     }
 
+    // ── 3.8 永久登录态验证与自动续期 (1年超长无感免登) ────────
+    if (url.pathname === "/api/auth/verify_session" && request.method === "POST") {
+      if (!env.DB) return json({ code: 1, msg: "数据库未连接" }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid, token } = body;
+        if (!uid) return json({ code: 1, msg: "缺少 uid" });
+
+        const user = await env.DB.prepare(
+          "SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at, security_q FROM users WHERE uid = ?"
+        ).bind(String(uid)).first();
+
+        if (!user) {
+          return json({ code: 1, msg: "用户不存在" });
+        }
+
+        const now = Date.now();
+        const oneYear = 365 * 24 * 3600 * 1000;
+
+        // 如果用户已绑定了正式账号名
+        if (user.username) {
+          if (!user.token || (token && token === user.token)) {
+            let freshToken = user.token || generateSecureHex(24);
+            const expiresAt = now + oneYear;
+            await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, user.uid).run();
+
+            return json({
+              code: 0,
+              msg: "正式账号凭证有效",
+              data: {
+                uid: user.uid,
+                username: user.username,
+                nickname: user.nickname,
+                avatar: user.avatar,
+                score: user.score,
+                wins: user.wins,
+                total_games: user.total_games,
+                security_q: user.security_q,
+                token: freshToken
+              }
+            });
+          }
+          return json({ code: 2, msg: "凭证已失效，需输入密码登录" });
+        } else {
+          // 游客账号
+          let freshToken = user.token || generateSecureHex(24);
+          const expiresAt = now + oneYear;
+          await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, user.uid).run();
+          return json({
+            code: 0,
+            msg: "游客凭证有效",
+            data: {
+              uid: user.uid,
+              username: null,
+              nickname: user.nickname,
+              avatar: user.avatar,
+              score: user.score,
+              wins: user.wins,
+              total_games: user.total_games,
+              token: freshToken
+            }
+          });
+        }
+      } catch (err) {
+        return json({ code: 1, msg: "会话验证异常: " + err.message }, 500);
+      }
+    }
+
     // ── 4. 账号登录（5 次错误锁定 5 分钟时间限制） ───────
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
@@ -319,7 +387,7 @@ export default {
         }
 
         const freshToken = generateSecureHex(24);
-        const expiresAt = now + 30 * 24 * 3600 * 1000;
+        const expiresAt = now + 365 * 24 * 3600 * 1000;
         await env.DB.prepare(`
           UPDATE users
           SET failed_login_count = 0, locked_until = 0, token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
@@ -413,7 +481,7 @@ export default {
         const newSalt = generateSecureHex(16);
         const newPwdHash = await hashWithSalt(newPassword, newSalt);
         const newToken = generateSecureHex(24);
-        const expiresAt = now + 30 * 24 * 3600 * 1000;
+        const expiresAt = now + 365 * 24 * 3600 * 1000;
 
         await env.DB.prepare(`
           UPDATE users

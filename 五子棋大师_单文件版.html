@@ -2786,6 +2786,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     function openProfileModal(player = 1) {
       initAnimeThumbnails();
+      updateAccountUI();
       // 无论我方执黑还是执白，在本地屏幕上：
       // p1 永远是我方（可随时修改），p2 永远是对方（AI或好友）
       if (player === 2) {
@@ -5518,43 +5519,101 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // 🛡️ 云端账号认证与安全 Token 管理器 (Session & Anti-BruteForce)
+    // 🛡️ 云端账号认证与永久免登持久化管理器 (Permanent Session & Native Sync)
     // ══════════════════════════════════════════════════════════════════
     let currentUserUid = localStorage.getItem('gomoku_user_uid') || '';
     let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
     let currentUsername = localStorage.getItem('gomoku_user_username') || '';
 
-    async function initUserSession() {
+    // 🛡️ 尝试从 Android 原生 SharedPreferences 读取免登双保险备份
+    if ((!currentUsername || !currentUserUid) && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
       try {
-        const res = await safeApiFetch(`/api/auth/guest`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            uid: currentUserUid,
-            token: currentUserToken
-          })
-        });
-        const json = await res.json();
-        if (json && json.code === 0 && json.data) {
-          applyUserData(json.data);
+        const nativeJson = AndroidNativeApp.getUserLoginJson();
+        if (nativeJson) {
+          const nativeUser = JSON.parse(nativeJson);
+          if (nativeUser.username) {
+            currentUsername = nativeUser.username;
+            currentUserUid = nativeUser.uid || currentUserUid;
+            currentUserToken = nativeUser.token || currentUserToken;
+            localStorage.setItem('gomoku_user_uid', currentUserUid);
+            localStorage.setItem('gomoku_user_token', currentUserToken);
+            localStorage.setItem('gomoku_user_username', currentUsername);
+            if (nativeUser.nickname) {
+              p1Name = nativeUser.nickname;
+              localStorage.setItem('gomoku_p1Name', p1Name);
+            }
+            if (nativeUser.avatar) {
+              p1Avatar = nativeUser.avatar;
+              localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+            }
+          }
         }
-      } catch (e) {
-        console.warn('initUserSession error:', e);
+      } catch(e) {}
+    }
+
+    async function initUserSession() {
+      // 1. 若本地已保存正式账号或凭证：发起无感静默验证与 1 年超长自动续期
+      if (currentUserUid && currentUserToken) {
+        try {
+          const res = await safeApiFetch(`/api/auth/verify_session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uid: currentUserUid,
+              token: currentUserToken
+            })
+          });
+          const json = await res.json();
+          if (json && json.code === 0 && json.data) {
+            // 云端验证成功，静默校准天梯积分与头像
+            applyUserData(json.data);
+            return;
+          }
+        } catch (e) {
+          console.warn('verify_session offline fallback, keep local session:', e);
+          // 网络慢或离线时：百分之百保留本地登录态，绝对不清空账号！
+          return;
+        }
+      }
+
+      // 2. 仅当没有任何本地凭据时（新设备/新装），才自动分配初始游客 UID
+      if (!currentUserUid && !currentUsername) {
+        try {
+          const res = await safeApiFetch(`/api/auth/guest`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          const json = await res.json();
+          if (json && json.code === 0 && json.data) {
+            applyUserData(json.data);
+          }
+        } catch (e) {
+          console.warn('init guest error:', e);
+        }
       }
     }
 
     function applyUserData(data) {
       if (!data) return;
-      currentUserUid = data.uid || currentUserUid;
-      currentUserToken = data.token || currentUserToken;
-      currentUsername = data.username || "";
-
-      localStorage.setItem("gomoku_user_uid", currentUserUid);
-      localStorage.setItem("gomoku_user_token", currentUserToken);
-      if (currentUsername) {
+      if (data.uid) {
+        currentUserUid = String(data.uid);
+        localStorage.setItem("gomoku_user_uid", currentUserUid);
+      }
+      if (data.token) {
+        currentUserToken = String(data.token);
+        localStorage.setItem("gomoku_user_token", currentUserToken);
+      }
+      if (typeof data.username === "string" && data.username.trim()) {
+        currentUsername = data.username.trim();
         localStorage.setItem("gomoku_user_username", currentUsername);
-      } else {
+      } else if (data.username === null) {
+        // 明确传入 null 时才表示注销
+        currentUsername = "";
         localStorage.removeItem("gomoku_user_username");
+        if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.clearUserLogin) {
+          try { AndroidNativeApp.clearUserLogin(); } catch(e) {}
+        }
       }
 
       // 恢复账号中持久化保存的头像与昵称
@@ -5570,6 +5629,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         localStorage.setItem("gomoku_p1Name", p1Name);
       }
       updatePlayerHeaderUI();
+
+      // 双保险：写入 Android 原生持久化存储（不怕清缓存、不怕杀后台）
+      if (currentUsername && typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
+        try {
+          AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar);
+        } catch(e) {}
+      }
 
       // 同步天梯分与段位
       if (typeof data.score === "number") {
@@ -7690,7 +7756,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.33';
+    const CURRENT_VERSION_TAG = 'v1.0.34';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
@@ -7963,6 +8029,11 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }, 2500);
 
     initAnimeThumbnails();
+    // 页面加载完毕立刻同步本地账号登录态并开启静默会话校验
+    updateAccountUI();
+    updatePlayerHeaderUI();
+    updateHistoryCountUI();
+    initUserSession();
   </script>
 </body>
 </html>
