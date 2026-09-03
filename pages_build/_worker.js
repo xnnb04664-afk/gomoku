@@ -66,11 +66,13 @@ export default {
 
     function sanitizeAvatar(avatar) {
       if (!avatar || typeof avatar !== 'string') return '👦';
+      if (avatar === 'anime_boy' || avatar === 'img/avatar_boy.png') return 'anime_boy';
+      if (avatar === 'anime_girl' || avatar === 'img/avatar_girl.png') return 'anime_girl';
       if (avatar.length <= 4) return avatar;
       const regex = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
-      if (!regex.test(avatar)) return '👦';
-      if (avatar.length > 14000) return '👦';
-      return avatar;
+      if (regex.test(avatar) && avatar.length <= 95000) return avatar;
+      if ((avatar.startsWith('http://') || avatar.startsWith('https://')) && avatar.length <= 300) return avatar;
+      return '👦';
     }
 
     // ── 数据库自动安全升级迁移 ─────────────────────────────
@@ -254,6 +256,34 @@ export default {
         return json({ code: 0, msg: '注册成功并已自动登录！', data: created });
       } catch (err) {
         return json({ code: 1, msg: '注册异常: ' + err.message }, 500);
+      }
+    }
+
+    // ── 3.5 用户资料更新（保存头像与昵称至云端账号） ───────
+    if (url.pathname === '/api/user/update_profile' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid, nickname, avatar } = body;
+        if (!uid) return json({ code: 1, msg: '缺少 uid' });
+
+        const user = await env.DB.prepare('SELECT uid FROM users WHERE uid = ?').bind(String(uid)).first();
+        if (!user) return json({ code: 1, msg: '用户不存在' });
+
+        const safeNick = nickname ? sanitizeText(nickname, 12) : null;
+        const safeAvatar = avatar ? sanitizeAvatar(avatar) : null;
+
+        if (safeNick && safeAvatar) {
+          await env.DB.prepare('UPDATE users SET nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeAvatar, String(uid)).run();
+        } else if (safeNick) {
+          await env.DB.prepare('UPDATE users SET nickname = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, String(uid)).run();
+        } else if (safeAvatar) {
+          await env.DB.prepare('UPDATE users SET avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeAvatar, String(uid)).run();
+        }
+
+        return json({ code: 0, msg: '资料已成功同步到云端账号！', data: { nickname: safeNick, avatar: safeAvatar } });
+      } catch (err) {
+        return json({ code: 1, msg: '资料更新异常: ' + err.message }, 500);
       }
     }
 
