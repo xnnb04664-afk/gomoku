@@ -48,6 +48,22 @@ export default {
     }
 
     // 🛡️ 头像极严格安全校验与清洗（彻底粉碎任意文件上传漏洞与 SVG XSS）
+    
+    const RANDOM_AVATARS = ['🐱', '🐶', '🐼', '🦁', '🦊', '🐯', '🐰', '🐸', '🦄', '🌸', '👦', '👧', '🧙‍♂️', '🥷', '✨', '🐾', '🐻', '🐨', '🤖', '👑'];
+    const NAME_PREFIXES = ['逍遥', '灵动', '疾风', '星月', '青云', '竹林', '傲雪', '听雨', '落樱', '幻影', '天元', '破晓', '悠然', '春风', '弈心', '无痕'];
+    const NAME_SUFFIXES = ['棋仙', '弈客', '少侠', '神算', '隐士', '先锋', '棋圣', '奇才', '萌客', '棋王', '行者', '剑客'];
+
+    function generateRandomNickname() {
+      const pre = NAME_PREFIXES[Math.floor(Math.random() * NAME_PREFIXES.length)];
+      const suf = NAME_SUFFIXES[Math.floor(Math.random() * NAME_SUFFIXES.length)];
+      const num = Math.floor(10 + Math.random() * 90);
+      return pre + suf + '_' + num;
+    }
+
+    function generateRandomAvatar() {
+      return RANDOM_AVATARS[Math.floor(Math.random() * RANDOM_AVATARS.length)];
+    }
+
     function sanitizeAvatar(avatar) {
       if (!avatar || typeof avatar !== 'string') return '👦';
       if (avatar.length <= 4) return avatar;
@@ -126,12 +142,13 @@ export default {
         const newUid = String(Math.floor(100000 + Math.random() * 900000));
         const newToken = generateSecureHex(24);
         const expiresAt = now + thirtyDays;
-        const defaultName = `棋友${newUid.slice(-4)}`;
+        const defaultName = generateRandomNickname();
+        const defaultAvatar = generateRandomAvatar();
 
         await env.DB.prepare(`
           INSERT INTO users (uid, token, token_expires_at, nickname, avatar, score, wins, total_games)
-          VALUES (?, ?, ?, ?, '👦', 1000, 0, 0)
-        `).bind(newUid, newToken, expiresAt, defaultName).run();
+          VALUES (?, ?, ?, ?, ?, 1000, 0, 0)
+        `).bind(newUid, newToken, expiresAt, defaultName, defaultAvatar).run();
 
         return json({
           code: 0,
@@ -139,7 +156,7 @@ export default {
             uid: newUid,
             username: null,
             nickname: defaultName,
-            avatar: '👦',
+            avatar: defaultAvatar,
             score: 1000,
             wins: 0,
             total_games: 0,
