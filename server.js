@@ -7,6 +7,18 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = 3000;
+const HOST = '127.0.0.1';
+const PUBLIC_ROOT_FILES = new Set([
+  'index.html',
+  'theme1_zen_dark.html',
+  'theme2_neo_traditional.html',
+  'theme3_luxury_glass.html',
+  'theme4_clean_ios.html',
+  'theme5_sweet_romance.html',
+  '五子棋大师_单文件版.html',
+  'favicon.png'
+]);
+const PUBLIC_ROOT_DIRS = new Set(['css', 'js', 'img']);
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -19,6 +31,12 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8', 'Allow': 'GET, HEAD' });
+    res.end('405 Method Not Allowed');
+    return;
+  }
+
   let requestPath = (req.url || '/').split('?')[0];
   try {
     requestPath = decodeURIComponent(requestPath);
@@ -40,6 +58,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  const relativeParts = relativePath.split(path.sep);
+  const isAllowed = relativeParts.length === 1
+    ? PUBLIC_ROOT_FILES.has(relativeParts[0])
+    : PUBLIC_ROOT_DIRS.has(relativeParts[0]);
+  if (!isAllowed) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('404 Not Found');
+    return;
+  }
+
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
@@ -53,13 +81,18 @@ const server = http.createServer((req, res) => {
         res.end(`Server Error: ${err.code}`);
       }
     } else {
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content, 'utf-8');
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+      if (req.method === 'HEAD') res.end();
+      else res.end(content);
     }
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(`=========================================`);
   console.log(` 五子棋游戏本地服务已启动！`);
   console.log(` 本机浏览器访问: http://localhost:${PORT}`);

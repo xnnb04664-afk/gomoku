@@ -5671,6 +5671,12 @@
             ...(options.headers || {}),
             "X-Gomoku-Client": "gomoku-app-client-auth"
           };
+          try {
+            const sessionToken = localStorage.getItem("gomoku_user_token") || "";
+            if (sessionToken && !mergedHeaders.Authorization) {
+              mergedHeaders.Authorization = `Bearer ${sessionToken}`;
+            }
+          } catch (_) {}
           const res = await fetch(url, {
             ...options,
             headers: mergedHeaders,

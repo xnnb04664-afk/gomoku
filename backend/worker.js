@@ -36,6 +36,11 @@ export default {
       }
     });
 
+    const contentLength = Number(request.headers.get('content-length') || 0);
+    if (contentLength > 512 * 1024) {
+      return json({ code: 413, msg: '请求数据过大' }, 413);
+    }
+
     // ── 🛡️ 安全工具箱 ─────────────────────────────────────
     function generateSecureHex(len = 24) {
       const bytes = new Uint8Array(len);
@@ -48,6 +53,23 @@ export default {
       const combined = enc.encode(`${text}__GOMOKU_PEPPER_2026__${salt}`);
       const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
       return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // 新账号使用 PBKDF2；旧账号仍可用旧 SHA-256 登录，并在成功登录时自动升级。
+    async function hashPassword(text, salt) {
+      const key = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(text),
+        'PBKDF2',
+        false,
+        ['deriveBits']
+      );
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt: new TextEncoder().encode(`GOMOKU_PASSWORD_${salt}`), iterations: 120000, hash: 'SHA-256' },
+        key,
+        256
+      );
+      return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
     function sanitizeText(str, maxLen = 12) {
@@ -113,6 +135,7 @@ export default {
             username TEXT UNIQUE,
             password_hash TEXT,
             salt TEXT,
+            password_algo TEXT DEFAULT 'sha256',
             security_q TEXT,
             security_a_hash TEXT,
             security_salt TEXT,
@@ -134,7 +157,7 @@ export default {
         `).run();
 
         const cols = [
-          'password_hash TEXT', 'salt TEXT', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
+          'password_hash TEXT', 'salt TEXT', 'password_algo TEXT DEFAULT \'sha256\'', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
           'failed_login_count INTEGER DEFAULT 0', 'locked_until INTEGER DEFAULT 0', 'last_game_at INTEGER DEFAULT 0',
           'security_q TEXT', 'security_a_hash TEXT', 'security_salt TEXT',
           'failed_reset_count INTEGER DEFAULT 0', 'reset_locked_until INTEGER DEFAULT 0'
@@ -142,8 +165,7 @@ export default {
         for (const col of cols) {
           try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col}`).run(); } catch(e){}
         }
-      } catch (e) {
-        
+
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS match_queue (
             uid TEXT PRIMARY KEY,
@@ -160,7 +182,15 @@ export default {
             updated_at INTEGER
           )
         `).run();
-
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS ip_register_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_ip_register_log_ip_time ON ip_register_log(ip, created_at)`).run();
+      } catch (e) {
         console.warn('DB check error:', e.message);
       }
     }
@@ -187,30 +217,34 @@ export default {
       });
     }
 
-    const clientHeader = request.headers.get("X-Gomoku-Client");
-    if (request.method !== "OPTIONS" && clientHeader !== "gomoku-app-client-auth") {
-      return new Response(JSON.stringify({
-        code: 426,
-        msg: "🛡️ 官方安全网关已升级加固！请覆盖安装最新版游戏以保障账号数据安全。"
-      }), {
-        status: 403,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json; charset=utf-8"
-        }
-      });
+    function getRequestToken(request, body = {}) {
+      const authorization = request.headers.get('Authorization') || '';
+      if (/^Bearer\s+/i.test(authorization)) return authorization.replace(/^Bearer\s+/i, '').trim();
+      return typeof body.token === 'string' ? body.token.trim() : '';
     }
 
-    // ── 0. 官方版本与下载源安全中枢 (不可篡改权威下发) ────────
-    if (url.pathname === "/api/version") {
-      return json({
-        code: 0,
-        tag: "v1.0.45",
-        officialRepo: "xnnb04664-afk/gomoku",
-        apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
-        htmlDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/五子棋大师_单文件版.html",
-        officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
-      });
+    async function requireUser(uid, token) {
+      const cleanUid = String(uid || '').trim();
+      const cleanToken = String(token || '').trim();
+      if (!env.DB) return { response: json({ code: 1, msg: '数据库未连接' }, 500) };
+      if (!cleanUid || !cleanToken) return { response: json({ code: 401, msg: '未授权：缺少身份凭证' }, 401) };
+
+      const user = await env.DB.prepare(`
+        SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at
+        FROM users WHERE uid = ? AND token = ?
+      `).bind(cleanUid, cleanToken).first();
+      if (!user) return { response: json({ code: 403, msg: '未授权：Token 无效' }, 403) };
+      if (user.token_expires_at && Number(user.token_expires_at) <= Date.now()) {
+        return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
+      }
+      return { user };
+    }
+
+    async function requireMatchIdentity(uid, token) {
+      const cleanUid = String(uid || '').trim();
+      if (cleanUid.startsWith('guest_')) return { uid: cleanUid, user: null };
+      const auth = await requireUser(cleanUid, token);
+      return auth.response ? auth : { uid: cleanUid, user: auth.user };
     }
 
     // ── 智能动态 UID 分配引擎（支持 6 位靓号到亿级自动平滑扩容） ──
@@ -297,7 +331,7 @@ async function allocateNextAvailableUid(env) {
         const now = Date.now();
         const expiresAt = now + 365 * 24 * 3600 * 1000;
         const salt = generateSecureHex(16);
-        const passwordHash = await hashWithSalt(password, salt);
+        const passwordHash = await hashPassword(password, salt);
         const newToken = generateSecureHex(24);
 
         const safeQ = sanitizeText(securityQuestion, 60) || '你最喜欢的人是谁？';
@@ -310,7 +344,7 @@ async function allocateNextAvailableUid(env) {
           if (guest && !guest.username) {
             await env.DB.prepare(`
               UPDATE users
-              SET username = ?, password_hash = ?, salt = ?, token = ?, token_expires_at = ?,
+              SET username = ?, password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
                   security_q = ?, security_a_hash = ?, security_salt = ?,
                   failed_login_count = 0, locked_until = 0, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP
               WHERE uid = ?
@@ -324,8 +358,8 @@ async function allocateNextAvailableUid(env) {
 
         const newUid = await allocateNextAvailableUid(env);
         await env.DB.prepare(`
-          INSERT INTO users (uid, username, password_hash, salt, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
+          INSERT INTO users (uid, username, password_hash, salt, password_algo, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
+          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
         `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
 
         try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
@@ -341,11 +375,12 @@ async function allocateNextAvailableUid(env) {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
         const body = await request.json().catch(() => ({}));
-        const { uid, nickname, avatar } = body;
+        const { uid, token, nickname, avatar } = body;
         if (!uid) return json({ code: 1, msg: '缺少 uid' });
 
-        const user = await env.DB.prepare('SELECT uid, username, nickname, avatar FROM users WHERE uid = ?').bind(String(uid)).first();
-        if (!user) return json({ code: 1, msg: '用户不存在' });
+        const auth = await requireUser(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        const user = auth.user;
 
         const safeNick = nickname ? sanitizeText(nickname, 16) : null;
         const safeAvatar = avatar ? sanitizeAvatar(avatar) : null;
@@ -404,7 +439,7 @@ async function allocateNextAvailableUid(env) {
 
         // 如果用户已绑定了正式账号名
         if (user.username) {
-          if (!user.token || (token && token === user.token)) {
+          if (token && user.token && token === user.token && (!user.token_expires_at || user.token_expires_at > now)) {
             let freshToken = user.token || generateSecureHex(24);
             const expiresAt = now + oneYear;
             await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, user.uid).run();
@@ -427,8 +462,11 @@ async function allocateNextAvailableUid(env) {
           }
           return json({ code: 2, msg: "凭证已失效，需输入密码登录" });
         } else {
-          // 游客账号
-          let freshToken = user.token || generateSecureHex(24);
+          // 兼容历史上曾写入 D1 的游客账号，但不再允许无凭证续期。
+          if (!token || !user.token || token !== user.token || (user.token_expires_at && user.token_expires_at <= now)) {
+            return json({ code: 401, msg: "游客凭证已失效" }, 401);
+          }
+          const freshToken = user.token;
           const expiresAt = now + oneYear;
           await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, user.uid).run();
           return json({
@@ -469,7 +507,9 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 429, msg: `密码输错过多，账号保护性锁定中！请在 ${remain} 秒后再试` });
         }
 
-        const calcHash = await hashWithSalt(password, user.salt);
+        const calcHash = user.password_algo === 'pbkdf2'
+          ? await hashPassword(password, user.salt)
+          : await hashWithSalt(password, user.salt);
         if (calcHash !== user.password_hash) {
           const newFailCount = (user.failed_login_count || 0) + 1;
           if (newFailCount >= 5) {
@@ -482,13 +522,22 @@ async function allocateNextAvailableUid(env) {
           }
         }
 
+        let loginSalt = user.salt;
+        let loginHash = calcHash;
+        let passwordAlgo = user.password_algo || 'sha256';
+        if (passwordAlgo !== 'pbkdf2') {
+          loginSalt = generateSecureHex(16);
+          loginHash = await hashPassword(password, loginSalt);
+          passwordAlgo = 'pbkdf2';
+        }
         const freshToken = generateSecureHex(24);
         const expiresAt = now + 365 * 24 * 3600 * 1000;
         await env.DB.prepare(`
           UPDATE users
-          SET failed_login_count = 0, locked_until = 0, token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+          SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = ?,
+              token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(freshToken, expiresAt, user.uid).run();
+        `).bind(loginHash, loginSalt, passwordAlgo, freshToken, expiresAt, user.uid).run();
 
         return json({
           code: 0,
@@ -575,13 +624,13 @@ async function allocateNextAvailableUid(env) {
         }
 
         const newSalt = generateSecureHex(16);
-        const newPwdHash = await hashWithSalt(newPassword, newSalt);
+        const newPwdHash = await hashPassword(newPassword, newSalt);
         const newToken = generateSecureHex(24);
         const expiresAt = now + 365 * 24 * 3600 * 1000;
 
         await env.DB.prepare(`
           UPDATE users
-          SET password_hash = ?, salt = ?, token = ?, token_expires_at = ?,
+          SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
               failed_reset_count = 0, reset_locked_until = 0,
               failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
@@ -621,9 +670,14 @@ async function allocateNextAvailableUid(env) {
         const { uid, mode, isWin, winnerColor, myColor, oppName, oppAvatar, moves, movesData, boardData, time, date } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
-        const cleanUid = String(uid).trim();
+        const auth = await requireUser(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        const cleanUid = auth.user.uid;
         const movesJson = typeof movesData === 'string' ? movesData : JSON.stringify(movesData || []);
         const boardJson = typeof boardData === 'string' ? boardData : JSON.stringify(boardData || []);
+        if (movesJson.length > 120000 || boardJson.length > 120000) {
+          return json({ code: 413, msg: '棋谱数据过大' }, 413);
+        }
 
         await env.DB.prepare(`
           INSERT INTO game_history (
@@ -667,6 +721,9 @@ async function allocateNextAvailableUid(env) {
         const uid = url.searchParams.get('uid');
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
+        const auth = await requireUser(uid, getRequestToken(request));
+        if (auth.response) return auth.response;
+
         const rows = await env.DB.prepare(`
           SELECT id, uid, mode, is_win as isWin, winner_color as winnerColor, my_color as myColor,
                  opp_name as oppName, opp_avatar as oppAvatar, moves_count as moves,
@@ -675,7 +732,7 @@ async function allocateNextAvailableUid(env) {
           WHERE uid = ?
           ORDER BY id DESC
           LIMIT 30
-        `).bind(String(uid).trim()).all();
+        `).bind(auth.user.uid).all();
 
         const list = (rows.results || []).map(r => ({
           ...r,
@@ -702,7 +759,9 @@ async function allocateNextAvailableUid(env) {
         const { uid } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
-        await env.DB.prepare('DELETE FROM game_history WHERE uid = ?').bind(String(uid).trim()).run();
+        const auth = await requireUser(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        await env.DB.prepare('DELETE FROM game_history WHERE uid = ?').bind(auth.user.uid).run();
         return json({ code: 0, msg: '云端历史战报已彻底同步清空！' });
       } catch (err) {
         return json({ code: 1, msg: '清空云端战绩异常: ' + err.message }, 500);
@@ -717,7 +776,9 @@ async function allocateNextAvailableUid(env) {
         const { uid, id } = body;
         if (!uid || !id) return json({ code: 1, msg: '缺少参数' });
 
-        await env.DB.prepare('DELETE FROM game_history WHERE uid = ? AND id = ?').bind(String(uid).trim(), parseInt(id, 10)).run();
+        const auth = await requireUser(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        await env.DB.prepare('DELETE FROM game_history WHERE uid = ? AND id = ?').bind(auth.user.uid, parseInt(id, 10)).run();
         return json({ code: 0, msg: '该条云端战绩已同步删除！' });
       } catch (err) {
         return json({ code: 1, msg: '删除云端战绩异常: ' + err.message }, 500);
@@ -734,13 +795,17 @@ async function allocateNextAvailableUid(env) {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
         const body = await request.json().catch(() => ({}));
-        const { uid, nickname, avatar, score } = body;
+        const { uid, nickname, avatar } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户信息' });
+
+        const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        const matchUid = auth.uid;
 
         const now = Date.now();
         const safeNick = sanitizeText(nickname, 12) || '棋士';
         const safeAvatar = sanitizeAvatar(avatar);
-        const safeScore = parseInt(score, 10) || 1000;
+        const safeScore = auth.user ? Math.max(0, Number(auth.user.score) || 1000) : 1000;
 
         // 清理 25 秒以上的超时死连接
         await env.DB.prepare('DELETE FROM match_queue WHERE updated_at < ? AND status = "waiting"').bind(now - 25000).run();
@@ -748,7 +813,7 @@ async function allocateNextAvailableUid(env) {
         // 寻找正在等待的真人对手 (非自己)
         const opponent = await env.DB.prepare(
           'SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1'
-        ).bind(String(uid), now - 20000).first();
+        ).bind(matchUid, now - 20000).first();
 
         if (opponent) {
           // 匹配成功！分配 6 位专属房间码
@@ -761,7 +826,7 @@ async function allocateNextAvailableUid(env) {
                 matched_nickname = ?, matched_avatar = ?, matched_score = ?,
                 room_code = ?, updated_at = ?
             WHERE uid = ?
-          `).bind(String(uid), safeNick, safeAvatar, safeScore, roomCode, now, opponent.uid).run();
+          `).bind(matchUid, safeNick, safeAvatar, safeScore, roomCode, now, opponent.uid).run();
 
           await env.DB.prepare(`
             INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
@@ -770,7 +835,7 @@ async function allocateNextAvailableUid(env) {
               status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
               matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
               matched_score = excluded.matched_score, room_code = excluded.room_code, updated_at = excluded.updated_at
-          `).bind(String(uid), safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, opponent.avatar, opponent.score, roomCode, now).run();
+          `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, opponent.avatar, opponent.score, roomCode, now).run();
 
           return json({
             code: 0,
@@ -795,7 +860,7 @@ async function allocateNextAvailableUid(env) {
             nickname = excluded.nickname, avatar = excluded.avatar, score = excluded.score,
             status = 'waiting', matched_with = NULL, matched_color = NULL, matched_nickname = NULL,
             matched_avatar = NULL, matched_score = NULL, room_code = NULL, updated_at = excluded.updated_at
-        `).bind(String(uid), safeNick, safeAvatar, safeScore, now).run();
+        `).bind(matchUid, safeNick, safeAvatar, safeScore, now).run();
 
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
@@ -808,18 +873,22 @@ async function allocateNextAvailableUid(env) {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
         const body = await request.json().catch(() => ({}));
-        const { uid } = body;
+        const { uid, token } = body;
         if (!uid) return json({ code: 1, msg: '缺少 uid' });
 
+        const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        const matchUid = auth.uid;
+
         const now = Date.now();
-        const record = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(String(uid)).first();
+        const record = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
         if (!record) {
           return json({ code: 0, status: 'cancelled' });
         }
 
         if (record.status === 'matched') {
           // 清理记录
-          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(String(uid)).run();
+          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(matchUid).run();
           return json({
             code: 0,
             status: 'matched',
@@ -836,7 +905,7 @@ async function allocateNextAvailableUid(env) {
         }
 
         // 保持心跳活跃
-        await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ?').bind(now, String(uid)).run();
+        await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ?').bind(now, matchUid).run();
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
         return json({ code: 1, msg: '轮询异常: ' + err.message }, 500);
@@ -850,7 +919,9 @@ async function allocateNextAvailableUid(env) {
         const body = await request.json().catch(() => ({}));
         const { uid } = body;
         if (uid) {
-          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(String(uid)).run();
+          const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
+          if (auth.response) return auth.response;
+          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(auth.uid).run();
         }
         return json({ code: 0, msg: '已成功取消匹配' });
       } catch (err) {
@@ -880,7 +951,10 @@ async function allocateNextAvailableUid(env) {
         const { uid, token, isWin } = await request.json().catch(() => ({}));
 
         if (!uid || !token) {
-          return json({ code: 401, msg: '未授权：缺失身份凭证' });
+          return json({ code: 401, msg: '未授权：缺失身份凭证' }, 401);
+        }
+        if (typeof isWin !== 'boolean') {
+          return json({ code: 400, msg: '战绩结果必须是布尔值' }, 400);
         }
 
         const now = Date.now();
@@ -894,29 +968,30 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 403, msg: '游客模式不上天梯榜，请注册账号后参与排名' });
         }
 
-        if (user.token_expires_at && user.token_expires_at < now) {
-          return json({ code: 401, msg: '登录凭证已过期，请重新登录' });
+        if (user.token_expires_at && user.token_expires_at <= now) {
+          return json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401);
         }
 
-        if (user.last_game_at && (now - user.last_game_at < 3000)) {
-          return json({ code: 429, msg: '对局结算过于频繁，请稍候再试' });
-        }
-
-        const oldScore = (typeof user.score === 'number') ? user.score : 1000;
+        const oldScore = Number.isFinite(Number(user.score)) ? Number(user.score) : 1000;
         const scoreDelta = isWin ? 25 : -15;
         const newScore = Math.max(0, oldScore + scoreDelta);
 
-        await env.DB.prepare(`
+        // 15 秒冷却放进 UPDATE 条件，避免并发请求同时通过预检查刷分。
+        const updateResult = await env.DB.prepare(`
           UPDATE users
           SET score = ?,
               wins = wins + ?,
               total_games = total_games + 1,
               last_game_at = ?,
               updated_at = CURRENT_TIMESTAMP
-          WHERE uid = ?
-        `).bind(newScore, isWin ? 1 : 0, now, uid).run();
+          WHERE uid = ? AND token = ?
+            AND (last_game_at IS NULL OR last_game_at = 0 OR last_game_at <= ?)
+        `).bind(newScore, isWin ? 1 : 0, now, String(uid), String(token), now - 15000).run();
+        if (!updateResult.meta || updateResult.meta.changes !== 1) {
+          return json({ code: 429, msg: '对局结算过于频繁，请 15 秒后再试' }, 429);
+        }
 
-        const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(uid).first();
+        const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(String(uid)).first();
         return json({
           code: 0,
           msg: '战绩安全归档成功',
