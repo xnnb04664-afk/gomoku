@@ -540,7 +540,7 @@
       .card-slot { padding: 2.5px 1px !important; }
       .slot-title { font-size: 13px !important; }
       .slot-sub { font-size: 11px !important; }
-      .bottom-controls { gap: 3px !important; padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important; }
+      .bottom-controls { gap: 3px !important; padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important; margin-bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
       .btn-ctrl { padding: 6px 0 !important; font-size: 14px !important; letter-spacing: -0.2px !important; }
     }
   
@@ -1336,7 +1336,7 @@
       .card-slot { padding: 2.5px 1px !important; }
       .slot-title { font-size: 13px !important; }
       .slot-sub { font-size: 11px !important; }
-      .bottom-controls { gap: 3px !important; padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important; }
+      .bottom-controls { gap: 3px !important; padding: 1px 1px env(safe-area-inset-bottom, 2px) 1px !important; margin-bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
       .btn-ctrl { padding: 6px 0 !important; font-size: 14px !important; letter-spacing: -0.2px !important; }
     }
   
@@ -5265,7 +5265,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.39';
+    const CURRENT_VERSION_TAG = 'v1.0.40';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
