@@ -1977,7 +1977,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.72</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.73</div>
         </div>
       </div>
 
@@ -3098,10 +3098,20 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           }
         }
 
+        // 🌟 立即在本地缓存的天梯榜中将自己的名字与头像替换（零延迟无缝生效）
+        if (Array.isArray(cachedLeaderboard)) {
+          cachedLeaderboard.forEach(item => {
+            if ((currentUserUid && String(item.uid) === String(currentUserUid)) || (currentUsername && item.name === currentUsername)) {
+              item.name = p1Name;
+              item.avatar = p1Avatar;
+            }
+          });
+        }
+
         // 🌟 同步到云端数据库：修改 username 和 nickname
         if (currentUserUid) {
           try {
-            safeApiFetch('/api/user/update_profile', {
+            const res = await safeApiFetch('/api/user/update_profile', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -3110,20 +3120,21 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
                 nickname: p1Name,
                 avatar: p1Avatar
               })
-            }).then(r => r.json()).then(res => {
-              if (res && res.code === 0) {
-                console.log('[saveProfile] 账号名与天梯榜已同步:', p1Name);
-                if (res.data) {
-                  applyUserData(res.data);
-                }
-                updateAccountUI();
-                fetchGlobalLeaderboard(false);
-                showGameNotice('🎉 账号名与昵称已成功同步更新！', false);
-              } else if (res && res.msg) {
-                showGameNotice('⚠️ ' + res.msg, true);
+            });
+            const data = await res.json();
+            if (data && data.code === 0) {
+              console.log('[saveProfile] 账号名与天梯榜已同步:', p1Name);
+              if (data.data) {
+                applyUserData(data.data);
               }
-            }).catch(e => console.warn('[saveProfile sync error]', e));
-          } catch(e) {}
+              updateAccountUI();
+              fetchGlobalLeaderboard(false);
+            } else if (data && data.msg) {
+              console.warn('[saveProfile sync warning]', data.msg);
+            }
+          } catch(e) {
+            console.warn('[saveProfile sync error]', e);
+          }
         }
       } else {
         p2Name = nameInput;
@@ -6427,10 +6438,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       const html = list.map((item, idx) => {
         const rank = idx + 1;
-        const isP1 = (item.name === p1Name) || (currentUserUid && String(item.uid) === String(currentUserUid)) || (currentUsername && item.name === currentUsername);
+        // 🌟 优先通过不变的专属 UID 判定是否是本人（改名后依然百分之百精准命中自己）
+        const isP1 = (currentUserUid && String(item.uid) === String(currentUserUid)) || (item.name === p1Name) || (currentUsername && item.name === currentUsername);
         if (isP1) {
           myRankNum = rank;
           myScore = item.score;
+          // 若本人已在本地改了新名字，天梯榜即刻以最新名字展示
+          item.name = p1Name;
         }
 
         let rankBadge = `<span style="font-size:13px; font-weight:900; color:#64748b; min-width:22px; text-align:center;">#${rank}</span>`;
@@ -8544,7 +8558,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.72';
+    const CURRENT_VERSION_TAG = 'v1.0.73';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;

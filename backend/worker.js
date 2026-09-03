@@ -29,7 +29,11 @@ export default {
 
     const json = (data, status = 200) => new Response(JSON.stringify(data), {
       status,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' }
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+      }
     });
 
     // ── 🛡️ 安全工具箱 ─────────────────────────────────────
@@ -73,8 +77,7 @@ export default {
       if (avatar === 'anime_boy' || avatar === 'img/avatar_boy.png') return 'anime_boy';
       if (avatar === 'anime_girl' || avatar === 'img/avatar_girl.png') return 'anime_girl';
       if (avatar.length <= 4) return avatar;
-      const regex = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
-      if (regex.test(avatar) && avatar.length <= 95000) return avatar;
+      if (avatar.startsWith('data:image/') && avatar.includes(';base64,') && avatar.length <= 150000) return avatar;
       if ((avatar.startsWith('http://') || avatar.startsWith('https://')) && avatar.length <= 300) return avatar;
       return '👦';
     }
@@ -153,7 +156,7 @@ export default {
     if (url.pathname === "/api/version") {
       return json({
         code: 0,
-        tag: "v1.0.72",
+        tag: "v1.0.73",
         officialRepo: "xnnb04664-afk/gomoku",
         updateLog: "五子棋最新正式版更新发布：\n1. 全面修复胜负判定与联机执白显示错位\n2. 主界面常驻聊天框增大，完整展示最新3条对局对话\n3. 增加网络波动心跳自动对账与棋盘对齐机制",
         apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
