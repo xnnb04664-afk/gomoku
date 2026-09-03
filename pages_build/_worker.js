@@ -112,6 +112,24 @@ export default {
           try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col}`).run(); } catch(e){}
         }
       } catch (e) {
+        
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS match_queue (
+            uid TEXT PRIMARY KEY,
+            nickname TEXT,
+            avatar TEXT,
+            score INTEGER DEFAULT 1000,
+            status TEXT DEFAULT 'waiting',
+            matched_with TEXT,
+            matched_color TEXT,
+            matched_nickname TEXT,
+            matched_avatar TEXT,
+            matched_score INTEGER,
+            room_code TEXT,
+            updated_at INTEGER
+          )
+        `).run();
+
         console.warn('DB check error:', e.message);
       }
     }
@@ -387,6 +405,140 @@ export default {
         });
       } catch (err) {
         return json({ code: 1, msg: '重置密码异常: ' + err.message }, 500);
+      }
+    }
+
+    
+    // ══════════════════════════════════════════════════════
+    // ⚡ 全服实时快速匹配系统 (Cloudflare D1 驱动)
+    // ══════════════════════════════════════════════════════
+
+    // 1. 加入匹配队列
+    if (url.pathname === '/api/match/join' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid, nickname, avatar, score } = body;
+        if (!uid) return json({ code: 1, msg: '缺少用户信息' });
+
+        const now = Date.now();
+        const safeNick = sanitizeText(nickname, 12) || '棋士';
+        const safeAvatar = sanitizeAvatar(avatar);
+        const safeScore = parseInt(score, 10) || 1000;
+
+        // 清理 25 秒以上的超时死连接
+        await env.DB.prepare('DELETE FROM match_queue WHERE updated_at < ? AND status = "waiting"').bind(now - 25000).run();
+
+        // 寻找正在等待的真人对手 (非自己)
+        const opponent = await env.DB.prepare(
+          'SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1'
+        ).bind(String(uid), now - 20000).first();
+
+        if (opponent) {
+          // 匹配成功！分配 6 位专属房间码
+          const roomCode = String(Math.floor(100000 + Math.random() * 900000));
+          
+          // 对手执黑（作为房主创建连接），当前玩家执白（加入连接）
+          await env.DB.prepare(`
+            UPDATE match_queue
+            SET status = 'matched', matched_with = ?, matched_color = 'black',
+                matched_nickname = ?, matched_avatar = ?, matched_score = ?,
+                room_code = ?, updated_at = ?
+            WHERE uid = ?
+          `).bind(String(uid), safeNick, safeAvatar, safeScore, roomCode, now, opponent.uid).run();
+
+          await env.DB.prepare(`
+            INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
+            VALUES (?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?)
+            ON CONFLICT(uid) DO UPDATE SET
+              status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
+              matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
+              matched_score = excluded.matched_score, room_code = excluded.room_code, updated_at = excluded.updated_at
+          `).bind(String(uid), safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, opponent.avatar, opponent.score, roomCode, now).run();
+
+          return json({
+            code: 0,
+            status: 'matched',
+            role: 'client',
+            color: 'white',
+            roomCode: roomCode,
+            opponent: {
+              uid: opponent.uid,
+              nickname: opponent.nickname,
+              avatar: opponent.avatar,
+              score: opponent.score
+            }
+          });
+        }
+
+        // 暂无等待对手，将自己放入等待队列
+        await env.DB.prepare(`
+          INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
+          VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, NULL, NULL, NULL, NULL, ?)
+          ON CONFLICT(uid) DO UPDATE SET
+            nickname = excluded.nickname, avatar = excluded.avatar, score = excluded.score,
+            status = 'waiting', matched_with = NULL, matched_color = NULL, matched_nickname = NULL,
+            matched_avatar = NULL, matched_score = NULL, room_code = NULL, updated_at = excluded.updated_at
+        `).bind(String(uid), safeNick, safeAvatar, safeScore, now).run();
+
+        return json({ code: 0, status: 'waiting' });
+      } catch (err) {
+        return json({ code: 1, msg: '匹配服务异常: ' + err.message }, 500);
+      }
+    }
+
+    // 2. 轮询匹配结果
+    if (url.pathname === '/api/match/poll' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid } = body;
+        if (!uid) return json({ code: 1, msg: '缺少 uid' });
+
+        const now = Date.now();
+        const record = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(String(uid)).first();
+        if (!record) {
+          return json({ code: 0, status: 'cancelled' });
+        }
+
+        if (record.status === 'matched') {
+          // 清理记录
+          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(String(uid)).run();
+          return json({
+            code: 0,
+            status: 'matched',
+            role: record.matched_color === 'black' ? 'host' : 'client',
+            color: record.matched_color,
+            roomCode: record.room_code,
+            opponent: {
+              uid: record.matched_with,
+              nickname: record.matched_nickname,
+              avatar: record.matched_avatar,
+              score: record.matched_score
+            }
+          });
+        }
+
+        // 保持心跳活跃
+        await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ?').bind(now, String(uid)).run();
+        return json({ code: 0, status: 'waiting' });
+      } catch (err) {
+        return json({ code: 1, msg: '轮询异常: ' + err.message }, 500);
+      }
+    }
+
+    // 3. 取消匹配
+    if (url.pathname === '/api/match/cancel' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const { uid } = body;
+        if (uid) {
+          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(String(uid)).run();
+        }
+        return json({ code: 0, msg: '已成功取消匹配' });
+      } catch (err) {
+        return json({ code: 1, msg: '取消异常: ' + err.message }, 500);
       }
     }
 

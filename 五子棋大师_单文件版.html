@@ -1453,6 +1453,55 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       box-shadow: 0 1.5px 0 #047857;
     }
 
+    
+    /* ⚡ 全服实时快速匹配雷达与卡片动画 */
+    .matchmaking-box {
+      background: #fff;
+      border: 2px dashed #cbd5e1;
+      border-radius: 16px;
+      padding: 16px 12px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    .match-radar-wrap {
+      position: relative;
+      width: 76px;
+      height: 76px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .match-pulse-circle {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: rgba(245, 158, 11, 0.25);
+      animation: radarPulse 2s infinite cubic-bezier(0.215, 0.61, 0.355, 1);
+    }
+    .circle-2 { animation-delay: 0.65s; }
+    .circle-3 { animation-delay: 1.3s; }
+    @keyframes radarPulse {
+      0% { transform: scale(0.5); opacity: 1; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+    .match-my-avatar {
+      position: relative;
+      z-index: 2;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2.5px solid #f59e0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 4px 10px rgba(245, 158, 11, 0.3);
+      overflow: hidden;
+    }
+
     /* 🏆 天梯榜与安全账号认证弹窗顶层置顶层叠与显隐修复 */
     #authModal, #leaderboardModal {
       z-index: 100010 !important;
@@ -1755,7 +1804,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     <button class="btn-ctrl btn-chat" id="btnOpenChat">💬 聊天</button>
     <button class="btn-ctrl btn-primary" id="btnRestart">🔄 重开</button>
     <button class="btn-ctrl" id="btnUndo">↩️ 悔棋</button>
-    <button class="btn-ctrl btn-online" id="btnOnline" onclick="openOnlineModal()">🌐 联机</button>
+    <button class="btn-ctrl btn-online" id="btnOnline" onclick="openOnlineModal('match')" style="background:linear-gradient(135deg, #f59e0b, #d97706); border-color:#b45309; color:#fff;">⚡ 匹配对战</button>
   </div>
 
   <!-- 完整聊天记录抽屉面板 -->
@@ -1886,7 +1935,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       <!-- 🚀 版本号与 GitHub 免服务器在线更新检测 -->
       <div style="background:rgba(255,255,255,0.7); border:1.5px solid var(--border-dark); border-radius:12px; padding:6px 10px; margin:8px 0 10px 0; display:flex; justify-content:space-between; align-items:center;">
         <div style="text-align:left; line-height:1.2;">
-          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.26</span></div>
+          <div style="font-size:11px; font-weight:800; color:#2d3436;">五子棋正式版 <span id="appVersionDisplay" style="color:#0984e3; font-weight:900;">v1.0.27</span></div>
           <div style="font-size:9.5px; color:#636e72;">启动时全自动后台静默检测更新 <span style="color:#10b981; font-weight:800;">● 已开启</span></div>
         </div>
         <button type="button" class="btn-chat-tool" onclick="checkAppUpdate(true)" style="background:#0984e3; color:#fff; border-color:#0984e3; padding:4px 9px; font-size:11px; border-radius:8px;">🚀 检查更新</button>
@@ -1925,11 +1974,46 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     <div class="online-modal-card">
       <div class="undo-title">🌐 联机对战 & 房间大厅</div>
       <div class="online-tab-row">
-        <button class="online-tab-btn active" id="tabCreateRoom" onclick="switchOnlineTab('create')">🏠 创建房间</button>
+        <button class="online-tab-btn active" id="tabMatch" onclick="switchOnlineTab('match')">⚡ 快速匹配</button>
+        <button class="online-tab-btn" id="tabCreateRoom" onclick="switchOnlineTab('create')">🏠 好友开房</button>
         <button class="online-tab-btn" id="tabJoinRoom" onclick="switchOnlineTab('join')">🚪 加入房间</button>
       </div>
 
-      <div id="viewCreateRoom">
+      <!-- 选项卡 1：⚡ 全服快速匹配 -->
+      <div id="viewMatch">
+        <div class="matchmaking-box">
+          <div class="match-radar-wrap">
+            <div class="match-pulse-circle circle-1"></div>
+            <div class="match-pulse-circle circle-2"></div>
+            <div class="match-pulse-circle circle-3"></div>
+            <div class="match-my-avatar" id="matchMyAvatarPreview">🐱</div>
+          </div>
+          <div id="matchStatusText" style="font-size:14px; font-weight:900; color:#1e293b; margin:12px 0 4px 0;">⚡ 寻找全国实力相当的对手</div>
+          <div id="matchTimerText" style="font-size:11.5px; font-weight:800; color:#64748b; margin-bottom:12px;">全国百万棋友实时联网对战</div>
+          
+          <div id="matchVsCard" style="display:none; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:14px; padding:10px 14px; margin-bottom:12px;">
+            <div style="font-size:11px; font-weight:800; color:#f59e0b; margin-bottom:6px;">⚔️ 匹配成功！对手已就位</div>
+            <div style="display:flex; justify-content:space-around; align-items:center;">
+              <div style="text-align:center;">
+                <div id="matchP1Avatar" style="font-size:26px;">🐱</div>
+                <div id="matchP1Name" style="font-size:11.5px; font-weight:900; color:#1e293b;">我</div>
+              </div>
+              <div style="font-size:16px; font-weight:900; color:#ef4444; font-style:italic;">VS</div>
+              <div style="text-align:center;">
+                <div id="matchP2Avatar" style="font-size:26px;">🦄</div>
+                <div id="matchP2Name" style="font-size:11.5px; font-weight:900; color:#1e293b;">灵动棋仙</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:8px;">
+            <button class="online-action-btn" id="btnStartMatch" onclick="startQuickMatch()" style="background:linear-gradient(135deg, #f59e0b, #d97706); box-shadow:0 3.5px 0 #b45309;">⚡ 开始全服快速匹配</button>
+            <button class="online-action-btn" id="btnCancelMatch" onclick="cancelQuickMatch()" style="display:none; background:#f1f5f9; color:#475569; box-shadow:none; border:1.5px solid #cbd5e1;">✕ 取消匹配</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="viewCreateRoom" style="display:none;">
         <div style="font-size:14px; font-weight:800; color:#4a2810;">将房间号发给好友，好友加入即可开局：</div>
         <div class="room-code-display" id="myRoomCodeDisplay" onclick="copyRoomCode()" style="cursor:pointer;" title="点击即可快速复制">------</div>
         <div style="display:flex; justify-content:center; align-items:center; gap:12px; margin:-2px 0 12px 0;">
@@ -4643,13 +4727,215 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
 
+    
+    // ══════════════════════════════════════════════════════════════════
+    // ⚡ 全服极速匹配系统 (实时信令 + 人机即时保底双引擎)
+    // ══════════════════════════════════════════════════════════════════
+    let isMatchmaking = false;
+    let matchPollInterval = null;
+    let matchTimerInterval = null;
+    let matchStartTime = 0;
+
+    async function startQuickMatch() {
+      if (isMatchmaking) return;
+      isMatchmaking = true;
+      matchStartTime = Date.now();
+
+      const btnStart = document.getElementById('btnStartMatch');
+      const btnCancel = document.getElementById('btnCancelMatch');
+      const statusEl = document.getElementById('matchStatusText');
+      const vsCard = document.getElementById('matchVsCard');
+      const prevAvatar = document.getElementById('matchMyAvatarPreview');
+
+      if (btnStart) btnStart.style.display = 'none';
+      if (btnCancel) btnCancel.style.display = 'block';
+      if (statusEl) statusEl.textContent = '🔍 正在全服搜寻对手...';
+      if (vsCard) vsCard.style.display = 'none';
+      if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
+
+      // 实时计时器
+      matchTimerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - matchStartTime) / 1000);
+        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const s = String(elapsed % 60).padStart(2, '0');
+        const timerEl = document.getElementById('matchTimerText');
+        if (timerEl) timerEl.textContent = `正在匹配：${m}:${s}`;
+
+        // 超过 7 秒若无其他玩家，自动匹配天梯高仿棋士智能AI（保证玩家零等待立刻能玩）
+        if (elapsed >= 7 && isMatchmaking) {
+          matchWithAiOpponent();
+        }
+      }, 1000);
+
+      try {
+        const res = await safeApiFetch('/api/match/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: currentUserUid || ('guest_' + Date.now()),
+            nickname: p1Name,
+            avatar: p1Avatar,
+            score: 1000
+          })
+        });
+        const data = await res.json();
+        if (data.code === 0) {
+          if (data.status === 'matched') {
+            onMatchFound(data);
+          } else {
+            // 定时轮询对手是否加入
+            matchPollInterval = setInterval(async () => {
+              if (!isMatchmaking) {
+                clearInterval(matchPollInterval);
+                return;
+              }
+              try {
+                const pRes = await safeApiFetch('/api/match/poll', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ uid: currentUserUid })
+                });
+                const pData = await pRes.json();
+                if (pData.code === 0 && pData.status === 'matched') {
+                  clearInterval(matchPollInterval);
+                  onMatchFound(pData);
+                }
+              } catch(e) {}
+            }, 1500);
+          }
+        }
+      } catch (err) {
+        console.warn('Match join error:', err);
+      }
+    }
+
+    function onMatchFound(data) {
+      clearInterval(matchPollInterval);
+      clearInterval(matchTimerInterval);
+      isMatchmaking = false;
+
+      const opp = data.opponent || { nickname: '棋圣隐士', avatar: '🐱' };
+      const statusEl = document.getElementById('matchStatusText');
+      const vsCard = document.getElementById('matchVsCard');
+      if (statusEl) statusEl.textContent = '⚔️ 匹配成功！正在载入对局...';
+      if (vsCard) vsCard.style.display = 'block';
+
+      const p1N = document.getElementById('matchP1Name');
+      const p1A = document.getElementById('matchP1Avatar');
+      const p2N = document.getElementById('matchP2Name');
+      const p2A = document.getElementById('matchP2Avatar');
+      if (p1N) p1N.textContent = p1Name;
+      if (p1A) p1A.innerHTML = renderAvatarElement(p1Avatar);
+      if (p2N) p2N.textContent = opp.nickname;
+      if (p2A) p2A.innerHTML = renderAvatarElement(opp.avatar);
+
+      showGameNotice(`⚔️ 匹配成功！对手【${opp.nickname}】已就位！`, false);
+      try { playCardAudioEffect('draw'); } catch(e) {}
+
+      setTimeout(() => {
+        closeOnlineModal();
+        if (data.role === 'host') {
+          // 我作为房主（执黑先行）
+          initHostPeer(data.roomCode, true);
+          myOnlineColor = BLACK;
+          p2Name = opp.nickname;
+          p2Avatar = opp.avatar;
+          updatePlayerHeaderUI();
+          setMode('online');
+        } else {
+          // 我作为客户端（执白后行）
+          const codeInput = document.getElementById('inputJoinCode');
+          if (codeInput) codeInput.value = data.roomCode;
+          joinOnlineRoom();
+        }
+      }, 1500);
+    }
+
+    function matchWithAiOpponent() {
+      clearInterval(matchPollInterval);
+      clearInterval(matchTimerInterval);
+      isMatchmaking = false;
+
+      const aiName = getRandomDefaultNickname();
+      const aiAvatar = getRandomDefaultAvatar();
+
+      const statusEl = document.getElementById('matchStatusText');
+      const vsCard = document.getElementById('matchVsCard');
+      if (statusEl) statusEl.textContent = '⚔️ 匹配到全服棋士！正在开局...';
+      if (vsCard) vsCard.style.display = 'block';
+
+      const p1N = document.getElementById('matchP1Name');
+      const p1A = document.getElementById('matchP1Avatar');
+      const p2N = document.getElementById('matchP2Name');
+      const p2A = document.getElementById('matchP2Avatar');
+      if (p1N) p1N.textContent = p1Name;
+      if (p1A) p1A.innerHTML = renderAvatarElement(p1Avatar);
+      if (p2N) p2N.textContent = aiName;
+      if (p2A) p2A.innerHTML = renderAvatarElement(aiAvatar);
+
+      showGameNotice(`⚔️ 匹配成功！全服棋士【${aiName}】向您发起挑战！`, false);
+      try { playCardAudioEffect('draw'); } catch(e) {}
+
+      setTimeout(() => {
+        closeOnlineModal();
+        p2Name = aiName;
+        p2Avatar = aiAvatar;
+        updatePlayerHeaderUI();
+        setMode('ai');
+        initGame();
+      }, 1500);
+    }
+
+    async function cancelQuickMatch() {
+      isMatchmaking = false;
+      clearInterval(matchPollInterval);
+      clearInterval(matchTimerInterval);
+
+      const btnStart = document.getElementById('btnStartMatch');
+      const btnCancel = document.getElementById('btnCancelMatch');
+      const statusEl = document.getElementById('matchStatusText');
+      const timerEl = document.getElementById('matchTimerText');
+      const vsCard = document.getElementById('matchVsCard');
+
+      if (btnStart) btnStart.style.display = 'block';
+      if (btnCancel) btnCancel.style.display = 'none';
+      if (statusEl) statusEl.textContent = '⚡ 寻找全国实力相当的对手';
+      if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
+      if (vsCard) vsCard.style.display = 'none';
+
+      try {
+        await safeApiFetch('/api/match/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: currentUserUid })
+        });
+      } catch(e) {}
+      showGameNotice('已取消匹配');
+    }
+
     function switchOnlineTab(tab) {
-      document.getElementById('tabCreateRoom').classList.toggle('active', tab === 'create');
-      document.getElementById('tabJoinRoom').classList.toggle('active', tab === 'join');
-      document.getElementById('viewCreateRoom').style.display = tab === 'create' ? 'block' : 'none';
-      document.getElementById('viewJoinRoom').style.display = tab === 'join' ? 'block' : 'none';
+      const tabMatch = document.getElementById('tabMatch');
+      const tabCreate = document.getElementById('tabCreateRoom');
+      const tabJoin = document.getElementById('tabJoinRoom');
+      const viewMatch = document.getElementById('viewMatch');
+      const viewCreate = document.getElementById('viewCreateRoom');
+      const viewJoin = document.getElementById('viewJoinRoom');
+
+      if (tabMatch) tabMatch.classList.toggle('active', tab === 'match');
+      if (tabCreate) tabCreate.classList.toggle('active', tab === 'create');
+      if (tabJoin) tabJoin.classList.toggle('active', tab === 'join');
+
+      if (viewMatch) viewMatch.style.display = tab === 'match' ? 'block' : 'none';
+      if (viewCreate) viewCreate.style.display = tab === 'create' ? 'block' : 'none';
+      if (viewJoin) viewJoin.style.display = tab === 'join' ? 'block' : 'none';
+
+      const prevAvatar = document.getElementById('matchMyAvatarPreview');
+      if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
+
       if (tab === 'create') {
         initPeer();
+      } else if (tab !== 'match') {
+        if (isMatchmaking) cancelQuickMatch();
       }
     }
 
@@ -4663,11 +4949,16 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       navigator.clipboard ? navigator.clipboard.writeText(code).then(() => showGameNotice(`📋 房间码【${code}】已复制！快发给好友吧~`, false)) : showGameNotice(`📋 房间码: ${code}`, false);
     }
 
-    function openOnlineModal() {
-      initPeer();
+    function openOnlineModal(tab = 'match') {
+      const prevAvatar = document.getElementById('matchMyAvatarPreview');
+      if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
       document.getElementById('onlineModal').classList.add('show');
+      switchOnlineTab(tab);
     }
     function closeOnlineModal() {
+      if (isMatchmaking) {
+        cancelQuickMatch();
+      }
       document.getElementById('onlineModal').classList.remove('show');
     }
 
@@ -7124,7 +7415,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
-    const CURRENT_VERSION_TAG = 'v1.0.26';
+    const CURRENT_VERSION_TAG = 'v1.0.27';
     const GITHUB_REPO = 'xnnb04664-afk/gomoku';
 
     function compareVersions(v1, v2) {
