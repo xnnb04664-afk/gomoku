@@ -393,26 +393,42 @@ node publish.js
   - **当前机器上该文件永久存在且完整**，任何在此电脑上启动的后续 AI、发布脚本（`publish.js`）与运维工具（`admin.js`、`deploy_worker.js`）均已具备 100% 完整的控制权限，**无需手动登录网页版 Cloudflare 控制台**。
 
 ### 3. 🛠️ 开发者专属管理运维工具 (`admin.js`)
-项目根目录配备了开箱即用的命令行全能管理中枢 `admin.js`，下一任 AI 或开发者可直接在终端中掌控全服数据：
+项目根目录配备了安全加固后的命令行管理工具 `admin.js`。它只在本机读取 `.cloudflare_config.json`，不会输出 Token、密码哈希、Salt 或密保字段：
 
-- **查看全服所有注册玩家与天梯排位**：
+- **查看全服用户（简洁安全输出）**：
   ```bash
   node admin.js users
+  node admin.js users --json
   ```
-- **查询指定玩家详细战绩与账号详情**：
+- **查询指定用户安全档案**：
   ```bash
-  node admin.js user <UID 或 账号用户名>
+  node admin.js user <UID 或账号用户名>
   # 示例：node admin.js user 661713
   ```
-- **开发者为指定玩家重置密码**：
+- **重置密码**：
   ```bash
-  node admin.js set-pwd <UID 或 账号用户名> <新密码>
-  # 示例：node admin.js set-pwd 661713 123456
+  # 推荐交互式输入，密码不会出现在命令历史中
+  node admin.js set-pwd <UID 或账号用户名>
+  # 也支持参数方式，但不会在工具输出中回显密码
+  node admin.js set-pwd <UID 或账号用户名> <新密码>
   ```
-- **执行任意自定义 D1 SQL 查询**：
+  新密码使用与 Worker 一致的 PBKDF2（SHA-256、120000 次迭代），并会使旧登录令牌失效。
+- **同步修改用户名和昵称**：
   ```bash
-  node admin.js sql "SELECT uid, username, rating, win_count FROM users ORDER BY rating DESC LIMIT 10;"
+  node admin.js set-nickname <UID 或账号用户名> <新昵称>
   ```
+- **修改积分、临时锁定或解锁账号**：
+  ```bash
+  node admin.js set-score <UID 或账号用户名> <积分>
+  node admin.js lock <UID 或账号用户名> [分钟]
+  node admin.js unlock <UID 或账号用户名>
+  ```
+- **执行 D1 SQL**：默认仅允许 `SELECT`/`EXPLAIN`；写操作必须显式使用 `--write`，并默认输入 `CONFIRM`：
+  ```bash
+  node admin.js sql "SELECT uid, username, score FROM users ORDER BY score DESC;"
+  node admin.js sql --write "UPDATE users SET score = 1000 WHERE uid = '661713';"
+  ```
+  工具会自动兼容尚未完成 Worker 迁移的旧版 `users` 表；首次通过管理员工具重置密码时，会在确认后补齐 `password_algo` 字段。
 - **手动触发 Worker 部署**：
   ```bash
   node deploy_worker.js

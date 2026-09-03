@@ -1,0 +1,15 @@
+# 工作进度
+
+## 2026-09-04
+
+- 已阅读项目交接背景和当前 `admin.js` 实现。
+- 已确认工作区干净。
+- 已核对 `backend/worker.js`：PBKDF2 为 SHA-256、120000 次迭代、盐值格式 `GOMOKU_PASSWORD_${salt}`，用户表含 `password_algo`、锁定和 Token 字段。
+- 已确认 `admin.js` 现状：详情输出密码哈希/Salt，重置密码回显明文，重置仍使用旧 SHA-256，SQL 无写操作保护。
+- Phase 1 已完成，开始实现安全基础。
+- 已实现管理员工具主体，但云端用户列表查询提示 D1 错误；准备通过只读 `PRAGMA table_info(users)` 核对线上字段。
+- 已确认线上 `users` 表暂缺 `password_algo`；工具已改为动态识别旧表结构，普通查询正常，首次重置密码会在明确确认后补齐该字段。
+- 已完成 `admin.js`：PBKDF2 重置、敏感输出隐藏、用户名/昵称同步、积分修改、锁定/解锁、只读 SQL 白名单与写 SQL 确认。
+- 已更新 `PROJECT_HANDOVER.md` 管理员工具说明。
+- 已通过 `node --check admin.js`、帮助命令、云端用户列表、只读 SQL 查询、写 SQL 拦截、敏感日志扫描和 `git diff --check`。
+- 已提交 Git commit：`6be5d33 feat: 升级管理员数据管理工具`；未部署 Worker，未改动用户数据。
