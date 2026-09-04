@@ -13,3 +13,8 @@
 - 已更新 `PROJECT_HANDOVER.md` 管理员工具说明。
 - 已通过 `node --check admin.js`、帮助命令、云端用户列表、只读 SQL 查询、写 SQL 拦截、敏感日志扫描和 `git diff --check`。
 - 已提交 Git commit：`6be5d33 feat: 升级管理员数据管理工具`；未部署 Worker，未改动用户数据。
+- 已完成 AI 审计：主页面原先使用内嵌旧引擎，旧 `js/ai.js` 未接入；单文件版由主页面生成，Android 页面同源。
+- 已重写 `js/ai.js` 为统一大师级引擎，加入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深、置换表、候选点排序和单步时间预算。
+- 已将主页面 `smartAiMove` 接入新引擎，保留 `forbiddenPoints` 参数；已同步 Android 资源并重新生成 `五子棋大师_单文件版.html`。
+- 已通过 Node 棋力用例、3 个 HTML 文件脚本语法检查，以及主页面和单文件版的 Playwright 实际落子测试。
+- 本轮尚未执行 APK 打包、GitHub 推送、Release 创建或线上 Worker 部署，等待明确发布指令。

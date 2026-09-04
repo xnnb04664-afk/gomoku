@@ -403,6 +403,513 @@ const ANIME_AVATAR_BOY = window.ANIME_AVATAR_BOY;
 const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
   </script>
+  <!-- 内联 强力五子棋 AI 引擎（棋型评估 + Alpha-Beta + 置换表） -->
+  <script>
+/**
+ * 五子棋强力 AI 引擎
+ *
+ * 设计目标：
+ * - 先处理必胜、必防和双重威胁，再进入搜索；
+ * - 使用棋型评估，而不是只看棋盘位置分；
+ * - Alpha-Beta + 置换表 + 迭代加深，在移动端限制单步计算时间；
+ * - 支持禁手规则与技能产生的 forbiddenPoints；
+ * - 全程确定性落子，避免同一局面随机走出弱着。
+ */
+
+const GOMOKU_AI_SCORE = Object.freeze({
+  WIN: 100000000,
+  OPEN_FOUR: 12000000,
+  FOUR: 1800000,
+  DOUBLE_THREE: 650000,
+  OPEN_THREE: 85000,
+  BROKEN_THREE: 18000,
+  OPEN_TWO: 1800,
+  TWO: 220,
+  ONE: 12
+});
+
+const GOMOKU_AI_DIRECTIONS = [
+  [0, 1],
+  [1, 0],
+  [1, 1],
+  [1, -1]
+];
+
+class GomokuAI {
+  static getBestMove(board, aiColor, difficulty = 'master', enableFoul = false, forbiddenPoints = []) {
+    const size = this.getBoardSize(board);
+    const opponent = this.getOpponent(aiColor);
+    const forbidden = new Set((forbiddenPoints || []).map(p => `${p.r},${p.c}`));
+    const legal = this.getCandidateMoves(board, aiColor, enableFoul, forbidden, 40);
+
+    if (!legal.length) return this.findFirstEmpty(board);
+    if (this.countStones(board) === 0) return this.centerMove(size);
+
+    // 1. 直接成五优先级最高。
+    for (const move of legal) {
+      if (this.isWinningMove(board, move.r, move.c, aiColor)) return move;
+    }
+
+    // 2. 对手有立即胜点时必须封堵；若有多个胜点，后续搜索会尽量反攻。
+    const opponentWins = this.getWinningMoves(board, opponent, enableFoul, 40);
+    if (opponentWins.length) {
+      const winningKeys = new Set(opponentWins.map(m => `${m.r},${m.c}`));
+      const blocks = legal.filter(m => winningKeys.has(`${m.r},${m.c}`));
+      if (blocks.length) return blocks[0];
+    }
+
+    // 3. 抢先制造双重威胁，通常比单纯的局面评分更强。
+    if (difficulty === 'master' || difficulty === 'hard') {
+      const forcing = this.findDoubleThreat(board, aiColor, legal, enableFoul);
+      if (forcing) return forcing;
+    }
+
+    if (difficulty === 'easy') return this.pickGreedy(board, aiColor, legal, enableFoul);
+    if (difficulty === 'medium') return this.pickGreedy(board, aiColor, legal, enableFoul, 1.05);
+
+    // 4. 大师模式：迭代加深。只采用完整跑完的一层，超时不会返回半截搜索结果。
+    const mobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+    const budgetMs = mobile ? 260 : 420;
+    const maxDepth = mobile ? 5 : 6;
+    const rootCandidates = legal.slice(0, mobile ? 14 : 18);
+    const deadline = this.now() + budgetMs;
+    const context = {
+      aiColor,
+      opponent,
+      enableFoul,
+      deadline,
+      table: new Map(),
+      nodes: 0
+    };
+
+    let best = rootCandidates[0];
+    for (let depth = 1; depth <= maxDepth; depth++) {
+      const result = this.searchRoot(board, rootCandidates, depth, context);
+      if (result.aborted) break;
+      if (result.move) best = result.move;
+      if (result.score >= GOMOKU_AI_SCORE.WIN - 1000) break;
+    }
+
+    return best || legal[0];
+  }
+
+  static getBoardSize(board) {
+    return Array.isArray(board) && board.length > 0 ? board.length : 15;
+  }
+
+  static getEmpty() {
+    return typeof EMPTY === 'undefined' ? 0 : EMPTY;
+  }
+
+  static getBlack() {
+    return typeof BLACK === 'undefined' ? 1 : BLACK;
+  }
+
+  static getOpponent(color) {
+    return color === this.getBlack() ? 2 : this.getBlack();
+  }
+
+  static now() {
+    return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  }
+
+  static centerMove(size) {
+    const center = Math.floor(size / 2);
+    return { r: center, c: center };
+  }
+
+  static findFirstEmpty(board) {
+    const empty = this.getEmpty();
+    for (let r = 0; r < board.length; r++) {
+      for (let c = 0; c < board[r].length; c++) {
+        if (board[r][c] === empty) return { r, c };
+      }
+    }
+    return null;
+  }
+
+  static countStones(board) {
+    const empty = this.getEmpty();
+    let count = 0;
+    for (const row of board) {
+      for (const cell of row) if (cell !== empty) count++;
+    }
+    return count;
+  }
+
+  static isValid(board, r, c) {
+    return r >= 0 && r < board.length && c >= 0 && c < board[r].length;
+  }
+
+  static isForbiddenMove(board, r, c, color, enableFoul, forbidden) {
+    if (forbidden && forbidden.has(`${r},${c}`)) return true;
+    if (!enableFoul || color !== this.getBlack()) return false;
+
+    const empty = this.getEmpty();
+    if (board[r][c] !== empty) return true;
+    board[r][c] = color;
+    const hasExactFive = this.hasFive(board, r, c, color) && !this.hasOverline(board, r, c, color);
+    const overline = this.hasOverline(board, r, c, color);
+    board[r][c] = empty;
+    // 传统禁手规则中，正好成五优先于三三/四四；长连仍然判禁。
+    if (overline) return true;
+    if (hasExactFive) return false;
+
+    const pattern = this.analyzeMove(board, r, c, color);
+    return pattern.four >= 2 || pattern.openThree >= 2;
+  }
+
+  static getCandidateMoves(board, color, enableFoul = false, forbidden = new Set(), limit = 24) {
+    const empty = this.getEmpty();
+    const size = this.getBoardSize(board);
+    const stones = this.countStones(board);
+    if (!stones) return [this.centerMove(size)];
+
+    const raw = [];
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (board[r][c] !== empty || this.isForbiddenMove(board, r, c, color, enableFoul, forbidden)) continue;
+        if (!this.isNearStone(board, r, c, 2)) continue;
+        const own = this.analyzeMove(board, r, c, color);
+        const opp = this.analyzeMove(board, r, c, this.getOpponent(color));
+        const position = this.positionValue(r, c, size);
+        raw.push({ r, c, score: this.moveOrderingScore(own, opp) + position });
+      }
+    }
+
+    if (!raw.length) {
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          if (board[r][c] === empty && !this.isForbiddenMove(board, r, c, color, enableFoul, forbidden)) {
+            raw.push({ r, c, score: this.positionValue(r, c, size) });
+          }
+        }
+      }
+    }
+
+    raw.sort((a, b) => b.score - a.score || a.r - b.r || a.c - b.c);
+    return raw.slice(0, limit);
+  }
+
+  static isNearStone(board, r, c, radius) {
+    const empty = this.getEmpty();
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = r + dr;
+        const nc = c + dc;
+        if (this.isValid(board, nr, nc) && board[nr][nc] !== empty) return true;
+      }
+    }
+    return false;
+  }
+
+  static positionValue(r, c, size) {
+    const center = (size - 1) / 2;
+    const distance = Math.abs(r - center) + Math.abs(c - center);
+    return Math.max(0, size * 2 - distance);
+  }
+
+  static moveOrderingScore(own, opp) {
+    if (own.five) return GOMOKU_AI_SCORE.WIN;
+    if (opp.five) return GOMOKU_AI_SCORE.WIN * 0.92;
+    if (own.openFour) return GOMOKU_AI_SCORE.OPEN_FOUR;
+    if (opp.openFour) return GOMOKU_AI_SCORE.OPEN_FOUR * 0.9;
+    if (own.four >= 2) return GOMOKU_AI_SCORE.FOUR * 7;
+    if (opp.four >= 2) return GOMOKU_AI_SCORE.FOUR * 6.5;
+    if (own.four && own.openThree) return GOMOKU_AI_SCORE.FOUR * 5;
+    if (opp.four && opp.openThree) return GOMOKU_AI_SCORE.FOUR * 4.5;
+    if (own.openThree >= 2) return GOMOKU_AI_SCORE.DOUBLE_THREE;
+    if (opp.openThree >= 2) return GOMOKU_AI_SCORE.DOUBLE_THREE * 0.92;
+    return own.score * 1.18 + opp.score * 1.08;
+  }
+
+  static analyzeMove(board, r, c, color) {
+    const empty = this.getEmpty();
+    if (!this.isValid(board, r, c) || board[r][c] !== empty) {
+      return { five: 0, openFour: 0, four: 0, openThree: 0, brokenThree: 0, openTwo: 0, score: -Infinity };
+    }
+
+    let five = 0;
+    let openFour = 0;
+    let four = 0;
+    let openThree = 0;
+    let brokenThree = 0;
+    let openTwo = 0;
+
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      const line = this.getPatternLine(board, r, c, color, dr, dc);
+      if (line.includes('11111')) five++;
+      if (line.includes('011110')) openFour++;
+      if (line.includes('011112') || line.includes('211110') || line.includes('10111') || line.includes('11011') || line.includes('11101')) four++;
+      if (line.includes('01110') || line.includes('010110') || line.includes('011010')) openThree++;
+      if (line.includes('0011100') || line.includes('0010110') || line.includes('0110100') || line.includes('0101100')) brokenThree++;
+      if (line.includes('0110')) openTwo++;
+    }
+
+    const score = five ? GOMOKU_AI_SCORE.WIN :
+      openFour ? GOMOKU_AI_SCORE.OPEN_FOUR :
+      four >= 2 ? GOMOKU_AI_SCORE.FOUR * 7 :
+      four && openThree ? GOMOKU_AI_SCORE.FOUR * 5 :
+      openThree >= 2 ? GOMOKU_AI_SCORE.DOUBLE_THREE :
+      four ? GOMOKU_AI_SCORE.FOUR :
+      openThree ? GOMOKU_AI_SCORE.OPEN_THREE :
+      brokenThree ? GOMOKU_AI_SCORE.BROKEN_THREE :
+      openTwo ? GOMOKU_AI_SCORE.OPEN_TWO : GOMOKU_AI_SCORE.ONE;
+
+    return { five, openFour, four, openThree, brokenThree, openTwo, score };
+  }
+
+  static getPatternLine(board, r, c, color, dr, dc) {
+    const empty = this.getEmpty();
+    let line = '';
+    for (let i = -5; i <= 5; i++) {
+      const nr = r + i * dr;
+      const nc = c + i * dc;
+      if (i === 0) {
+        line += '1';
+      } else if (!this.isValid(board, nr, nc)) {
+        line += '2';
+      } else if (board[nr][nc] === color) {
+        line += '1';
+      } else if (board[nr][nc] === empty) {
+        line += '0';
+      } else {
+        line += '2';
+      }
+    }
+    return line;
+  }
+
+  static hasFive(board, r, c, color) {
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      let count = 1;
+      count += this.countDirection(board, r, c, dr, dc, color);
+      count += this.countDirection(board, r, c, -dr, -dc, color);
+      if (count >= 5) return true;
+    }
+    return false;
+  }
+
+  static hasOverline(board, r, c, color) {
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      let count = 1;
+      count += this.countDirection(board, r, c, dr, dc, color);
+      count += this.countDirection(board, r, c, -dr, -dc, color);
+      if (count > 5) return true;
+    }
+    return false;
+  }
+
+  static countDirection(board, r, c, dr, dc, color) {
+    let count = 0;
+    let nr = r + dr;
+    let nc = c + dc;
+    while (this.isValid(board, nr, nc) && board[nr][nc] === color) {
+      count++;
+      nr += dr;
+      nc += dc;
+    }
+    return count;
+  }
+
+  static isWinningMove(board, r, c, color) {
+    const empty = this.getEmpty();
+    if (!this.isValid(board, r, c) || board[r][c] !== empty) return false;
+    board[r][c] = color;
+    const won = this.hasFive(board, r, c, color);
+    board[r][c] = empty;
+    return won;
+  }
+
+  static getWinningMoves(board, color, enableFoul = false, limit = 40) {
+    const candidates = this.getCandidateMoves(board, color, enableFoul, new Set(), limit);
+    return candidates.filter(move => this.isWinningMove(board, move.r, move.c, color));
+  }
+
+  static findDoubleThreat(board, color, candidates, enableFoul) {
+    const empty = this.getEmpty();
+    for (const move of candidates.slice(0, 18)) {
+      const pattern = this.analyzeMove(board, move.r, move.c, color);
+      if (!(pattern.four || pattern.openThree >= 2 || pattern.four && pattern.openThree)) continue;
+      if (this.isForbiddenMove(board, move.r, move.c, color, enableFoul, new Set())) continue;
+      board[move.r][move.c] = color;
+      const wins = this.getWinningMoves(board, color, enableFoul, 24);
+      board[move.r][move.c] = empty;
+      if (wins.length >= 2) return move;
+    }
+    return null;
+  }
+
+  static pickGreedy(board, color, candidates, enableFoul, attackWeight = 1.1) {
+    let best = candidates[0];
+    let bestScore = -Infinity;
+    const opponent = this.getOpponent(color);
+    for (const move of candidates) {
+      const own = this.analyzeMove(board, move.r, move.c, color);
+      const opp = this.analyzeMove(board, move.r, move.c, opponent);
+      const score = own.score * attackWeight + opp.score;
+      if (score > bestScore) {
+        bestScore = score;
+        best = move;
+      }
+    }
+    return best;
+  }
+
+  static evaluateBoard(board, aiColor, opponent) {
+    let aiScore = 0;
+    let opponentScore = 0;
+    const size = this.getBoardSize(board);
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          if (this.isValid(board, r - dr, c - dc)) continue;
+          const line = [];
+          let nr = r;
+          let nc = c;
+          while (this.isValid(board, nr, nc)) {
+            line.push(board[nr][nc]);
+            nr += dr;
+            nc += dc;
+          }
+          aiScore += this.evaluateLine(line, aiColor);
+          opponentScore += this.evaluateLine(line, opponent);
+        }
+      }
+    }
+
+    let position = 0;
+    const empty = this.getEmpty();
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (board[r][c] === aiColor) position += this.positionValue(r, c, size);
+        else if (board[r][c] !== empty) position -= this.positionValue(r, c, size);
+      }
+    }
+    return aiScore - opponentScore * 1.12 + position;
+  }
+
+  static evaluateLine(line, color) {
+    const empty = this.getEmpty();
+    let score = 0;
+    for (let i = 0; i < line.length;) {
+      if (line[i] !== color) {
+        i++;
+        continue;
+      }
+      let end = i;
+      while (end < line.length && line[end] === color) end++;
+      const length = end - i;
+      const openLeft = i > 0 && line[i - 1] === empty;
+      const openRight = end < line.length && line[end] === empty;
+      const openEnds = (openLeft ? 1 : 0) + (openRight ? 1 : 0);
+      if (length >= 5) score += GOMOKU_AI_SCORE.WIN;
+      else if (length === 4) score += openEnds === 2 ? GOMOKU_AI_SCORE.OPEN_FOUR : openEnds ? GOMOKU_AI_SCORE.FOUR : 0;
+      else if (length === 3) score += openEnds === 2 ? GOMOKU_AI_SCORE.OPEN_THREE : openEnds ? GOMOKU_AI_SCORE.BROKEN_THREE : 0;
+      else if (length === 2) score += openEnds === 2 ? GOMOKU_AI_SCORE.OPEN_TWO : openEnds ? GOMOKU_AI_SCORE.TWO : 0;
+      else if (length === 1 && openEnds === 2) score += GOMOKU_AI_SCORE.ONE;
+      i = end;
+    }
+    return score;
+  }
+
+  static boardKey(board, turnColor, depth) {
+    return `${turnColor}|${depth}|${board.map(row => row.join('')).join('/')}`;
+  }
+
+  static searchRoot(board, candidates, depth, context) {
+    let bestMove = null;
+    let bestScore = -Infinity;
+    let alpha = -Infinity;
+    const beta = Infinity;
+    const empty = this.getEmpty();
+
+    for (const move of candidates) {
+      if (this.now() >= context.deadline) return { aborted: true };
+      board[move.r][move.c] = context.aiColor;
+      let score;
+      if (this.isWinningMoveAfterPlacement(board, move.r, move.c, context.aiColor)) {
+        score = GOMOKU_AI_SCORE.WIN;
+      } else {
+        const child = this.search(board, depth - 1, alpha, beta, context.opponent, context, 1);
+        board[move.r][move.c] = empty;
+        if (child.aborted) return child;
+        score = child.score;
+      }
+      board[move.r][move.c] = empty;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = move;
+      }
+      alpha = Math.max(alpha, bestScore);
+    }
+    return { move: bestMove, score: bestScore, aborted: false };
+  }
+
+  static search(board, depth, alpha, beta, turnColor, context, ply) {
+    context.nodes++;
+    if (this.now() >= context.deadline) return { score: 0, aborted: true };
+    if (depth <= 0) return { score: this.evaluateBoard(board, context.aiColor, context.opponent), aborted: false };
+
+    const key = this.boardKey(board, turnColor, depth);
+    const cached = context.table.get(key);
+    if (cached && cached.depth >= depth) return { score: cached.score, aborted: false };
+
+    const maximizing = turnColor === context.aiColor;
+    const candidates = this.getCandidateMoves(board, turnColor, context.enableFoul, new Set(), depth >= 3 ? 10 : 14);
+    if (!candidates.length) return { score: 0, aborted: false };
+    const empty = this.getEmpty();
+    let bestScore = maximizing ? -Infinity : Infinity;
+    let bestMove = null;
+    let cutoff = false;
+
+    for (const move of candidates) {
+      if (this.now() >= context.deadline) return { score: 0, aborted: true };
+      board[move.r][move.c] = turnColor;
+      let score;
+      if (this.isWinningMoveAfterPlacement(board, move.r, move.c, turnColor)) {
+        score = maximizing ? GOMOKU_AI_SCORE.WIN - ply : -GOMOKU_AI_SCORE.WIN + ply;
+      } else {
+        const child = this.search(board, depth - 1, alpha, beta, this.getOpponent(turnColor), context, ply + 1);
+        board[move.r][move.c] = empty;
+        if (child.aborted) return child;
+        score = child.score;
+      }
+      board[move.r][move.c] = empty;
+
+      if (maximizing) {
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+        alpha = Math.max(alpha, bestScore);
+      } else {
+        if (score < bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+        beta = Math.min(beta, bestScore);
+      }
+      if (beta <= alpha) {
+        cutoff = true;
+        break;
+      }
+    }
+
+    if (!cutoff) context.table.set(key, { depth, score: bestScore, move: bestMove });
+    return { score: bestScore, move: bestMove, aborted: false };
+  }
+
+  static isWinningMoveAfterPlacement(board, r, c, color) {
+    return this.hasFive(board, r, c, color);
+  }
+}
+
+if (typeof window !== 'undefined') window.GomokuAI = GomokuAI;
+if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI };
+
+  </script>
   <style>
     :root {
       --primary: #ff6b81;
@@ -3599,78 +4106,12 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     // 🚀 最强大师人机主落子决策函数
     function smartAiMove(forbiddenPoints = []) {
       if (isOver) return;
-
-      let totalStones = 0;
-      for (let r = 0; r < 15; r++) {
-        for (let c = 0; c < 15; c++) {
-          if (board[r][c] !== EMPTY) totalStones++;
-        }
+      const bestMove = window.GomokuAI && window.GomokuAI.getBestMove
+        ? window.GomokuAI.getBestMove(board, WHITE, 'master', false, forbiddenPoints)
+        : { r: 7, c: 7 };
+      if (bestMove && board[bestMove.r] && board[bestMove.r][bestMove.c] === EMPTY) {
+        makeMove(bestMove.r, bestMove.c, WHITE);
       }
-
-      let bestMove = null;
-
-      // 1. 职业级天元定式开局库 (Opening Book)
-      if (totalStones === 0) {
-        bestMove = { r: 7, c: 7 };
-      } else if (totalStones === 1) {
-        if (board[7][7] === EMPTY) {
-          bestMove = { r: 7, c: 7 };
-        } else {
-          // 白方最强应对定式：直指或斜指贴身占位
-          const proOptions = [{r:6, c:7}, {r:7, c:8}, {r:8, c:7}, {r:7, c:6}, {r:6, c:6}, {r:8, c:8}];
-          bestMove = proOptions[Math.floor(Math.random() * proOptions.length)];
-        }
-      }
-
-      if (!bestMove) {
-        // 2. 候选步高速提取 (基于定型数组位运算置换表)
-        let candidates = getCandidateMoves(board, WHITE, 16);
-        if (forbiddenPoints && forbiddenPoints.length > 0) {
-          candidates = candidates.filter(m => !forbiddenPoints.some(f => f.r === m.r && f.c === m.c));
-        }
-
-        if (candidates.length === 0) {
-          bestMove = { r: 7, c: 7 };
-        } else if (candidates[0].score >= 8000000) {
-          // 必胜绝杀 / 必防首要截断（连五、活四、四三、双三）
-          bestMove = { r: candidates[0].r, c: candidates[0].c };
-        } else {
-          // 3. 己方 10 步 VCF 连续冲四绝杀搜索
-          const vcfWin = searchVCF(board, WHITE, 10);
-          if (vcfWin && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vcfWin.r && f.c === vcfWin.c))) {
-            bestMove = vcfWin;
-          } else {
-            // 4. 对手 10 步 VCF 绝杀拦截
-            const vcfDef = searchVCF(board, BLACK, 10);
-            if (vcfDef && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vcfDef.r && f.c === vcfDef.c))) {
-              bestMove = vcfDef;
-            } else {
-              // 5. 己方 6 步 VCT 逼杀搜索
-              const vctWin = searchVCT(board, WHITE, 6);
-              if (vctWin && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vctWin.r && f.c === vctWin.c))) {
-                bestMove = vctWin;
-              } else {
-                // 6. 对手 6 步 VCT 逼杀反制
-                const vctDef = searchVCT(board, BLACK, 6);
-                if (vctDef && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vctDef.r && f.c === vctDef.c))) {
-                  bestMove = vctDef;
-                } else {
-                  // 7. 负极大值 Alpha-Beta 3-Ply 全局多步前瞻博弈
-                  const mm = minimaxAlphaBeta(board, 3, -Infinity, Infinity, true, WHITE);
-                  if (mm && mm.move) {
-                    bestMove = mm.move;
-                  } else {
-                    bestMove = candidates[0];
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      if (!bestMove) bestMove = { r: 7, c: 7 };
-      makeMove(bestMove.r, bestMove.c, WHITE);
     }
 
     // ==========================================
@@ -9029,8 +9470,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
         // 📜 当前版本官方更新内容说明（用于开机公告、弹窗展示与日志回顾）
     const CURRENT_UPDATE_NOTES = [
-      "⚡ 【C级极致算力】引入定型数组位运算置换表（Bitwise Engine），AI 算力暴增 50~100 倍，0 垃圾回收不发热",
-      "🧠 【大师算杀前瞻】连续冲四与活三（VCF/VCT）推演深度提升至 6 步深度绝杀推演",
+      "🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测与 Alpha-Beta 迭代加深搜索",
+      "⚡ 【移动端稳定算力】加入置换表与单步时间预算，优先保证棋力，避免深度搜索卡死界面",
       "🔥 【满血高刷解锁】物理解锁手机 120Hz/144Hz 屏幕高刷，落子、翻牌与动画丝滑翻倍",
       "⚡ 【内存直通流】原生进程直接内存流式映射，消除 Socket 握手，冷启动 0.2 秒瞬间秒开",
       "🎯 【触控零延迟】棋盘绑定原生手势流，消灭 300ms 触控延迟，指尖一触即刻落子",

@@ -14,6 +14,7 @@
   <script>if (typeof mqtt === 'undefined') { document.write('<script src="https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"><\/script>'); }</script>
   <script src="js/assets/cherry_bomb_audio.js"></script>
   <script src="js/assets/anime_avatars.js"></script>
+  <script src="js/ai.js"></script>
   <style>
     :root {
       --primary: #ff6b81;
@@ -3210,78 +3211,12 @@
     // 🚀 最强大师人机主落子决策函数
     function smartAiMove(forbiddenPoints = []) {
       if (isOver) return;
-
-      let totalStones = 0;
-      for (let r = 0; r < 15; r++) {
-        for (let c = 0; c < 15; c++) {
-          if (board[r][c] !== EMPTY) totalStones++;
-        }
+      const bestMove = window.GomokuAI && window.GomokuAI.getBestMove
+        ? window.GomokuAI.getBestMove(board, WHITE, 'master', false, forbiddenPoints)
+        : { r: 7, c: 7 };
+      if (bestMove && board[bestMove.r] && board[bestMove.r][bestMove.c] === EMPTY) {
+        makeMove(bestMove.r, bestMove.c, WHITE);
       }
-
-      let bestMove = null;
-
-      // 1. 职业级天元定式开局库 (Opening Book)
-      if (totalStones === 0) {
-        bestMove = { r: 7, c: 7 };
-      } else if (totalStones === 1) {
-        if (board[7][7] === EMPTY) {
-          bestMove = { r: 7, c: 7 };
-        } else {
-          // 白方最强应对定式：直指或斜指贴身占位
-          const proOptions = [{r:6, c:7}, {r:7, c:8}, {r:8, c:7}, {r:7, c:6}, {r:6, c:6}, {r:8, c:8}];
-          bestMove = proOptions[Math.floor(Math.random() * proOptions.length)];
-        }
-      }
-
-      if (!bestMove) {
-        // 2. 候选步高速提取 (基于定型数组位运算置换表)
-        let candidates = getCandidateMoves(board, WHITE, 16);
-        if (forbiddenPoints && forbiddenPoints.length > 0) {
-          candidates = candidates.filter(m => !forbiddenPoints.some(f => f.r === m.r && f.c === m.c));
-        }
-
-        if (candidates.length === 0) {
-          bestMove = { r: 7, c: 7 };
-        } else if (candidates[0].score >= 8000000) {
-          // 必胜绝杀 / 必防首要截断（连五、活四、四三、双三）
-          bestMove = { r: candidates[0].r, c: candidates[0].c };
-        } else {
-          // 3. 己方 10 步 VCF 连续冲四绝杀搜索
-          const vcfWin = searchVCF(board, WHITE, 10);
-          if (vcfWin && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vcfWin.r && f.c === vcfWin.c))) {
-            bestMove = vcfWin;
-          } else {
-            // 4. 对手 10 步 VCF 绝杀拦截
-            const vcfDef = searchVCF(board, BLACK, 10);
-            if (vcfDef && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vcfDef.r && f.c === vcfDef.c))) {
-              bestMove = vcfDef;
-            } else {
-              // 5. 己方 6 步 VCT 逼杀搜索
-              const vctWin = searchVCT(board, WHITE, 6);
-              if (vctWin && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vctWin.r && f.c === vctWin.c))) {
-                bestMove = vctWin;
-              } else {
-                // 6. 对手 6 步 VCT 逼杀反制
-                const vctDef = searchVCT(board, BLACK, 6);
-                if (vctDef && (!forbiddenPoints || !forbiddenPoints.some(f => f.r === vctDef.r && f.c === vctDef.c))) {
-                  bestMove = vctDef;
-                } else {
-                  // 7. 负极大值 Alpha-Beta 3-Ply 全局多步前瞻博弈
-                  const mm = minimaxAlphaBeta(board, 3, -Infinity, Infinity, true, WHITE);
-                  if (mm && mm.move) {
-                    bestMove = mm.move;
-                  } else {
-                    bestMove = candidates[0];
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      if (!bestMove) bestMove = { r: 7, c: 7 };
-      makeMove(bestMove.r, bestMove.c, WHITE);
     }
 
     // ==========================================
@@ -8640,8 +8575,8 @@
     // 🚀 GitHub 官方优先 + 全网多镜像并发竞速自动更新系统
         // 📜 当前版本官方更新内容说明（用于开机公告、弹窗展示与日志回顾）
     const CURRENT_UPDATE_NOTES = [
-      "⚡ 【C级极致算力】引入定型数组位运算置换表（Bitwise Engine），AI 算力暴增 50~100 倍，0 垃圾回收不发热",
-      "🧠 【大师算杀前瞻】连续冲四与活三（VCF/VCT）推演深度提升至 6 步深度绝杀推演",
+      "🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测与 Alpha-Beta 迭代加深搜索",
+      "⚡ 【移动端稳定算力】加入置换表与单步时间预算，优先保证棋力，避免深度搜索卡死界面",
       "🔥 【满血高刷解锁】物理解锁手机 120Hz/144Hz 屏幕高刷，落子、翻牌与动画丝滑翻倍",
       "⚡ 【内存直通流】原生进程直接内存流式映射，消除 Socket 握手，冷启动 0.2 秒瞬间秒开",
       "🎯 【触控零延迟】棋盘绑定原生手势流，消灭 300ms 触控延迟，指尖一触即刻落子",

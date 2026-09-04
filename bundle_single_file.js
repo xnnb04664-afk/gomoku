@@ -33,6 +33,12 @@ if (fs.existsSync(animeAvatarsPath)) {
   animeAvatarsContent = fs.readFileSync(animeAvatarsPath, 'utf8');
 }
 
+const aiEnginePath = path.join(ROOT_DIR, 'js', 'ai.js');
+let aiEngineContent = '';
+if (fs.existsSync(aiEnginePath)) {
+  aiEngineContent = fs.readFileSync(aiEnginePath, 'utf8');
+}
+
 // 压缩库可能包含 </script> 字符串；内联时必须转义，否则浏览器会提前结束脚本标签。
 const escapeInlineScript = content => content.replace(/<\/script/gi, '<\\/script');
 
@@ -62,6 +68,9 @@ if (cherryAudioContent) {
 }
 if (animeAvatarsContent) {
   inlinedHeadScripts += `  <!-- 内联 专属二次元情侣动漫头像 Base64 数据 -->\n  <script>\n${escapeInlineScript(animeAvatarsContent)}\n  </script>\n`;
+}
+if (aiEngineContent) {
+  inlinedHeadScripts += `  <!-- 内联 强力五子棋 AI 引擎（棋型评估 + Alpha-Beta + 置换表） -->\n  <script>\n${escapeInlineScript(aiEngineContent)}\n  </script>\n`;
 }
 
 // 执行替换：按 head 边界替换，避免 CDN fallback 中嵌套的 <script> 字符串干扰正则。

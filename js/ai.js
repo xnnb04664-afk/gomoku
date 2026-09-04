@@ -1,375 +1,503 @@
 /**
- * 五子棋智能 AI 对弈引擎 (Gomoku AI Engine)
- * 支持三种难度模式：简单 (Easy)、中等 (Medium)、大师 (Master - Minimax with Alpha-Beta Pruning)
+ * 五子棋强力 AI 引擎
+ *
+ * 设计目标：
+ * - 先处理必胜、必防和双重威胁，再进入搜索；
+ * - 使用棋型评估，而不是只看棋盘位置分；
+ * - Alpha-Beta + 置换表 + 迭代加深，在移动端限制单步计算时间；
+ * - 支持禁手规则与技能产生的 forbiddenPoints；
+ * - 全程确定性落子，避免同一局面随机走出弱着。
  */
 
-const SHAPE_SCORE = {
-  WIN: 1000000,
-  FIVE: 100000,
-  OPEN_FOUR: 10000,
-  BLOCKED_FOUR: 1200,
-  OPEN_THREE: 1000,
-  BLOCKED_THREE: 150,
-  OPEN_TWO: 100,
-  BLOCKED_TWO: 15,
-  ONE: 2
-};
+const GOMOKU_AI_SCORE = Object.freeze({
+  WIN: 100000000,
+  OPEN_FOUR: 12000000,
+  FOUR: 1800000,
+  DOUBLE_THREE: 650000,
+  OPEN_THREE: 85000,
+  BROKEN_THREE: 18000,
+  OPEN_TWO: 1800,
+  TWO: 220,
+  ONE: 12
+});
+
+const GOMOKU_AI_DIRECTIONS = [
+  [0, 1],
+  [1, 0],
+  [1, 1],
+  [1, -1]
+];
 
 class GomokuAI {
-  /**
-   * 计算最佳落子点
-   */
-  static getBestMove(board, aiColor, difficulty = 'medium', enableFoul = false) {
-    const oppColor = aiColor === BLACK ? WHITE : BLACK;
-    const candidates = this.getCandidateMoves(board);
+  static getBestMove(board, aiColor, difficulty = 'master', enableFoul = false, forbiddenPoints = []) {
+    const size = this.getBoardSize(board);
+    const opponent = this.getOpponent(aiColor);
+    const forbidden = new Set((forbiddenPoints || []).map(p => `${p.r},${p.c}`));
+    const legal = this.getCandidateMoves(board, aiColor, enableFoul, forbidden, 40);
 
-    // 如果棋盘为空，首手落天元 (7, 7)
-    if (candidates.length === 0) {
-      return { r: 7, c: 7 };
+    if (!legal.length) return this.findFirstEmpty(board);
+    if (this.countStones(board) === 0) return this.centerMove(size);
+
+    // 1. 直接成五优先级最高。
+    for (const move of legal) {
+      if (this.isWinningMove(board, move.r, move.c, aiColor)) return move;
     }
 
-    // 只有 1 个候选点
-    if (candidates.length === 1) {
-      return candidates[0];
+    // 2. 对手有立即胜点时必须封堵；若有多个胜点，后续搜索会尽量反攻。
+    const opponentWins = this.getWinningMoves(board, opponent, enableFoul, 40);
+    if (opponentWins.length) {
+      const winningKeys = new Set(opponentWins.map(m => `${m.r},${m.c}`));
+      const blocks = legal.filter(m => winningKeys.has(`${m.r},${m.c}`));
+      if (blocks.length) return blocks[0];
     }
 
-    if (difficulty === 'easy') {
-      return this.getEasyMove(board, aiColor, oppColor, candidates, enableFoul);
-    } else if (difficulty === 'medium') {
-      return this.getMediumMove(board, aiColor, oppColor, candidates, enableFoul);
-    } else {
-      return this.getMasterMove(board, aiColor, oppColor, candidates, enableFoul);
+    // 3. 抢先制造双重威胁，通常比单纯的局面评分更强。
+    if (difficulty === 'master' || difficulty === 'hard') {
+      const forcing = this.findDoubleThreat(board, aiColor, legal, enableFoul);
+      if (forcing) return forcing;
     }
+
+    if (difficulty === 'easy') return this.pickGreedy(board, aiColor, legal, enableFoul);
+    if (difficulty === 'medium') return this.pickGreedy(board, aiColor, legal, enableFoul, 1.05);
+
+    // 4. 大师模式：迭代加深。只采用完整跑完的一层，超时不会返回半截搜索结果。
+    const mobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+    const budgetMs = mobile ? 260 : 420;
+    const maxDepth = mobile ? 5 : 6;
+    const rootCandidates = legal.slice(0, mobile ? 14 : 18);
+    const deadline = this.now() + budgetMs;
+    const context = {
+      aiColor,
+      opponent,
+      enableFoul,
+      deadline,
+      table: new Map(),
+      nodes: 0
+    };
+
+    let best = rootCandidates[0];
+    for (let depth = 1; depth <= maxDepth; depth++) {
+      const result = this.searchRoot(board, rootCandidates, depth, context);
+      if (result.aborted) break;
+      if (result.move) best = result.move;
+      if (result.score >= GOMOKU_AI_SCORE.WIN - 1000) break;
+    }
+
+    return best || legal[0];
   }
 
-  /**
-   * 简单难度：贪心启发式评估，少量随机扰动
-   */
-  static getEasyMove(board, aiColor, oppColor, candidates, enableFoul) {
-    let bestScore = -Infinity;
-    let bestMoves = [];
-
-    for (const move of candidates) {
-      const { r, c } = move;
-
-      // 禁手过滤
-      if (aiColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, r, c)) {
-        continue;
-      }
-
-      // 评估自身进攻得分与防守得分
-      const attackScore = this.evaluatePoint(board, r, c, aiColor);
-      const defenseScore = this.evaluatePoint(board, r, c, oppColor);
-      const totalScore = attackScore * 1.0 + defenseScore * 0.75 + Math.random() * 20;
-
-      if (totalScore > bestScore) {
-        bestScore = totalScore;
-        bestMoves = [move];
-      } else if (Math.abs(totalScore - bestScore) < 5) {
-        bestMoves.push(move);
-      }
-    }
-
-    return bestMoves[Math.floor(Math.random() * bestMoves.length)] || candidates[0];
+  static getBoardSize(board) {
+    return Array.isArray(board) && board.length > 0 ? board.length : 15;
   }
 
-  /**
-   * 中等难度：综合攻防权衡，对必胜/必堵棋型绝对响应
-   */
-  static getMediumMove(board, aiColor, oppColor, candidates, enableFoul) {
-    let bestScore = -Infinity;
-    let bestMove = candidates[0];
-
-    for (const move of candidates) {
-      const { r, c } = move;
-
-      if (aiColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, r, c)) {
-        continue;
-      }
-
-      const myScore = this.evaluatePoint(board, r, c, aiColor);
-      const oppScore = this.evaluatePoint(board, r, c, oppColor);
-
-      // 如果我方能直接连五获胜，直接下！
-      if (myScore >= SHAPE_SCORE.FIVE) {
-        return move;
-      }
-
-      // 如果对方下一步能连五，必须抢先封堵！
-      if (oppScore >= SHAPE_SCORE.FIVE) {
-        return move;
-      }
-
-      // 攻防综合得分
-      let total = myScore * 1.1 + oppScore * 1.0;
-
-      if (total > bestScore) {
-        bestScore = total;
-        bestMove = move;
-      }
-    }
-
-    return bestMove;
+  static getEmpty() {
+    return typeof EMPTY === 'undefined' ? 0 : EMPTY;
   }
 
-  /**
-   * 大师难度：Minimax 深度博弈搜索 + Alpha-Beta 剪枝
-   */
-  static getMasterMove(board, aiColor, oppColor, candidates, enableFoul) {
-    // 快速检查立即获胜或必须防守点
-    for (const move of candidates) {
-      if (aiColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, move.r, move.c)) continue;
-      const myScore = this.evaluatePoint(board, move.r, move.c, aiColor);
-      if (myScore >= SHAPE_SCORE.FIVE) return move;
-    }
-
-    for (const move of candidates) {
-      const oppScore = this.evaluatePoint(board, move.r, move.c, oppColor);
-      if (oppScore >= SHAPE_SCORE.FIVE) {
-        if (aiColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, move.r, move.c)) continue;
-        return move;
-      }
-    }
-
-    // 候选点评分排序，截取前 12 个最具价值的落子点进行深入搜索
-    const rankedCandidates = this.rankCandidateMoves(board, candidates, aiColor, oppColor, enableFoul).slice(0, 12);
-
-    let bestScore = -Infinity;
-    let bestMove = rankedCandidates[0];
-    const searchDepth = 4; // 4 层前瞻预测
-
-    for (const move of rankedCandidates) {
-      const { r, c } = move;
-      board[r][c] = aiColor;
-
-      const score = this.minimax(
-        board,
-        searchDepth - 1,
-        -Infinity,
-        Infinity,
-        false,
-        aiColor,
-        oppColor,
-        enableFoul
-      );
-
-      board[r][c] = EMPTY;
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestMove = move;
-      }
-    }
-
-    return bestMove || candidates[0];
+  static getBlack() {
+    return typeof BLACK === 'undefined' ? 1 : BLACK;
   }
 
-  /**
-   * Minimax 递归搜索函数
-   */
-  static minimax(board, depth, alpha, beta, isMaximizing, aiColor, oppColor, enableFoul) {
-    const currentColor = isMaximizing ? aiColor : oppColor;
-    const previousColor = isMaximizing ? oppColor : aiColor;
-
-    // 终止条件：到达最大深度
-    if (depth === 0) {
-      return this.evaluateWholeBoard(board, aiColor, oppColor);
-    }
-
-    const allCandidates = this.getCandidateMoves(board);
-    if (allCandidates.length === 0) return 0;
-
-    const candidates = this.rankCandidateMoves(board, allCandidates, currentColor, previousColor, enableFoul).slice(0, 8);
-
-    if (isMaximizing) {
-      let maxEval = -Infinity;
-      for (const { r, c } of candidates) {
-        if (aiColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, r, c)) continue;
-
-        // 若当前点能获胜
-        const ptScore = this.evaluatePoint(board, r, c, aiColor);
-        if (ptScore >= SHAPE_SCORE.FIVE) return SHAPE_SCORE.WIN + depth * 1000;
-
-        board[r][c] = aiColor;
-        const evaluation = this.minimax(board, depth - 1, alpha, beta, false, aiColor, oppColor, enableFoul);
-        board[r][c] = EMPTY;
-
-        maxEval = Math.max(maxEval, evaluation);
-        alpha = Math.max(alpha, evaluation);
-        if (beta <= alpha) break; // Beta 剪枝
-      }
-      return maxEval === -Infinity ? this.evaluateWholeBoard(board, aiColor, oppColor) : maxEval;
-    } else {
-      let minEval = Infinity;
-      for (const { r, c } of candidates) {
-        if (oppColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, r, c)) continue;
-
-        const ptScore = this.evaluatePoint(board, r, c, oppColor);
-        if (ptScore >= SHAPE_SCORE.FIVE) return -SHAPE_SCORE.WIN - depth * 1000;
-
-        board[r][c] = oppColor;
-        const evaluation = this.minimax(board, depth - 1, alpha, beta, true, aiColor, oppColor, enableFoul);
-        board[r][c] = EMPTY;
-
-        minEval = Math.min(minEval, evaluation);
-        beta = Math.min(beta, evaluation);
-        if (beta <= alpha) break; // Alpha 剪枝
-      }
-      return minEval === Infinity ? this.evaluateWholeBoard(board, aiColor, oppColor) : minEval;
-    }
+  static getOpponent(color) {
+    return color === this.getBlack() ? 2 : this.getBlack();
   }
 
-  /**
-   * 整盘局面评估函数
-   */
-  static evaluateWholeBoard(board, aiColor, oppColor) {
-    let myTotal = 0;
-    let oppTotal = 0;
+  static now() {
+    return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  }
 
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
-        if (board[r][c] === aiColor) {
-          myTotal += this.evaluatePoint(board, r, c, aiColor);
-        } else if (board[r][c] === oppColor) {
-          oppTotal += this.evaluatePoint(board, r, c, oppColor);
-        }
+  static centerMove(size) {
+    const center = Math.floor(size / 2);
+    return { r: center, c: center };
+  }
+
+  static findFirstEmpty(board) {
+    const empty = this.getEmpty();
+    for (let r = 0; r < board.length; r++) {
+      for (let c = 0; c < board[r].length; c++) {
+        if (board[r][c] === empty) return { r, c };
+      }
+    }
+    return null;
+  }
+
+  static countStones(board) {
+    const empty = this.getEmpty();
+    let count = 0;
+    for (const row of board) {
+      for (const cell of row) if (cell !== empty) count++;
+    }
+    return count;
+  }
+
+  static isValid(board, r, c) {
+    return r >= 0 && r < board.length && c >= 0 && c < board[r].length;
+  }
+
+  static isForbiddenMove(board, r, c, color, enableFoul, forbidden) {
+    if (forbidden && forbidden.has(`${r},${c}`)) return true;
+    if (!enableFoul || color !== this.getBlack()) return false;
+
+    const empty = this.getEmpty();
+    if (board[r][c] !== empty) return true;
+    board[r][c] = color;
+    const hasExactFive = this.hasFive(board, r, c, color) && !this.hasOverline(board, r, c, color);
+    const overline = this.hasOverline(board, r, c, color);
+    board[r][c] = empty;
+    // 传统禁手规则中，正好成五优先于三三/四四；长连仍然判禁。
+    if (overline) return true;
+    if (hasExactFive) return false;
+
+    const pattern = this.analyzeMove(board, r, c, color);
+    return pattern.four >= 2 || pattern.openThree >= 2;
+  }
+
+  static getCandidateMoves(board, color, enableFoul = false, forbidden = new Set(), limit = 24) {
+    const empty = this.getEmpty();
+    const size = this.getBoardSize(board);
+    const stones = this.countStones(board);
+    if (!stones) return [this.centerMove(size)];
+
+    const raw = [];
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (board[r][c] !== empty || this.isForbiddenMove(board, r, c, color, enableFoul, forbidden)) continue;
+        if (!this.isNearStone(board, r, c, 2)) continue;
+        const own = this.analyzeMove(board, r, c, color);
+        const opp = this.analyzeMove(board, r, c, this.getOpponent(color));
+        const position = this.positionValue(r, c, size);
+        raw.push({ r, c, score: this.moveOrderingScore(own, opp) + position });
       }
     }
 
-    return myTotal - oppTotal * 1.15;
-  }
-
-  /**
-   * 候选点排序：综合攻防价值启发式排序
-   */
-  static rankCandidateMoves(board, candidates, playerColor, oppColor, enableFoul) {
-    const scored = candidates.map(move => {
-      const { r, c } = move;
-      if (playerColor === BLACK && enableFoul && GomokuRule.checkBlackFoul(board, r, c)) {
-        return { ...move, score: -999999 };
-      }
-      const myScore = this.evaluatePoint(board, r, c, playerColor);
-      const oppScore = this.evaluatePoint(board, r, c, oppColor);
-      return { ...move, score: myScore * 1.1 + oppScore * 1.0 };
-    });
-
-    return scored.sort((a, b) => b.score - a.score);
-  }
-
-  /**
-   * 搜索已有棋子周围 2 格以内的邻近空位作为候选点（大幅缩减搜索空间）
-   */
-  static getCandidateMoves(board) {
-    const visited = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(false));
-    const candidates = [];
-    let hasAnyPiece = false;
-
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
-        if (board[r][c] !== EMPTY) {
-          hasAnyPiece = true;
-          // 扫描周围 2 格距离
-          for (let dr = -2; dr <= 2; dr++) {
-            for (let dc = -2; dc <= 2; dc++) {
-              const nr = r + dr;
-              const nc = c + dc;
-              if (GomokuRule.isValidCoord(nr, nc) && board[nr][nc] === EMPTY && !visited[nr][nc]) {
-                visited[nr][nc] = true;
-                candidates.push({ r: nr, c: nc });
-              }
-            }
+    if (!raw.length) {
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          if (board[r][c] === empty && !this.isForbiddenMove(board, r, c, color, enableFoul, forbidden)) {
+            raw.push({ r, c, score: this.positionValue(r, c, size) });
           }
         }
       }
     }
 
-    if (!hasAnyPiece) {
-      return [{ r: 7, c: 7 }];
-    }
-
-    return candidates;
+    raw.sort((a, b) => b.score - a.score || a.r - b.r || a.c - b.c);
+    return raw.slice(0, limit);
   }
 
-  /**
-   * 单点价值评估（4个方向特征匹配）
-   */
-  static evaluatePoint(board, r, c, color) {
-    let totalScore = 0;
-
-    for (const [dr, dc] of DIRECTIONS) {
-      totalScore += this.evaluateDirection(board, r, c, dr, dc, color);
+  static isNearStone(board, r, c, radius) {
+    const empty = this.getEmpty();
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = r + dr;
+        const nc = c + dc;
+        if (this.isValid(board, nr, nc) && board[nr][nc] !== empty) return true;
+      }
     }
-
-    return totalScore;
+    return false;
   }
 
-  /**
-   * 单方向棋型评分
-   */
-  static evaluateDirection(board, r, c, dr, dc, color) {
-    let count = 1; // 假定在此落子
-    let blockSides = 0; // 被阻挡的端数 (0: 活, 1: 冲/眠, 2: 死)
+  static positionValue(r, c, size) {
+    const center = (size - 1) / 2;
+    const distance = Math.abs(r - center) + Math.abs(c - center);
+    return Math.max(0, size * 2 - distance);
+  }
 
-    // 正向扫描
-    let step = 1;
-    while (true) {
-      const nr = r + step * dr;
-      const nc = c + step * dc;
-      if (!GomokuRule.isValidCoord(nr, nc)) {
-        blockSides++;
-        break;
-      }
-      if (board[nr][nc] === color) {
-        count++;
-        step++;
-      } else if (board[nr][nc] === EMPTY) {
-        break; // 开放端
+  static moveOrderingScore(own, opp) {
+    if (own.five) return GOMOKU_AI_SCORE.WIN;
+    if (opp.five) return GOMOKU_AI_SCORE.WIN * 0.92;
+    if (own.openFour) return GOMOKU_AI_SCORE.OPEN_FOUR;
+    if (opp.openFour) return GOMOKU_AI_SCORE.OPEN_FOUR * 0.9;
+    if (own.four >= 2) return GOMOKU_AI_SCORE.FOUR * 7;
+    if (opp.four >= 2) return GOMOKU_AI_SCORE.FOUR * 6.5;
+    if (own.four && own.openThree) return GOMOKU_AI_SCORE.FOUR * 5;
+    if (opp.four && opp.openThree) return GOMOKU_AI_SCORE.FOUR * 4.5;
+    if (own.openThree >= 2) return GOMOKU_AI_SCORE.DOUBLE_THREE;
+    if (opp.openThree >= 2) return GOMOKU_AI_SCORE.DOUBLE_THREE * 0.92;
+    return own.score * 1.18 + opp.score * 1.08;
+  }
+
+  static analyzeMove(board, r, c, color) {
+    const empty = this.getEmpty();
+    if (!this.isValid(board, r, c) || board[r][c] !== empty) {
+      return { five: 0, openFour: 0, four: 0, openThree: 0, brokenThree: 0, openTwo: 0, score: -Infinity };
+    }
+
+    let five = 0;
+    let openFour = 0;
+    let four = 0;
+    let openThree = 0;
+    let brokenThree = 0;
+    let openTwo = 0;
+
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      const line = this.getPatternLine(board, r, c, color, dr, dc);
+      if (line.includes('11111')) five++;
+      if (line.includes('011110')) openFour++;
+      if (line.includes('011112') || line.includes('211110') || line.includes('10111') || line.includes('11011') || line.includes('11101')) four++;
+      if (line.includes('01110') || line.includes('010110') || line.includes('011010')) openThree++;
+      if (line.includes('0011100') || line.includes('0010110') || line.includes('0110100') || line.includes('0101100')) brokenThree++;
+      if (line.includes('0110')) openTwo++;
+    }
+
+    const score = five ? GOMOKU_AI_SCORE.WIN :
+      openFour ? GOMOKU_AI_SCORE.OPEN_FOUR :
+      four >= 2 ? GOMOKU_AI_SCORE.FOUR * 7 :
+      four && openThree ? GOMOKU_AI_SCORE.FOUR * 5 :
+      openThree >= 2 ? GOMOKU_AI_SCORE.DOUBLE_THREE :
+      four ? GOMOKU_AI_SCORE.FOUR :
+      openThree ? GOMOKU_AI_SCORE.OPEN_THREE :
+      brokenThree ? GOMOKU_AI_SCORE.BROKEN_THREE :
+      openTwo ? GOMOKU_AI_SCORE.OPEN_TWO : GOMOKU_AI_SCORE.ONE;
+
+    return { five, openFour, four, openThree, brokenThree, openTwo, score };
+  }
+
+  static getPatternLine(board, r, c, color, dr, dc) {
+    const empty = this.getEmpty();
+    let line = '';
+    for (let i = -5; i <= 5; i++) {
+      const nr = r + i * dr;
+      const nc = c + i * dc;
+      if (i === 0) {
+        line += '1';
+      } else if (!this.isValid(board, nr, nc)) {
+        line += '2';
+      } else if (board[nr][nc] === color) {
+        line += '1';
+      } else if (board[nr][nc] === empty) {
+        line += '0';
       } else {
-        blockSides++; // 对方棋子阻挡
-        break;
+        line += '2';
+      }
+    }
+    return line;
+  }
+
+  static hasFive(board, r, c, color) {
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      let count = 1;
+      count += this.countDirection(board, r, c, dr, dc, color);
+      count += this.countDirection(board, r, c, -dr, -dc, color);
+      if (count >= 5) return true;
+    }
+    return false;
+  }
+
+  static hasOverline(board, r, c, color) {
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      let count = 1;
+      count += this.countDirection(board, r, c, dr, dc, color);
+      count += this.countDirection(board, r, c, -dr, -dc, color);
+      if (count > 5) return true;
+    }
+    return false;
+  }
+
+  static countDirection(board, r, c, dr, dc, color) {
+    let count = 0;
+    let nr = r + dr;
+    let nc = c + dc;
+    while (this.isValid(board, nr, nc) && board[nr][nc] === color) {
+      count++;
+      nr += dr;
+      nc += dc;
+    }
+    return count;
+  }
+
+  static isWinningMove(board, r, c, color) {
+    const empty = this.getEmpty();
+    if (!this.isValid(board, r, c) || board[r][c] !== empty) return false;
+    board[r][c] = color;
+    const won = this.hasFive(board, r, c, color);
+    board[r][c] = empty;
+    return won;
+  }
+
+  static getWinningMoves(board, color, enableFoul = false, limit = 40) {
+    const candidates = this.getCandidateMoves(board, color, enableFoul, new Set(), limit);
+    return candidates.filter(move => this.isWinningMove(board, move.r, move.c, color));
+  }
+
+  static findDoubleThreat(board, color, candidates, enableFoul) {
+    const empty = this.getEmpty();
+    for (const move of candidates.slice(0, 18)) {
+      const pattern = this.analyzeMove(board, move.r, move.c, color);
+      if (!(pattern.four || pattern.openThree >= 2 || pattern.four && pattern.openThree)) continue;
+      if (this.isForbiddenMove(board, move.r, move.c, color, enableFoul, new Set())) continue;
+      board[move.r][move.c] = color;
+      const wins = this.getWinningMoves(board, color, enableFoul, 24);
+      board[move.r][move.c] = empty;
+      if (wins.length >= 2) return move;
+    }
+    return null;
+  }
+
+  static pickGreedy(board, color, candidates, enableFoul, attackWeight = 1.1) {
+    let best = candidates[0];
+    let bestScore = -Infinity;
+    const opponent = this.getOpponent(color);
+    for (const move of candidates) {
+      const own = this.analyzeMove(board, move.r, move.c, color);
+      const opp = this.analyzeMove(board, move.r, move.c, opponent);
+      const score = own.score * attackWeight + opp.score;
+      if (score > bestScore) {
+        bestScore = score;
+        best = move;
+      }
+    }
+    return best;
+  }
+
+  static evaluateBoard(board, aiColor, opponent) {
+    let aiScore = 0;
+    let opponentScore = 0;
+    const size = this.getBoardSize(board);
+    for (const [dr, dc] of GOMOKU_AI_DIRECTIONS) {
+      for (let r = 0; r < size; r++) {
+        for (let c = 0; c < size; c++) {
+          if (this.isValid(board, r - dr, c - dc)) continue;
+          const line = [];
+          let nr = r;
+          let nc = c;
+          while (this.isValid(board, nr, nc)) {
+            line.push(board[nr][nc]);
+            nr += dr;
+            nc += dc;
+          }
+          aiScore += this.evaluateLine(line, aiColor);
+          opponentScore += this.evaluateLine(line, opponent);
+        }
       }
     }
 
-    // 反向扫描
-    step = 1;
-    while (true) {
-      const nr = r - step * dr;
-      const nc = c - step * dc;
-      if (!GomokuRule.isValidCoord(nr, nc)) {
-        blockSides++;
-        break;
+    let position = 0;
+    const empty = this.getEmpty();
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        if (board[r][c] === aiColor) position += this.positionValue(r, c, size);
+        else if (board[r][c] !== empty) position -= this.positionValue(r, c, size);
       }
-      if (board[nr][nc] === color) {
-        count++;
-        step++;
-      } else if (board[nr][nc] === EMPTY) {
-        break;
+    }
+    return aiScore - opponentScore * 1.12 + position;
+  }
+
+  static evaluateLine(line, color) {
+    const empty = this.getEmpty();
+    let score = 0;
+    for (let i = 0; i < line.length;) {
+      if (line[i] !== color) {
+        i++;
+        continue;
+      }
+      let end = i;
+      while (end < line.length && line[end] === color) end++;
+      const length = end - i;
+      const openLeft = i > 0 && line[i - 1] === empty;
+      const openRight = end < line.length && line[end] === empty;
+      const openEnds = (openLeft ? 1 : 0) + (openRight ? 1 : 0);
+      if (length >= 5) score += GOMOKU_AI_SCORE.WIN;
+      else if (length === 4) score += openEnds === 2 ? GOMOKU_AI_SCORE.OPEN_FOUR : openEnds ? GOMOKU_AI_SCORE.FOUR : 0;
+      else if (length === 3) score += openEnds === 2 ? GOMOKU_AI_SCORE.OPEN_THREE : openEnds ? GOMOKU_AI_SCORE.BROKEN_THREE : 0;
+      else if (length === 2) score += openEnds === 2 ? GOMOKU_AI_SCORE.OPEN_TWO : openEnds ? GOMOKU_AI_SCORE.TWO : 0;
+      else if (length === 1 && openEnds === 2) score += GOMOKU_AI_SCORE.ONE;
+      i = end;
+    }
+    return score;
+  }
+
+  static boardKey(board, turnColor, depth) {
+    return `${turnColor}|${depth}|${board.map(row => row.join('')).join('/')}`;
+  }
+
+  static searchRoot(board, candidates, depth, context) {
+    let bestMove = null;
+    let bestScore = -Infinity;
+    let alpha = -Infinity;
+    const beta = Infinity;
+    const empty = this.getEmpty();
+
+    for (const move of candidates) {
+      if (this.now() >= context.deadline) return { aborted: true };
+      board[move.r][move.c] = context.aiColor;
+      let score;
+      if (this.isWinningMoveAfterPlacement(board, move.r, move.c, context.aiColor)) {
+        score = GOMOKU_AI_SCORE.WIN;
       } else {
-        blockSides++;
+        const child = this.search(board, depth - 1, alpha, beta, context.opponent, context, 1);
+        board[move.r][move.c] = empty;
+        if (child.aborted) return child;
+        score = child.score;
+      }
+      board[move.r][move.c] = empty;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = move;
+      }
+      alpha = Math.max(alpha, bestScore);
+    }
+    return { move: bestMove, score: bestScore, aborted: false };
+  }
+
+  static search(board, depth, alpha, beta, turnColor, context, ply) {
+    context.nodes++;
+    if (this.now() >= context.deadline) return { score: 0, aborted: true };
+    if (depth <= 0) return { score: this.evaluateBoard(board, context.aiColor, context.opponent), aborted: false };
+
+    const key = this.boardKey(board, turnColor, depth);
+    const cached = context.table.get(key);
+    if (cached && cached.depth >= depth) return { score: cached.score, aborted: false };
+
+    const maximizing = turnColor === context.aiColor;
+    const candidates = this.getCandidateMoves(board, turnColor, context.enableFoul, new Set(), depth >= 3 ? 10 : 14);
+    if (!candidates.length) return { score: 0, aborted: false };
+    const empty = this.getEmpty();
+    let bestScore = maximizing ? -Infinity : Infinity;
+    let bestMove = null;
+    let cutoff = false;
+
+    for (const move of candidates) {
+      if (this.now() >= context.deadline) return { score: 0, aborted: true };
+      board[move.r][move.c] = turnColor;
+      let score;
+      if (this.isWinningMoveAfterPlacement(board, move.r, move.c, turnColor)) {
+        score = maximizing ? GOMOKU_AI_SCORE.WIN - ply : -GOMOKU_AI_SCORE.WIN + ply;
+      } else {
+        const child = this.search(board, depth - 1, alpha, beta, this.getOpponent(turnColor), context, ply + 1);
+        board[move.r][move.c] = empty;
+        if (child.aborted) return child;
+        score = child.score;
+      }
+      board[move.r][move.c] = empty;
+
+      if (maximizing) {
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+        alpha = Math.max(alpha, bestScore);
+      } else {
+        if (score < bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+        beta = Math.min(beta, bestScore);
+      }
+      if (beta <= alpha) {
+        cutoff = true;
         break;
       }
     }
 
-    // 两端皆死则无价值
-    if (blockSides === 2 && count < 5) return 0;
+    if (!cutoff) context.table.set(key, { depth, score: bestScore, move: bestMove });
+    return { score: bestScore, move: bestMove, aborted: false };
+  }
 
-    // 棋型对应分值映射
-    if (count >= 5) return SHAPE_SCORE.FIVE;
-    if (count === 4) {
-      return blockSides === 0 ? SHAPE_SCORE.OPEN_FOUR : SHAPE_SCORE.BLOCKED_FOUR;
-    }
-    if (count === 3) {
-      return blockSides === 0 ? SHAPE_SCORE.OPEN_THREE : SHAPE_SCORE.BLOCKED_THREE;
-    }
-    if (count === 2) {
-      return blockSides === 0 ? SHAPE_SCORE.OPEN_TWO : SHAPE_SCORE.BLOCKED_TWO;
-    }
-    if (count === 1) {
-      return blockSides === 0 ? SHAPE_SCORE.ONE : 0;
-    }
-
-    return 0;
+  static isWinningMoveAfterPlacement(board, r, c, color) {
+    return this.hasFive(board, r, c, color);
   }
 }
 
-window.GomokuAI = GomokuAI;
+if (typeof window !== 'undefined') window.GomokuAI = GomokuAI;
+if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI };
