@@ -63,7 +63,7 @@
 
 ## Next Step
 
-AI 升级及 v1.0.86 全平台发布均已完成；首屏启动优化和客户端私有仓库更新中转已完成源码验证，待在 Pages 项目 `gomoku-api` 配置 `GITHUB_READ_TOKEN`、部署 Pages Function 后再打包安装下一 APK。
+AI 升级及 v1.0.86 全平台发布均已完成；首屏启动优化和客户端私有仓库更新中转已完成源码及线上接口验证，待替换最终最小权限 `GITHUB_READ_TOKEN`、重新部署 Pages Function 后再打包安装下一 APK。
 
 ## Errors Encountered
 

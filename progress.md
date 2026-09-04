@@ -24,4 +24,4 @@
 - 已通过主页面与单文件版的 Playwright 首屏/实际落子回归，以及 3 个 HTML 文件脚本语法检查；本轮仅改源码，尚未重新打包或安装新的 APK。
 - 已移除软件内公开开源发布卡片、复制链接入口、更新弹窗官方通道和仓库主页链接；前端更新地址与 Android 原生兜底地址改为运行时 XOR 解码。
 - 已同步 6 套主题、Android assets 与单文件版；通过 13 个 HTML 文件脚本语法检查、Playwright 运行时检查、明文地址扫描和资源同步校验。本轮仅改源码，尚未重新打包或安装新的 APK。
-- 已完成私有仓库更新中转改造：Pages Function 新增 `/api/version`、`/api/update/apk`、`/api/update/html`，客户端与发布脚本统一切换到 Cloudflare 地址；Token 仅预留为 Pages 项目 `gomoku-api` 的 `GITHUB_READ_TOKEN` Secret，尚未配置或部署线上版本。
+- 已完成私有仓库更新中转改造并完成线上接口验证：Pages Function 新增 `/api/version`、`/api/update/apk`、`/api/update/html`，客户端与发布脚本统一切换到 Cloudflare 地址；Pages 项目 `gomoku-api` 的 Secret 轮换后需重新部署 Pages Function。当前已用临时凭据验证返回 `code: 0`，待替换为最终最小权限 Token。
