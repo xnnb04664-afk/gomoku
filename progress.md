@@ -17,5 +17,6 @@
 - 已重写 `js/ai.js` 为统一大师级引擎，加入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深、置换表、候选点排序和单步时间预算。
 - 已将主页面 `smartAiMove` 接入新引擎，保留 `forbiddenPoints` 参数；已同步 Android 资源并重新生成 `五子棋大师_单文件版.html`。
 - 已通过 Node 棋力用例、3 个 HTML 文件脚本语法检查，以及主页面和单文件版的 Playwright 实际落子测试。
-- 本轮尚未执行 APK 打包、GitHub 推送、Release 创建或线上 Worker 部署，等待明确发布指令。
+- 已按用户明确指令执行完整发布：v1.0.86 / Build 87 APK 与单文件版构建成功，GitHub `master` 已推送，Release 已上传 `gomoku.apk` 与 `gomoku.html`，Worker 与 Pages 已部署。
 - AI 升级已提交 Git commit：`3b5226e feat: 升级大师级人机 AI 引擎`；工作区仅待记录本计划收尾。
+- 已修正发布脚本、版本接口和 Pages Worker 中的旧 AI 更新文案，并重新部署版本接口。

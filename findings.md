@@ -21,4 +21,5 @@
 - 主页面通过 `window.GomokuAI` 接入新引擎；`android_src/assets` 与单文件版已同步生成。
 - 已保留禁止落点参数，并在引擎内部避免明显黑棋禁手点；空棋盘优先落中心。
 - 通过 Node 棋力用例、HTML 脚本语法检查，以及主页面/单文件版 Playwright 实际落子测试。
-- 按交接约定仅完成本地代码与单文件生成，尚未执行 APK 打包、GitHub 推送、Release 创建或 Worker 部署。
+- v1.0.86 / Build 87 已完成 APK 与单文件构建，GitHub `master` 已推送，Release 已上传 `gomoku.apk` 与 `gomoku.html`，Cloudflare Worker 与 Pages 已部署。
+- 发布脚本、`version.json`、Worker 与 Pages Worker 的 AI 更新文案已同步为实际新引擎能力。

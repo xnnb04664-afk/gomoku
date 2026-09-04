@@ -63,7 +63,7 @@
 
 ## Next Step
 
-AI 升级已完成并提交；后续若需交付到 GitHub，须明确执行“打包并上传 GitHub”。
+AI 升级及 v1.0.86 全平台发布均已完成；后续按用户新需求继续迭代。
 
 ## Errors Encountered
 
