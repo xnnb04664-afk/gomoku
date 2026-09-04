@@ -317,6 +317,13 @@
       border-width: 4px 0 4px 5px;
       border-color: transparent transparent transparent #ff6b81;
     }
+    .turn-bubble.finished {
+      background: #64748b;
+      animation: none;
+    }
+    .turn-bubble.finished::after {
+      border-color: transparent #64748b transparent transparent;
+    }
     @keyframes bounceBubble {
       from { transform: translateY(0) scale(1); }
       to { transform: translateY(-3px) scale(1.05); }
@@ -2219,7 +2226,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.0.86</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.0.91</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
@@ -2393,12 +2400,16 @@
       return false;
     };
 
+    const CURRENT_VERSION_TAG = 'v1.0.91';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
     let turn = BLACK;
     let history = [];
     let isOver = false;
+    let gameWinnerColor = 0;
+    let resultModalTimer = null;
+    let resultModalGeneration = 0;
     let soundEnabled = true;
 
     // 自定义玩家昵称与头像
@@ -2416,6 +2427,11 @@
     let peer = null;
     let conn = null;
     let myRoomId = '';
+    let onlineRoundId = '';
+    let pendingOnlineUndoId = '';
+    let activeOnlineUndoId = '';
+    let pendingOnlineRestartId = '';
+    let activeOnlineRestartId = '';
 
     // ==========================================
     // 🃏 干扰牌技能卡池系统 (每次随机抽取3张)
@@ -2537,19 +2553,26 @@
     let opponentFreeMove = false; // 命运神抽点数1: 对手免费补落一子状态
     let undoStack = []; // 包含棋盘 + 干扰牌 + 技能状态的高精度撤销快照栈
 
+    function cloneSkillCardState(cards) {
+      if (!Array.isArray(cards)) return [];
+      return cards.map(card => (card && typeof card === 'object') ? { ...card } : card);
+    }
+
     function saveUndoSnapshot(type, metadata = {}) {
       const snap = {
         type: type, // 'move' | 'skill'
         board: board.map(row => [...row]),
         history: history.map(h => ({ ...h })),
         turn: turn,
-        currentDrawnCards: JSON.parse(JSON.stringify(currentDrawnCards)),
+        currentDrawnCards: cloneSkillCardState(currentDrawnCards),
         cardUsedStatus: [...cardUsedStatus],
         prophecyPoint: prophecyPoint ? { ...prophecyPoint } : null,
         hasExtraMove: hasExtraMove,
         consecutiveMovesLeft: consecutiveMovesLeft,
         opponentFreeMove: opponentFreeMove,
-        winningLine: winningLine ? [...winningLine] : null,
+        opponentSkillsUsedCount: opponentSkillsUsedCount,
+        opponentReforgeUsed: opponentReforgeUsed,
+        winningLine: winningLine ? winningLine.map(point => ({ ...point })) : null,
         isOver: isOver,
         isDraw: gameResultIsDraw,
         ...metadata
@@ -2583,6 +2606,21 @@
     let chatHistory = [
       { sender: 1, name: p1Name, avatar: p1Avatar, text: '你好呀~ 晴空草坪见！🌿', time: getNowTime() }
     ];
+
+    function resetChatHistoryForRoom() {
+      if (p1ChatTimer) clearTimeout(p1ChatTimer);
+      if (p2ChatTimer) clearTimeout(p2ChatTimer);
+      p1ChatTimer = null;
+      p2ChatTimer = null;
+      chatHistory = [
+        { sender: 1, name: p1Name, avatar: p1Avatar, text: '你好呀~ 晴空草坪见！🌿', time: getNowTime() }
+      ];
+      const p1Bubble = document.getElementById('p1ChatBubble');
+      const p2Bubble = document.getElementById('p2ChatBubble');
+      if (p1Bubble) p1Bubble.classList.remove('show');
+      if (p2Bubble) p2Bubble.classList.remove('show');
+      renderChatHistory();
+    }
 
     function escapeHtml(value) {
       return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
@@ -4021,6 +4059,9 @@
           ...data,
           _mid: typeof data._mid === 'string' && data._mid.length <= 80 ? data._mid : generateSecureId(10, 'm_')
         };
+        // 每一局使用独立轮次标识，避免重开后延迟到达的旧落子/技能重新污染新棋局。
+        const currentRound = typeof onlineRoundId === 'string' ? onlineRoundId : '';
+        if (currentRound && !message.roundId) message.roundId = currentRound;
         let jsonStr;
         try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
         if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
@@ -4105,7 +4146,13 @@
     }
 
     async function initHostMqttPeer(targetCode = null, forceNew = false) {
-      if (targetCode && String(targetCode) !== String(currentRoomCode)) activeOnlineGuestUid = '';
+      const isDifferentRoom = targetCode && String(targetCode) !== String(currentRoomCode);
+      if (isDifferentRoom) activeOnlineGuestUid = '';
+      // forceNew 只表示重建传输连接，不能在断线重连时更换棋局轮次。
+      if (isDifferentRoom || !onlineRoundId) {
+        onlineRoundId = generateSecureId(12, 'round_');
+      }
+      if (isDifferentRoom) resetChatHistoryForRoom();
       if (targetCode) currentRoomCode = targetCode;
       if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
 
@@ -4166,6 +4213,8 @@
             if (data.type !== 'join_request' && data.type !== 'reconnect_handshake') return;
             if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
             if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
+            if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
+            if (data.type === 'reconnect_handshake' && data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
             const reqUid = String(data.uid || data.name || 'guest').slice(0, 128);
 
             // 🛡️ 第三人进房拦截：若房间已有客方在对局，且请求者不是当前对局客方，直接回绝人数已满
@@ -4190,7 +4239,8 @@
                   type: 'join_accepted',
                   targetUid: activeGuestUid,
                   name: p1Name,
-                  avatar: getNetworkAvatarValue(p1Avatar)
+                  avatar: getNetworkAvatarValue(p1Avatar),
+                  roundId: onlineRoundId || undefined
                 }), { qos: 0 });
               } catch(_) {}
             };
@@ -4410,12 +4460,11 @@
         turn: turn,
         isOver: isOver,
         isDraw: gameResultIsDraw,
+        winnerColor: gameWinnerColor,
         p1Name: p1Name,
         p1Avatar: getNetworkAvatarValue(p1Avatar),
         p2Name: p2Name,
-        p2Avatar: getNetworkAvatarValue(p2Avatar),
-        currentDrawnCards: currentDrawnCards,
-        cardUsedStatus: cardUsedStatus
+        p2Avatar: getNetworkAvatarValue(p2Avatar)
       });
     }
 
@@ -4479,10 +4528,11 @@
       if (!ONLINE_MESSAGE_TYPES.has(data.type)) return false;
       const localColor = myOnlineColor === BLACK ? BLACK : WHITE;
       const remoteColor = localColor === BLACK ? WHITE : BLACK;
+      const isDestinyContinuation = data.type === 'destiny_point_1' || data.type === 'destiny_point_2';
       // 技能只能由当前回合的对手发动，避免利用公开 MQTT 信道注入跨回合操作。
       if (turn !== remoteColor) return false;
       // 1. 施法上限风控：当前手牌阶段最多只能使用 3 张技能牌。
-      if (opponentSkillsUsedCount >= MAX_OPPONENT_SKILLS_PER_HAND) {
+      if (!isDestinyContinuation && opponentSkillsUsedCount >= MAX_OPPONENT_SKILLS_PER_HAND) {
         return rejectIncomingSkill('⚠️ 对手本轮技能额度已用尽，异常数据包已拦截！');
       }
       
@@ -4581,7 +4631,7 @@
         if (rows.length !== 2 || cols.length !== 2 || rows[1] !== rows[0] + 1 || cols[1] !== cols[0] + 1) return false;
       }
 
-      opponentSkillsUsedCount++;
+      if (!isDestinyContinuation) opponentSkillsUsedCount++;
       return true;
     }
 
@@ -4601,6 +4651,7 @@
       if (data.turn !== BLACK && data.turn !== WHITE) return false;
       if (typeof data.isOver !== 'boolean') return false;
       if (data.isDraw !== undefined && typeof data.isDraw !== 'boolean') return false;
+      if (data.winnerColor !== undefined && data.winnerColor !== 0 && data.winnerColor !== BLACK && data.winnerColor !== WHITE) return false;
       if (data.cardUsedStatus !== undefined &&
           (!Array.isArray(data.cardUsedStatus) || data.cardUsedStatus.length !== 3 ||
            data.cardUsedStatus.some(value => typeof value !== 'boolean'))) return false;
@@ -4677,6 +4728,11 @@
         if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
         if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
         if (data.step !== undefined && (!Number.isInteger(data.step) || data.step < 0 || data.step > 1024)) return;
+        if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
+        if (data.requestId !== undefined && (typeof data.requestId !== 'string' || data.requestId.length > 80)) return;
+        if (data.nextRoundId !== undefined && (typeof data.nextRoundId !== 'string' || data.nextRoundId.length > 80)) return;
+        // 新局轮次不一致的报文一律丢弃，防止旧 MQTT/P2P 报文在重开后再次触发旧胜局。
+        if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
         if (data.type === "leave_room") {
           showGameNotice(`⚠️ 对手【${normalizeNetworkName(data.name, p2Name)}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
@@ -4755,10 +4811,17 @@
           turn = data.turn;
           isOver = data.isOver;
           gameResultIsDraw = data.isDraw === true;
+          gameWinnerColor = data.winnerColor === BLACK || data.winnerColor === WHITE ? data.winnerColor : 0;
+          winningLine = null;
+          if (isOver && gameWinnerColor) {
+            for (let i = history.length - 1; i >= 0; i--) {
+              const step = history[i];
+              if (step && step.r >= 0 && step.c >= 0 && step.p === gameWinnerColor && checkWin(step.r, step.c, step.p)) break;
+            }
+          }
           p2Name = normalizeNetworkName(data.p1Name, p2Name);
           if (isSafeNetworkAvatar(data.p1Avatar)) p2Avatar = data.p1Avatar;
-          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards.map(card => SKILL_CARD_POOL.find(localCard => localCard.id === card.id));
-          if (data.cardUsedStatus) cardUsedStatus = [...data.cardUsedStatus];
+          // 干扰牌是每位玩家的私有手牌，重连只同步棋盘，不覆盖本地手牌或泄露对方手牌。
           updatePlayerHeaderUI();
           draw();
           updateUI();
@@ -4793,24 +4856,40 @@
             conn.send({ type: 'profile_sync', name: normalizeNetworkName(p1Name, '棋友'), avatar: getNetworkAvatarValue(p1Avatar), isReply: true });
           }
         } else if (data.type === 'undo_req') {
+          if (isOver) {
+            if (conn && conn.open) conn.send({ type: 'undo_res', agree: false, requestId: data.requestId || '' });
+            return;
+          }
+          const incomingUndoId = typeof data.requestId === 'string' && data.requestId ? data.requestId : generateSecureId(10, 'undo_');
+          if (activeOnlineUndoId) return;
+          activeOnlineUndoId = incomingUndoId;
           undoDescText.textContent = "对方发起了悔棋申请，是否同意？";
           document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
           document.getElementById('btnUndoRefuse').style.display = "block";
           undoModal.classList.add('show');
         } else if (data.type === 'undo_res') {
+          if (!pendingOnlineUndoId) return;
+          if (pendingOnlineUndoId && data.requestId && data.requestId !== pendingOnlineUndoId) return;
+          pendingOnlineUndoId = '';
           if (!validateIncomingUndoState(data)) {
             console.warn('[undo_res] 拦截结构非法的悔棋响应');
             return;
           }
           if (data.agree) {
-            doUndo();
-            if (data.board && data.cardUsedStatus) {
+            const localUndoApplied = doUndo();
+            if (!localUndoApplied) {
+              showGameNotice("⚠️ 悔棋状态已过期，正在重新对齐棋局！", true);
+              requestOnlineResync();
+              return;
+            }
+            if (data.board && data.history) {
               board = data.board.map(r => [...r]);
               history = data.history.map(h => ({ ...h }));
-              cardUsedStatus = [...data.cardUsedStatus];
-              if (data.currentDrawnCards) currentDrawnCards = JSON.parse(JSON.stringify(data.currentDrawnCards));
               if (data.turn !== undefined) turn = data.turn;
-              renderCardSlots();
+              isOver = false;
+              gameWinnerColor = 0;
+              gameResultIsDraw = false;
+              winningLine = null;
               draw(); updateUI(); persistGameState();
             }
             showGameNotice("✅ 对方同意了悔棋申请！已连同干扰牌一并恢复！", false);
@@ -4818,43 +4897,82 @@
             showGameNotice("❌ 对方拒绝了您的悔棋申请！落子无悔哦~", true);
           }
         } else if (data.type === 'restart_req') {
+          const incomingRestartId = typeof data.requestId === 'string' && data.requestId ? data.requestId : generateSecureId(10, 'restart_');
+          if (activeOnlineRestartId) return;
+          activeOnlineRestartId = incomingRestartId;
           showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true });
-            resetBoardOnly();
+            activeOnlineRestartId = '';
+            const nextRoundId = generateSecureId(12, 'round_');
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true, requestId: incomingRestartId, nextRoundId });
+            resetBoardOnly(nextRoundId);
             showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
           }, () => {
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false });
+            activeOnlineRestartId = '';
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false, requestId: incomingRestartId });
             showGameNotice("已拒绝对手的重开申请，继续本局", false);
           }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
         } else if (data.type === 'restart_res') {
           if (typeof data.agree !== 'boolean') return;
+          if (!pendingOnlineRestartId) return;
+          if (pendingOnlineRestartId && data.requestId && data.requestId !== pendingOnlineRestartId) return;
+          pendingOnlineRestartId = '';
           if (data.agree) {
-            resetBoardOnly();
+            resetBoardOnly(data.nextRoundId || null);
             showGameNotice("🎉 对手同意了您的重开申请，新对局已开启！", false);
           } else {
             showGameNotice("❌ 对手拒绝了重开申请，继续当前对局！", true);
           }
         } else if (data.type === 'restart') {
           // 兼容旧版客户端指令：弹出协商弹窗，严禁单方面清空棋盘
+          const incomingRestartId = typeof data.requestId === 'string' && data.requestId ? data.requestId : generateSecureId(10, 'restart_');
+          if (activeOnlineRestartId) return;
+          activeOnlineRestartId = incomingRestartId;
           showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重开？`, () => {
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true });
-            resetBoardOnly();
+            activeOnlineRestartId = '';
+            const nextRoundId = generateSecureId(12, 'round_');
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true, requestId: incomingRestartId, nextRoundId });
+            resetBoardOnly(nextRoundId);
             showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
           }, () => {
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false });
+            activeOnlineRestartId = '';
+            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false, requestId: incomingRestartId });
             showGameNotice("已拒绝对手的重开申请，继续本局", false);
           }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
         } else if (data.type === "skill_use") {
+          const quotaBefore = {
+            opponentSkillsUsedCount,
+            opponentReforgeUsed
+          };
           const incomingCard = SKILL_CARD_POOL.find(card => card.id === data.skillId);
           if (!incomingCard || !validateIncomingSkillUse(data)) {
             console.warn("[AntiCheat] 无效的无目标技能报文，已被裁判拦截");
             return;
           }
+          // 远端无目标技能也要写入本地撤销栈，否则双方栈会错位，悔棋时无法恢复本地手牌额度。
+          saveUndoSnapshot('skill', {
+            source: 'remote',
+            skillId: data.skillId,
+            player: myOnlineColor === BLACK ? WHITE : BLACK,
+            ...quotaBefore
+          });
           alert(`⚡ 对方发动了干扰卡【${incomingCard.name}】！`);
         } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
+          const quotaBefore = {
+            opponentSkillsUsedCount,
+            opponentReforgeUsed
+          };
           if (!validateIncomingSkill(data)) {
             console.warn("[AntiCheat] 技能报文非法，已被裁判拦截丢弃:", data);
             return;
+          }
+          // destiny_point_1/2 是【命运神抽】的结果报文；前置 skill_use 已经记录了同一张牌，不能重复压栈。
+          if (data.type !== 'destiny_point_1' && data.type !== 'destiny_point_2') {
+            saveUndoSnapshot('skill', {
+              source: 'remote',
+              skillId: data.type,
+              player: myOnlineColor === BLACK ? WHITE : BLACK,
+              ...quotaBefore
+            });
           }
           if (data.type === "skill_identity_swap") {
             // 身份互换：全盘棋子颜色对调
@@ -5216,6 +5334,9 @@
         // 👑 掷出 6（天命降临·掀桌）：如果对方此时有“活三”或“成四”，直接全部作废移除；如果没有，你在棋盘上任意选一个未占用的 2×2 区域，全填上你的棋子
         const dangerLine = findEnemyThreeOrFour(enemyColor);
         if (dangerLine && dangerLine.length >= 3) {
+          // 初始命运神抽快照之外，掀桌本身也是一次可撤销的棋盘变更。
+          // 远端收到 destiny_wipe_danger 后会建立对应快照，保证双方撤销栈保持同长度。
+          saveUndoSnapshot('skill', { slotIdx, skillId: 'destiny_wipe_danger', player: myColor });
           dangerLine.forEach(pos => {
             board[pos.r][pos.c] = EMPTY;
             triggerSkillVFX('remove_stone', pos.r, pos.c);
@@ -5261,6 +5382,10 @@
       if (!card.needTarget) {
         if (card.id === 'destiny_dice') {
           saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'destiny_dice', player: turn });
+          if (gameMode === 'online' && conn && conn.open) {
+            // 先广播一次“开始掷骰”，让对端建立同一个悔棋快照；点数结果报文只负责应用结果。
+            conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
+          }
           executeDestinyDice(idx, card);
         } else if (card.id === 'double_move') {
           saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'double_move', player: turn });
@@ -5710,6 +5835,7 @@
               }
               if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
               if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
+              if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
               hasJoined = true;
               clearInterval(joinInterval);
               clearTimeout(joinTimeout);
@@ -5721,6 +5847,8 @@
               lastActiveRoomCode = code;
               currentRoomCode = code;
               myOnlineColor = WHITE;
+              onlineRoundId = typeof data.roundId === 'string' ? data.roundId : '';
+              resetChatHistoryForRoom();
               p2Name = normalizeNetworkName(data.name, '房主');
               p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👦';
               updatePlayerHeaderUI();
@@ -6106,7 +6234,11 @@
     }
 
     function setMode(mode, silent = false) {
+      const previousMode = gameMode;
       gameMode = mode;
+      if (mode === 'online' && previousMode !== 'online') {
+        resetChatHistoryForRoom();
+      }
       updatePlayerHeaderUI();
       resetBoardOnly();
       if (!silent) {
@@ -7228,7 +7360,7 @@
         contact: contact,
         uid: currentUserUid || '',
         nickname: (typeof p1Name !== 'undefined' && p1Name) ? p1Name : (currentUsername || '游客'),
-        version: typeof CURRENT_VERSION_TAG !== 'undefined' ? CURRENT_VERSION_TAG : 'v1.0.86',
+        version: CURRENT_VERSION_TAG,
         timestamp: Date.now()
       };
 
@@ -7670,6 +7802,22 @@
       modal.classList.add('show');
     }
 
+    function scheduleGameResultModal(options) {
+      if (resultModalTimer) clearTimeout(resultModalTimer);
+      const generation = ++resultModalGeneration;
+      resultModalTimer = setTimeout(() => {
+        resultModalTimer = null;
+        if (generation !== resultModalGeneration || !isOver) return;
+        showGameResultModal(options);
+      }, 350);
+    }
+
+    function cancelPendingGameResultModal() {
+      resultModalGeneration++;
+      if (resultModalTimer) clearTimeout(resultModalTimer);
+      resultModalTimer = null;
+    }
+
     function updateGameResultModalScore({ isWin, oldScore, newScore, delta, data }) {
       const oldScoreEl = document.getElementById('resultOldScore');
       if (oldScoreEl) oldScoreEl.textContent = oldScore;
@@ -7719,6 +7867,12 @@
 
     function restartGameFromResultModal() {
       closeGameResultModal();
+      // 联机终局必须经过双方确认，不能让结果弹窗单方面清空本地棋盘。
+      if (gameMode === 'online') {
+        const restartButton = document.getElementById('btnRestart');
+        if (restartButton) restartButton.click();
+        return;
+      }
       if (typeof resetBoardOnly === 'function') {
         resetBoardOnly();
       } else {
@@ -8107,14 +8261,18 @@
     function triggerGameDraw(customDrawReason = '') {
       if (isOver) return;
       isOver = true;
+      gameWinnerColor = 0;
       gameResultIsDraw = true;
       winningLine = null;
+      activeSkill = null;
+      const skillPromptBar = document.getElementById('skillPromptBar');
+      if (skillPromptBar) skillPromptBar.style.display = 'none';
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
 
       const drawReason = customDrawReason || '棋盘已无空位且没有五连，双方本局和棋！';
       showSkillBanner('🤝', '【棋逢对手】和棋！', drawReason, true);
       playPopSound();
-      setTimeout(() => showGameResultModal({ isPvp: gameMode === 'pvp', isWin: false, isDraw: true, winnerName: '' }), 350);
+      scheduleGameResultModal({ isPvp: gameMode === 'pvp', isWin: false, isDraw: true, winnerName: '' });
 
       // AI/联机和棋计入总局数但不改变积分；同屏娱乐局不上传天梯。
       if (gameMode === 'online' || gameMode === 'ai') {
@@ -8149,8 +8307,13 @@
 
     // 🏆 胜负终局统一结算与音效调度器 (严格区分胜利方与失败方的专属音效)
     function triggerGameEnd(winnerColor, customWinReason = '') {
+      if (isOver) return;
       isOver = true;
+      gameWinnerColor = winnerColor === BLACK || winnerColor === WHITE ? winnerColor : 0;
       gameResultIsDraw = false;
+      activeSkill = null;
+      const skillPromptBar = document.getElementById('skillPromptBar');
+      if (skillPromptBar) skillPromptBar.style.display = 'none';
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
 
       let isPlayerWin = false;
@@ -8171,19 +8334,19 @@
         triggerVictoryVFX();
         playSkillSound('victory');
         showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
-        setTimeout(() => showGameResultModal({ isPvp: true, winnerName }), 350);
+        scheduleGameResultModal({ isPvp: true, winnerName });
       } else if (isPlayerWin) {
         // 🎉 胜利方视角：大调凯旋专属胜利音效 + 金色五彩烟花
         triggerVictoryVFX();
         playSkillSound('victory');
         showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
-        setTimeout(() => showGameResultModal({ isWin: true, winnerName }), 350);
+        scheduleGameResultModal({ isWin: true, winnerName });
       } else {
         // 💔 失败方视角：小调幽默哀叹专属失败音效 + 局势震颤
         triggerBoardShake(false);
         playSkillSound('defeat');
         showSkillBanner('💔', '【棋局惜败】胜败乃兵家常事！', customWinReason || `【${winnerName}】达成五连珠！胜不骄败不馁，再战一局必定逆袭！`);
-        setTimeout(() => showGameResultModal({ isWin: false, winnerName }), 350);
+        scheduleGameResultModal({ isWin: false, winnerName });
       }
 
       // 仅在 AI 模式与全服联机中上报天梯战绩，双人同屏 pvp 绝不上报天梯
@@ -8213,6 +8376,8 @@
       });
 
       draw();
+      updateUI();
+      persistGameState();
     }
 
     // 🎴 炫酷干扰技能提示卡与震屏控制器 (等用户确认之后才消失！)
@@ -8629,6 +8794,22 @@
       const bubble = document.getElementById('turnBubble');
       const p1Status = document.getElementById('p1Status');
       const p2Status = document.getElementById('p2Status');
+
+      // 终局时不再沿用上一回合的“对手回合/落子中”提示，避免看起来像棋局又回到了旧状态。
+      if (isOver) {
+        const resultText = gameResultIsDraw ? '本局和棋' : '对局结束';
+        if (p1Status) p1Status.textContent = gameResultIsDraw ? '和棋' : '已结束';
+        if (p2Status) p2Status.textContent = gameResultIsDraw ? '和棋' : '已结束';
+        if (bubble) {
+          bubble.textContent = resultText;
+          bubble.className = 'turn-bubble finished';
+        }
+        const c1 = document.getElementById('p1Card');
+        const c2 = document.getElementById('p2Card');
+        if (c1) c1.style.opacity = '0.9';
+        if (c2) c2.style.opacity = '0.9';
+        return;
+      }
       
       // 判断当前是否属于左侧 p1 (本地玩家/黑方) 的回合
       const isP1Turn = (gameMode === 'online')
@@ -9230,7 +9411,7 @@
       }
 
       // 7. 绘制【五子连珠】连线金光激光与胜利光环
-      if (winningLine && winningLine.length >= 5) {
+      if (isOver && winningLine && winningLine.length >= 5) {
         ctx.save();
         ctx.beginPath();
         const p0 = winningLine[0];
@@ -9463,6 +9644,11 @@
         onlineHeartbeatTimer = null;
       }
       currentRoomCode = null;
+      onlineRoundId = '';
+      pendingOnlineUndoId = '';
+      activeOnlineUndoId = '';
+      pendingOnlineRestartId = '';
+      activeOnlineRestartId = '';
       activeOnlineGuestUid = '';
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
       cancelQuickMatch();
@@ -9519,11 +9705,20 @@
       showGameNotice(`🚪 已退出账号【${oldName}】，战绩已在云端安全归档`, true);
     }
 
-    function resetBoardOnly() {
+    function resetBoardOnly(nextRoundId = null) {
+      cancelPendingGameResultModal();
+      if (typeof closeGameResultModal === 'function') closeGameResultModal();
+      if (gameMode === 'online' && nextRoundId) {
+        onlineRoundId = nextRoundId;
+      }
       opponentSkillsUsedCount = 0;
       opponentReforgeUsed = false;
       board = Array.from({length: 15}, () => Array(15).fill(0));
-      turn = BLACK; history = []; isOver = false; winningLine = null; gameResultIsDraw = false;
+      turn = BLACK; history = []; isOver = false; gameWinnerColor = 0; winningLine = null; gameResultIsDraw = false;
+      pendingOnlineUndoId = '';
+      activeOnlineUndoId = '';
+      pendingOnlineRestartId = '';
+      activeOnlineRestartId = '';
       activeVFX = [];
       undoStack = [];
       if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelAnimationFrame(vfxRAF); vfxRAF = null; }
@@ -9538,13 +9733,19 @@
       if (e && e.currentTarget) e.currentTarget.blur();
 
       if (gameMode === 'online') {
+        if (pendingOnlineRestartId) return;
         if (!conn || !conn.open) {
           showGameNotice("⚠️ 当前联机已中断，直接重置棋盘", true);
           resetBoardOnly();
           return;
         }
         // 🚀 联机模式：点击重开直接向对手发送申请，必须经过对方同意才能重开
-        conn.send({ type: 'restart_req', name: p1Name });
+        pendingOnlineRestartId = generateSecureId(10, 'restart_');
+        if (!conn.send({ type: 'restart_req', name: p1Name, requestId: pendingOnlineRestartId })) {
+          pendingOnlineRestartId = '';
+          showGameNotice("⚠️ 重开申请发送失败，请检查联机状态后重试", true);
+          return;
+        }
         showGameNotice("📡 已向对手发送重新开局申请，等待对方同意...", false);
       } else if (gameMode === 'ai') {
         if (history.length > 0 && !isOver) {
@@ -9562,22 +9763,43 @@
     };
 
     function restoreSnapshot(snap) {
-      if (!snap) return;
+      if (!snap || !Array.isArray(snap.board) || snap.board.length !== 15 ||
+          !Array.isArray(snap.history) || snap.history.length > 512) return false;
       const prevBoard = board.map(r => [...r]);
       const prevCardsUsed = [...cardUsedStatus];
 
       board = snap.board.map(r => [...r]);
       history = snap.history.map(h => ({ ...h }));
       turn = snap.turn;
-      currentDrawnCards = JSON.parse(JSON.stringify(snap.currentDrawnCards));
-      cardUsedStatus = [...snap.cardUsedStatus];
+      currentDrawnCards = cloneSkillCardState(snap.currentDrawnCards).map(card =>
+        card && typeof card.id === 'string'
+          ? (SKILL_CARD_POOL.find(localCard => localCard.id === card.id) || card)
+          : card
+      );
+      if (currentDrawnCards.length !== 3) currentDrawnCards = cloneSkillCardState(currentDrawnCards);
+      cardUsedStatus = Array.isArray(snap.cardUsedStatus) && snap.cardUsedStatus.length === 3
+        ? snap.cardUsedStatus.map(value => value === true)
+        : [false, false, false];
       prophecyPoint = snap.prophecyPoint ? { ...snap.prophecyPoint } : null;
       hasExtraMove = snap.hasExtraMove || false;
       consecutiveMovesLeft = snap.consecutiveMovesLeft || 0;
       opponentFreeMove = snap.opponentFreeMove || false;
+      opponentSkillsUsedCount = Number.isInteger(snap.opponentSkillsUsedCount)
+        ? Math.max(0, Math.min(MAX_OPPONENT_SKILLS_PER_HAND, snap.opponentSkillsUsedCount))
+        : 0;
+      opponentReforgeUsed = snap.opponentReforgeUsed === true;
       winningLine = null;
       isOver = false;
+      gameWinnerColor = 0;
       gameResultIsDraw = false;
+      cancelPendingGameResultModal();
+      if (typeof closeGameResultModal === 'function') closeGameResultModal();
+
+      activeVFX = [];
+      if (typeof vfxRAF !== 'undefined' && vfxRAF) {
+        cancelAnimationFrame(vfxRAF);
+        vfxRAF = null;
+      }
 
       // 💫 粒子反馈：检测被撤销的棋子，触发金色倒流粒子动效
       for (let r = 0; r < 15; r++) {
@@ -9618,10 +9840,11 @@
       } else {
         showGameNotice("↩️ 悔棋成功！已撤回上一步落子", false);
       }
+      return true;
     }
 
     function doUndo() {
-      if ((undoStack.length === 0 && history.length === 0) || (isOver && gameMode === 'online')) return;
+      if ((undoStack.length === 0 && history.length === 0) || (isOver && gameMode === 'online')) return false;
 
       // 🚀 优先使用高精度全息快照恢复（完美还原棋盘 + 干扰牌 + 技能全部状态）
       if (undoStack.length > 0) {
@@ -9630,8 +9853,7 @@
         // 1. 如果当前栈顶直接是刚刚单独发动的技能牌（尚未落子），直接撤销该技能牌与棋盘变化
         if (undoStack[undoStack.length - 1].type === 'skill') {
           targetSnap = undoStack.pop();
-          restoreSnapshot(targetSnap);
-          return;
+          return restoreSnapshot(targetSnap);
         }
 
         if (gameMode === 'ai') {
@@ -9656,14 +9878,17 @@
         }
 
         if (targetSnap) {
-          restoreSnapshot(targetSnap);
-          return;
+          return restoreSnapshot(targetSnap);
         }
       }
 
       // 兜底降级处理（防旧局数据无 undoStack 时的兼容）
       winningLine = null;
       isOver = false;
+      gameWinnerColor = 0;
+      gameResultIsDraw = false;
+      cancelPendingGameResultModal();
+      if (typeof closeGameResultModal === 'function') closeGameResultModal();
       const last = history[history.length - 1];
       if (last && last.action === 'identity_swap') {
         history.pop();
@@ -9674,7 +9899,7 @@
         playSkillSound('rewind');
         draw(); updateUI();
         persistGameState();
-        return;
+        return true;
       }
       if (gameMode === 'ai' && history.length >= 2) {
         const a = history.pop(); const b = history.pop();
@@ -9693,6 +9918,7 @@
       }
       draw(); updateUI();
       persistGameState();
+      return true;
     }
 
     const undoModal = document.getElementById('undoModal');
@@ -9721,8 +9947,13 @@
         document.getElementById('btnUndoAgree').textContent = "确认悔棋";
         document.getElementById('btnUndoRefuse').style.display = "none";
       } else if (gameMode === 'online') {
-        if (conn && conn.open) {
-          conn.send({ type: 'undo_req' });
+        if (conn && conn.open && !pendingOnlineUndoId) {
+          pendingOnlineUndoId = generateSecureId(10, 'undo_');
+          if (!conn.send({ type: 'undo_req', requestId: pendingOnlineUndoId })) {
+            pendingOnlineUndoId = '';
+            showGameNotice("⚠️ 悔棋申请发送失败，请检查联机状态后重试", true);
+            return;
+          }
           showGameNotice("📡 已向联机好友发送悔棋申请，等待对方同意...", false);
         }
       } else {
@@ -9736,24 +9967,32 @@
 
     document.getElementById('btnUndoAgree').onclick = () => {
       undoModal.classList.remove('show');
-      doUndo();
+      const acceptedUndoId = activeOnlineUndoId;
+      activeOnlineUndoId = '';
+      const undoApplied = doUndo();
       if (gameMode === 'online' && conn && conn.open) {
-        conn.send({
-          type: 'undo_res',
-          agree: true,
-          board,
-          history,
-          cardUsedStatus,
-          currentDrawnCards,
-          turn
-        });
+        if (!undoApplied) {
+          conn.send({ type: 'undo_res', agree: false, requestId: acceptedUndoId });
+        } else {
+          // 双方手牌是私有状态，只同步悔棋后的公共棋盘；对端会用自己的快照恢复自己的干扰牌。
+          conn.send({
+            type: 'undo_res',
+            agree: true,
+            requestId: acceptedUndoId,
+            board: board.map(row => [...row]),
+            history: history.map(step => ({ ...step })),
+            turn
+          });
+        }
       }
     };
 
     document.getElementById('btnUndoRefuse').onclick = () => {
       undoModal.classList.remove('show');
+      const refusedUndoId = activeOnlineUndoId;
+      activeOnlineUndoId = '';
       if (gameMode === 'online' && conn && conn.open) {
-        conn.send({ type: 'undo_res', agree: false });
+        conn.send({ type: 'undo_res', agree: false, requestId: refusedUndoId });
       } else {
         showGameNotice("❌ 已拒绝悔棋申请，落子无悔哦~", true);
       }
@@ -9789,7 +10028,11 @@
     if (customPhrases.length === 0) customPhrases = [...DEFAULT_PHRASES];
 
     function savePhrases() {
-      localStorage.setItem('gomoku_custom_phrases', JSON.stringify(customPhrases));
+      try {
+        localStorage.setItem('gomoku_custom_phrases', JSON.stringify(customPhrases));
+      } catch (e) {
+        console.warn('保存快捷短语异常:', e);
+      }
     }
 
     function renderQuickPhrases() {
@@ -10039,9 +10282,10 @@
     function persistGameState() {
       try {
         const state = {
-          board, history, turn, stepCount: history.length, isOver, isDraw: gameResultIsDraw, gameMode,
+          board, history, turn, stepCount: history.length, isOver, winnerColor: gameWinnerColor, isDraw: gameResultIsDraw, gameMode,
           p1Name, p2Name, p1Avatar, p2Avatar,
           currentDrawnCards, cardUsedStatus,
+          opponentSkillsUsedCount, opponentReforgeUsed,
           undoStack: undoStack.slice(-30)
         };
         sessionStorage.setItem('gomoku_active_game_state', JSON.stringify(state));
@@ -10052,10 +10296,12 @@
             roomCode: currentRoomCode,
             myColor: myOnlineColor,
             myRole: myOnlineColor === BLACK ? 'host' : 'client',
+            roundId: onlineRoundId,
             p1Name, p1Avatar, p2Name, p2Avatar,
-            board, history, turn,
+            board, history, turn, winnerColor: gameWinnerColor,
             isDraw: gameResultIsDraw,
             currentDrawnCards, cardUsedStatus,
+            opponentSkillsUsedCount, opponentReforgeUsed,
             undoStack: undoStack.slice(-30),
             timestamp: Date.now()
           };
@@ -10077,6 +10323,7 @@
             currentRoomCode = session.roomCode;
             lastActiveRoomCode = session.roomCode;
             myOnlineColor = session.myColor;
+            onlineRoundId = typeof session.roundId === 'string' ? session.roundId : onlineRoundId;
             p1Name = session.p1Name || p1Name;
             p1Avatar = session.p1Avatar || p1Avatar;
             p2Name = session.p2Name || '好友';
@@ -10087,6 +10334,9 @@
             if (session.currentDrawnCards) currentDrawnCards = session.currentDrawnCards;
             if (session.cardUsedStatus) cardUsedStatus = session.cardUsedStatus;
             gameResultIsDraw = session.isDraw === true;
+            gameWinnerColor = session.winnerColor === BLACK || session.winnerColor === WHITE ? session.winnerColor : 0;
+            opponentSkillsUsedCount = Number.isInteger(session.opponentSkillsUsedCount) ? session.opponentSkillsUsedCount : 0;
+            opponentReforgeUsed = session.opponentReforgeUsed === true;
             if (Array.isArray(session.undoStack)) undoStack = session.undoStack;
             gameMode = 'online';
 
@@ -10111,7 +10361,10 @@
             history = s.history;
             turn = s.turn;
             isOver = s.isOver || false;
+            gameWinnerColor = s.winnerColor === BLACK || s.winnerColor === WHITE ? s.winnerColor : 0;
             gameResultIsDraw = s.isDraw === true;
+            opponentSkillsUsedCount = Number.isInteger(s.opponentSkillsUsedCount) ? s.opponentSkillsUsedCount : 0;
+            opponentReforgeUsed = s.opponentReforgeUsed === true;
             if (s.currentDrawnCards) currentDrawnCards = s.currentDrawnCards;
             if (s.cardUsedStatus) cardUsedStatus = s.cardUsedStatus;
             if (Array.isArray(s.undoStack)) undoStack = s.undoStack;
@@ -10168,7 +10421,6 @@
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.91';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
