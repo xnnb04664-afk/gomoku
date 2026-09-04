@@ -10,8 +10,12 @@
  */
 
 let isDbInitialized = false;
+let dbInitializationPromise = null;
 let cachedLeaderboard = null;
 let lastLeaderboardTime = 0;
+const PASSWORD_PBKDF2_ITERATIONS = 100000;
+const LEADERBOARD_CACHE_TTL_MS = 15000;
+const MAX_LEADERBOARD_AVATAR_CHARS = 300;
 
 // 私有仓库更新中转：GitHub 凭据只通过 Worker Secret 注入，绝不下发到客户端。
 const UPDATE_REPOSITORY = 'xnnb04664-afk/gomoku';
@@ -70,6 +74,15 @@ export default {
       }
     });
 
+    const leaderboardJson = (data, status = 200) => new Response(JSON.stringify(data), {
+      status,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=5, s-maxage=15, stale-while-revalidate=30'
+      }
+    });
+
     const contentLength = Number(request.headers.get('content-length') || 0);
     if (contentLength > 512 * 1024) {
       return json({ code: 413, msg: '请求数据过大' }, 413);
@@ -90,7 +103,8 @@ export default {
     }
 
     // 新账号使用 PBKDF2；旧账号仍可用旧 SHA-256 登录，并在成功登录时自动升级。
-    async function hashPassword(text, salt) {
+    // Cloudflare Workers 的 WebCrypto 运行时最多接受 100000 次迭代，不能写成 120000。
+    async function hashPassword(text, salt, iterations = PASSWORD_PBKDF2_ITERATIONS) {
       const key = await crypto.subtle.importKey(
         'raw',
         new TextEncoder().encode(text),
@@ -99,7 +113,7 @@ export default {
         ['deriveBits']
       );
       const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt: new TextEncoder().encode(`GOMOKU_PASSWORD_${salt}`), iterations: 120000, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt: new TextEncoder().encode(`GOMOKU_PASSWORD_${salt}`), iterations, hash: 'SHA-256' },
         key,
         256
       );
@@ -133,14 +147,21 @@ export default {
       if (avatar === 'anime_boy' || avatar === 'img/avatar_boy.png') return 'anime_boy';
       if (avatar === 'anime_girl' || avatar === 'img/avatar_girl.png') return 'anime_girl';
       if (avatar.length <= 4) return avatar;
-      if (avatar.startsWith('data:image/') && avatar.includes(';base64,') && avatar.length <= 150000) return avatar;
+      if (avatar.startsWith('data:image/') && avatar.includes(';base64,') && avatar.length <= 12000) return avatar;
       if ((avatar.startsWith('http://') || avatar.startsWith('https://')) && avatar.length <= 300) return avatar;
       return '👦';
     }
 
+    function compactAvatar(avatar) {
+      const safe = sanitizeAvatar(avatar);
+      return safe.startsWith('data:image/') ? '👦' : safe;
+    }
+
     // ── 数据库自动安全升级迁移 ─────────────────────────────
-    if (env.DB) {
-      try {
+    if (env.DB && !isDbInitialized) {
+      if (!dbInitializationPromise) {
+        dbInitializationPromise = (async () => {
+          try {
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS game_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,12 +260,20 @@ export default {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `).run();
-        try {
-          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at)`).run();
-        } catch(e) {}
-      } catch (e) {
-        console.warn('DB check error:', e.message);
+            try {
+              await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at)`).run();
+            } catch(e) {}
+            // 榜单按积分/胜场排序；只在 Worker 实例首次需要数据库时创建一次。
+            await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_users_score_wins_uid ON users(score DESC, wins DESC, uid ASC)`).run();
+            await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_users_nickname ON users(nickname)`).run();
+            isDbInitialized = true;
+          } catch (e) {
+            dbInitializationPromise = null;
+            console.warn('DB check error:', e.message);
+          }
+        })();
       }
+      await dbInitializationPromise;
     }
 
     const githubHeaders = (token, accept = 'application/vnd.github+json') => ({
@@ -573,6 +602,8 @@ async function allocateNextAvailableUid(env) {
 
             try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
             const updated = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(uid).first();
+            cachedLeaderboard = null;
+            lastLeaderboardTime = 0;
             return json({ code: 0, msg: '账号绑定升级成功！', data: updated });
           }
         }
@@ -585,6 +616,8 @@ async function allocateNextAvailableUid(env) {
 
         try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
         const created = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(newUid).first();
+        cachedLeaderboard = null;
+        lastLeaderboardTime = 0;
         return json({ code: 0, msg: '注册成功并已自动登录！', data: created });
       } catch (err) {
         return json({ code: 1, msg: '注册异常: ' + err.message }, 500);
@@ -623,6 +656,8 @@ async function allocateNextAvailableUid(env) {
           await env.DB.prepare('UPDATE users SET avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeAvatar, String(uid)).run();
         }
 
+        cachedLeaderboard = null;
+        lastLeaderboardTime = 0;
         const finalName = safeNick || user.username || user.nickname;
         return json({
           code: 0,
@@ -631,7 +666,7 @@ async function allocateNextAvailableUid(env) {
             uid: String(uid),
             username: finalName,
             nickname: finalName,
-            avatar: safeAvatar || user.avatar
+            avatar: safeAvatar || sanitizeAvatar(user.avatar)
           }
         });
       } catch (err) {
@@ -672,7 +707,7 @@ async function allocateNextAvailableUid(env) {
                 uid: user.uid,
                 username: user.username,
                 nickname: user.nickname,
-                avatar: user.avatar,
+                avatar: sanitizeAvatar(user.avatar),
                 score: user.score,
                 wins: user.wins,
                 total_games: user.total_games,
@@ -697,7 +732,7 @@ async function allocateNextAvailableUid(env) {
               uid: user.uid,
               username: null,
               nickname: user.nickname,
-              avatar: user.avatar,
+              avatar: sanitizeAvatar(user.avatar),
               score: user.score,
               wins: user.wins,
               total_games: user.total_games,
@@ -728,9 +763,18 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 429, msg: `密码输错过多，账号保护性锁定中！请在 ${remain} 秒后再试` });
         }
 
-        const calcHash = user.password_algo === 'pbkdf2'
-          ? await hashPassword(password, user.salt)
-          : await hashWithSalt(password, user.salt);
+        let calcHash;
+        try {
+          calcHash = user.password_algo === 'pbkdf2'
+            ? await hashPassword(password, user.salt)
+            : await hashWithSalt(password, user.salt);
+        } catch (hashError) {
+          const hashMessage = String(hashError && hashError.message || hashError || '').toLowerCase();
+          if (hashMessage.includes('iteration')) {
+            return json({ code: 409, msg: '该账号使用了旧版密码加密参数，请先点击“找回密码”重置一次密码' }, 409);
+          }
+          throw hashError;
+        }
         if (calcHash !== user.password_hash) {
           const newFailCount = (user.failed_login_count || 0) + 1;
           if (newFailCount >= 5) {
@@ -767,7 +811,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
-            avatar: user.avatar,
+            avatar: sanitizeAvatar(user.avatar),
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
@@ -865,7 +909,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
-            avatar: user.avatar,
+            avatar: sanitizeAvatar(user.avatar),
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
@@ -1056,7 +1100,7 @@ async function allocateNextAvailableUid(env) {
               status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
               matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
               matched_score = excluded.matched_score, room_code = excluded.room_code, updated_at = excluded.updated_at
-          `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, opponent.avatar, opponent.score, roomCode, now).run();
+          `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score, roomCode, now).run();
 
           return json({
             code: 0,
@@ -1067,7 +1111,7 @@ async function allocateNextAvailableUid(env) {
             opponent: {
               uid: opponent.uid,
               nickname: opponent.nickname,
-              avatar: opponent.avatar,
+              avatar: compactAvatar(opponent.avatar),
               score: opponent.score
             }
           });
@@ -1119,7 +1163,7 @@ async function allocateNextAvailableUid(env) {
             opponent: {
               uid: record.matched_with,
               nickname: record.matched_nickname,
-              avatar: record.matched_avatar,
+              avatar: compactAvatar(record.matched_avatar),
               score: record.matched_score
             }
           });
@@ -1153,16 +1197,28 @@ async function allocateNextAvailableUid(env) {
     // ── 7. 全服天梯榜（仅正式注册账号上榜，游客与未注册用户绝不上榜） ──
     if (url.pathname === '/api/rank' && request.method === 'GET') {
       if (env.DB) {
+        const cacheNow = Date.now();
+        if (Array.isArray(cachedLeaderboard) && cacheNow - lastLeaderboardTime < LEADERBOARD_CACHE_TTL_MS) {
+          return leaderboardJson({ code: 0, data: cachedLeaderboard });
+        }
         const { results } = await env.DB.prepare(`
-          SELECT uid, nickname AS name, avatar, score, wins, total_games
+          SELECT uid, nickname AS name,
+                 CASE
+                   WHEN avatar IS NULL OR avatar = '' OR avatar LIKE 'data:image/%' OR length(avatar) > ${MAX_LEADERBOARD_AVATAR_CHARS}
+                   THEN '👦'
+                   ELSE avatar
+                 END AS avatar,
+                 score, wins, total_games
           FROM users
           WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL
-          ORDER BY score DESC, wins DESC
+          ORDER BY score DESC, wins DESC, uid ASC
           LIMIT 30
         `).all();
-        return json({ code: 0, data: results || [] });
+        cachedLeaderboard = Array.isArray(results) ? results : [];
+        lastLeaderboardTime = cacheNow;
+        return leaderboardJson({ code: 0, data: cachedLeaderboard });
       }
-      return json({ code: 0, data: [] });
+      return leaderboardJson({ code: 0, data: [] });
     }
 
     // ── 8. 战绩安全上报（Token 验证 + 15 秒冷却防刷） ─────
@@ -1212,6 +1268,8 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 429, msg: '对局结算过于频繁，请 15 秒后再试' }, 429);
         }
 
+        cachedLeaderboard = null;
+        lastLeaderboardTime = 0;
         const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(String(uid)).first();
         return json({
           code: 0,

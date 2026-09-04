@@ -1631,14 +1631,14 @@
         <span>✨ 专属情侣动漫头像（点击选用）：</span>
       </div>
       <div class="anime-avatar-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:6px; margin-bottom:8px;">
-        <div class="anime-avatar-card" id="animeCardBoy" onclick="selectImgAvatar(this, window.ANIME_AVATAR_BOY || 'img/avatar_boy.png')">
+        <div class="anime-avatar-card" id="animeCardBoy" onclick="selectImgAvatar(this, 'anime_boy')">
           <img id="animeImgBoy" src="img/avatar_boy.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #70a1ff;" />
           <div style="text-align:left; line-height:1.2;">
             <div style="font-size:12px; font-weight:900; color:#2d3436;">银发少年 👦</div>
             <div style="font-size:10px; color:#636e72;">优雅礼服</div>
           </div>
         </div>
-        <div class="anime-avatar-card" id="animeCardGirl" onclick="selectImgAvatar(this, window.ANIME_AVATAR_GIRL || 'img/avatar_girl.png')">
+        <div class="anime-avatar-card" id="animeCardGirl" onclick="selectImgAvatar(this, 'anime_girl')">
           <img id="animeImgGirl" src="img/avatar_girl.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #ff9ff3;" />
           <div style="text-align:left; line-height:1.2;">
             <div style="font-size:12px; font-weight:900; color:#2d3436;">银发少女 👧</div>
@@ -2602,7 +2602,7 @@
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
 
-      const scoreSuffix = currentUsername ? ` (${currentUserScore}分)` : '';
+      const scoreSuffix = hasRegisteredAccountSession() ? ` (${currentUserScore}分)` : '';
       document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag + scoreSuffix;
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
       document.getElementById('p2NameLabel').textContent = p2DisplayName + p2ColorTag;
@@ -2773,7 +2773,7 @@
       if (titleEl) titleEl.textContent = '👤 自定义我的昵称与头像';
       const syncTip = document.getElementById('profileSyncTip');
       if (syncTip) {
-        if (currentUserUid || currentUsername) {
+        if (hasRegisteredAccountSession()) {
           syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · 修改后登录账号与全服天梯将同步变更`;
         } else {
           syncTip.innerHTML = `⚠️ <span style="color:#d97706;">当前为游客模式 (未登录)</span> · 修改仅在本地生效，登录正式账号后方可上天梯榜`;
@@ -2896,6 +2896,14 @@
       }
     }
 
+    function getAvatarSyncValue(avatar) {
+      if (avatar === 'anime_boy' || avatar === 'img/avatar_boy.png') return 'anime_boy';
+      if (avatar === 'anime_girl' || avatar === 'img/avatar_girl.png') return 'anime_girl';
+      if (typeof window.ANIME_AVATAR_BOY === 'string' && avatar === window.ANIME_AVATAR_BOY) return 'anime_boy';
+      if (typeof window.ANIME_AVATAR_GIRL === 'string' && avatar === window.ANIME_AVATAR_GIRL) return 'anime_girl';
+      return avatar;
+    }
+
     async function saveProfile() {
       const nameInput = document.getElementById('inputProfileName').value.trim();
       if (!nameInput) return showGameNotice('⚠️ 账号昵称不能为空哦！', true);
@@ -2903,11 +2911,12 @@
       if (editingPlayer === 1) {
         p1Name = nameInput;
         p1Avatar = selectedAvatarData;
+        const hasRegisteredAccount = hasRegisteredAccountSession();
         localStorage.setItem('gomoku_p1Name', p1Name);
         localStorage.setItem('gomoku_p1Avatar', p1Avatar);
 
         // 🌟 核心要求：昵称就是账号名，改昵称就是改账号名！
-        if (currentUsername || currentUserUid) {
+        if (hasRegisteredAccount) {
           currentUsername = p1Name;
           localStorage.setItem('gomoku_user_username', currentUsername);
           if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
@@ -2916,9 +2925,9 @@
         }
 
         // 🌟 立即在本地缓存的天梯榜中将自己的名字与头像替换（零延迟无缝生效）
-        if (Array.isArray(cachedLeaderboard)) {
+        if (hasRegisteredAccount && Array.isArray(cachedLeaderboard)) {
           cachedLeaderboard.forEach(item => {
-            if ((currentUserUid && String(item.uid) === String(currentUserUid)) || (currentUsername && item.name === currentUsername)) {
+            if (currentUserUid && String(item.uid) === String(currentUserUid)) {
               item.name = p1Name;
               item.avatar = p1Avatar;
             }
@@ -2926,7 +2935,7 @@
         }
 
         // 🌟 同步到云端数据库：修改 username 和 nickname
-        if (currentUserUid) {
+        if (hasRegisteredAccount) {
           try {
             const res = await safeApiFetch('/api/user/update_profile', {
               method: 'POST',
@@ -2935,7 +2944,7 @@
                 uid: currentUserUid,
                 token: currentUserToken,
                 nickname: p1Name,
-                avatar: p1Avatar
+                avatar: getAvatarSyncValue(p1Avatar)
               })
             });
             const data = await res.json();
@@ -2945,6 +2954,7 @@
                 applyUserData(data.data);
               }
               updateAccountUI();
+              leaderboardLoadedAt = 0;
               fetchGlobalLeaderboard(false);
             } else if (data && data.msg) {
               console.warn('[saveProfile sync warning]', data.msg);
@@ -2964,7 +2974,7 @@
       updateAccountUI();
 
       // 🌟 用户明确要求：在主页保存并应用之后不退出，就保持当前页面！
-      if (!currentUserUid && !currentUsername) {
+      if (!hasRegisteredAccountSession()) {
         showGameNotice('💾 游客昵称已保存在本地。登录正式账号即可同步至全服天梯榜！', false);
       } else {
         showGameNotice('🎉 保存成功！账号与昵称已应用并同步至全服天梯！', false);
@@ -5882,6 +5892,13 @@
     }
     let currentUsername = localStorage.getItem('gomoku_user_username') || '';
 
+    function hasRegisteredAccountSession() {
+      return Boolean(
+        currentUsername && currentUserUid && currentUserToken
+        && !String(currentUserUid).startsWith('guest_')
+      );
+    }
+
     // 🛡️ 尝试从 Android 原生 SharedPreferences 读取免登双保险备份
     if ((!currentUsername || !currentUserUid) && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
       try {
@@ -6027,7 +6044,7 @@
       }
 
       const btnLogout = document.getElementById("btnLogoutAction");
-      if (currentUsername) {
+      if (hasRegisteredAccountSession()) {
         if (icon) icon.textContent = "✅";
         if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${escapeHtml(currentUsername)}</span>`;
         if (subText) subText.innerHTML = `账号名与天梯展示完全统一 · 随时可改`;
@@ -6231,7 +6248,7 @@
             username: u,
             password: p,
             nickname: p1Name || u,
-            avatar: p1Avatar || "👦",
+            avatar: getAvatarSyncValue(p1Avatar || "👦"),
             uid: currentUserUid,
             token: currentUserToken,
             securityQuestion: q,
@@ -6286,7 +6303,7 @@
           errEl.style.display = 'block';
         }
       } catch(e) {
-        errEl.textContent = '网络连接失败: ' + (err.message || '请检查手机网络设置');
+        errEl.textContent = '网络连接失败: ' + (e.message || '请检查手机网络设置');
         errEl.style.display = 'block';
       }
     }
@@ -6325,7 +6342,7 @@
           errEl.style.display = 'block';
         }
       } catch(e) {
-        errEl.textContent = '网络连接失败: ' + (err.message || '请检查手机网络设置');
+        errEl.textContent = '网络连接失败: ' + (e.message || '请检查手机网络设置');
         errEl.style.display = 'block';
       }
     }
@@ -6335,6 +6352,9 @@
     // 🏆 Cloudflare Worker + D1 全服天梯排行榜与战绩同步系统
     // ══════════════════════════════════════════════════════════════════
     let cachedLeaderboard = [];
+    let leaderboardLoadedAt = 0;
+    let leaderboardRequest = null;
+    const LEADERBOARD_CACHE_TTL_MS = 30000;
     let isReportingMatch = false;
 
     function openLeaderboardModal() {
@@ -6460,10 +6480,17 @@
     }
 
     const fetchLeaderboard = (...args) => fetchGlobalLeaderboard(...args);
-    async function fetchGlobalLeaderboard(isManualRefresh = false) {
+    function fetchGlobalLeaderboard(isManualRefresh = false) {
       const listEl = document.getElementById('leaderboardList');
       const statusText = document.getElementById('myRankStatusText');
       const badge = document.getElementById('myLadderBadge');
+
+      const now = Date.now();
+      if (!isManualRefresh && leaderboardLoadedAt > 0 && now - leaderboardLoadedAt < LEADERBOARD_CACHE_TTL_MS) {
+        renderLeaderboardUI(cachedLeaderboard);
+        return Promise.resolve(cachedLeaderboard);
+      }
+      if (leaderboardRequest) return leaderboardRequest;
 
       if (isManualRefresh && listEl) {
         listEl.innerHTML = `
@@ -6474,24 +6501,29 @@
         `;
       }
 
-      try {
-        const res = await safeApiFetch(`/api/rank?_t=${Date.now()}`);
-        const json = await res.json();
+      leaderboardRequest = (async () => {
+        try {
+          const res = await safeApiFetch('/api/rank', isManualRefresh ? { cache: 'no-store' } : {});
+          const json = await res.json();
 
-        if (json && json.code === 0 && Array.isArray(json.data)) {
-          cachedLeaderboard = json.data;
-          renderLeaderboardUI(cachedLeaderboard);
-        } else {
-          if (listEl && isManualRefresh) {
+          if (json && json.code === 0 && Array.isArray(json.data)) {
+            cachedLeaderboard = json.data;
+            leaderboardLoadedAt = Date.now();
+            renderLeaderboardUI(cachedLeaderboard);
+          } else if (listEl && isManualRefresh) {
             listEl.innerHTML = `<div style="text-align:center; padding:30px 0; color:#ef4444; font-size:12px; font-weight:800;">获取排行榜失败，请稍后重试</div>`;
           }
+        } catch (err) {
+          console.warn("拉取排行榜异常:", err);
+          if (listEl && cachedLeaderboard.length === 0) {
+            listEl.innerHTML = `<div style="text-align:center; padding:30px 0; color:#ef4444; font-size:12px; font-weight:800;">网络连接异常，请检查网络</div>`;
+          }
+        } finally {
+          leaderboardRequest = null;
         }
-      } catch (err) {
-        console.warn("拉取排行榜异常:", err);
-        if (listEl && cachedLeaderboard.length === 0) {
-          listEl.innerHTML = `<div style="text-align:center; padding:30px 0; color:#ef4444; font-size:12px; font-weight:800;">网络连接异常，请检查网络</div>`;
-        }
-      }
+        return cachedLeaderboard;
+      })();
+      return leaderboardRequest;
     }
 
     function renderLeaderboardUI(list) {
@@ -6516,7 +6548,8 @@
       const html = list.map((item, idx) => {
         const rank = idx + 1;
         // 🌟 优先通过不变的专属 UID 判定是否是本人（改名后依然百分之百精准命中自己）
-        const isP1 = (currentUserUid && String(item.uid) === String(currentUserUid)) || (item.name === p1Name) || (currentUsername && item.name === currentUsername);
+        // 只能用不可变 UID 识别本人，绝不能用昵称匹配，否则游客改成他人昵称会冒领对方排名。
+        const isP1 = hasRegisteredAccountSession() && currentUserUid && String(item.uid) === String(currentUserUid);
         if (isP1) {
           myRankNum = rank;
           myScore = item.score;
@@ -6580,7 +6613,7 @@
         if (myRankNum > 0) {
           statusText.innerHTML = `我的排名: <b style="color:#b45309;">第 ${myRankNum} 名</b> (积分: <b style="color:#0ea5e9;">${myScore}</b>)`;
         } else {
-          if (!currentUserUid && !currentUsername) {
+          if (!hasRegisteredAccountSession()) {
             statusText.innerHTML = `当前身份: <b style="color:#64748b;">${escapeRankHTML(p1Name)} (游客未登录)</b> · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">点此登录正式账号</a>`;
           } else {
             statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (暂未入榜，赢下一局即上榜)`;
@@ -6623,7 +6656,7 @@
       setTimeout(() => { isReportingMatch = false; }, 2000);
 
       // 🏠 游客：纯本地存储，不上天梯榜
-      if (!currentUsername) {
+      if (!hasRegisteredAccountSession()) {
         addLocalResult(isWin);
         const s = getLocalStats();
         updateGameResultModalGuest(s);
@@ -6657,6 +6690,7 @@
 
           const toastMsg = isWin ? `🏆 天梯胜利！积分 +25 (${newScore}分)，已同步云端` : `💔 天梯惜败！积分 -15 (${newScore}分)，已同步云端`;
           showGameNotice(toastMsg, true);
+          leaderboardLoadedAt = 0;
           setTimeout(() => fetchGlobalLeaderboard(false), 800);
         } else if (data && data.code === 403) {
           addLocalResult(isWin);
@@ -6737,7 +6771,7 @@
         if (subEl) subEl.textContent = `恭喜【${p1Name}】技高一筹，勇夺对局胜利！`;
         if (pvpCard) pvpCard.style.display = 'none';
 
-        if (currentUsername) {
+        if (hasRegisteredAccountSession()) {
           if (scoreCard) {
             scoreCard.style.display = 'block';
             scoreCard.style.background = 'linear-gradient(135deg, #f0fdf4, #dcfce7)';
@@ -6764,7 +6798,7 @@
         if (subEl) subEl.textContent = `【${winnerName}】达成五连珠，再战一局必定逆袭！`;
         if (pvpCard) pvpCard.style.display = 'none';
 
-        if (currentUsername) {
+        if (hasRegisteredAccountSession()) {
           if (scoreCard) {
             scoreCard.style.display = 'block';
             scoreCard.style.background = 'linear-gradient(135deg, #fff7ed, #ffedd5)';
@@ -8458,7 +8492,7 @@
 
     // 👤 退出当前账号功能 (切回安全游客模式)
     function confirmLogoutAccount() {
-      if (!currentUsername) return;
+      if (!hasRegisteredAccountSession()) return;
       showCustomConfirm(`确定要退出账号【${currentUsername}】吗？\n退出后将切换为游客模式，随时可重新输入密码登录。`, () => {
         logoutAccount();
       }, null, { title: '退出当前账号', icon: '👤', okText: '确认退出', cancelText: '取消' });

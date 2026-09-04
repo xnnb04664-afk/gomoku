@@ -24,7 +24,8 @@ const crypto = require('crypto');
 const readline = require('readline');
 
 const CONFIG_FILE = path.join(__dirname, '.cloudflare_config.json');
-const PBKDF2_ITERATIONS = 120000;
+// 必须与 Cloudflare Worker 保持一致；Workers WebCrypto 不接受超过 100000 的迭代次数。
+const PBKDF2_ITERATIONS = 100000;
 const MAX_NAME_LENGTH = 16;
 const MAX_SCORE = 99999;
 

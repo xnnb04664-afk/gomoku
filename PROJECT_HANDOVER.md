@@ -309,6 +309,8 @@
   - Android 启动安全检查已改为失败即阻止进入游戏：确认检测到 APK 签名异常、调试器或 Frida/Xposed/Substrate 等注入特征时，统一显示“应用运行异常”对话框和错误码并退出；不单独以 Root 状态拦截，减少正常设备误伤。该检查仅能提高篡改成本，不能保证绝对防逆向。
   - 本次安全版 APK 已按以上源码重新构建并推送到 GitHub `master`：版本 `1.0.89 (Build 90)`，正式签名校验通过，`五子棋.apk` SHA-256 为 `819118b528754fe2a3df6c26661dc64d0e5474ab3100bbbcDAFE35A731A9BA6`。
   - 为避免旧 APK 被线上开关立即锁死，`UPDATE_TICKET_ENFORCED` 未设置时是兼容阶段：新客户端已使用票据，旧客户端仍可暂时访问旧接口。安装本次重新签名的安全版 APK 后，再将该 Pages Secret 设置为 `1` 并重新部署，才算完成线上关闭直链。
+  - **天梯榜与账号兼容优化（Worker/Pages 已重新部署，客户端源码已同步）**：数据库迁移改为每个 Worker 实例只初始化一次，并新增积分/胜场/昵称索引；榜单增加 15 秒服务端缓存、客户端 30 秒缓存、并发请求合并和紧凑头像返回，避免重复 D1 排序及几十 KB Base64 头像拖慢手机；游客只能用本地昵称，榜单本人识别只使用不可变 UID。要让手机端获得客户端缓存与 UID 识别修复，还需用正式签名密钥重新构建并发布 APK/HTML。
+  - **密码登录兼容修复**：Worker 与 `admin.js` 统一使用 Cloudflare WebCrypto 支持的 PBKDF2 100000 次迭代；旧 SHA-256 账号在正确登录后自动升级。若账号是在错误的 120000 次参数版本中新注册的，需要使用“找回密码”重置一次后再登录。
   - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据，便于迁移。配置命令：
     ```powershell
     npx wrangler pages secret put UPDATE_TICKET_SECRET --project-name gomoku-api
@@ -465,7 +467,7 @@ node publish.js
   # 也支持参数方式，但不会在工具输出中回显密码
   node admin.js set-pwd <UID 或账号用户名> <新密码>
   ```
-  新密码使用与 Worker 一致的 PBKDF2（SHA-256、120000 次迭代），并会使旧登录令牌失效。
+  新密码使用与 Worker 一致的 PBKDF2（SHA-256、100000 次迭代），并会使旧登录令牌失效。
 - **同步修改用户名和昵称**：
   ```bash
   node admin.js set-nickname <UID 或账号用户名> <新昵称>
@@ -496,4 +498,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：下载票据保护与客户端防篡改改造已完成源码实现，新的安全版 APK 已重新构建并推送；请先手动安装到手机并确认能正常检查更新，随后开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署，完成线上强制保护。后续发布请先阅读本文件并使用 `node publish.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化与密码兼容修复已完成；Worker/Pages 已重新部署，客户端源码与单文件版已同步，但仍需重新构建并发布 APK/HTML 才能让手机端获得最新前端修复。确认新客户端登录和检查更新正常后，再开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署。后续发布请先阅读本文件并使用 `node publish.js`。*
