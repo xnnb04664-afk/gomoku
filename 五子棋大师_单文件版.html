@@ -2620,7 +2620,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.87</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.88</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -9958,12 +9958,30 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.87';
+    const CURRENT_VERSION_TAG = 'v1.0.88';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
     } catch(e) {}
     const UPDATE_API_URL = 'https://gomoku-api.pages.dev/api/version';
+    const UPDATE_PROXY_APK_URL = 'https://gomoku-api.pages.dev/api/update/apk';
+    const UPDATE_PROXY_HTML_URL = 'https://gomoku-api.pages.dev/api/update/html';
+
+    function isTrustedUpdateUrl(value, expectedPath) {
+      try {
+        const parsed = new URL(value, UPDATE_API_URL);
+        return parsed.protocol === 'https:' && parsed.hostname === 'gomoku-api.pages.dev' && parsed.pathname === expectedPath;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function sha256Hex(value) {
+      if (!window.crypto || !window.crypto.subtle) throw new Error('当前环境不支持更新完整性校验');
+      const bytes = new TextEncoder().encode(value);
+      const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+      return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
 
     function compareVersions(v1, v2) {
       const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
@@ -10031,12 +10049,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         clearTimeout(timeoutId);
         if (cfRes.ok) {
           const d = await cfRes.json();
-          if (d && d.tag) {
+          const releaseTag = String(d && d.tag || '').trim();
+          if (d && /^v\d+\.\d+\.\d+$/.test(releaseTag)) {
             versionData = {
-              tag: d.tag,
+              tag: releaseTag,
               notes: d.updateLog || "修复已知问题，优化联机体验与显示",
-              fastUrl: d.apkDownload || '',
-              htmlUrl: d.htmlDownload || ''
+              fastUrl: isTrustedUpdateUrl(d.apkDownload, '/api/update/apk') ? d.apkDownload : UPDATE_PROXY_APK_URL,
+              htmlUrl: isTrustedUpdateUrl(d.htmlDownload, '/api/update/html') ? d.htmlDownload : UPDATE_PROXY_HTML_URL,
+              htmlSha256: /^[0-9a-f]{64}$/i.test(String(d.htmlSha256 || '')) ? String(d.htmlSha256).toLowerCase() : ''
             };
           }
         }
@@ -10157,6 +10177,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
                       const txt = await res.text();
                       if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
                         throw new Error("Invalid html payload");
+                      }
+                      if (versionData.htmlSha256) {
+                        const actualHash = await sha256Hex(txt);
+                        if (actualHash !== versionData.htmlSha256) {
+                          throw new Error("HTML integrity check failed");
+                        }
+                      } else {
+                        throw new Error("Missing HTML integrity digest");
                       }
                       return txt;
                     });
