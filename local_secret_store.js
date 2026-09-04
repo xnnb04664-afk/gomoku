@@ -43,6 +43,15 @@ function decryptWithWindowsDpapi(filePath) {
     '}'
   ].join('\n');
 
+  const windowsRoot = process.env.WINDIR || process.env.SystemRoot || 'C:\\Windows';
+  const nativeModulePaths = [
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'WindowsPowerShell', 'Modules'),
+    path.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')
+  ].join(';');
+
+  // Codex/PowerShell 7 可能会把新版模块路径注入父进程；Windows PowerShell 5.1
+  // 加载其中的 Microsoft.PowerShell.Security 会发生类型定义冲突。只给子进程
+  // 保留 Windows PowerShell 5.1 的系统模块目录，确保 DPAPI cmdlet 正常加载。
   const result = spawnSync(
     'powershell.exe',
     [
@@ -55,7 +64,11 @@ function decryptWithWindowsDpapi(filePath) {
       script
     ],
     {
-      env: { ...process.env, GOMOKU_DPAPI_FILE: filePath },
+      env: {
+        ...process.env,
+        GOMOKU_DPAPI_FILE: filePath,
+        PSModulePath: nativeModulePaths
+      },
       encoding: 'utf8',
       windowsHide: true,
       maxBuffer: 64 * 1024
