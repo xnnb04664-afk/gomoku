@@ -34,8 +34,8 @@
 ## 客户端公开地址移除与私有仓库更新中转
 
 - 已移除主版本个人中心的公开开源发布卡片、复制下载链接、更新弹窗官方通道和仓库主页链接；单文件版与 Android 资源已同步。
-- 更新器已切换为只访问 Cloudflare Worker 的 `/api/version`、`/api/update/apk`、`/api/update/html`；Worker 通过 `GITHUB_READ_TOKEN` Secret 读取私有 Release，Token 不下发客户端。
+- 更新器已切换为只访问 Cloudflare Pages Function 的 `/api/version`、`/api/update/apk`、`/api/update/html`；Pages 项目 `gomoku-api` 通过 `GITHUB_READ_TOKEN` Secret 读取私有 Release，Token 不下发客户端。
 - `publish.js` 与 `version.json` 已改为记录 Cloudflare 中转地址，不再向客户端下发 GitHub 下载地址；所有主题、单文件版和 Android assets 已同步。
 - 验证通过：13 个生产 HTML 文件脚本语法检查、Playwright 页面运行时检查、Android 资源同步检查、Worker/客户端静态扫描。
-- 待办：在 Cloudflare Worker 配置 `GITHUB_READ_TOKEN` 并部署后，使用线上 `/api/version` 和两个文件代理接口做真机下载验证。
+- 待办：在 Cloudflare Pages 项目 `gomoku-api` 配置 `GITHUB_READ_TOKEN` 并部署后，使用线上 `/api/version` 和两个文件代理接口做真机下载验证。
 - 安全边界：Token 只在 Worker Secret 中，客户端仍可在运行时看到 Cloudflare 请求地址，但不会获得 GitHub 凭据。

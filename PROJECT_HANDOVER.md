@@ -217,7 +217,7 @@
 ### 18. 🔄 手机无缝覆盖更新与私有 GitHub Releases 云发版体系
 - **仓库权限**：GitHub 仓库保持 Private；仓库地址、Release 地址和 GitHub Token 只供维护脚本与 Cloudflare Worker 使用，不写入客户端界面。
 - **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本，并通过 `/api/update/apk`、`/api/update/html` 获取文件；不会直连 GitHub、Raw、jsDelivr 或第三方反代。
-- **Cloudflare Worker 私有仓库中转**：Worker 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。
+- **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
   - 在【个人资料】中常驻版本显示当前正式版本（本次为 `v1.0.86`）与【🚀 检查更新】按钮；
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
@@ -294,7 +294,7 @@
 - **v1.0.86（Build 87）发布结果**：已完成单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时部署 Cloudflare Worker 与 Pages。
 - **维护发布记录**：[`v1.0.86 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.86)；上述地址仅供维护者留档，已不再在软件界面公开展示。
 - **首屏启动优化（待下一 APK 构建生效）**：联机库、音频与头像资源改为首帧后延迟执行；账号会话、头像初始化和历史统计移到首帧后；单文件版同步采用延迟内联资源；Android WebView 关闭不必要的离屏预栅格化并使用浅色启动底色，减少冷启动蓝屏等待感。
-- **客户端地址保护与私有仓库中转（源码已完成，待配置 Secret/部署）**：移除个人中心的公开开源发布卡片、复制链接入口和更新弹窗官方通道；客户端更新器统一访问 Cloudflare Worker 的 `/api/version`、`/api/update/apk`、`/api/update/html`，由 Worker 使用 `GITHUB_READ_TOKEN` Secret 读取私有 Release 并中转文件。Token 不进入 APK、网页或 Git；Token 轮换无需更新客户端。该方案仍不能阻止运行时调试观察最终请求。
+- **客户端地址保护与私有仓库中转（源码已完成，待配置 Secret/部署）**：移除个人中心的公开开源发布卡片、复制链接入口和更新弹窗官方通道；客户端更新器统一访问 Cloudflare Pages Function 的 `/api/version`、`/api/update/apk`、`/api/update/html`，由 Pages 项目 `gomoku-api` 使用 `GITHUB_READ_TOKEN` Secret 读取私有 Release 并中转文件。Token 不进入 APK、网页或 Git；Token 轮换无需更新客户端。该方案仍不能阻止运行时调试观察最终请求。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：
