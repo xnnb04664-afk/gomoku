@@ -3,6 +3,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const ROOT_DIR = __dirname;
+const UPDATE_PROXY_ORIGIN = 'https://gomoku-api.pages.dev';
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
 
 const vm = require('vm');
@@ -124,7 +125,7 @@ htmlFiles.forEach(f => {
   }
 });
 
-// 同步更新 version.json (供 jsDelivr 国内极速 CDN 毫秒级分发检测)
+// 同步更新 version.json（兼容旧客户端；新客户端统一走 Cloudflare Worker 中转）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const vJson = {
@@ -137,7 +138,7 @@ const vJson = {
     `🎯 【主棋盘大屏动态复盘】历史战绩点击「查看棋局」，直接平滑跳转至主棋盘大屏！每颗棋子中心清晰印上落子序号（1, 2, 3...），支持滑动条拖拽推演、单步进退、自动电影级播放与终局一键跳转`,
     `🔒 【设置弹窗按钮底部常驻】个人中心弹窗底部「保存并应用」与「关闭」按钮改为永远固定常驻在屏幕最下方，打开弹窗一眼可见，彻底告别必须滑到最底部的繁琐操作`,
     `☁️ 【历史战绩云端存储与双向彻底抹除】全盘走法谱与棋局数据全自动备份至 Cloudflare D1 云端数据库，换手机/重装账号一键找回；清空记录本地与云端彻底同步抹除`,
-    `⚡ 【免安装秒更4路全球CDN并发竞速】免安装在线热更新采用 jsDelivr、Fastly、GitHub 加速镜像 4 路全球 CDN 并发竞速（Promise.any），彻底消灭网络卡顿丢包，点一次秒更完成`,
+    `⚡ 【免安装在线热更新】由 Cloudflare Worker 安全中转私有仓库文件，手机端无需 GitHub 权限`,
     `🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深与置换表搜索，并按桌面/移动端设置单步时间预算`,
     `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
   ].join('\n\n'),
@@ -146,14 +147,13 @@ const vJson = {
     `🎯 【主棋盘大屏动态复盘】历史战绩点击「查看棋局」，直接平滑跳转至主棋盘大屏！每颗棋子中心清晰印上落子序号（1, 2, 3...），支持滑动条拖拽推演、单步进退、自动电影级播放与终局一键跳转`,
     `🔒 【设置弹窗按钮底部常驻】个人中心弹窗底部「保存并应用」与「关闭」按钮改为永远固定常驻在屏幕最下方，打开弹窗一眼可见，彻底告别必须滑到最底部的繁琐操作`,
     `☁️ 【历史战绩云端存储与双向彻底抹除】全盘走法谱与棋局数据全自动备份至 Cloudflare D1 云端数据库，换手机/重装账号一键找回；清空记录本地与云端彻底同步抹除`,
-    `⚡ 【免安装秒更4路全球CDN并发竞速】免安装在线热更新采用 jsDelivr、Fastly、GitHub 加速镜像 4 路全球 CDN 并发竞速（Promise.any），彻底消灭网络卡顿丢包，点一次秒更完成`,
+    `⚡ 【免安装在线热更新】由 Cloudflare Worker 安全中转私有仓库文件，手机端无需 GitHub 权限`,
     `🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深与置换表搜索，并按桌面/移动端设置单步时间预算`,
     `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
   ].join('\n\n'),
   download: {
-    fastUrl: `https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
-    backupFastUrl: `https://ghps.cc/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`,
-    officialUrl: `https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
+    fastUrl: `${UPDATE_PROXY_ORIGIN}/api/update/apk`,
+    htmlUrl: `${UPDATE_PROXY_ORIGIN}/api/update/html`
   }
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
@@ -239,6 +239,6 @@ try {
 
 console.log('======================================================');
 console.log(`✨ 全部发布流程圆满成功！版本: v${newName}`);
-console.log(`🔗 永久最新版下载直链: https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
-console.log(`⚡ 国内高速加速下载链: https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`);
+console.log(`🔗 APK 更新中转地址: ${UPDATE_PROXY_ORIGIN}/api/update/apk`);
+console.log(`⚡ HTML 热更新中转地址: ${UPDATE_PROXY_ORIGIN}/api/update/html`);
 console.log('======================================================');

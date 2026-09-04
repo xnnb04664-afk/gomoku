@@ -214,18 +214,14 @@
 - **触控零延迟 (Zero Touch Latency)**：
   - 规范配置 `touch-action: manipulation;` 与 `user-scalable=no`，彻底根除手机端浏览器默认的 300ms 点击延迟。
 
-### 18. 🔄 手机无缝覆盖更新与 GitHub Releases 免服务器云发版体系
-- **GitHub 官方公开仓库**：[`xnnb04664-afk/gomoku`](https://github.com/xnnb04664-afk/gomoku)
-- **永久最新版下载直链**：
-  - 官方通道：`https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
-  - ⚡ 国内高速免翻墙镜像：`https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
+### 18. 🔄 手机无缝覆盖更新与私有 GitHub Releases 云发版体系
+- **仓库权限**：GitHub 仓库保持 Private；仓库地址、Release 地址和 GitHub Token 只供维护脚本与 Cloudflare Worker 使用，不写入客户端界面。
+- **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本，并通过 `/api/update/apk`、`/api/update/html` 获取文件；不会直连 GitHub、Raw、jsDelivr 或第三方反代。
+- **Cloudflare Worker 私有仓库中转**：Worker 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。
 - **游戏内免服务器智能检查更新系统**：
   - 在【个人资料】中常驻版本显示当前正式版本（本次为 `v1.0.86`）与【🚀 检查更新】按钮；
-  - **国内极速 CDN 双重加速架构（彻底解决国内访问 GitHub 慢的痛点）**：
-    1. **毫秒级版本检测**：优先走国内备案极速 jsDelivr 边缘节点（`fastly.jsdelivr.net`）读取 `version.json`，响应耗时仅 20ms~50ms，彻底避开 GitHub 官方 API 偶尔的网络阻断；
-    2. **满速极速下载**：下载直链自动通过 `ghproxy.net` 与 `mirror.ghproxy.com` 国内高速反代镜像，手机下载 1.06MB APK 只要 1~2 秒！
-  - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出精美果冻卡片与更新日志；
-  - 提供国内高速与官方原源双下载通道，点击直连下载最新 APK；
+  - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
+  - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
   - **固化根目录永久正式签名证书 (`release.keystore`)**：签名密钥永久锁定，彻底解决 Android 系统“签名冲突无法安装”的致命痛点，手机用户直接安装最新 APK 即可 1 秒覆盖升级，无需卸载，保留全部对局历史与自定义头像；
 - **全平台一键极速发布流水线 (`publish.js`)**：
@@ -280,16 +276,12 @@
   - **登录自动拉取合并**：玩家在任何设备登录账号，自动自云端拉取全量战绩；
   - **双向彻底抹除**：当玩家在历史战绩弹窗点击“🗑️ 清空记录”时，前端不仅清空本机 `localStorage`，同时向 Cloudflare 后端发起 `/api/history/clear` 接口调用，在 D1 数据库执行 `DELETE FROM game_history WHERE uid = ?;`，**物理彻底抹除云端所有记录，绝无残留**！
 
-### 4. ⚡ 4路并发 CDN 极速竞速热更新与免安装秒更
+### 4. ⚡ Cloudflare Worker 私有仓库中转热更新与免安装秒更
 - **用户原始需求**：“我在1.0.79版本的时候，点了几次更新才好的”；
 - **实现架构**：
-  - 客户端构建了 4 条高可用加速链路：
-    1. `https://raw.githubusercontent.com/...`（官方源）
-    2. `https://cdn.jsdelivr.net/gh/...`（全球 CDN）
-    3. `https://gh-proxy.com/...`（国内极速直连）
-    4. `https://fastly.jsdelivr.net/gh/...`（备用极速节点）
-  - 检查更新与下载时采用 `Promise.any` 竞速模式，**哪路最快就取哪路**，彻底根除单通道丢包或卡住的问题；
-  - 结合安卓本地热更沙盒，用户无需重新下载大包安装即可秒更至最新版本代码。
+  - 客户端统一请求 Cloudflare Worker 的版本接口和两个文件中转接口，减少多条不稳定外部链路造成的等待与失败；
+  - Worker 服务端携带 `GITHUB_READ_TOKEN` 读取私有仓库最新 Release，客户端永远看不到仓库凭据；
+  - 结合安卓本地热更沙盒，用户无需重新下载大包安装即可更新到最新网页代码；APK 更新则通过 Worker 下载并覆盖安装。
 
 ### 5. 🤖 最强大师级人机 AI 与算力深度剪枝（v1.0.86）
 - **用户原始需求**：“人机要最强的，还有为什么AI有时候还要思考一段时间”；
@@ -302,7 +294,7 @@
 - **v1.0.86（Build 87）发布结果**：已完成单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时部署 Cloudflare Worker 与 Pages。
 - **维护发布记录**：[`v1.0.86 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.86)；上述地址仅供维护者留档，已不再在软件界面公开展示。
 - **首屏启动优化（待下一 APK 构建生效）**：联机库、音频与头像资源改为首帧后延迟执行；账号会话、头像初始化和历史统计移到首帧后；单文件版同步采用延迟内联资源；Android WebView 关闭不必要的离屏预栅格化并使用浅色启动底色，减少冷启动蓝屏等待感。
-- **客户端地址保护（源码已完成）**：移除个人中心的公开开源发布卡片、复制链接入口和更新弹窗官方通道；更新器所需的仓库、Raw、API、CDN 与镜像前缀改为运行时 XOR 解码，Android 原生兜底下载地址同步处理。该方案用于隐藏静态明文，不能替代服务端权限控制，也不能阻止运行时调试获取最终 URL。
+- **客户端地址保护与私有仓库中转（源码已完成，待配置 Secret/部署）**：移除个人中心的公开开源发布卡片、复制链接入口和更新弹窗官方通道；客户端更新器统一访问 Cloudflare Worker 的 `/api/version`、`/api/update/apk`、`/api/update/html`，由 Worker 使用 `GITHUB_READ_TOKEN` Secret 读取私有 Release 并中转文件。Token 不进入 APK、网页或 Git；Token 轮换无需更新客户端。该方案仍不能阻止运行时调试观察最终请求。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：

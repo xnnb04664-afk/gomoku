@@ -13,6 +13,11 @@ let isDbInitialized = false;
 let cachedLeaderboard = null;
 let lastLeaderboardTime = 0;
 
+// 私有仓库更新中转：GitHub 凭据只通过 Worker Secret 注入，绝不下发到客户端。
+const UPDATE_REPOSITORY = 'xnnb04664-afk/gomoku';
+const GITHUB_API_ORIGIN = 'https://api.github.com';
+const GITHUB_API_VERSION = '2022-11-28';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -213,25 +218,80 @@ export default {
       }
     }
 
+    const githubHeaders = (token, accept = 'application/vnd.github+json') => ({
+      Accept: accept,
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': GITHUB_API_VERSION,
+      'User-Agent': 'gomoku-update-proxy'
+    });
+
+    const getLatestPrivateRelease = async () => {
+      const token = String(env.GITHUB_READ_TOKEN || '').trim();
+      if (!token) return { error: '更新服务尚未配置私有仓库凭据' };
+      const response = await fetch(`${GITHUB_API_ORIGIN}/repos/${UPDATE_REPOSITORY}/releases/latest`, {
+        headers: githubHeaders(token)
+      });
+      if (!response.ok) {
+        return { error: `私有仓库版本读取失败 (${response.status})` };
+      }
+      return { token, release: await response.json() };
+    };
+
+    const getPrivateReleaseAsset = async (assetType) => {
+      const latest = await getLatestPrivateRelease();
+      if (latest.error) return latest;
+      const assets = Array.isArray(latest.release.assets) ? latest.release.assets : [];
+      const asset = assetType === 'apk'
+        ? assets.find(item => item.name === 'gomoku.apk' || /\.apk$/i.test(item.name || ''))
+        : assets.find(item => item.name === 'gomoku.html' || /\.html?$/i.test(item.name || ''));
+      if (!asset || !asset.url) return { error: `最新 Release 中没有可用的 ${assetType.toUpperCase()} 文件` };
+      return { token: latest.token, release: latest.release, asset };
+    };
+
+    const streamPrivateReleaseAsset = async (assetType) => {
+      const result = await getPrivateReleaseAsset(assetType);
+      if (result.error) return json({ code: 503, msg: result.error }, 503);
+
+      const assetResponse = await fetch(result.asset.url, {
+        headers: githubHeaders(result.token, 'application/octet-stream')
+      });
+      if (!assetResponse.ok || !assetResponse.body) {
+        return json({ code: 502, msg: `更新文件读取失败 (${assetResponse.status})` }, 502);
+      }
+
+      const headers = new Headers(corsHeaders);
+      headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      headers.set('Content-Type', assetType === 'apk' ? 'application/vnd.android.package-archive' : 'text/html; charset=utf-8');
+      headers.set('Content-Disposition', `attachment; filename="${assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html'}"`);
+      const contentLength = assetResponse.headers.get('content-length');
+      if (contentLength) headers.set('Content-Length', contentLength);
+      return new Response(assetResponse.body, { status: 200, headers });
+    };
+
+    // 版本检测与文件下载统一从 Worker 出口完成，客户端不再直连私有仓库。
+    if (url.pathname === "/api/version") {
+      const latest = await getLatestPrivateRelease();
+      if (latest.error) return json({ code: 503, msg: latest.error }, 503);
+      const releaseTag = String(latest.release.tag_name || '').trim();
+      if (!releaseTag) return json({ code: 502, msg: '私有仓库最新 Release 缺少版本号' }, 502);
+      return json({
+        code: 0,
+        tag: releaseTag,
+        updateLog: latest.release.body || '五子棋版本更新与稳定性优化',
+        apkDownload: `${url.origin}/api/update/apk`,
+        htmlDownload: `${url.origin}/api/update/html`,
+        officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
+      });
+    }
+    if (url.pathname === "/api/update/apk") return streamPrivateReleaseAsset('apk');
+    if (url.pathname === "/api/update/html") return streamPrivateReleaseAsset('html');
+
     // 🛡️ 终极安全第一网关：全量强制校验客户端专属安全暗号，阻断一切外部未授权访问！
     const isDocNav = request.headers.get("sec-fetch-dest") === "document" || request.headers.get("sec-fetch-mode") === "navigate";
     if (url.pathname === "/" || url.pathname === "/index.html" || isDocNav) {
       return new Response('<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style="font-family:sans-serif;text-align:center;padding:120px 20px;"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style="color:#888;font-size:12px;">nginx</div></body></html>', {
         status: 404,
         headers: { "Content-Type": "text/html; charset=utf-8" }
-      });
-    }
-
-    // ── 0. 官方版本与下载源安全中枢 (公开免客户端私钥拦截，极速检测) ────────
-    if (url.pathname === "/api/version") {
-      return json({
-        code: 0,
-        tag: "v1.0.86",
-        officialRepo: "xnnb04664-afk/gomoku",
-        updateLog: "五子棋 v1.0.86 官方正式版更新说明：\n\n🎯 【主棋盘大屏动态复盘】历史战绩点击「查看棋局」，直接平滑跳转至主棋盘大屏！每颗棋子中心清晰印上落子序号（1, 2, 3...），支持滑动条拖拽推演、单步进退、自动电影级播放与终局一键跳转\n\n🔒 【设置弹窗按钮底部常驻】个人中心弹窗底部「保存并应用」与「关闭」按钮改为永远固定常驻在屏幕最下方，打开弹窗一眼可见，彻底告别必须滑到最底部的繁琐操作\n\n☁️ 【历史战绩云端存储与双向彻底抹除】全盘走法谱与棋局数据全自动备份至 Cloudflare D1 云端数据库，换手机/重装账号一键找回；清空记录本地与云端彻底同步抹除\n\n⚡ 【免安装秒更4路全球CDN并发竞速】免安装在线热更新采用 jsDelivr、Fastly、GitHub 加速镜像 4 路全球 CDN 并发竞速（Promise.any），彻底消灭网络卡顿丢包，点一次秒更完成\n\n🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深与置换表搜索，并按桌面/移动端设置单步时间预算\n\n🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您",
-        apkDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk",
-        htmlDownload: "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/五子棋大师_单文件版.html",
-        officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
       });
     }
 

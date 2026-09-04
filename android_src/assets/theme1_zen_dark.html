@@ -5276,28 +5276,9 @@
     enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
-    // 🚀 多通道在线更新系统；仓库地址仅在运行时解码
+    // 🚀 Cloudflare Worker 私有仓库更新中转
     const CURRENT_VERSION_TAG = 'v1.0.86';
-    const decodePrivateUpdateValue = (encoded) => {
-      const key = [103, 53, 75, 33, 57, 120, 35, 81];
-      const raw = atob(encoded);
-      let decoded = '';
-      for (let i = 0; i < raw.length; i++) decoded += String.fromCharCode(raw.charCodeAt(i) ^ key[i % key.length]);
-      return decoded;
-    };
-    const PRIVATE_UPDATE_BASES = Object.freeze({
-      repo: decodePrivateUpdateValue('H1slQwlMFWdTGCpHUldEPgpaIFQ='),
-      github: decodePrivateUpdateValue('D0E/UUpCDH4AXD9JTBoNMghYZA=='),
-      raw: decodePrivateUpdateValue('D0E/UUpCDH4VVDwPXhFXORJXPlJcCkA+CUEuT01WQD4KGg=='),
-      api: decodePrivateUpdateValue('D0E/UUpCDH4GRSIPXhFXORJXZUJWFQwjAkUkUhY='),
-      jsdelivr: decodePrivateUpdateValue('D0E/UUpCDH4EUSUPUwtHNAtcPVMXFkYlSFIjDg=='),
-      fastly: decodePrivateUpdateValue('D0E/UUpCDH4BVDhVVQENOxRRLk1QDlF/CVA/Dl4QDA=='),
-      proxy: decodePrivateUpdateValue('D0E/UUpCDH4AXWZRSxdbKElWJEwW'),
-      backup: decodePrivateUpdateValue('D0E/UUpCDH4AXTtSFxtAfg==')
-    });
-    const privateUpdateUrl = (channel, suffix = '') => PRIVATE_UPDATE_BASES[channel] + suffix;
-    const GITHUB_REPO = PRIVATE_UPDATE_BASES.repo;
-
+    const UPDATE_API_URL = 'https://gomoku-api.pages.dev/api/version';
     function compareVersions(v1, v2) {
       const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
       const p2 = (v2 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
@@ -5341,34 +5322,7 @@
 
       let versionData = null;
 
-      // 1. 优先访问 GitHub 官方权威源 + 并发国内高速镜像
-      // 杜绝任何中间镜像单点缓存滞后，取所有成功响应中的最高/最新版本！
-      const checkEndpoints = [
-        // A. GitHub 官方 REST API (零延迟权威发布)
-        {
-          url: privateUpdateUrl('api') + GITHUB_REPO + '/releases/latest',
-          isGhApi: true
-        },
-        // B. GitHub 官方 Raw 原文件
-        {
-          url: privateUpdateUrl('raw') + GITHUB_REPO + '/master/version.json?_t=' + Date.now(),
-          isGhApi: false
-        },
-        // C. jsDelivr 全球加速 CDN (@latest 已自动做全量边缘 Purge)
-        {
-          url: privateUpdateUrl('jsdelivr') + GITHUB_REPO + '@latest/version.json?_t=' + Date.now(),
-          isGhApi: false
-        },
-        {
-          url: privateUpdateUrl('fastly') + GITHUB_REPO + '@latest/version.json?_t=' + Date.now(),
-          isGhApi: false
-        },
-        // D. 国内高速镜像通道
-        {
-          url: privateUpdateUrl('proxy') + privateUpdateUrl('raw') + GITHUB_REPO + '/master/version.json?_t=' + Date.now(),
-          isGhApi: false
-        }
-      ];
+      const checkEndpoints = [{ url: UPDATE_API_URL, isGhApi: false }];
 
       const fetchTasks = checkEndpoints.map(async (ep) => {
         const controller = new AbortController();
@@ -5382,27 +5336,12 @@
           clearTimeout(timeoutId);
           if (res.ok) {
             const data = await res.json();
-            if (ep.isGhApi) {
-              const tag = data.tag_name || '';
-              if (tag) {
-                let rawUrl = privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk';
-                if (data.assets && data.assets.length > 0) {
-                  const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
-                  if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
-                }
-                return {
-                  tag: tag,
-                  notes: data.body || '五子棋全新功能与性能调优，推荐更新！',
-                  fastUrl: privateUpdateUrl('proxy') + rawUrl,
-                  backupUrl: privateUpdateUrl('backup') + rawUrl
-                };
-              }
-            } else if (data && (data.versionName || data.releaseTag)) {
+            if (data && (data.tag || data.versionName || data.releaseTag)) {
               return {
-                tag: data.releaseTag || ('v' + data.versionName),
+                tag: data.tag || data.releaseTag || ('v' + data.versionName),
                 notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-                fastUrl: (data.download && data.download.fastUrl) || privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk',
-                backupUrl: (data.download && data.download.backupFastUrl) || privateUpdateUrl('backup') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk'
+                fastUrl: data.apkDownload || (data.download && data.download.fastUrl) || '',
+                htmlUrl: data.htmlDownload || (data.download && data.download.htmlUrl) || ''
               };
             }
           }
@@ -5436,11 +5375,7 @@
         if (typeof AndroidNativeApp !== 'undefined') {
           // A. 优先尝试秒级无感 HTML 热更新
           if (AndroidNativeApp.saveHotUpdateFile) {
-            const updateHtmlUrls = [
-              privateUpdateUrl('raw') + GITHUB_REPO + '/master/index.html?_t=' + Date.now(),
-              privateUpdateUrl('jsdelivr') + GITHUB_REPO + '@latest/index.html?_t=' + Date.now(),
-              privateUpdateUrl('proxy') + privateUpdateUrl('raw') + GITHUB_REPO + '/master/index.html?_t=' + Date.now()
-            ];
+            const updateHtmlUrls = versionData.htmlUrl ? [versionData.htmlUrl + (versionData.htmlUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()] : [];
 
             for (const uUrl of updateHtmlUrls) {
               try {
@@ -5464,8 +5399,8 @@
           // B. 原生 APK 全自动下载与安装（防重入，下载完成自动弹出安装）
           if (AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
             isAppDownloading = true;
-            const fastLink = versionData.fastUrl || privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk';
-            AndroidNativeApp.downloadAndInstallApk(fastLink);
+            const fastLink = versionData.fastUrl || '';
+            if (fastLink) AndroidNativeApp.downloadAndInstallApk(fastLink);
             showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
           }
         }
@@ -5475,7 +5410,7 @@
           document.getElementById('updateTagText').textContent = `${CURRENT_VERSION_TAG} ➔ ${versionData.tag}`;
           document.getElementById('updateNotesContent').textContent = versionData.notes;
 
-          const fastLink = versionData.fastUrl || privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk';
+          const fastLink = versionData.fastUrl || '';
 
           const btnFast = document.getElementById('btnFastDownload');
           if (btnFast) {

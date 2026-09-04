@@ -31,9 +31,11 @@
 - 验证结果：主页面和单文件版均能正常加载，新 AI 可用且实际应手；本地 Playwright 测得 DOMContentLoaded 约 495～581ms。
 - 注意：这次优化尚未进入已安装的 v1.0.86 APK，必须下一次打包安装后才会在手机生效。
 
-## 客户端公开地址移除与链接保护
+## 客户端公开地址移除与私有仓库更新中转
 
 - 已移除主版本个人中心的公开开源发布卡片、复制下载链接、更新弹窗官方通道和仓库主页链接；单文件版与 Android 资源已同步。
-- 更新器仍保留必要的内部更新能力，但仓库、Raw、API、CDN 和镜像地址不再以完整明文出现在客户端源码中；Android 原生下载兜底地址使用同一运行时解码方案。
-- 验证通过：13 个生产 HTML 文件脚本语法检查、Playwright 页面运行时检查、Android 资源同步检查，以及客户端明文地址扫描。
-- 安全边界：客户端地址保护只能提高静态逆向门槛；只要客户端需要联网访问，具备运行时调试能力的人仍可能观察到最终请求地址。
+- 更新器已切换为只访问 Cloudflare Worker 的 `/api/version`、`/api/update/apk`、`/api/update/html`；Worker 通过 `GITHUB_READ_TOKEN` Secret 读取私有 Release，Token 不下发客户端。
+- `publish.js` 与 `version.json` 已改为记录 Cloudflare 中转地址，不再向客户端下发 GitHub 下载地址；所有主题、单文件版和 Android assets 已同步。
+- 验证通过：13 个生产 HTML 文件脚本语法检查、Playwright 页面运行时检查、Android 资源同步检查、Worker/客户端静态扫描。
+- 待办：在 Cloudflare Worker 配置 `GITHUB_READ_TOKEN` 并部署后，使用线上 `/api/version` 和两个文件代理接口做真机下载验证。
+- 安全边界：Token 只在 Worker Secret 中，客户端仍可在运行时看到 Cloudflare 请求地址，但不会获得 GitHub 凭据。
