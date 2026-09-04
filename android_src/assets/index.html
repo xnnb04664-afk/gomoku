@@ -4068,17 +4068,31 @@
             return;
           }
           if (data.type === "skill_identity_swap") {
-          // 身份互换：全盘棋子颜色对调
-          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
-            if (board[r][c] === BLACK) board[r][c] = WHITE;
-            else if (board[r][c] === WHITE) board[r][c] = BLACK;
-          }
-          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
-          triggerBoardShake();
-          playSkillSound('warp');
-          showSkillBanner('🔄', '对方发动【身份互换】！', '全场棋子黑白颠倒！');
-          draw();
-        } else if (data.type === 'skill_prophecy') {
+            // 身份互换：全盘棋子颜色对调
+            for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+              if (board[r][c] === BLACK) board[r][c] = WHITE;
+              else if (board[r][c] === WHITE) board[r][c] = BLACK;
+            }
+            // ⚠️ 严禁倒退翻转已有落子记录（杜绝开头就互换颜色），记录身份互换事件
+            history.push({ action: 'identity_swap', type: 'skill_identity_swap', r: -1, c: -1, p: 0, desc: '身份互换' });
+            triggerBoardShake();
+            playSkillSound('warp');
+            showSkillBanner('🔄', '对方发动【身份互换】！', '全场棋子黑白颠倒！');
+            draw();
+            // 检查互换后是否有人达成五子连珠（直接按棋盘实际棋子扫描判定）
+            winningLine = null;
+            let hasWin = false;
+            for (let r = 0; r < 15; r++) {
+              for (let c = 0; c < 15; c++) {
+                if (board[r][c] !== EMPTY && checkWin(r, c, board[r][c])) {
+                  triggerGameEnd(board[r][c], `对方发动身份互换后，【${getPlayerNameByColor(board[r][c])} (${board[r][c] === BLACK ? '黑子' : '白子'})】直接达成五子连珠获胜！`);
+                  hasWin = true;
+                  break;
+                }
+              }
+              if (hasWin) break;
+            }
+          } else if (data.type === 'skill_prophecy') {
           prophecyPoint = { r: data.r, c: data.c, by: data.by };
           draw();
           showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
@@ -4468,13 +4482,16 @@
           }
           persistGameState();
         } else if (card.id === 'identity_swap') {
-          if (history.length === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
+          const placedStonesCount = history.filter(h => h && h.r >= 0).length;
+          if (placedStonesCount === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
           // 全盘颜色互换
           for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
             if (board[r][c] === BLACK) board[r][c] = WHITE;
             else if (board[r][c] === WHITE) board[r][c] = BLACK;
           }
-          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          // ⚠️ 修复历史记录开头颠倒问题：严禁倒退修改历史走法谱！
+          // 追加一条【身份互换】事件记录，记录其发生的准确时刻与步数
+          history.push({ action: 'identity_swap', type: 'skill_identity_swap', r: -1, c: -1, p: 0, desc: '身份互换' });
           markCardUsed(idx);
           triggerBoardShake();
           playSkillSound('warp');
@@ -4483,13 +4500,18 @@
           if (gameMode === 'online' && conn && conn.open) {
             conn.send({ type: 'skill_identity_swap' });
           }
-          // 检查互换后是否有人赢棋
+          // 检查互换后是否有人赢棋（直接按棋盘实际棋子扫描判定）
           winningLine = null;
-          for (const s of history) {
-            if (checkWin(s.r, s.c, s.p)) {
-              triggerGameEnd(s.p, `身份互换后，【${getPlayerNameByColor(s.p)} (${s.p === BLACK ? '黑子' : '白子'})】直接达成五子连珠获胜！`);
-              break;
+          let hasWinner = false;
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (board[r][c] !== EMPTY && checkWin(r, c, board[r][c])) {
+                triggerGameEnd(board[r][c], `身份互换后，【${getPlayerNameByColor(board[r][c])} (${board[r][c] === BLACK ? '黑子' : '白子'})】直接达成五子连珠获胜！`);
+                hasWinner = true;
+                break;
+              }
             }
+            if (hasWinner) break;
           }
           updateUI(); persistGameState();
         } else if (card.id === 'mega_bomb') {
@@ -6543,10 +6565,18 @@
         if (typeof closeReplayModal === 'function') closeReplayModal();
 
         // 2. 检查是否有全盘落子谱数据
-        replayAllMoves = Array.isArray(item.movesData) ? item.movesData : [];
+        replayAllMoves = Array.isArray(item.movesData) ? item.movesData.map(m => ({ ...m })) : [];
         if (replayAllMoves.length === 0) {
           showGameNotice("📜 本局为早期极速战报，未记录详细走法谱；最新对局均支持完整单步复盘！");
           return;
+        }
+
+        // 🛡️ 兼容旧战绩自我修复：若旧记录开头第一手异常记录为白子且无身份互换标记，自动校正开头色盘
+        if (replayAllMoves[0] && replayAllMoves[0].p === WHITE && !replayAllMoves.some(m => m.action === 'identity_swap')) {
+          replayAllMoves.forEach(m => {
+            if (m.p === BLACK) m.p = WHITE;
+            else if (m.p === WHITE) m.p = BLACK;
+          });
         }
 
         // 3. 备份当前对局状态（以便退出复盘时完美恢复）
@@ -6618,12 +6648,24 @@
       }
       history = [];
 
-      // 逐步应用落子
+      // 逐步应用落子与技能事件
       for (let i = 0; i < replayStepIndex; i++) {
         const m = replayAllMoves[i];
-        if (m && m.r >= 0 && m.r < 15 && m.c >= 0 && m.c < 15) {
+        if (!m) continue;
+        if (m.action === 'identity_swap' || m.type === 'identity_swap' || m.type === 'skill_identity_swap') {
+          // 🔄 在该步数发生身份互换：全盘已有棋子黑白颠倒！
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (board[r][c] === BLACK) board[r][c] = WHITE;
+              else if (board[r][c] === WHITE) board[r][c] = BLACK;
+            }
+          }
+          for (const h of history) {
+            if (h && h.r >= 0) h.p = (h.p === BLACK ? WHITE : BLACK);
+          }
+        } else if (m.r >= 0 && m.r < 15 && m.c >= 0 && m.c < 15) {
           board[m.r][m.c] = m.p;
-          history.push({ r: m.r, c: m.c, p: m.p });
+          history.push({ r: m.r, c: m.c, p: m.p, moveNum: history.length + 1 });
         }
       }
 
@@ -6633,7 +6675,7 @@
       const slider = document.getElementById("replayMainSlider");
 
       if (stepLabel) {
-        stepLabel.textContent = `当前: 第 ${replayStepIndex} / 共 ${replayAllMoves.length} 手`;
+        stepLabel.textContent = `当前: 第 ${replayStepIndex} / 共 ${replayAllMoves.length} 步`;
       }
       if (turnLabel) {
         if (replayStepIndex === 0) {
@@ -6641,9 +6683,14 @@
           turnLabel.style.color = "#1e293b";
         } else {
           const lastM = replayAllMoves[replayStepIndex - 1];
-          const colorName = lastM ? (lastM.p === 1 ? "黑方落子" : "白方落子") : "";
-          turnLabel.textContent = `第 ${replayStepIndex} 手: ${colorName}`;
-          turnLabel.style.color = lastM && lastM.p === 1 ? "#1e293b" : "#0284c7";
+          if (lastM && (lastM.action === 'identity_swap' || lastM.type === 'identity_swap' || lastM.type === 'skill_identity_swap')) {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 🔄【身份互换】全盘黑白颠倒！`;
+            turnLabel.style.color = "#d97706";
+          } else {
+            const colorName = lastM ? (lastM.p === 1 ? "黑方落子" : "白方落子") : "";
+            turnLabel.textContent = `第 ${replayStepIndex} 手: ${colorName}`;
+            turnLabel.style.color = lastM && lastM.p === 1 ? "#1e293b" : "#0284c7";
+          }
         }
       }
       if (slider) slider.value = replayStepIndex;
@@ -6895,7 +6942,10 @@
         reportMatchResult(isPlayerWin);
       }
 
-      const movesSnapshot = (history || []).map(step => ({ r: step.r, c: step.c, p: step.p }));
+      const movesSnapshot = (history || []).map(step => {
+        if (step.action) return { ...step };
+        return { r: step.r, c: step.c, p: step.p };
+      });
       const boardSnapshot = (board || []).map(row => [...row]);
 
       recordGameHistory({
@@ -6905,7 +6955,7 @@
         myColor: (gameMode === "online" ? myOnlineColor : BLACK),
         oppName: (gameMode === "ai" ? "大师AI" : (p2Name || "棋友")),
         oppAvatar: (gameMode === "ai" ? "🤖" : (p2Avatar || "👧")),
-        moves: history ? history.length : 0,
+        moves: history ? history.filter(h => h && h.r >= 0).length : 0,
         movesData: movesSnapshot,
         boardData: boardSnapshot,
         time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
@@ -7789,19 +7839,22 @@
       if (isReplayMode && history && history.length > 0) {
         for (let i = 0; i < history.length; i++) {
           const st = history[i];
+          if (!st || st.r < 0 || st.c < 0) continue;
           const sx = paddingX + (st.c + 0.5) * gridX;
           const sy = paddingY + (st.r + 0.5) * gridY;
           ctx.font = `bold ${Math.round(radius * 0.95)}px Arial, sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillStyle = (st.p === 1) ? '#f8fafc' : '#1e293b';
-          ctx.fillText(String(i + 1), sx, sy + 1);
+          const curColor = (board[st.r] && board[st.r][st.c]) || st.p;
+          ctx.fillStyle = (curColor === 1) ? '#f8fafc' : '#1e293b';
+          const displayNum = st.moveNum || (i + 1);
+          ctx.fillText(String(displayNum), sx, sy + 1);
         }
       }
 
       // 3. 最后一手标记 (各主题自适应)
-      if (history.length > 0) {
-        const last = history[history.length-1];
+      const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+      if (last) {
         const lx = paddingX + (last.c + 0.5) * gridX;
         const ly = paddingY + (last.r + 0.5) * gridY;
         const markSize = Math.max(12, Math.round(cWidth * 0.035));
@@ -8165,19 +8218,32 @@
     function doUndo() {
       if (history.length === 0 || isOver) return;
       winningLine = null;
+      const last = history[history.length - 1];
+      if (last && last.action === 'identity_swap') {
+        history.pop();
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+          if (board[r][c] === BLACK) board[r][c] = WHITE;
+          else if (board[r][c] === WHITE) board[r][c] = BLACK;
+        }
+        playSkillSound('rewind');
+        draw(); updateUI();
+        persistGameState();
+        return;
+      }
       if (gameMode === 'ai' && history.length >= 2) {
         const a = history.pop(); const b = history.pop();
-        board[a.r][a.c] = EMPTY; board[b.r][b.c] = EMPTY;
-        triggerUndoVFX(a.r, a.c);
-        triggerUndoVFX(b.r, b.c);
+        if (a && a.r >= 0 && a.c >= 0) { board[a.r][a.c] = EMPTY; triggerUndoVFX(a.r, a.c); }
+        if (b && b.r >= 0 && b.c >= 0) { board[b.r][b.c] = EMPTY; triggerUndoVFX(b.r, b.c); }
         playSkillSound('rewind');
         turn = BLACK;
       } else {
-        const last = history.pop();
-        board[last.r][last.c] = EMPTY;
-        triggerUndoVFX(last.r, last.c);
+        const lastMove = history.pop();
+        if (lastMove && lastMove.r >= 0 && lastMove.c >= 0) {
+          board[lastMove.r][lastMove.c] = EMPTY;
+          triggerUndoVFX(lastMove.r, lastMove.c);
+        }
         playSkillSound('rewind');
-        turn = last.p;
+        turn = lastMove ? (lastMove.p || (turn === BLACK ? WHITE : BLACK)) : turn;
       }
       draw(); updateUI();
       persistGameState();

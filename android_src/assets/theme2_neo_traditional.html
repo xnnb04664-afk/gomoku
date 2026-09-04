@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -3130,11 +3130,20 @@
             if (board[r][c] === BLACK) board[r][c] = WHITE;
             else if (board[r][c] === WHITE) board[r][c] = BLACK;
           }
-          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          history.push({ action: 'identity_swap', type: 'skill_identity_swap', r: -1, c: -1, p: 0, desc: '身份互换' });
           triggerBoardShake();
           playSkillSound('warp');
           showSkillBanner('🔄', '对方发动【身份互换】！', '全场棋子黑白颠倒！');
           draw();
+          winningLine = null;
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (board[r][c] !== EMPTY && checkWin(r, c, board[r][c])) {
+                triggerGameEnd(board[r][c], `对方发动身份互换后，【${board[r][c] === BLACK ? p1Name : p2Name}】直接达成五子连珠获胜！`);
+                break;
+              }
+            }
+          }
         } else if (data.type === 'skill_prophecy') {
           prophecyPoint = { r: data.r, c: data.c, by: data.by };
           draw();
@@ -3524,13 +3533,14 @@
           }
           persistGameState();
         } else if (card.id === 'identity_swap') {
-          if (history.length === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
+          const placedStonesCount = history.filter(h => h && h.r >= 0).length;
+          if (placedStonesCount === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
           // 全盘颜色互换
           for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
             if (board[r][c] === BLACK) board[r][c] = WHITE;
             else if (board[r][c] === WHITE) board[r][c] = BLACK;
           }
-          for (const h of history) h.p = h.p === BLACK ? WHITE : BLACK;
+          history.push({ action: 'identity_swap', type: 'skill_identity_swap', r: -1, c: -1, p: 0, desc: '身份互换' });
           markCardUsed(idx);
           triggerBoardShake();
           playSkillSound('warp');
@@ -3541,10 +3551,12 @@
           }
           // 检查互换后是否有人赢棋
           winningLine = null;
-          for (const s of history) {
-            if (checkWin(s.r, s.c, s.p)) {
-              triggerGameEnd(s.p, `身份互换后，【${s.p === BLACK ? p1Name : p2Name}】直接达成五子连珠获胜！`);
-              break;
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (board[r][c] !== EMPTY && checkWin(r, c, board[r][c])) {
+                triggerGameEnd(board[r][c], `身份互换后，【${board[r][c] === BLACK ? p1Name : p2Name}】直接达成五子连珠获胜！`);
+                break;
+              }
             }
           }
           updateUI(); persistGameState();
@@ -4710,8 +4722,8 @@
       }
 
       // 最后一手朱砂红印标记
-      if (history.length > 0) {
-        const last = history[history.length-1];
+      const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+      if (last) {
         const heartSize = Math.max(12, Math.round(cWidth * 0.035));
         ctx.font = `${heartSize}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('❤️', paddingX + (last.c + 0.5) * gridX, paddingY + (last.r + 0.5) * gridY);
