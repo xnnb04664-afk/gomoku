@@ -1334,13 +1334,22 @@
         margin: 0 !important;
       }
       .player-capsule {
-        padding: 2px 7px 2px 2px !important;
+        padding: 2px 6px 2px 2px !important;
+        max-width: 49% !important;
       }
       .player-capsule.right {
-        padding: 2px 2px 2px 7px !important;
+        padding: 2px 2px 2px 6px !important;
+      }
+      .avatar-wrap, .avatar-circle {
+        width: 30px !important;
+        height: 30px !important;
+      }
+      .avatar-circle {
+        font-size: 16px !important;
       }
       .player-name {
-        font-size: 12px !important;
+        font-size: 11.5px !important;
+        margin: 0 2px !important;
       }
       .signs-row {
         margin-top: 0 !important;
@@ -1430,6 +1439,20 @@
         font-size: 12px !important;
         padding: 5.5px 0 !important;
         border-width: 2px !important;
+      }
+      #userAccountCard {
+        padding: 6px 8px !important;
+      }
+      #userAccountCard .btn-chat-tool {
+        padding: 2.5px 5px !important;
+        font-size: 10px !important;
+      }
+      #userUidBadge {
+        padding: 2px 5px !important;
+        font-size: 9.5px !important;
+      }
+      #accountSubText {
+        font-size: 9.5px !important;
       }
     }
   </style>
@@ -2690,38 +2713,49 @@
         if (btnOnline) btnOnline.style.display = "flex";
         if (topRoomBar) topRoomBar.style.display = "none";
       }
-      let p1ColorTag = ' (●黑子)';
-      let p2ColorTag = ' (○白子)';
+      const isNarrow = typeof window !== 'undefined' && window.innerWidth <= 380;
+      let p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+      let p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
       let p2DisplayName = p2Name;
 
       if (gameMode === 'ai') {
-        p1ColorTag = ' (●黑子)';
-        p2ColorTag = ' (○白子)';
+        p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+        p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
         p2DisplayName = '大师AI';
         document.getElementById('p2AvatarIcon').innerHTML = '🤖';
       } else if (gameMode === 'online') {
         // 联机对战：黑白子明确展示，且绝不显示“房主”，双方直接呈现真实昵称！
         if (myOnlineColor === BLACK) {
-          p1ColorTag = ' (●黑子)';
-          p2ColorTag = ' (○白子)';
+          p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+          p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
         } else {
-          p1ColorTag = ' (○白子)';
-          p2ColorTag = ' (●黑子)';
+          p1ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
+          p2ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
         }
         p2DisplayName = (p2Name && p2Name.trim()) ? p2Name : '好友';
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       } else {
         // 双人同屏 pvp
-        p1ColorTag = ' (●黑子)';
-        p2ColorTag = ' (○白子)';
+        p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+        p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
         p2DisplayName = p2Name;
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
 
-      const scoreSuffix = hasRegisteredAccountSession() ? ` (${currentUserScore}分)` : '';
-      document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag + scoreSuffix;
+      const scoreSuffix = hasRegisteredAccountSession() ? (isNarrow ? ` · ${currentUserScore}` : ` · ${currentUserScore}分`) : '';
+      const fullP1Text = p1Name + p1ColorTag + scoreSuffix;
+      const p1Label = document.getElementById('p1NameLabel');
+      if (p1Label) {
+        p1Label.textContent = fullP1Text;
+        p1Label.title = p1Name + (myOnlineColor === WHITE ? ' (○白子)' : ' (●黑子)') + (hasRegisteredAccountSession() ? ` · ${currentUserScore}分` : '');
+      }
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
-      document.getElementById('p2NameLabel').textContent = p2DisplayName + p2ColorTag;
+      const p2Label = document.getElementById('p2NameLabel');
+      if (p2Label) {
+        const fullP2Text = p2DisplayName + p2ColorTag;
+        p2Label.textContent = fullP2Text;
+        p2Label.title = p2DisplayName + (myOnlineColor === WHITE ? ' (●黑子)' : ' (○白子)');
+      }
     }
 
     // 🎯 根据棋子颜色准确获取玩家名称（适配联机执白、联机执黑、人机及同屏模式）
@@ -6856,7 +6890,7 @@
       if (hasRegisteredAccountSession()) {
         if (icon) icon.textContent = "✅";
         if (title) {
-          title.innerHTML = `正式账号: <span style="color:#0284c7;">${escapeHtml(currentUsername)}</span>`;
+          title.innerHTML = `<span style="color:#0369a1; font-weight:900;">${escapeHtml(currentUsername)}</span> <span style="font-size:9.5px; color:#0284c7; background:#e0f2fe; padding:1px 4px; border-radius:4px; font-weight:800; border:1px solid #bae6fd; flex-shrink:0;">正式</span>`;
           title.title = `正式账号: ${currentUsername}`;
         }
         if (subText) {
@@ -6962,6 +6996,7 @@
         showGameNotice('请先登录正式账号，再修改登录密码', true);
         return;
       }
+      closeProfileModal();
       const modal = document.getElementById('changePasswordModal');
       const errorEl = document.getElementById('changePasswordErrorMsg');
       if (errorEl) {
@@ -6974,17 +7009,20 @@
       });
       if (modal) {
         modal.classList.add('show');
-        setTimeout(() => document.getElementById('changeCurrentPassword')?.focus(), 0);
+        setTimeout(() => document.getElementById('changeCurrentPassword')?.focus(), 80);
       }
     }
 
-    function closeChangePasswordModal() {
+    function closeChangePasswordModal(reopenProfile = true) {
       const modal = document.getElementById('changePasswordModal');
       if (modal) modal.classList.remove('show');
       ['changeCurrentPassword', 'changeNewPassword', 'changeConfirmPassword'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      if (reopenProfile && typeof openProfileModal === 'function') {
+        openProfileModal();
+      }
     }
 
     async function submitChangePassword() {
@@ -7289,6 +7327,16 @@
       const modal = document.getElementById('leaderboardModal');
       if (modal) {
         modal.classList.add('show');
+        const statusText = document.getElementById('myRankStatusText');
+        if (statusText) {
+          if (!hasRegisteredAccountSession()) {
+            statusText.innerHTML = `游客未登录 · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">登录账号入榜</a>`;
+            statusText.title = "游客身份未登录，点击登录或注册正式账号上榜";
+          } else {
+            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (正在同步全服排名...)`;
+            statusText.title = `当前玩家: ${p1Name}`;
+          }
+        }
         fetchGlobalLeaderboard(false);
       }
     }
@@ -9704,6 +9752,12 @@
           applyUserData(json.data);
         }
       } catch(e) {
+        let guestNick = localStorage.getItem('gomoku_guest_nickname') || '逍遥弈客';
+        p1Name = guestNick;
+        localStorage.setItem('gomoku_p1Name', p1Name);
+        currentUserUid = 'guest_' + Math.random().toString(36).substring(2, 9);
+        currentUserScore = 1000;
+        updatePlayerHeaderUI();
         updateAccountUI();
       }
 

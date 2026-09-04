@@ -261,7 +261,7 @@
 - **Android 安全边界**：`file://` 导航仅允许 `/android_asset/index.html`；安装 Provider 仅接受固定 APK URI 且只读打开；保留正式签名、APK 摘要校验、HTTPS 主机限制、禁止调试与明文流量。新增的实体返回键会优先关闭复盘、抽屉和弹窗，再执行双击退出。
 - **本地性能与稳定性**：Android 本地静态服务补齐 ETag/304；登录后端增加账号/密码类型和 6~32 位长度约束；旧模块化孤立资源已按前一节记录清理。单文件版、Android 资源和正式签名 APK 已重新同步构建。
 - **热更新范围**：Android 已安装旧 APK 可以在游戏内下载并校验新的 `gomoku.html`，写入应用私有 `hot_update/index.html` 后重载，网页 UI、JS、AI 和联机逻辑无需重装 APK；Java/Manifest、签名、Provider 等原生改动仍必须安装新的正式签名 APK。浏览器单文件版不走原生沙盒，需重新下载/打开新 HTML。
-- **当前构建验证**：APK 版本仍为 `v1.0.91 (Build 92)`，v1/v2/v3 签名校验通过；SHA-256：`2E84BA454C337A42B271D5654BAC859B5F1AEE3CE5D78884D7691EA828F360E2`。`node tests/worker_unit.js`、本地 Playwright 回归（含联机悔棋/终局重开/返回键）、八份 HTML 内嵌脚本语法检查、Node 服务 ETag/304 与隐藏文件访问检查均通过。
+- **当前构建验证**：APK 版本仍为 `v1.0.91 (Build 92)`，v1/v2/v3 签名校验通过；本次最终 APK SHA-256：`D61AF1AAA3C910557E6037E8A28D0B773C4ACD933F4357A120DCE63228809030`。`node tests/worker_unit.js`、本地 Playwright 回归（含联机悔棋/终局重开/返回键）、13 份 HTML 内嵌脚本语法检查、Node 服务 ETag/304 与隐藏文件访问检查均通过。
 
 ---
 
@@ -591,11 +591,11 @@ node publish.js
 ### 4. 本次验证与产物
 - `python tests\\optimization_smoke.py` 通过：终局状态、重置、单机悔棋返还干扰牌、联机悔棋响应、聊天上限、调整大小调度和 API 兜底均正常，控制台无错误。
 - `node tests\\worker_unit.js` 通过：版本/资源读取与票据流程正常，GitHub 令牌未泄露。
-- 根页面与 `android_src/assets/index.html` SHA-256 均为 `386D092A00755488EB336E13F7C282D4B15C038E8BEC1236EA503FCD77A1D178`；单文件版已重新生成。
-- 正式签名 APK `五子棋.apk` 已重新构建，SHA-256 为 `B1E8B8091591A203E9F46F710C406BEB0236FF4E9E3B59516A04B122002E294B`，v1/v2/v3 签名校验通过。
-- 本次只完成本地构建、测试和版本库同步，未部署 Cloudflare 生产环境。
+- 根页面与 `android_src/assets/index.html` SHA-256 均为 `9DB449A7445CC891D3E74FC5C44F68C6E451BB67434BEBA58DD82AB9C17541B7`；单文件版已重新生成。
+- 正式签名 APK `五子棋.apk` 已重新构建，SHA-256 为 `D61AF1AAA3C910557E6037E8A28D0B773C4ACD933F4357A120DCE63228809030`，v1/v2/v3 签名校验通过。
+- 本轮仅为修复线上更新直链保护完成了一次必要的 Cloudflare Worker/Pages 部署；普通客户端构建与发版不重复部署 Cloudflare。
 
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.91 (Build 92)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查，以及本次联机终局/重开/悔棋/状态显示修复均已完成；源码、单文件版、Android 资源已在本地完全同步并通过回归测试，正式签名 APK 已重新构建。本次未自动部署 Cloudflare，线上仍以已部署版本为准；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；仅补发线上资源时不要重复运行发布脚本，直接使用 Wrangler 部署命令。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查，以及本次联机终局/重开/悔棋/状态显示修复均已完成；源码、单文件版、Android 资源已在本地完全同步并通过回归测试，正式签名 APK 已重新构建。本轮仅为更新直链安全保护完成了一次必要的 Cloudflare 部署，普通 UI/客户端发版不重复部署；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；仅补发线上资源时不要重复运行发布脚本，直接使用 Wrangler 部署命令。*

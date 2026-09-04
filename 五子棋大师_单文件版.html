@@ -2421,6 +2421,20 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         padding: 5.5px 0 !important;
         border-width: 2px !important;
       }
+      #userAccountCard {
+        padding: 6px 8px !important;
+      }
+      #userAccountCard .btn-chat-tool {
+        padding: 2.5px 5px !important;
+        font-size: 10px !important;
+      }
+      #userUidBadge {
+        padding: 2px 5px !important;
+        font-size: 9.5px !important;
+      }
+      #accountSubText {
+        font-size: 9.5px !important;
+      }
     }
   </style>
 </head>
@@ -3708,10 +3722,20 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
 
-      const scoreSuffix = hasRegisteredAccountSession() ? ` (${currentUserScore}分)` : '';
-      document.getElementById('p1NameLabel').textContent = p1Name + p1ColorTag + scoreSuffix;
+      const scoreSuffix = hasRegisteredAccountSession() ? ` · ${currentUserScore}分` : '';
+      const fullP1Text = p1Name + p1ColorTag + scoreSuffix;
+      const p1Label = document.getElementById('p1NameLabel');
+      if (p1Label) {
+        p1Label.textContent = fullP1Text;
+        p1Label.title = fullP1Text;
+      }
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
-      document.getElementById('p2NameLabel').textContent = p2DisplayName + p2ColorTag;
+      const p2Label = document.getElementById('p2NameLabel');
+      if (p2Label) {
+        const fullP2Text = p2DisplayName + p2ColorTag;
+        p2Label.textContent = fullP2Text;
+        p2Label.title = fullP2Text;
+      }
     }
 
     // 🎯 根据棋子颜色准确获取玩家名称（适配联机执白、联机执黑、人机及同屏模式）
@@ -7846,7 +7870,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (hasRegisteredAccountSession()) {
         if (icon) icon.textContent = "✅";
         if (title) {
-          title.innerHTML = `正式账号: <span style="color:#0284c7;">${escapeHtml(currentUsername)}</span>`;
+          title.innerHTML = `<span style="color:#0369a1; font-weight:900;">${escapeHtml(currentUsername)}</span> <span style="font-size:9.5px; color:#0284c7; background:#e0f2fe; padding:1px 4px; border-radius:4px; font-weight:800; border:1px solid #bae6fd; flex-shrink:0;">正式</span>`;
           title.title = `正式账号: ${currentUsername}`;
         }
         if (subText) {
@@ -7952,6 +7976,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         showGameNotice('请先登录正式账号，再修改登录密码', true);
         return;
       }
+      closeProfileModal();
       const modal = document.getElementById('changePasswordModal');
       const errorEl = document.getElementById('changePasswordErrorMsg');
       if (errorEl) {
@@ -7964,17 +7989,20 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       });
       if (modal) {
         modal.classList.add('show');
-        setTimeout(() => document.getElementById('changeCurrentPassword')?.focus(), 0);
+        setTimeout(() => document.getElementById('changeCurrentPassword')?.focus(), 80);
       }
     }
 
-    function closeChangePasswordModal() {
+    function closeChangePasswordModal(reopenProfile = true) {
       const modal = document.getElementById('changePasswordModal');
       if (modal) modal.classList.remove('show');
       ['changeCurrentPassword', 'changeNewPassword', 'changeConfirmPassword'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      if (reopenProfile && typeof openProfileModal === 'function') {
+        openProfileModal();
+      }
     }
 
     async function submitChangePassword() {
@@ -8279,6 +8307,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       const modal = document.getElementById('leaderboardModal');
       if (modal) {
         modal.classList.add('show');
+        const statusText = document.getElementById('myRankStatusText');
+        if (statusText) {
+          if (!hasRegisteredAccountSession()) {
+            statusText.innerHTML = `游客未登录 · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">登录账号入榜</a>`;
+            statusText.title = "游客身份未登录，点击登录或注册正式账号上榜";
+          } else {
+            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (正在同步全服排名...)`;
+            statusText.title = `当前玩家: ${p1Name}`;
+          }
+        }
         fetchGlobalLeaderboard(false);
       }
     }
@@ -10694,6 +10732,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           applyUserData(json.data);
         }
       } catch(e) {
+        let guestNick = localStorage.getItem('gomoku_guest_nickname') || '逍遥弈客';
+        p1Name = guestNick;
+        localStorage.setItem('gomoku_p1Name', p1Name);
+        currentUserUid = 'guest_' + Math.random().toString(36).substring(2, 9);
+        currentUserScore = 1000;
+        updatePlayerHeaderUI();
         updateAccountUI();
       }
 
