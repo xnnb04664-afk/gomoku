@@ -1407,90 +1407,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       line-height: 1.35;
     }
 
-    /* --- 📍 最后一手落子清晰指示器 (高对比度双层微光环 + 精致小指针，清晰醒目适度) --- */
-    .last-move-indicator,
-    .last-move-indicator * {
-      pointer-events: none !important;
-    }
-    .last-move-indicator {
-      position: absolute;
-      left: 0; top: 0;
-      z-index: 25;
-      transform: translate(-50%, -50%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      transition: left 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
-    }
-    
-    /* 核心高亮环：鲜亮红色 + 2px 高清白边 + 柔光，全主题背景下均极其醒目 */
-    .last-move-ring {
-      position: absolute;
-      border-radius: 50%;
-      border: 2.5px solid #ff3b30;
-      box-shadow: 0 0 0 2px #ffffff, 0 0 12px rgba(255, 59, 48, 0.75);
-      animation: lastMoveBreath 1.6s infinite ease-in-out;
-    }
-    
-    /* 外层水滴微波脉冲：向外自然扩散荡漾，瞬间抓住余光焦点 */
-    .last-move-ping {
-      position: absolute;
-      border-radius: 50%;
-      border: 2px solid rgba(255, 59, 48, 0.85);
-      animation: lastMoveRipple 1.8s infinite cubic-bezier(0.1, 0.7, 0.3, 1);
-    }
-
-    @keyframes lastMoveBreath {
-      0%, 100% { transform: scale(0.97); opacity: 0.95; }
-      50% { transform: scale(1.06); opacity: 0.75; }
-    }
-    @keyframes lastMoveRipple {
-      0% { transform: scale(1); opacity: 0.85; }
-      100% { transform: scale(1.48); opacity: 0; }
-    }
-
-    /* 顶部精致小气泡指针 (小巧玲珑，清晰指出落子，不占空间) */
-    .last-move-pin {
-      position: absolute;
-      bottom: calc(100% + 4px);
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      animation: lastMoveBounce 1.4s infinite alternate ease-in-out;
-      filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
-      white-space: nowrap;
-      user-select: none;
-    }
-    .last-move-pin-body {
-      background: linear-gradient(135deg, #ff3b30 0%, #f97316 100%);
-      color: #ffffff;
-      border: 1.5px solid #ffffff;
-      border-radius: 12px;
-      padding: 1.5px 7px;
-      font-size: 11px;
-      font-weight: 900;
-      letter-spacing: 0.3px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.25);
-      display: flex;
-      align-items: center;
-      gap: 3px;
-    }
-    .last-move-pin-arrow {
-      width: 0;
-      height: 0;
-      border-left: 4px solid transparent;
-      border-right: 4px solid transparent;
-      border-top: 5px solid #f97316;
-      margin-top: -1px;
-    }
-    @keyframes lastMoveBounce {
-      0% { transform: translateX(-50%) translateY(0); }
-      100% { transform: translateX(-50%) translateY(-4px); }
-    }
-
     @keyframes boardShake {
       0%, 100% { transform: translate(0, 0); }
       20% { transform: translate(-4px, 3px) rotate(-0.5deg); }
@@ -2540,18 +2456,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
   <!-- 手机全屏最大化棋盘容器 -->
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
-
-    <!-- 📍 最后一手落子高亮指示器 (双层微光环 + 精致小指针) -->
-    <div id="opponentMoveIndicator" class="last-move-indicator" style="display:none;">
-      <div class="last-move-ping" id="lastMovePing"></div>
-      <div class="last-move-ring" id="lastMoveRing"></div>
-      <div class="last-move-pin" id="lastMovePin">
-        <div class="last-move-pin-body">
-          <span id="lastMovePinText">📍 上一步</span>
-        </div>
-        <div class="last-move-pin-arrow"></div>
-      </div>
-    </div>
 
     <!-- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 -->
     <div id="skillBanner" class="skill-vfx-banner" onclick="closeSkillBanner()">
@@ -6415,7 +6319,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       radius = gridX * 0.44; // 棋子饱满大号，触摸体验极佳
       invalidateBoardCache();
       draw();
-      if (typeof updateOpponentMoveIndicator === 'function') updateOpponentMoveIndicator();
     }
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
@@ -7837,7 +7740,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         // 4. 激活主棋盘复盘模式
         isReplayMode = true;
         replayStepIndex = replayAllMoves.length; // 默认展示终局决胜盘面
-        if (typeof updateOpponentMoveIndicator === 'function') updateOpponentMoveIndicator();
 
         // 更新顶部状态栏与 Dock
         const topBar = document.getElementById("replayTopBar");
@@ -8622,94 +8524,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return `${COL_LABELS[c]}${15 - r}`;
     }
 
-    // 📍 对方上一步落子高能视觉指示系统：动态跟随定位与状态自适应
-    function updateOpponentMoveIndicator() {
-      const ind = document.getElementById('opponentMoveIndicator');
-      if (!ind) return;
-
-      // 若处于对局结束、复盘模式或尚未落子，隐藏指示器
-      if (isOver || isReplayMode || !history || history.length === 0) {
-        ind.style.display = 'none';
-        return;
-      }
-
-      // 寻找上一手落子（重点标出对手落子）
-      let targetMove = null;
-
-      if (gameMode === 'ai') {
-        if (turn === BLACK) {
-          // 当前是玩家回合：指示 AI (白方) 上一手落子
-          targetMove = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === WHITE);
-        } else {
-          // AI 思考中，暂隐指示器
-          ind.style.display = 'none';
-          return;
-        }
-      } else if (gameMode === 'online') {
-        const oppColor = (myOnlineColor === BLACK ? WHITE : BLACK);
-        if (turn === myOnlineColor) {
-          // 当前是本地玩家回合：指示联机对手上一手落子
-          targetMove = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === oppColor);
-        } else {
-          // 对手回合中，暂隐指示器
-          ind.style.display = 'none';
-          return;
-        }
-      } else {
-        // 本地双人对战 (PvP)
-        const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
-        if (last && last.p !== turn) {
-          targetMove = last;
-        } else {
-          ind.style.display = 'none';
-          return;
-        }
-      }
-
-      if (!targetMove || targetMove.r < 0 || targetMove.c < 0) {
-        ind.style.display = 'none';
-        return;
-      }
-
-      // 计算相对于 islandWrapper 的绝对坐标 (兼容各种屏幕与缩放)
-      const lx = paddingX + (targetMove.c + 0.5) * gridX;
-      const ly = paddingY + (targetMove.r + 0.5) * gridY;
-      const cvsRect = cvs.getBoundingClientRect();
-      const wrapRect = islandWrapper ? islandWrapper.getBoundingClientRect() : null;
-
-      let posX, posY;
-      if (wrapRect && wrapRect.width > 0) {
-        posX = Math.round(cvsRect.left - wrapRect.left + lx);
-        posY = Math.round(cvsRect.top - wrapRect.top + ly);
-      } else {
-        posX = Math.round(cvs.offsetLeft + lx);
-        posY = Math.round(cvs.offsetTop + ly);
-      }
-
-      ind.style.left = `${posX}px`;
-      ind.style.top = `${posY}px`;
-      ind.style.display = 'flex';
-
-      // 自适应微光环大小与提示文字
-      const ring = document.getElementById('lastMoveRing');
-      const ping = document.getElementById('lastMovePing');
-      const pinText = document.getElementById('lastMovePinText');
-      if (pinText) {
-        if (gameMode === 'ai') pinText.textContent = '🤖 AI落子';
-        else if (gameMode === 'online') pinText.textContent = '📍 对方落子';
-        else pinText.textContent = '📍 上一步';
-      }
-      const ringSize = Math.max(26, Math.round(radius * 2.25));
-      if (ring) {
-        ring.style.width = `${ringSize}px`;
-        ring.style.height = `${ringSize}px`;
-      }
-      if (ping) {
-        ping.style.width = `${ringSize}px`;
-        ping.style.height = `${ringSize}px`;
-      }
-    }
-
     function updateUI() {
       const bubble = document.getElementById('turnBubble');
       const p1Status = document.getElementById('p1Status');
@@ -8743,8 +8557,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (c1) c1.style.opacity = '0.75';
         if (c2) c2.style.opacity = '1';
       }
-
-      updateOpponentMoveIndicator();
     }
 
     // 晴空浮岛草坪版是官方默认版本，默认始终展示青草绿地与猫爪棋子
@@ -9198,29 +9010,33 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
       }
 
-      // 3. 最后一手标记 (各主题自适应)
-      const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
-      if (last) {
-        const lx = paddingX + (last.c + 0.5) * gridX;
-        const ly = paddingY + (last.r + 0.5) * gridY;
-        const markSize = Math.max(12, Math.round(cWidth * 0.035));
+      // 3. 最后一手落子标记 (采用五子棋行业公认标准：中心经典高反差正红圆点 + 纯白轮廓，全主题全棋色通用)
+      if (!isReplayMode) {
+        const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+        if (last) {
+          const lx = paddingX + (last.c + 0.5) * gridX;
+          const ly = paddingY + (last.r + 0.5) * gridY;
+          const dotRadius = Math.max(3.5, radius * 0.28);
 
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        if (activeThemeKey === 'sweet_romance') {
-          ctx.font = `${markSize}px sans-serif`; ctx.fillText('💖', lx, ly);
-        } else if (activeThemeKey === 'zen_dark') {
-          ctx.beginPath(); ctx.arc(lx, ly, radius * 0.35, 0, Math.PI*2);
-          ctx.strokeStyle = '#6366f1'; ctx.lineWidth = 2.5; ctx.stroke();
-        } else if (activeThemeKey === 'luxury_glass') {
-          ctx.font = `${markSize}px sans-serif`; ctx.fillText('✨', lx, ly);
-        } else if (activeThemeKey === 'clean_ios') {
-          ctx.beginPath(); ctx.arc(lx, ly, radius * 0.35, 0, Math.PI*2);
-          ctx.strokeStyle = '#0071e3'; ctx.lineWidth = 2.5; ctx.stroke();
-        } else if (activeThemeKey === 'neo_trad') {
-          ctx.beginPath(); ctx.arc(lx, ly, radius * 0.35, 0, Math.PI*2);
-          ctx.strokeStyle = '#c8382c'; ctx.lineWidth = 2.5; ctx.stroke();
-        } else {
-          ctx.font = `${markSize}px sans-serif`; ctx.fillText('❤️', lx, ly);
+          ctx.save();
+          // 外层轻柔微阴影，增强各主题与棋色下的立体度与清晰度
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+          ctx.shadowBlur = 3;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 1;
+
+          // 经典行业正红圆标
+          ctx.beginPath();
+          ctx.arc(lx, ly, dotRadius, 0, Math.PI * 2);
+          ctx.fillStyle = '#ef4444';
+          ctx.fill();
+
+          // 纯白高反差轮廓线 (在黑棋、白棋及各主题背景下均极其清晰醒目，符合国际围棋与五子棋通用规范)
+          ctx.lineWidth = Math.max(1.5, dotRadius * 0.35);
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+
+          ctx.restore();
         }
       }
 
