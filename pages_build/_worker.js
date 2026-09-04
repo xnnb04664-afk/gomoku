@@ -191,6 +191,7 @@ export default {
             password_hash TEXT,
             salt TEXT,
             password_algo TEXT DEFAULT 'sha256',
+            password_iterations INTEGER DEFAULT 100000,
             security_q TEXT,
             security_a_hash TEXT,
             security_salt TEXT,
@@ -212,7 +213,7 @@ export default {
         `).run();
 
         const cols = [
-          'password_hash TEXT', 'salt TEXT', 'password_algo TEXT DEFAULT \'sha256\'', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
+          'password_hash TEXT', 'salt TEXT', 'password_algo TEXT DEFAULT \'sha256\'', 'password_iterations INTEGER', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
           'failed_login_count INTEGER DEFAULT 0', 'locked_until INTEGER DEFAULT 0', 'last_game_at INTEGER DEFAULT 0',
           'security_q TEXT', 'security_a_hash TEXT', 'security_salt TEXT',
           'failed_reset_count INTEGER DEFAULT 0', 'reset_locked_until INTEGER DEFAULT 0'
@@ -594,11 +595,11 @@ async function allocateNextAvailableUid(env) {
           if (guest && !guest.username) {
             await env.DB.prepare(`
               UPDATE users
-              SET username = ?, password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
+              SET username = ?, password_hash = ?, salt = ?, password_algo = 'pbkdf2', password_iterations = ?, token = ?, token_expires_at = ?,
                   security_q = ?, security_a_hash = ?, security_salt = ?,
                   failed_login_count = 0, locked_until = 0, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP
               WHERE uid = ?
-            `).bind(safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
+            `).bind(safeUsername, passwordHash, salt, PASSWORD_PBKDF2_ITERATIONS, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
 
             try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
             const updated = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(uid).first();
@@ -610,9 +611,9 @@ async function allocateNextAvailableUid(env) {
 
         const newUid = await allocateNextAvailableUid(env);
         await env.DB.prepare(`
-          INSERT INTO users (uid, username, password_hash, salt, password_algo, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
-          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
-        `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
+          INSERT INTO users (uid, username, password_hash, salt, password_algo, password_iterations, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
+          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
+        `).bind(newUid, safeUsername, passwordHash, salt, PASSWORD_PBKDF2_ITERATIONS, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
 
         try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
         const created = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(newUid).first();
@@ -764,9 +765,18 @@ async function allocateNextAvailableUid(env) {
         }
 
         let calcHash;
+        let passwordIterations = PASSWORD_PBKDF2_ITERATIONS;
+        if (user.password_algo === 'pbkdf2') {
+          const storedIterations = Number(user.password_iterations);
+          // 旧版 120000 次哈希无法在 Workers WebCrypto 中重新计算，必须通过找回密码重置。
+          if (!Number.isInteger(storedIterations) || storedIterations < 1 || storedIterations > PASSWORD_PBKDF2_ITERATIONS) {
+            return json({ code: 409, msg: '该账号使用了旧版密码加密参数，请先点击“找回密码”重置一次密码' }, 409);
+          }
+          passwordIterations = storedIterations;
+        }
         try {
           calcHash = user.password_algo === 'pbkdf2'
-            ? await hashPassword(password, user.salt)
+            ? await hashPassword(password, user.salt, passwordIterations)
             : await hashWithSalt(password, user.salt);
         } catch (hashError) {
           const hashMessage = String(hashError && hashError.message || hashError || '').toLowerCase();
@@ -792,17 +802,18 @@ async function allocateNextAvailableUid(env) {
         let passwordAlgo = user.password_algo || 'sha256';
         if (passwordAlgo !== 'pbkdf2') {
           loginSalt = generateSecureHex(16);
-          loginHash = await hashPassword(password, loginSalt);
+          loginHash = await hashPassword(password, loginSalt, PASSWORD_PBKDF2_ITERATIONS);
           passwordAlgo = 'pbkdf2';
+          passwordIterations = PASSWORD_PBKDF2_ITERATIONS;
         }
         const freshToken = generateSecureHex(24);
         const expiresAt = now + 365 * 24 * 3600 * 1000;
         await env.DB.prepare(`
           UPDATE users
-          SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = ?,
+          SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = ?, password_iterations = ?,
               token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(loginHash, loginSalt, passwordAlgo, freshToken, expiresAt, user.uid).run();
+        `).bind(loginHash, loginSalt, passwordAlgo, passwordIterations, freshToken, expiresAt, user.uid).run();
 
         return json({
           code: 0,
@@ -895,12 +906,12 @@ async function allocateNextAvailableUid(env) {
 
         await env.DB.prepare(`
           UPDATE users
-          SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
+          SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', password_iterations = ?, token = ?, token_expires_at = ?,
               failed_reset_count = 0, reset_locked_until = 0,
               failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(newPwdHash, newSalt, newToken, expiresAt, user.uid).run();
+        `).bind(newPwdHash, newSalt, PASSWORD_PBKDF2_ITERATIONS, newToken, expiresAt, user.uid).run();
 
         return json({
           code: 0,
