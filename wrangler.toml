@@ -1,4 +1,4 @@
-name = "gomoku"
+name = "gomoku-backend"
 main = "backend/worker.js"
 compatibility_date = "2024-09-03"
 
