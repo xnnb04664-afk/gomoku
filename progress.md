@@ -20,3 +20,5 @@
 - 已按用户明确指令执行完整发布：v1.0.86 / Build 87 APK 与单文件版构建成功，GitHub `master` 已推送，Release 已上传 `gomoku.apk` 与 `gomoku.html`，Worker 与 Pages 已部署。
 - AI 升级已提交 Git commit：`3b5226e feat: 升级大师级人机 AI 引擎`；工作区仅待记录本计划收尾。
 - 已修正发布脚本、版本接口和 Pages Worker 中的旧 AI 更新文案，并重新部署版本接口。
+- 已完成首屏启动优化：联机库、音频和头像资源改为延后执行，账号/历史初始化移到首帧后；Android WebView 关闭离屏预栅格化并调整启动底色；单文件生成器同步延迟内联非首屏资源。
+- 已通过主页面与单文件版的 Playwright 首屏/实际落子回归，以及 3 个 HTML 文件脚本语法检查；本轮仅改源码，尚未重新打包或安装新的 APK。

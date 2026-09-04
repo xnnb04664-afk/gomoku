@@ -48,26 +48,42 @@ if (fs.existsSync(mqttJsPath)) {
   mqttJsContent = fs.readFileSync(mqttJsPath, 'utf8');
 }
 
-// 替换外部脚本引用为完全内联脚本
+// 替换外部脚本引用为完全内联脚本；非首屏资源延迟到首帧后执行，避免单文件冷启动阻塞首屏。
 const peerRegex = /<!-- 引入 PeerJS 免服务器外网穿透联机库[\s\S]*?<script src="https:\/\/fastly\.jsdelivr\.net\/npm\/mqtt[\s\S]*?<\/script>/i;
 const cherryRegex = /<script src="js\/assets\/cherry_bomb_audio\.js"><\/script>/i;
 const animeRegex = /<script src="js\/assets\/anime_avatars\.js"><\/script>/i;
 
+const deferredInlineScript = (label, content) => `
+  <!-- ${label}（首帧后延迟执行） -->
+  <script>
+    (() => {
+      const runDeferredAsset = () => {
+${escapeInlineScript(content)}
+      };
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => setTimeout(runDeferredAsset, 0));
+      } else {
+        setTimeout(runDeferredAsset, 0);
+      }
+    })();
+  </script>
+`;
+
 let inlinedHeadScripts = '';
 if (peerJsContent) {
-  inlinedHeadScripts += `\n  <!-- 内联 PeerJS 1.5.4 完整生产库 (零外网依赖，离线秒开) -->\n  <script>\n${escapeInlineScript(peerJsContent)}\n  </script>\n`;
+  inlinedHeadScripts += deferredInlineScript('内联 PeerJS 1.5.4 完整生产库', peerJsContent);
 }
 if (p2pNetworkContent) {
-  inlinedHeadScripts += `  <!-- 内联 P2P 优先联机兼容层 -->\n  <script>\n${escapeInlineScript(p2pNetworkContent)}\n  </script>\n`;
+  inlinedHeadScripts += deferredInlineScript('内联 P2P 优先联机兼容层', p2pNetworkContent);
 }
 if (mqttJsContent) {
-  inlinedHeadScripts += `  <!-- 内联 MQTT 极速联机引擎 (国内直连，秒级穿透) -->\n  <script>\n${escapeInlineScript(mqttJsContent)}\n  </script>\n`;
+  inlinedHeadScripts += deferredInlineScript('内联 MQTT 极速联机引擎（国内直连，秒级穿透）', mqttJsContent);
 }
 if (cherryAudioContent) {
-  inlinedHeadScripts += `  <!-- 内联 樱桃炸弹 MP3 原声 Base64 数据 -->\n  <script>\n${escapeInlineScript(cherryAudioContent)}\n  </script>\n`;
+  inlinedHeadScripts += deferredInlineScript('内联 樱桃炸弹 MP3 原声 Base64 数据', cherryAudioContent);
 }
 if (animeAvatarsContent) {
-  inlinedHeadScripts += `  <!-- 内联 专属二次元情侣动漫头像 Base64 数据 -->\n  <script>\n${escapeInlineScript(animeAvatarsContent)}\n  </script>\n`;
+  inlinedHeadScripts += deferredInlineScript('内联 专属二次元情侣动漫头像 Base64 数据', animeAvatarsContent);
 }
 if (aiEngineContent) {
   inlinedHeadScripts += `  <!-- 内联 强力五子棋 AI 引擎（棋型评估 + Alpha-Beta + 置换表） -->\n  <script>\n${escapeInlineScript(aiEngineContent)}\n  </script>\n`;

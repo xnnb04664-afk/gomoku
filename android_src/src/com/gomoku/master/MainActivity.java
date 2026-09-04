@@ -167,7 +167,8 @@ public class MainActivity extends Activity {
         }
 
         mWebView = new WebView(this);
-        mWebView.setBackgroundColor(Color.parseColor("#4da4ff"));
+        // 使用浅色首屏底色，避免 WebView 冷启动期间整屏显示深蓝空白。
+        mWebView.setBackgroundColor(Color.parseColor("#eef8ff"));
         setContentView(mWebView);
 
         setupWebView();
@@ -291,7 +292,8 @@ public class MainActivity extends Activity {
         mWebView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
         mWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            settings.setOffscreenPreRaster(true);
+            // 当前 WebView 全屏可见，不需要为不可见区域预栅格化，减少冷启动内存与绘制开销。
+            settings.setOffscreenPreRaster(false);
         }
 
         // 缓存策略

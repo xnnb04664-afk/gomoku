@@ -23,3 +23,10 @@
 - 通过 Node 棋力用例、HTML 脚本语法检查，以及主页面/单文件版 Playwright 实际落子测试。
 - v1.0.86 / Build 87 已完成 APK 与单文件构建，GitHub `master` 已推送，Release 已上传 `gomoku.apk` 与 `gomoku.html`，Cloudflare Worker 与 Pages 已部署。
 - 发布脚本、`version.json`、Worker 与 Pages Worker 的 AI 更新文案已同步为实际新引擎能力。
+
+## Android 首屏启动优化
+
+- 原因确认：`MainActivity` 先显示蓝色 WebView 背景，页面 head 同步加载 PeerJS、MQTT、音频 Base64、头像 Base64 和 AI，冷启动首屏被大量非必要资源阻塞。
+- 处理结果：网络库、音频和头像改为 `defer`；账号会话、头像初始化和历史统计移到首帧后；单文件版的非首屏内联资源也延迟执行；Android 关闭不必要的离屏预栅格化并降低蓝屏视觉等待感。
+- 验证结果：主页面和单文件版均能正常加载，新 AI 可用且实际应手；本地 Playwright 测得 DOMContentLoaded 约 495～581ms。
+- 注意：这次优化尚未进入已安装的 v1.0.86 APK，必须下一次打包安装后才会在手机生效。

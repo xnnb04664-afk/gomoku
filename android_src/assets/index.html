@@ -6,14 +6,30 @@
   <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
   <link rel="icon" href="favicon.png" type="image/png">
   <!-- 引入 PeerJS 免服务器外网穿透联机库 (优先本地极速离线加载，CDN优雅降级兜底) -->
-  <script src="js/peerjs.min.js"></script>
-  <script>if (typeof Peer === 'undefined') { document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>'); }</script>
-  <script src="js/p2p-network.js"></script>
+  <script defer src="js/peerjs.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof Peer === 'undefined') {
+        const fallback = document.createElement('script');
+        fallback.src = 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
+        document.head.appendChild(fallback);
+      }
+    }, { once: true });
+  </script>
+  <script defer src="js/p2p-network.js"></script>
   <!-- 引入 MQTT.js：用于中国友好型 WebRTC 信令（香港 EMQX 节点，替代被墙的 peerjs.com 信令服务器） -->
-  <script src="js/mqtt.min.js"></script>
-  <script>if (typeof mqtt === 'undefined') { document.write('<script src="https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"><\/script>'); }</script>
-  <script src="js/assets/cherry_bomb_audio.js"></script>
-  <script src="js/assets/anime_avatars.js"></script>
+  <script defer src="js/mqtt.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof mqtt === 'undefined') {
+        const fallback = document.createElement('script');
+        fallback.src = 'https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js';
+        document.head.appendChild(fallback);
+      }
+    }, { once: true });
+  </script>
+  <script defer src="js/assets/cherry_bomb_audio.js"></script>
+  <script defer src="js/assets/anime_avatars.js"></script>
   <script src="js/ai.js"></script>
   <style>
     :root {
@@ -9010,12 +9026,19 @@
       checkAppUpdate(false);
     }, 2500);
 
-    initAnimeThumbnails();
-    // 页面加载完毕立刻同步本地账号登录态并开启静默会话校验
-    updateAccountUI();
-    updatePlayerHeaderUI();
-    updateHistoryCountUI();
-    initUserSession();
+    // 首帧优先：头像、账号同步和历史统计不阻塞棋盘首次绘制。
+    const runNonCriticalStartupTasks = () => {
+      initAnimeThumbnails();
+      updateAccountUI();
+      updatePlayerHeaderUI();
+      updateHistoryCountUI();
+      initUserSession();
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(runNonCriticalStartupTasks, 0));
+    } else {
+      setTimeout(runNonCriticalStartupTasks, 0);
+    }
     // 按照用户需求：启动绝不自动弹更新卡片，保持极致秒开直入棋盘
     // checkPostUpdateAnnouncement();
   </script>

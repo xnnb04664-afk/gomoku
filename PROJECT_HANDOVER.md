@@ -301,6 +301,7 @@
   - 支持技能产生的禁止落点与禁手过滤，保持人机模式的既有玩法兼容。
 - **v1.0.86（Build 87）发布结果**：已完成单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时部署 Cloudflare Worker 与 Pages。
 - **正式发布地址**：[`v1.0.86 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.86)；APK 永久直链为 `https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`。
+- **首屏启动优化（待下一 APK 构建生效）**：联机库、音频与头像资源改为首帧后延迟执行；账号会话、头像初始化和历史统计移到首帧后；单文件版同步采用延迟内联资源；Android WebView 关闭不必要的离屏预栅格化并使用浅色启动底色，减少冷启动蓝屏等待感。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：
