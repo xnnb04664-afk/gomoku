@@ -17,7 +17,7 @@ function Protect-SecretPath {
   & icacls.exe $Path /inheritance:r `
     /grant:r "*$($currentSid):F" "*S-1-5-18:F" "*S-1-5-32-544:F" | Out-Null
   if ($LASTEXITCODE -ne 0) {
-    throw "无法收紧本机凭据文件权限：$Path"
+    throw "Could not restrict local credential file permissions: $Path"
   }
 }
 
@@ -29,7 +29,7 @@ function Save-DpapiSecret {
 
   $secure = Read-Host $Prompt -AsSecureString
   if ($secure.Length -eq 0) {
-    throw '凭据不能为空。'
+    throw 'Credential cannot be empty.'
   }
 
   $encrypted = ConvertFrom-SecureString -SecureString $secure
@@ -40,7 +40,7 @@ function Save-DpapiSecret {
     [System.IO.File]::WriteAllText($temporary, $encrypted, $utf8NoBom)
     Move-Item -LiteralPath $temporary -Destination $target -Force
     Protect-SecretPath -Path $target
-    Write-Host "已保存本机加密凭据：$target"
+    Write-Host "Saved encrypted local credential: $target"
   }
   finally {
     if (Test-Path -LiteralPath $temporary) {
@@ -50,16 +50,12 @@ function Save-DpapiSecret {
   }
 }
 
-if ($Type -in @('Signing', 'Both')) {
-  Save-DpapiSecret `
-    -Prompt '首次设置签名密码（输入内容不会显示）' `
-    -FileName 'keystore-password.dpapi'
+if (($Type -eq 'Signing') -or ($Type -eq 'Both')) {
+  Save-DpapiSecret -Prompt 'Enter signing password (input is hidden)' -FileName 'keystore-password.dpapi'
 }
 
-if ($Type -in @('Cloudflare', 'Both')) {
-  Save-DpapiSecret `
-    -Prompt '首次设置 Cloudflare API Token（输入内容不会显示）' `
-    -FileName 'cloudflare-api-token.dpapi'
+if (($Type -eq 'Cloudflare') -or ($Type -eq 'Both')) {
+  Save-DpapiSecret -Prompt 'Enter Cloudflare API Token (input is hidden)' -FileName 'cloudflare-api-token.dpapi'
 }
 
-Write-Host '完成。以后 build_apk.js、publish.js、deploy_worker.js 和 admin.js 会自动读取本机凭据。'
+Write-Host 'Done. Build and deployment scripts will read these local credentials automatically.'
