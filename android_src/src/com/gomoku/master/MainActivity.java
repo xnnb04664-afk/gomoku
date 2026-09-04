@@ -88,28 +88,83 @@ public class MainActivity extends Activity {
 
     
     // 🛡️ 手机端防逆向安全套件：动态调试检测 + 动态 Hook 注入防御 + 切断远程调试
-    private void enforceAntiReverseProtection() {
+    private boolean enforceAntiReverseProtection() {
         // 1. 发布包彻底禁用 WebView 远程 USB 调试，避免运行时读取页面与会话数据。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             WebView.setWebContentsDebuggingEnabled(false);
         }
 
         // 2. 动态调试器附着拦截（JDWP / GDB / IDA Pro 调试检测）
-        if (android.os.Debug.isDebuggerConnected() || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            android.util.Log.e("SecurityGuard", "检测到非法调试器挂载，为保护游戏安全已强制终止运行！");
-            Toast.makeText(this, "⚠️ 安全拦截：检测到非法调试环境！", Toast.LENGTH_LONG).show();
-            android.os.Process.killProcess(android.os.Process.myPid());
-            System.exit(0);
+        if (android.os.Debug.isDebuggerConnected()
+                || android.os.Debug.waitingForDebugger()
+                || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            android.util.Log.e("SecurityGuard", "检测到非法调试器挂载，阻止应用启动");
+            showSecurityFailureDialog("应用运行异常", "检测到调试环境，应用无法继续运行。\n请安装未被修改的官方版本。\n错误码：DEBUG_ENV");
+            return true;
         }
 
         // 3. 动态 Hook 框架检测（Frida / Xposed / Substrate 注入探测）
         if (detectHookFramework()) {
-            android.util.Log.w("SecurityGuard", "检测到系统底层注入框架！");
-            Toast.makeText(this, "⚠️ 安全提示：检测到当前设备存在 Hook 注入环境，已开启高风险防御！", Toast.LENGTH_LONG).show();
+            android.util.Log.e("SecurityGuard", "检测到系统底层注入框架，阻止应用启动");
+            showSecurityFailureDialog("应用运行异常", "检测到应用运行环境被修改或注入，应用无法继续运行。\n请关闭调试/注入工具后重新启动。\n错误码：HOOK_ENV");
+            return true;
+        }
+        return false;
+    }
+
+    private void showSecurityFailureDialog(String title, String message) {
+        try {
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setCancelable(false)
+                    .setPositiveButton("退出应用", (dialog, which) -> terminateApplication())
+                    .show();
+        } catch (Exception error) {
+            android.util.Log.e("SecurityGuard", "无法显示安全提示", error);
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            finish();
         }
     }
 
+    private void terminateApplication() {
+        try {
+            finishAndRemoveTask();
+        } catch (Exception ignored) {
+            finish();
+        }
+        android.os.Process.killProcess(android.os.Process.myPid());
+        System.exit(0);
+    }
+
     private static boolean detectHookFramework() {
+        // 已加载的 Java Hook 框架类：仅命中明确框架类名时才拦截，避免把普通 Root 设备误判。
+        String[] suspiciousClasses = {
+                "de.robv.android.xposed.XposedBridge",
+                "de.robv.android.xposed.XposedHelpers",
+                "com.saurik.substrate.MS",
+                "com.saurik.substrate.MSC"
+        };
+        for (String className : suspiciousClasses) {
+            try {
+                Class.forName(className, false, MainActivity.class.getClassLoader());
+                return true;
+            } catch (Throwable ignored) {}
+        }
+
+        // Frida/Gum 等通常以 native 库形式注入；扫描当前进程映射表中的明确特征名。
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String lower = line.toLowerCase();
+                if (lower.contains("frida") || lower.contains("gum-js-loop")
+                        || lower.contains("xposed") || lower.contains("substrate")) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 某些注入框架只会在调用栈中留下特征类名。
         try {
             throw new Exception("probe_hook");
         } catch (Exception e) {
@@ -153,16 +208,16 @@ public class MainActivity extends Activity {
         applyImmersiveSticky();
         unlockHighRefreshRate();
         try {
-            enforceAntiReverseProtection();
+            if (enforceAntiReverseProtection()) {
+                return;
+            }
             if (!verifyApkSignatureIntegrity()) {
-                Toast.makeText(this, "⚠️ 官方安全提示：检测到应用签名异常，已停止运行。", Toast.LENGTH_LONG).show();
-                finish();
+                showSecurityFailureDialog("应用运行异常", "检测到应用签名异常，可能是 APK 被修改或重新打包。\n请重新安装官方版本。\n错误码：SIGNATURE_INVALID");
                 return;
             }
         } catch (Exception e) {
             android.util.Log.e("MainActivity", "Security check failed; refusing to start", e);
-            Toast.makeText(this, "⚠️ 安全校验失败，已停止运行。", Toast.LENGTH_LONG).show();
-            finish();
+            showSecurityFailureDialog("应用运行异常", "安全校验失败，应用无法继续运行。\n错误码：SECURITY_CHECK_FAILED");
             return;
         }
 

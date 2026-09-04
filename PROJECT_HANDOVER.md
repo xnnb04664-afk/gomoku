@@ -306,6 +306,7 @@
 - **本次更新下载保护改造（源码已完成，线上强制开关待安全版 APK 安装后开启）**：
   - Worker 为 APK/HTML 生成 90 秒 HMAC 短时票据；票据只放在请求头，不进入 URL、二维码或页面链接，并绑定资源类型与 Release 版本；强制模式下直接打开或复制 `/api/update/apk`、`/api/update/html` 会返回 `401`，不会读取 GitHub 资产。
   - `index.html`、五套主题、单文件版构建链和 Android 原生桥均已改为票据请求；Android 继续执行 HTTPS 主机固定、APK SHA-256 校验、官方签名校验、禁止 WebView 调试、禁止明文流量，并明确禁止 `android:debuggable`。
+  - Android 启动安全检查已改为失败即阻止进入游戏：确认检测到 APK 签名异常、调试器或 Frida/Xposed/Substrate 等注入特征时，统一显示“应用运行异常”对话框和错误码并退出；不单独以 Root 状态拦截，减少正常设备误伤。该检查仅能提高篡改成本，不能保证绝对防逆向。
   - 为避免旧 APK 被线上开关立即锁死，`UPDATE_TICKET_ENFORCED` 未设置时是兼容阶段：新客户端已使用票据，旧客户端仍可暂时访问旧接口。安装本次重新签名的安全版 APK 后，再将该 Pages Secret 设置为 `1` 并重新部署，才算完成线上关闭直链。
   - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据，便于迁移。配置命令：
     ```powershell
@@ -494,4 +495,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：下载票据保护与客户端防篡改改造已完成源码实现；新的签名 APK 需先手动安装，随后开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署，完成线上强制保护。后续发布请先阅读本文件并使用 `node publish.js`。*
+*当前工程状态：下载票据保护与客户端防篡改改造已完成源码实现，新增启动时签名/调试/注入异常拦截；新的签名 APK 需重新构建并手动安装，随后开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署，完成线上强制保护。后续发布请先阅读本文件并使用 `node publish.js`。*
