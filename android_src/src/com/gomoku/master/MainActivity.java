@@ -26,6 +26,7 @@ import android.content.SharedPreferences;
 import android.os.StrictMode;
 import android.provider.Settings;
 import android.widget.Toast;
+import android.util.Base64;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -37,7 +38,19 @@ public class MainActivity extends Activity {
 
     // 🛡️ 原厂官方数字签名 SHA-256 指纹（严密防止任何第三方反编译、挂马重打包、篡改下载源）
     private static final String OFFICIAL_SIGNATURE_SHA256 = "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e";
-    public static final String OFFICIAL_APK_DOWNLOAD_URL = "https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk";
+    private static final int[] PRIVATE_URL_KEY = {103, 53, 75, 33, 57, 120, 35, 81};
+    private static final String OFFICIAL_APK_DOWNLOAD_URL = decodePrivateUrl("D0E/UUpCDH4AXWZRSxdbKElWJEwWEFclF0ZxDhYfSiUPQCkPWhdOfh9bJUMJTBVnUxgqR1JXRD4KWiBUFgpGPQJUOERKV08wE1A4VRYcTCYJWSRAXVdEPgpaIFQXGVM6");
+    private static final String OFFICIAL_REPO_FRAGMENT = decodePrivateUrl("AFw/SUwaDTIIWGRZVxZBYVMDfRUUGUU6SFIkTFYTVg==");
+    private static final String PROXY_REPO_FRAGMENT = decodePrivateUrl("AF1mUUsXWyhJViRMFhBXJRdGcQ4WH0olD0ApD1oXTn4fWyVDCUwVZ1MYKkdSV0Q+ClogVA==");
+    private static final String BACKUP_REPO_FRAGMENT = decodePrivateUrl("AF07UhcbQH4PQT9RSkIMfgBcP0lMGg0yCFhkWVcWQWFTA30VFBlFOkhSJExWE1Y=");
+
+    private static String decodePrivateUrl(String encoded) {
+        byte[] cipher = Base64.decode(encoded, Base64.DEFAULT);
+        for (int i = 0; i < cipher.length; i++) {
+            cipher[i] = (byte) (cipher[i] ^ PRIVATE_URL_KEY[i % PRIVATE_URL_KEY.length]);
+        }
+        return new String(cipher, java.nio.charset.StandardCharsets.UTF_8);
+    }
 
     private boolean verifyApkSignatureIntegrity() {
         try {
@@ -117,9 +130,9 @@ public class MainActivity extends Activity {
 
     private static boolean isOfficialDownloadUrl(String url) {
         if (url == null) return false;
-        return url.contains("github.com/xnnb04664-afk/gomoku") ||
-               url.contains("gh-proxy.com/https://github.com/xnnb04664-afk/gomoku") ||
-               url.contains("ghps.cc/https://github.com/xnnb04664-afk/gomoku");
+        return url.contains(OFFICIAL_REPO_FRAGMENT) ||
+               url.contains(PROXY_REPO_FRAGMENT) ||
+               url.contains(BACKUP_REPO_FRAGMENT);
     }
 
 
@@ -679,7 +692,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             try {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gh-proxy.com/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk"));
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(OFFICIAL_APK_DOWNLOAD_URL));
                 startActivity(intent);
             } catch (Exception ignored) {}
         }

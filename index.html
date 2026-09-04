@@ -8847,13 +8847,10 @@
         if (notesEl) notesEl.textContent = `云端检查连接稍有延迟，但您当前运行的五子棋 (${effectiveVersion}) 已具备全部对战功能与修复，可正常畅快对弈。\n\n如需手动获取最新安装包，可点击下方按钮。`;
         if (btnFast) {
           btnFast.style.display = "flex";
-          btnFast.innerHTML = "<span>🌐 前往官网主页下载</span>";
+          btnFast.innerHTML = "<span>🔄 重新尝试获取更新</span>";
           btnFast.onclick = (e) => {
             e.preventDefault();
-            btnFast.onclick = (e) => {
-              e.preventDefault();
-              showGameNotice('暂未获取到更新，请稍后重试');
-            };
+            showGameNotice('暂未获取到更新，请稍后重试');
           };
         }
         if (btnCancel) {
@@ -8956,20 +8953,6 @@
             };
           }
         }
-        if (btnOfficial) {
-          btnOfficial.style.display = "flex";
-          btnOfficial.innerHTML = "<span>🌐 备用高速通道下载</span>";
-          btnOfficial.onclick = (e) => {
-            e.preventDefault();
-            setVisualProgress(5, "🚀 正在通过备用通道下载 APK...");
-            isAppDownloading = true;
-            if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
-              AndroidNativeApp.downloadAndInstallApk(officialLink);
-            } else {
-              window.location.href = officialLink;
-            }
-          };
-        }
         if (btnCancel) {
           btnCancel.textContent = "稍后再说";
           btnCancel.style.background = "#f1f5f9";
@@ -8989,7 +8972,6 @@
         if (notesEl) notesEl.textContent = `恭喜！您的游戏已处于最新正式版本 (${effectiveVersion})。\n\n` + CURRENT_UPDATE_NOTES.join("\n\n");
         
         if (btnFast) btnFast.style.display = "none";
-        if (btnOfficial) btnOfficial.style.display = "none";
         if (btnCancel) {
           btnCancel.textContent = "✅ 我知道了 (当前已是最新)";
           btnCancel.style.background = "#10b981";
@@ -9017,7 +8999,6 @@
             const notesTitle = document.getElementById("updateNotesTitle");
             const notesEl = document.getElementById("updateNotesContent");
             const btnFast = document.getElementById("btnFastDownload");
-            const btnOfficial = document.getElementById("btnOfficialDownload");
             const btnCancel = document.getElementById("btnUpdateCancel");
 
             if (modalIcon) modalIcon.textContent = "🎉";
@@ -9033,7 +9014,6 @@
               notesEl.style.maxHeight = "180px";
             }
             if (btnFast) btnFast.style.display = "none";
-            if (btnOfficial) btnOfficial.style.display = "none";
             if (btnCancel) {
               btnCancel.textContent = "🎉 我知道了，立即开局！";
               btnCancel.style.background = "linear-gradient(135deg, #0284c7, #0369a1)";
