@@ -240,6 +240,7 @@
 - **断线恢复修复**：监听 MQTT close/offline 立即启动重连；重连时清理旧客户端 Promise；房主重新安装入房监听，客方循环发送重连握手；恢复后校验并同步完整棋局。
 - **实测结果**：双端进房、双向落子无控制台错误；P2P 心跳往返约 11ms；同时断开两端 Broker 后约 6 秒恢复，2 手历史和棋盘状态保持不变。
 - **发布边界**：本次已更新 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html` 和本交接文档；尚未重新签名构建 APK、创建新 Release 或部署线上资源。手机端要获得本次联机修复，仍需按发布流程构建并安装新 APK。
+- **本次线上部署结果（2026-09-04）**：已使用 Wrangler OAuth 部署 Worker `gomoku-backend`（版本 ID：`c428ac44-cadf-4d16-812a-e005aaf88344`），并部署 Pages 项目 `gomoku-api`；生产 `https://gomoku-api.pages.dev/api/version` 与本次预览地址均返回 HTTP 200、`v1.0.89`。独立 Worker 的 `/api/version` 当前返回 503，是因为该 Worker 尚未配置 `GITHUB_READ_TOKEN`；客户端更新器固定优先走 Pages，不受此影响。若将来需要 Worker 作为更新接口备用出口，应把 GitHub 只读 Secret 直接配置到 Worker `gomoku-backend`，不要把 Secret 写入仓库或聊天。
 
 ---
 
@@ -505,4 +506,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录，以及本次 MQTT/WebRTC 联机稳定性升级已完成源码修改；Worker/Pages 源码未因本次前端联机改动而变化，单文件版与 Android 资源已同步，但本次尚未重新签名构建 APK、创建新 Release 或部署线上 Worker/Pages。发布前请先运行完整语法/浏览器回归，再使用正式签名密钥执行 `node publish.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录，以及本次 MQTT/WebRTC 联机稳定性升级已完成源码修改；联机源码、单文件版与 Android 资源已同步并推送，Worker/Pages 已完成本次线上部署，Pages 更新接口检查通过；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。本次尚未重新签名构建 APK 或创建新 Release，手机端要获得联机修复仍需按发布流程构建并安装新 APK。发布前请先运行完整语法/浏览器回归，再使用正式签名密钥执行 `node publish.js`。*
