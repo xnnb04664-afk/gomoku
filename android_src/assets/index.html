@@ -3403,8 +3403,8 @@
     // ==========================================
     // 🌐 极速秒开房间联机核心引擎 (全网络穿透·中国极速直连)
     // ==========================================
-    // 采用 EMQX 香港 Anycast 节点（国内平均延迟 30~60ms，免翻墙无超时），
-    // 结合 WSS 全双工通信，彻底解决移动 4G/5G 运营商大内网对称 NAT 穿透超时失败问题！
+    // 采用多个 WSS 节点容灾。房间会按固定顺序尝试节点，保证房主和客方
+    // 对同一个房间使用相同的 Broker；连接超时缩短，避免单个受限节点拖慢进房。
     const MQTT_BROKER_URLS = [
       'wss://broker.emqx.io:8084/mqtt',
       'wss://broker.hivemq.com:8884/mqtt',
@@ -3415,92 +3415,141 @@
     let mqttClient = null;
     let mqttClientPromise = null;
 
-    function getOrCreateMqttClient() {
+    const MQTT_CONNECT_TIMEOUT_MS = 5000;
+    const MQTT_LIBRARY_WAIT_MS = 8000;
+
+    function getMqttLibrary() {
+      if (typeof mqtt !== 'undefined' && mqtt && mqtt.connect) return mqtt;
+      if (typeof window !== 'undefined' && window.mqtt && window.mqtt.connect) return window.mqtt;
+      return null;
+    }
+
+    function waitForMqttLibrary(timeout = MQTT_LIBRARY_WAIT_MS) {
+      const existing = getMqttLibrary();
+      if (existing) return Promise.resolve(existing);
+
+      return new Promise((resolve, reject) => {
+        const startedAt = Date.now();
+        const timer = setInterval(() => {
+          const loaded = getMqttLibrary();
+          if (loaded) {
+            clearInterval(timer);
+            resolve(loaded);
+            return;
+          }
+          if (Date.now() - startedAt >= timeout) {
+            clearInterval(timer);
+            reject(new Error('联机网络组件加载超时，请刷新页面后重试'));
+          }
+        }, 50);
+      });
+    }
+
+    function getMqttBrokerOrder(roomKey = '') {
+      // 同一房间固定使用同一套优先级，且优先命中当前最稳定的 EMQX；
+      // 不按房间随机轮换，避免某些房间一上来就撞到受限节点。
+      return MQTT_BROKER_URLS.map((url, index) => ({ url, index }));
+    }
+
+    function watchMqttClientLifecycle(client) {
+      if (!client || client.__gomokuLifecycleBound) return;
+      client.__gomokuLifecycleBound = true;
+      const invalidate = (eventName) => {
+        if (mqttClient === client) {
+          mqttClient = null;
+          console.warn(`[MQTT] 活跃信令连接已${eventName}，准备自动重连`);
+        }
+      };
+      client.on('close', () => invalidate('断开'));
+      client.on('offline', () => invalidate('离线'));
+      // MQTT.js 的 error 后通常还会紧接着触发 close；这里只记录，不提前销毁连接。
+      client.on('error', (err) => console.warn('[MQTT Client Error]', err));
+    }
+
+    function getOrCreateMqttClient(roomKey = '') {
       if (mqttClient && mqttClient.connected) {
         return Promise.resolve(mqttClient);
       }
       if (mqttClientPromise) return mqttClientPromise;
 
       mqttClient = null;
-      mqttClientPromise = new Promise((resolve, reject) => {
-        if (typeof mqtt === 'undefined' && typeof window !== 'undefined' && typeof window.mqtt !== 'undefined') {
-          window.mqtt = window.mqtt;
-        }
-        const m = (typeof mqtt !== 'undefined') ? mqtt : (typeof window !== 'undefined' ? window.mqtt : null);
-        if (!m || !m.connect) {
-          mqttClientPromise = null;
-          return reject(new Error("联机网络组件加载中，请稍后重试"));
-        }
+      const promise = waitForMqttLibrary().then((m) => new Promise((resolve, reject) => {
+        const candidates = getMqttBrokerOrder(roomKey);
+        let candidateIndex = 0;
 
-        // 逐个尝试节点。旧代码虽然声明了多个节点，但实际永远只连接第一个。
-        const tryBroker = (index) => {
-          const brokerUrl = MQTT_BROKER_URLS[index];
-          if (!brokerUrl) {
-            mqttClientPromise = null;
-            return reject(new Error("信令网络连接失败，请检查网络后重试"));
+        const tryBroker = () => {
+          const candidate = candidates[candidateIndex++];
+          if (!candidate) {
+            reject(new Error('所有信令节点均连接失败，请检查网络后重试'));
+            return;
           }
 
+          const brokerUrl = candidate.url;
           const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
           let settled = false;
           let timer = null;
           let client = null;
 
+          const cleanup = () => {
+            if (timer) clearTimeout(timer);
+            if (!client) return;
+            try { client.removeListener('connect', onConnect); } catch (_) {}
+            try { client.removeListener('error', onError); } catch (_) {}
+            try { client.removeListener('close', onClose); } catch (_) {}
+          };
           const retry = (reason) => {
             if (settled) return;
             settled = true;
-            if (timer) clearTimeout(timer);
+            cleanup();
             try { if (client) client.end(true); } catch (_) {}
-            console.warn(`[MQTT] 节点 ${brokerUrl} 不可用，准备切换下一个节点`, reason || '');
-            if (index + 1 < MQTT_BROKER_URLS.length) {
-              setTimeout(() => tryBroker(index + 1), 80);
-            } else {
-              mqttClientPromise = null;
-              reject(new Error("所有信令节点均连接失败，请检查网络后重试"));
-            }
+            console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 不可用，切换备用节点`, reason || '');
+            setTimeout(tryBroker, 60);
           };
+          const onConnect = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            mqttClient = client;
+            mqttClientPromise = null;
+            watchMqttClientLifecycle(client);
+            console.info(`[MQTT] 已连接信令节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length}`);
+            resolve(client);
+          };
+          const onError = (err) => retry(err);
+          const onClose = () => retry(new Error('连接关闭'));
 
           try {
             client = m.connect(brokerUrl, {
               clientId,
-              connectTimeout: 8000,
-              keepalive: 20,
+              connectTimeout: MQTT_CONNECT_TIMEOUT_MS,
+              keepalive: 25,
               clean: true,
               reconnectPeriod: 0
             });
+            client.once('connect', onConnect);
+            client.once('error', onError);
+            client.once('close', onClose);
+            timer = setTimeout(() => {
+              if (!client.connected) retry(new Error('连接超时'));
+            }, MQTT_CONNECT_TIMEOUT_MS + 800);
           } catch (err) {
             retry(err);
-            return;
           }
-
-          timer = setTimeout(() => {
-            if (!client.connected) retry(new Error('连接超时'));
-          }, 9000);
-
-          client.once('connect', () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            mqttClient = client;
-            mqttClientPromise = null;
-            console.info(`[MQTT] 已连接信令节点 ${index + 1}/${MQTT_BROKER_URLS.length}`);
-            resolve(client);
-          });
-
-          client.once('error', (err) => {
-            console.warn('[MQTT Client Error]', err);
-            retry(err);
-          });
-
-          client.once('close', () => {
-            retry(new Error('连接关闭'));
-          });
         };
 
-        tryBroker(0);
+        tryBroker();
+      }));
+
+      mqttClientPromise = promise;
+      promise.catch(() => {
+        if (mqttClientPromise === promise) mqttClientPromise = null;
       });
 
-      return mqttClientPromise;
+      return promise;
     }
+
+    const P2P_SIGNAL_RETRY_MS = 900;
+    const P2P_SIGNAL_TIMEOUT_MS = 12000;
 
     class MqttRoomConnection {
       constructor(client, roomCode, role) {
@@ -3508,6 +3557,8 @@
         this.roomCode = roomCode;
         this.role = role;
         this.open = true;
+        this.closed = false;
+        this.ready = false;
         this.listeners = { data: [], close: [], error: [], open: [] };
 
         this.pubTopic = role === 'host' ? `gomoku/v3/${roomCode}/h2c` : `gomoku/v3/${roomCode}/c2h`;
@@ -3518,24 +3569,27 @@
         this.pc = null;
         this.dc = null;
         this.processedMsgIds = new Set();
-
-        try { this.client.subscribe(this.subTopic, { qos: 0 }); } catch(_) {}
-        try { this.client.subscribe(this.sigTopic, { qos: 0 }); } catch(_) {}
+        this.p2pProbeStarted = false;
+        this.p2pSessionId = role === 'host' ? this._createSessionId() : '';
+        this.localOffer = null;
+        this.localAnswer = null;
+        this.localIceCandidates = [];
+        this.remoteIceCandidates = new Set();
+        this.pendingRemoteIceCandidates = [];
+        this.remoteDescriptionSet = false;
+        this.remoteOfferSdp = '';
+        this.signalRetryTimer = null;
+        this.signalTask = Promise.resolve();
 
         this.messageHandler = (topic, payload) => {
+          const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+          if (rawPayload.length > 64 * 1024) return;
           if (topic === this.sigTopic) {
-            try {
-              const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
-              if (rawPayload.length > 64 * 1024) return;
-              const sig = JSON.parse(rawPayload);
-              this._handleWebRtcSignal(sig);
-            } catch(e) {}
+            try { this._queueWebRtcSignal(JSON.parse(rawPayload)); } catch(e) {}
             return;
           }
           if (topic !== this.subTopic) return;
           try {
-            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
-            if (rawPayload.length > 64 * 1024) return;
             const data = JSON.parse(rawPayload);
             // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
             if (data._mid) {
@@ -3551,14 +3605,114 @@
             console.warn('[MqttRoom parse error]', e);
           }
         };
+        this.mqttCloseHandler = () => this._markTransportClosed(new Error('信令连接已断开'));
+        this.mqttOfflineHandler = () => this._markTransportClosed(new Error('信令连接已离线'));
+        this.mqttErrorHandler = (err) => {
+          if (this.open && (!this.client || !this.client.connected)) this._markTransportClosed(err || new Error('信令网络异常'));
+        };
 
         this.client.on('message', this.messageHandler);
+        this.client.on('close', this.mqttCloseHandler);
+        this.client.on('offline', this.mqttOfflineHandler);
+        this.client.on('error', this.mqttErrorHandler);
 
-        // 🚀 后台静默启动 WebRTC STUN 穿透探针（绝不阻断正常下棋，打通即享 1ms 局域网/公网极速直连）
-        this._startSilentP2PProbe();
+        // 先确认房间信道订阅成功，再启动 WebRTC；避免一次性 offer/ICE 在订阅完成前丢失。
+        this.readyPromise = this._prepareConnection();
+        this.readyPromise.catch(() => {});
+      }
+
+      _createSessionId() {
+        return 'p2p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12);
+      }
+
+      _prepareConnection() {
+        return this._subscribeTopics().then(() => {
+          if (this.closed || !this.open) throw new Error('房间连接已关闭');
+          this.ready = true;
+          this._startSilentP2PProbe();
+          this.emit('open');
+          return this;
+        }).catch((err) => {
+          if (!this.closed) this._markTransportClosed(err);
+          throw err;
+        });
+      }
+
+      _subscribeTopics() {
+        return new Promise((resolve, reject) => {
+          if (!this.client || !this.client.connected) {
+            reject(new Error('信令连接尚未就绪'));
+            return;
+          }
+          const topics = [this.subTopic, this.sigTopic];
+          let pending = topics.length;
+          let finished = false;
+          const timer = setTimeout(() => finish(new Error('房间信道订阅超时')), 6000);
+          const finish = (err) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            if (err) reject(err); else resolve();
+          };
+          topics.forEach((topic) => {
+            try {
+              this.client.subscribe(topic, { qos: 0 }, (err) => {
+                if (err) return finish(err);
+                pending--;
+                if (pending === 0) finish();
+              });
+            } catch (err) {
+              finish(err);
+            }
+          });
+        });
+      }
+
+      _publishSignal(type, extra = {}) {
+        if (!this.open || !this.client || !this.client.connected) return false;
+        const signal = { sender: this.role, type, ...extra };
+        if (this.p2pSessionId) signal.sessionId = this.p2pSessionId;
+        try {
+          this.client.publish(this.sigTopic, JSON.stringify(signal), { qos: 0 });
+          return true;
+        } catch (err) {
+          return false;
+        }
+      }
+
+      _republishP2PSignals() {
+        if (this.role === 'host') {
+          if (this.localOffer) this._publishSignal('offer', { sdp: this.localOffer.sdp });
+          this.localIceCandidates.forEach((candidate) => this._publishSignal('ice', { candidate }));
+        } else if (this.localAnswer) {
+          this._publishSignal('answer', { sdp: this.localAnswer.sdp });
+        } else {
+          // 客方没有房主 sessionId 时发送 hello；房主收到后会重发 offer 和 ICE。
+          this._publishSignal('hello');
+        }
+      }
+
+      _startSignalRetry() {
+        if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
+        const startedAt = Date.now();
+        const tick = () => {
+          if (this.closed || !this.open || this.isP2pReady || Date.now() - startedAt >= P2P_SIGNAL_TIMEOUT_MS) {
+            this.signalRetryTimer = null;
+            return;
+          }
+          this._republishP2PSignals();
+          this.signalRetryTimer = setTimeout(tick, P2P_SIGNAL_RETRY_MS);
+        };
+        tick();
+      }
+
+      _queueWebRtcSignal(sig) {
+        this.signalTask = this.signalTask.then(() => this._handleWebRtcSignal(sig)).catch(() => {});
       }
 
       _startSilentP2PProbe() {
+        if (this.p2pProbeStarted || this.closed) return;
+        this.p2pProbeStarted = true;
         try {
           const RTCPC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
           if (!RTCPC) return;
@@ -3573,35 +3727,34 @@
           this.pc = pc;
 
           pc.onicecandidate = (e) => {
-            if (e.candidate && this.client && this.client.connected) {
-              try {
-                this.client.publish(this.sigTopic, JSON.stringify({
-                  sender: this.role,
-                  type: 'ice',
-                  candidate: e.candidate.toJSON()
-                }), { qos: 0 });
-              } catch(_) {}
-            }
+            if (!e.candidate) return;
+            const candidate = typeof e.candidate.toJSON === 'function' ? e.candidate.toJSON() : e.candidate;
+            this.localIceCandidates.push(candidate);
+            if (this.localIceCandidates.length > 64) this.localIceCandidates.shift();
+            this._publishSignal('ice', { candidate });
+          };
+          pc.onconnectionstatechange = () => {
+            if (!this.pc || this.pc !== pc) return;
+            if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) this.isP2pReady = false;
+          };
+          pc.oniceconnectionstatechange = () => {
+            if (!this.pc || this.pc !== pc) return;
+            if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) this.isP2pReady = false;
           };
 
           if (this.role === 'host') {
             const dc = pc.createDataChannel('gomoku_dc', { ordered: true });
             this._bindDataChannel(dc);
-            pc.createOffer().then(offer => {
-              return pc.setLocalDescription(offer).then(() => {
-                if (this.client && this.client.connected) {
-                  this.client.publish(this.sigTopic, JSON.stringify({
-                    sender: 'host',
-                    type: 'offer',
-                    sdp: offer.sdp
-                  }), { qos: 0 });
-                }
-              });
-            }).catch(() => {});
+            pc.createOffer().then(async (offer) => {
+              await pc.setLocalDescription(offer);
+              if (!pc.localDescription) return;
+              this.localOffer = { type: 'offer', sdp: pc.localDescription.sdp || offer.sdp };
+              this._startSignalRetry();
+            }).catch((err) => console.warn('[P2P offer]', err));
           } else {
-            pc.ondatachannel = (e) => {
-              this._bindDataChannel(e.channel);
-            };
+            pc.ondatachannel = (e) => this._bindDataChannel(e.channel);
+            // 客方主动 hello，解决房主 offer 早于客方订阅而丢失的问题。
+            this._startSignalRetry();
           }
         } catch(err) {
           console.warn('[P2P silent probe init]', err);
@@ -3609,82 +3762,161 @@
       }
 
       async _handleWebRtcSignal(sig) {
-        if (!sig || sig.sender === this.role || !this.pc) return;
-        try {
-          if (sig.type === 'offer' && this.role === 'client') {
-            await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sig.sdp }));
-            const answer = await this.pc.createAnswer();
-            await this.pc.setLocalDescription(answer);
-            if (this.client && this.client.connected) {
-              this.client.publish(this.sigTopic, JSON.stringify({
-                sender: 'client',
-                type: 'answer',
-                sdp: answer.sdp
-              }), { qos: 0 });
-            }
-          } else if (sig.type === 'answer' && this.role === 'host') {
-            if (this.pc.signalingState !== 'stable') {
-              await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sig.sdp }));
-            }
-          } else if (sig.type === 'ice' && sig.candidate) {
-            try {
-              await this.pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
-            } catch(_) {}
+        if (!sig || !this.open || !this.pc || sig.sender === this.role) return;
+        if (typeof sig.type !== 'string' || sig.type.length > 16) return;
+
+        // hello 不需要 sessionId；它的作用是请求房主重新发送当前 session 的 offer/ICE。
+        if (sig.type === 'hello' && this.role === 'host') {
+          this._republishP2PSignals();
+          return;
+        }
+        if (!sig.sessionId || typeof sig.sessionId !== 'string' || sig.sessionId.length > 80) return;
+
+        if (this.role === 'client') {
+          if (!this.p2pSessionId) this.p2pSessionId = sig.sessionId;
+          if (this.p2pSessionId !== sig.sessionId) return;
+        } else if (this.p2pSessionId !== sig.sessionId) {
+          return;
+        }
+
+        if (sig.type === 'offer' && this.role === 'client' && typeof sig.sdp === 'string' && sig.sdp.length <= 128 * 1024) {
+          if (this.remoteDescriptionSet && this.remoteOfferSdp === sig.sdp) {
+            this._republishP2PSignals();
+            return;
           }
-        } catch(e) {}
+          await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sig.sdp }));
+          this.remoteDescriptionSet = true;
+          this.remoteOfferSdp = sig.sdp;
+          await this._flushRemoteIceCandidates();
+          const answer = await this.pc.createAnswer();
+          await this.pc.setLocalDescription(answer);
+          this.localAnswer = { type: 'answer', sdp: this.pc.localDescription?.sdp || answer.sdp };
+          this._republishP2PSignals();
+          return;
+        }
+
+        if (sig.type === 'answer' && this.role === 'host' && typeof sig.sdp === 'string' && sig.sdp.length <= 128 * 1024) {
+          if (this.pc.signalingState === 'have-local-offer' && !this.remoteDescriptionSet) {
+            await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sig.sdp }));
+            this.remoteDescriptionSet = true;
+            await this._flushRemoteIceCandidates();
+          }
+          return;
+        }
+
+        if (sig.type === 'ice' && sig.candidate && typeof sig.candidate === 'object') {
+          const candidateKey = JSON.stringify(sig.candidate);
+          if (this.remoteIceCandidates.has(candidateKey)) return;
+          this.remoteIceCandidates.add(candidateKey);
+          if (!this.remoteDescriptionSet) {
+            this.pendingRemoteIceCandidates.push(sig.candidate);
+            return;
+          }
+          try { await this.pc.addIceCandidate(new RTCIceCandidate(sig.candidate)); } catch(_) {}
+        }
+      }
+
+      async _flushRemoteIceCandidates() {
+        if (!this.pc || !this.remoteDescriptionSet) return;
+        const pending = this.pendingRemoteIceCandidates.splice(0);
+        for (const candidate of pending) {
+          try { await this.pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(_) {}
+        }
       }
 
       _bindDataChannel(dc) {
+        if (!dc) return;
+        if (this.dc && this.dc !== dc) {
+          try { this.dc.close(); } catch(_) {}
+        }
         this.dc = dc;
         dc.onopen = () => {
+          if (this.dc !== dc || this.closed) return;
           this.isP2pReady = true;
-          console.info('🎉 [P2P Dual-Track] WebRTC 点对点直连通道成功建立！升级为 1ms 极速传输！');
-          showGameNotice('⚡ 已无感激活 P2P 点对点极速直连 (1ms)', false);
+          if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
+          this.signalRetryTimer = null;
+          console.info('🎉 [P2P Dual-Track] WebRTC 点对点直连通道成功建立，后续落子优先走低延迟直连');
+          showGameNotice('⚡ 已无感激活 P2P 点对点低延迟直连', false);
         };
         dc.onmessage = (e) => {
           try {
-            if (!e || typeof e.data !== 'string' || e.data.length > 64 * 1024) return;
+            if (this.dc !== dc || !e || typeof e.data !== 'string' || e.data.length > 64 * 1024) return;
             const data = JSON.parse(e.data);
             if (data._mid) {
               if (this.processedMsgIds.has(data._mid)) return;
               this.processedMsgIds.add(data._mid);
+              if (this.processedMsgIds.size > 200) {
+                const first = this.processedMsgIds.values().next().value;
+                this.processedMsgIds.delete(first);
+              }
             }
             this.emit('data', data);
           } catch(err) {}
         };
-        dc.onclose = () => {
-          this.isP2pReady = false;
+        const onClosed = () => {
+          if (this.dc === dc) this.isP2pReady = false;
         };
-        dc.onerror = () => {
-          this.isP2pReady = false;
-        };
+        dc.onclose = onClosed;
+        dc.onerror = onClosed;
+      }
+
+      _disposeP2P() {
+        if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
+        this.signalRetryTimer = null;
+        this.isP2pReady = false;
+        if (this.dc) {
+          try { this.dc.close(); } catch(_) {}
+          this.dc = null;
+        }
+        if (this.pc) {
+          try { this.pc.close(); } catch(_) {}
+          this.pc = null;
+        }
+      }
+
+      _markTransportClosed(reason) {
+        if (this.closed) return;
+        this.closed = true;
+        this.open = false;
+        this.ready = false;
+        this._disposeP2P();
+        this._detachMqttListeners();
+        this.emit('error', reason || new Error('信令连接异常'));
+        this.emit('close');
+      }
+
+      _detachMqttListeners() {
+        if (!this.client) return;
+        try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
+        try { this.client.removeListener('close', this.mqttCloseHandler); } catch(_) {}
+        try { this.client.removeListener('offline', this.mqttOfflineHandler); } catch(_) {}
+        try { this.client.removeListener('error', this.mqttErrorHandler); } catch(_) {}
       }
 
       send(data) {
-        if (!this.open) return;
-        if (!data._mid) {
-          data._mid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
-        }
+        if (!this.open || !data || typeof data !== 'object') return false;
+        if (!data._mid) data._mid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
         const jsonStr = JSON.stringify(data);
 
-        // 🚀 双轨竞速：若 P2P 直连已打通，优先走 P2P UDP 直传！
+        // P2P 打通后优先走 WebRTC；未打通或临时断开时自动回退 MQTT。
         if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
           try {
             this.dc.send(jsonStr);
-            return;
+            return true;
           } catch(e) {
             this.isP2pReady = false;
           }
         }
 
-        // 基石信道：走 100% 全网连通的 MQTT Anycast 云信道
         if (this.client && this.client.connected) {
           try {
             this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
+            return true;
           } catch(e) {
             console.warn('[MqttRoom send error]', e);
           }
         }
+        return false;
       }
 
       on(event, fn) {
@@ -3693,9 +3925,7 @@
       }
 
       off(event, fn) {
-        if (this.listeners[event]) {
-          this.listeners[event] = this.listeners[event].filter(h => h !== fn);
-        }
+        if (this.listeners[event]) this.listeners[event] = this.listeners[event].filter(h => h !== fn);
         return this;
       }
 
@@ -3707,27 +3937,28 @@
         }
       }
 
-      close() {
+      close(silent = false) {
+        if (this.closed) return;
+        this.closed = true;
         this.open = false;
-        this.isP2pReady = false;
-        if (this.dc) {
-          try { this.dc.close(); } catch(_) {}
-          this.dc = null;
-        }
-        if (this.pc) {
-          try { this.pc.close(); } catch(_) {}
-          this.pc = null;
-        }
-        if (this.client) {
-          try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
-        }
-        this.emit('close');
+        this.ready = false;
+        this._disposeP2P();
+        this._detachMqttListeners();
+        if (!silent) this.emit('close');
       }
     }
 
     let currentRoomCode = '';
     let isHostConnecting = false;
     let p2pChannel = null;
+    let hostInviteBinding = null;
+    let activeOnlineGuestUid = '';
+
+    function detachHostInviteListener() {
+      if (!hostInviteBinding) return;
+      try { hostInviteBinding.client.removeListener('message', hostInviteBinding.handler); } catch(_) {}
+      hostInviteBinding = null;
+    }
 
     function generateFastRoomCode() {
       return String(Math.floor(100000 + Math.random() * 900000));
@@ -3741,6 +3972,7 @@
     }
 
     async function initHostMqttPeer(targetCode = null, forceNew = false) {
+      if (targetCode && String(targetCode) !== String(currentRoomCode)) activeOnlineGuestUid = '';
       if (targetCode) currentRoomCode = targetCode;
       if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
 
@@ -3761,20 +3993,22 @@
         badgeEl.style.color = '#f59e0b';
       }
 
+      detachHostInviteListener();
       if (conn) {
-        try { conn.close(); } catch(e) {}
+        try { conn.close(true); } catch(e) {}
         conn = null;
       }
 
       const roomCode = currentRoomCode;
 
       try {
-        const client = await getOrCreateMqttClient();
+        const client = await getOrCreateMqttClient(roomCode);
         const c2hTopic = `gomoku/v3/${roomCode}/c2h`;
         const h2cTopic = `gomoku/v3/${roomCode}/h2c`;
 
         client.subscribe(c2hTopic, { qos: 0 }, (err) => {
           if (err) {
+            detachHostInviteListener();
             if (badgeEl) {
               badgeEl.innerHTML = '⚠️ 连入失败 <span style="cursor:pointer;color:#3b82f6;text-decoration:underline;" onclick="initHostPeer(null, true)">[重试]</span>';
               badgeEl.style.color = '#ef4444';
@@ -3787,74 +4021,90 @@
           }
         });
 
-        // 房主监听客方加入握手（多波段防丢包应答 + 第三人满员拦截防串房）
+        // 房主监听客方加入/重连握手。监听器随房间连接重建，避免房主重连后只剩“空壳”连接。
         let hostHandshakeDone = false;
-        let activeGuestUid = null;
+        let activeGuestUid = activeOnlineGuestUid || null;
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
             const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
             if (rawPayload.length > 64 * 1024) return;
             const data = JSON.parse(rawPayload);
-            if (data.type === 'join_request') {
-              const reqUid = data.uid || data.name || 'guest';
+            if (data.type !== 'join_request' && data.type !== 'reconnect_handshake') return;
+            const reqUid = String(data.uid || data.name || 'guest').slice(0, 128);
 
-              // 🛡️ 第三人进房拦截：若房间已有客方在对局，且请求者不是当前对局客方，直接回绝人数已满
-              if (hostHandshakeDone && activeGuestUid && reqUid !== activeGuestUid && gameMode === 'online' && !isOver) {
-                try {
-                  client.publish(h2cTopic, JSON.stringify({
-                    type: 'room_full',
-                    targetUid: reqUid,
-                    msg: '该房间已有 2 人正在对弈，人数已满！'
-                  }), { qos: 0 });
-                } catch(_) {}
-                return;
-              }
-
-              activeGuestUid = reqUid;
-
-              // 连续回送 join_accepted（0ms, 150ms, 350ms），确保 4G/5G 弱网下对方必能收到
-              const sendAccept = () => {
-                try {
-                  client.publish(h2cTopic, JSON.stringify({
-                    type: 'join_accepted',
-                    targetUid: activeGuestUid,
-                    name: p1Name,
-                    avatar: p1Avatar
-                  }), { qos: 0 });
-                } catch(_) {}
-              };
-              sendAccept();
-              setTimeout(sendAccept, 150);
-              setTimeout(sendAccept, 350);
-
-              if (!hostHandshakeDone) {
-                hostHandshakeDone = true;
-
-                conn = new MqttRoomConnection(client, roomCode, 'host');
-                myOnlineColor = BLACK;
-                lastActiveRoomCode = roomCode;
-                p2Name = data.name || '好友';
-                p2Avatar = data.avatar || '👧';
-                updatePlayerHeaderUI();
-
-                if (isReconnecting) {
-                  onReconnectSuccess();
-                } else {
-                  showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
-                  closeOnlineModal();
-                  setMode('online');
-                  conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
-                }
-                setupConn();
-              }
+            // 🛡️ 第三人进房拦截：若房间已有客方在对局，且请求者不是当前对局客方，直接回绝人数已满
+            if (activeGuestUid && reqUid !== activeGuestUid && gameMode === 'online' && !isOver) {
+              try {
+                client.publish(h2cTopic, JSON.stringify({
+                  type: 'room_full',
+                  targetUid: reqUid,
+                  msg: '该房间已有 2 人正在对弈，人数已满！'
+                }), { qos: 0 });
+              } catch(_) {}
+              return;
             }
+
+            activeGuestUid = reqUid;
+            activeOnlineGuestUid = reqUid;
+
+            // 连续回送 join_accepted（0ms, 150ms, 350ms），确保首次进房和弱网重连都能收到应答
+            const sendAccept = () => {
+              try {
+                client.publish(h2cTopic, JSON.stringify({
+                  type: 'join_accepted',
+                  targetUid: activeGuestUid,
+                  name: p1Name,
+                  avatar: p1Avatar
+                }), { qos: 0 });
+              } catch(_) {}
+            };
+            sendAccept();
+            setTimeout(sendAccept, 150);
+            setTimeout(sendAccept, 350);
+
+            const liveConnection = !!(conn && conn.open && currentRoomCode === roomCode && !isReconnecting);
+            if (liveConnection && hostHandshakeDone) {
+              if (data.type === 'reconnect_handshake') sendFullStateSnapshot();
+              return;
+            }
+
+            hostHandshakeDone = true;
+            if (conn) {
+              try { conn.close(true); } catch(_) {}
+              conn = null;
+            }
+
+            const reconnectingNow = isReconnecting;
+            const nextConn = new MqttRoomConnection(client, roomCode, 'host');
+            conn = nextConn;
+            myOnlineColor = BLACK;
+            lastActiveRoomCode = roomCode;
+            p2Name = data.name || p2Name || '好友';
+            p2Avatar = data.avatar || p2Avatar || '👧';
+            updatePlayerHeaderUI();
+            setupConn();
+
+            nextConn.readyPromise.then(() => {
+              if (conn !== nextConn || !nextConn.open) return;
+              if (reconnectingNow) {
+                onReconnectSuccess();
+              } else {
+                showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
+                closeOnlineModal();
+                setMode('online');
+                nextConn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+              }
+            }).catch((err) => {
+              console.warn('[host room connection]', err);
+            });
           } catch(e) {
             console.warn('[onHostInvite error]', e);
           }
         };
 
         client.on('message', onHostInvite);
+        hostInviteBinding = { client, handler: onHostInvite, topic: c2hTopic, roomCode };
 
       } catch(err) {
         console.error('[initHostPeer error]', err);
@@ -3870,6 +4120,7 @@
     }
 
     function refreshNewRoomCode() {
+      activeOnlineGuestUid = '';
       currentRoomCode = generateFastRoomCode();
       initHostPeer(currentRoomCode, true);
       showGameNotice("🔄 正在刷新全新房间码...", false);
@@ -3880,6 +4131,7 @@
     let reconnectAttempts = 0;
     const MAX_RECONNECT_ATTEMPTS = 5;
     let reconnectTimer = null;
+    let reconnectHandshakeTimer = null;
     let lastActiveRoomCode = '';
 
     function showReconnectOverlay(show, text = '') {
@@ -3926,20 +4178,27 @@
       }
 
       try {
-        const client = await getOrCreateMqttClient();
-        if (conn && conn.open) {
+        const roomCode = currentRoomCode;
+        const client = await getOrCreateMqttClient(roomCode);
+        if (conn && conn.open && conn.ready && client.connected) {
           onReconnectSuccess();
           return;
         }
 
+        if (conn) {
+          try { conn.close(true); } catch(_) {}
+          conn = null;
+        }
+
         if (myOnlineColor === WHITE) {
-          conn = new MqttRoomConnection(client, currentRoomCode, 'client');
-          conn.send({ type: 'reconnect_handshake', role: 'client', stepCount: history.length });
-          onReconnectSuccess();
+          const nextConn = new MqttRoomConnection(client, roomCode, 'client');
+          conn = nextConn;
+          setupConn();
+          await nextConn.readyPromise;
+          if (conn === nextConn && nextConn.open) startReconnectHandshakeLoop(nextConn);
         } else {
-          conn = new MqttRoomConnection(client, currentRoomCode, 'host');
-          sendFullStateSnapshot();
-          onReconnectSuccess();
+          // 房主必须重新挂载原始入房监听，等待客方的 reconnect_handshake。
+          await initHostMqttPeer(roomCode, true);
         }
       } catch(e) {
         console.warn('[doAutoReconnect error]', e);
@@ -3959,24 +4218,52 @@
 
     function manualTriggerReconnect() {
       reconnectAttempts = 0;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       document.getElementById('reconnectTitle').textContent = '联机中断重连中...';
       doAutoReconnect();
     }
 
+    function stopReconnectHandshakeLoop() {
+      if (reconnectHandshakeTimer) clearInterval(reconnectHandshakeTimer);
+      reconnectHandshakeTimer = null;
+    }
+
+    function startReconnectHandshakeLoop(connection) {
+      stopReconnectHandshakeLoop();
+      const sendHandshake = () => {
+        if (!isReconnecting || conn !== connection || !connection.open) {
+          stopReconnectHandshakeLoop();
+          return;
+        }
+        connection.send({
+          type: 'reconnect_handshake',
+          role: 'client',
+          uid: getOrCreateMatchUid(),
+          name: p1Name,
+          avatar: p1Avatar,
+          stepCount: history.length
+        });
+      };
+      sendHandshake();
+      reconnectHandshakeTimer = setInterval(sendHandshake, 700);
+    }
+
     function onReconnectSuccess() {
+      const wasReconnecting = isReconnecting;
       isReconnecting = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      stopReconnectHandshakeLoop();
       showReconnectOverlay(false);
       setupConn();
 
-      if (myOnlineColor === WHITE) {
-        conn.send({ type: 'reconnect_handshake', role: 'client', stepCount: history.length });
-      } else {
+      if (wasReconnecting && myOnlineColor === BLACK) {
         sendFullStateSnapshot();
       }
 
-      playPopSound();
-      showGameNotice("🎉 联机重连成功！棋局已完好恢复，继续对弈~", false);
+      if (wasReconnecting) {
+        playPopSound();
+        showGameNotice("🎉 联机重连成功！棋局已完好恢复，继续对弈~", false);
+      }
     }
 
     function sendFullStateSnapshot() {
@@ -4000,8 +4287,10 @@
     function fallbackToAiGame() {
       isReconnecting = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      stopReconnectHandshakeLoop();
       showReconnectOverlay(false);
-      if (conn) { try { conn.close(); } catch(e) {} conn = null; }
+      detachHostInviteListener();
+      if (conn) { try { conn.close(true); } catch(e) {} conn = null; }
       
       gameMode = 'ai';
       p2Name = '大师AI';
@@ -4141,20 +4430,22 @@
 
     function setupConn() {
       if (!conn) return;
+      if (conn.__gomokuSetup) return;
+      conn.__gomokuSetup = true;
       if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
       
       let missedPings = 0;
       onlineHeartbeatTimer = setInterval(() => {
         if (conn && conn.open && gameMode === 'online' && !isOver) {
           missedPings++;
-          // 容忍度放宽至 6 次心跳（即 30 秒无响应才触发重连），避免因手机短暂切后台或轻微网络波动误断
-          if (missedPings > 6) {
+          // MQTT close/offline 会立即触发重连；只有半开连接才走心跳兜底，约 12 秒判定失联。
+          if (missedPings >= 3) {
             triggerOnlineReconnect("心跳无响应");
             return;
           }
           try { conn.send({ type: 'ping', step: history.length }); } catch(e) {}
         }
-      }, 5000);
+      }, 4000);
 
       conn.on('close', () => {
         if (gameMode !== 'online' || isOver) return;
@@ -4174,7 +4465,8 @@
         if (data.type === "leave_room") {
           showGameNotice(`⚠️ 对手【${data.name || p2Name}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
-          if (conn) { try { conn.close(); } catch(_) {} conn = null; }
+          detachHostInviteListener();
+          if (conn) { try { conn.close(true); } catch(_) {} conn = null; }
           if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
           setMode("ai", false);
           return;
@@ -5143,12 +5435,12 @@
       }
 
       if (conn) {
-        try { conn.close(); } catch(e) {}
+        try { conn.close(true); } catch(e) {}
         conn = null;
       }
 
       try {
-        const client = await getOrCreateMqttClient();
+        const client = await getOrCreateMqttClient(code);
         const c2hTopic = `gomoku/v3/${code}/c2h`;
         const h2cTopic = `gomoku/v3/${code}/h2c`;
 
@@ -5193,7 +5485,8 @@
               client.removeListener('message', onClientInvite);
               restoreBtn();
 
-              conn = new MqttRoomConnection(client, code, 'client');
+              const nextConn = new MqttRoomConnection(client, code, 'client');
+              conn = nextConn;
               lastActiveRoomCode = code;
               currentRoomCode = code;
               myOnlineColor = WHITE;
@@ -5204,7 +5497,11 @@
               closeOnlineModal();
               setMode('online');
               setupConn();
-              conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+              nextConn.readyPromise.then(() => {
+                if (conn === nextConn && nextConn.open) {
+                  nextConn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+                }
+              }).catch((err) => console.warn('[guest room connection]', err));
             }
           } catch(e) {
             console.warn('[onClientInvite error]', e);
@@ -8797,11 +9094,13 @@
     }
 
     function leaveOnlineRoom(sendNotice = true) {
+      stopReconnectHandshakeLoop();
+      detachHostInviteListener();
       if (sendNotice && conn && conn.open) {
         try { conn.send({ type: "leave_room", name: p1Name }); } catch(_) {}
       }
       if (conn) {
-        try { conn.close(); } catch(_) {}
+        try { conn.close(true); } catch(_) {}
         conn = null;
       }
       if (p2pChannel) {
@@ -8817,6 +9116,7 @@
         onlineHeartbeatTimer = null;
       }
       currentRoomCode = null;
+      activeOnlineGuestUid = '';
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
       cancelQuickMatch();
       hideMatchingFloatingBar();
