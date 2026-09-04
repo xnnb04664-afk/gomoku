@@ -3,7 +3,6 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const ROOT_DIR = __dirname;
-const UPDATE_PROXY_ORIGIN = 'https://gomoku-api.pages.dev';
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
 
 const vm = require('vm');
@@ -229,13 +228,10 @@ const vJson = {
     `🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深与置换表搜索，并按桌面/移动端设置单步时间预算`,
     `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
   ].join('\n\n'),
-  download: {
-    fastUrl: `${UPDATE_PROXY_ORIGIN}/api/update/apk`,
-    htmlUrl: `${UPDATE_PROXY_ORIGIN}/api/update/html`
-  }
+  updateTransport: 'cloudflare-ticket-protected'
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
-console.log('📌 已同步更新 version.json (国内极速直连数据源)');
+console.log('📌 已同步更新 version.json (短时票据保护更新通道)');
 
 // 同步更新 backend/worker.js 中的版本号与更新日志
 const workerJsPath = path.join(ROOT_DIR, 'backend', 'worker.js');
@@ -319,6 +315,5 @@ try {
 
 console.log('======================================================');
 console.log(`✨ 全部发布流程圆满成功！版本: v${newName}`);
-console.log(`🔗 APK 更新中转地址: ${UPDATE_PROXY_ORIGIN}/api/update/apk`);
-console.log(`⚡ HTML 热更新中转地址: ${UPDATE_PROXY_ORIGIN}/api/update/html`);
+console.log('🔒 更新产物仅通过 Cloudflare 短时票据通道提供，不输出可复用下载地址');
 console.log('======================================================');

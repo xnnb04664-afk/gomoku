@@ -216,7 +216,7 @@
 
 ### 18. 🔄 手机无缝覆盖更新与私有 GitHub Releases 云发版体系
 - **仓库权限**：GitHub 仓库保持 Private；仓库地址、Release 地址和 GitHub Token 只供维护脚本与 Cloudflare Worker 使用，不写入客户端界面。
-- **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本，并通过 `/api/update/apk`、`/api/update/html` 获取文件；不会直连 GitHub、Raw、jsDelivr 或第三方反代。
+- **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本；版本响应不再下发 APK/HTML 完整下载 URL，只下发固定路径和一次性短时票据。文件请求必须使用 `X-Gomoku-Client: gomoku-app-client-v2` 与 `X-Gomoku-Update-Ticket` 请求头，不会直连 GitHub、Raw、jsDelivr 或第三方反代。
 - **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。每次新建或轮换 Pages Secret 后，都要重新部署 Pages Function 才能让当前生产部署绑定新值。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
   - 在【个人资料】中常驻版本显示当前正式版本（本次为 `v1.0.87`）与【🚀 检查更新】按钮；
@@ -303,6 +303,19 @@
 - **v1.0.89（Build 90）发布结果**：完成六大主题、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建并上传 GitHub Release `v1.0.89` 的 `gomoku.apk`、`gomoku.html`，并成功部署 Cloudflare Worker 与 Pages。
 - **v1.0.89 安全审计与清理结果**：六大主题统一增加动态文本/头像转义、远端快照与 P2P 消息结构校验、消息大小限制和严格房间码校验；Android 更新器固定官方 HTTPS 出口、限制重定向、限制响应大小，并在下载和安装前校验 APK SHA-256，移除 file URI 暴露配置；Worker 禁止游客进入全服匹配、只信任 Cloudflare 来源 IP、增加反馈限流和安全响应头；部署脚本改为配置严格校验、Worker 失败即停止、Pages 失败返回非零状态；发布脚本新增全主题语法门禁、敏感内容扫描和失败即停机制。
 - **v1.0.89 无用产物清理**：删除旧代码快照 `GOMOKU_CODEBASE_FOR_REVIEW.md`、旧审计笔记 `findings.md`/`progress.md`/`task_plan.md`、重复且未被发布流程使用的 `build_apk.ps1`、旧版 `android_src/classes/*.class`，以及被 Git 错误跟踪的 `.wrangler/` 部署缓存；构建产物统一在临时目录重新生成。
+- **本次更新下载保护改造（源码已完成，线上强制开关待安全版 APK 安装后开启）**：
+  - Worker 为 APK/HTML 生成 90 秒 HMAC 短时票据；票据只放在请求头，不进入 URL、二维码或页面链接，并绑定资源类型与 Release 版本；强制模式下直接打开或复制 `/api/update/apk`、`/api/update/html` 会返回 `401`，不会读取 GitHub 资产。
+  - `index.html`、五套主题、单文件版构建链和 Android 原生桥均已改为票据请求；Android 继续执行 HTTPS 主机固定、APK SHA-256 校验、官方签名校验、禁止 WebView 调试、禁止明文流量，并明确禁止 `android:debuggable`。
+  - 为避免旧 APK 被线上开关立即锁死，`UPDATE_TICKET_ENFORCED` 未设置时是兼容阶段：新客户端已使用票据，旧客户端仍可暂时访问旧接口。安装本次重新签名的安全版 APK 后，再将该 Pages Secret 设置为 `1` 并重新部署，才算完成线上关闭直链。
+  - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据，便于迁移。配置命令：
+    ```powershell
+    npx wrangler pages secret put UPDATE_TICKET_SECRET --project-name gomoku-api
+    npx wrangler pages secret put UPDATE_TICKET_ENFORCED --project-name gomoku-api
+    # 第二条命令输入：1
+    node deploy_worker.js
+    ```
+  - 上线顺序必须是：先用仓库外签名密钥构建并手动安装新 APK → 确认新 APK 能检查更新 → 设置 `UPDATE_TICKET_ENFORCED=1` → 重新部署。否则旧 APK 没有票据桥接方法，会无法下载下一版。
+  - **逆向边界**：无法绝对阻止专业人员对 APK、WebView 或运行时网络进行分析；本次措施的目标是移除仓库凭据和公开直链、阻断裸 URL 下载、缩短授权窗口并提高重打包/篡改成本。若要做到用户级访问控制，还需登录态/Cloudflare Access/应用商店完整性服务，属于额外产品方案。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：
@@ -481,4 +494,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：安全加固、无用产物清理、全量构建发布与 Cloudflare 云端部署均已完成；后续发布请先阅读本文件并使用 `node publish.js`。*
+*当前工程状态：下载票据保护与客户端防篡改改造已完成源码实现；新的签名 APK 需先手动安装，随后开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署，完成线上强制保护。后续发布请先阅读本文件并使用 `node publish.js`。*

@@ -5392,14 +5392,46 @@
   
     // 🚀 Cloudflare Worker 私有仓库更新中转
     const CURRENT_VERSION_TAG = 'v1.0.89';
-    const UPDATE_API_URL = 'https://gomoku-api.pages.dev/api/version';
-    const UPDATE_PROXY_APK_URL = 'https://gomoku-api.pages.dev/api/update/apk';
-    const UPDATE_PROXY_HTML_URL = 'https://gomoku-api.pages.dev/api/update/html';
-    function isTrustedUpdateUrl(value, expectedPath) {
+    const UPDATE_PROXY_ORIGIN = 'https://gomoku-api.pages.dev';
+    const UPDATE_API_URL = `${UPDATE_PROXY_ORIGIN}/api/version`;
+    const UPDATE_PROXY_APK_PATH = '/api/update/apk';
+    const UPDATE_PROXY_HTML_PATH = '/api/update/html';
+    const UPDATE_PROXY_APK_URL = `${UPDATE_PROXY_ORIGIN}${UPDATE_PROXY_APK_PATH}`;
+    const UPDATE_PROXY_HTML_URL = `${UPDATE_PROXY_ORIGIN}${UPDATE_PROXY_HTML_PATH}`;
+    const UPDATE_CLIENT_HEADER = 'X-Gomoku-Client';
+    const UPDATE_CLIENT_VALUE = 'gomoku-app-client-v2';
+    const UPDATE_TICKET_HEADER = 'X-Gomoku-Update-Ticket';
+    function isTrustedUpdatePath(value, expectedPath) {
+      return String(value || '').trim() === expectedPath;
+    }
+    function getUpdateHeaders(ticket = '') {
+      const headers = { [UPDATE_CLIENT_HEADER]: UPDATE_CLIENT_VALUE };
+      if (ticket) headers[UPDATE_TICKET_HEADER] = ticket;
+      return headers;
+    }
+    async function downloadProtectedApk(url, ticket) {
+      if (url !== UPDATE_PROXY_APK_URL || !ticket) throw new Error('更新下载授权无效');
+      const response = await fetch(url, { cache: 'no-store', headers: getUpdateHeaders(ticket) });
+      if (!response.ok) throw new Error('更新文件接口不可用');
+      const blob = await response.blob();
+      if (blob.size < 500000 || blob.size > 50 * 1024 * 1024) throw new Error('更新文件大小异常');
+      const objectUrl = URL.createObjectURL(blob);
       try {
-        const parsed = new URL(value, UPDATE_API_URL);
-        return parsed.origin === 'https://gomoku-api.pages.dev' && !parsed.username && !parsed.password && parsed.pathname === expectedPath;
-      } catch (_) { return false; }
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = 'gomoku_latest.apk';
+        anchor.rel = 'noopener';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+      }
+    }
+    function invokeProtectedNativeApkUpdate(ticket) {
+      if (typeof AndroidNativeApp === 'undefined' || !ticket || typeof AndroidNativeApp.downloadAndInstallApkWithTicket !== 'function') return false;
+      AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
+      return true;
     }
     async function sha256Hex(value) {
       if (!window.crypto || !window.crypto.subtle) throw new Error('当前环境不支持更新完整性校验');
@@ -5457,7 +5489,7 @@
         try {
           const res = await fetch(ep.url, {
             cache: 'no-cache',
-            headers: ep.isGhApi ? { 'Accept': 'application/vnd.github.v3+json' } : {},
+            headers: getUpdateHeaders(),
             signal: controller.signal
           });
           clearTimeout(timeoutId);
@@ -5468,8 +5500,10 @@
               return {
                 tag: releaseTag,
                 notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-                fastUrl: isTrustedUpdateUrl(data.apkDownload || (data.download && data.download.fastUrl), '/api/update/apk') ? (data.apkDownload || data.download.fastUrl) : UPDATE_PROXY_APK_URL,
-                htmlUrl: isTrustedUpdateUrl(data.htmlDownload || (data.download && data.download.htmlUrl), '/api/update/html') ? (data.htmlDownload || data.download.htmlUrl) : UPDATE_PROXY_HTML_URL,
+                fastUrl: isTrustedUpdatePath(data.apkPath, UPDATE_PROXY_APK_PATH) ? UPDATE_PROXY_APK_URL : '',
+                htmlUrl: isTrustedUpdatePath(data.htmlPath, UPDATE_PROXY_HTML_PATH) ? UPDATE_PROXY_HTML_URL : '',
+                apkTicket: String(data.apkTicket || '').trim(),
+                htmlTicket: String(data.htmlTicket || '').trim(),
                 htmlSha256: /^[0-9a-f]{64}$/i.test(String(data.htmlSha256 || '')) ? String(data.htmlSha256).toLowerCase() : ''
               };
             }
@@ -5510,7 +5544,7 @@
               try {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 6000);
-                const res = await fetch(uUrl, { signal: controller.signal });
+                const res = await fetch(uUrl, { signal: controller.signal, cache: 'no-store', headers: getUpdateHeaders(versionData.htmlTicket) });
                 clearTimeout(timeoutId);
                 if (res.ok) {
                   const htmlText = await res.text();
@@ -5525,11 +5559,14 @@
           }
 
           // B. 原生 APK 全自动下载与安装（防重入，下载完成自动弹出安装）
-          if (AndroidNativeApp.downloadAndInstallApk && !isAppDownloading) {
+          if (typeof AndroidNativeApp !== 'undefined' && versionData.apkTicket && !isAppDownloading) {
             isAppDownloading = true;
-            const fastLink = versionData.fastUrl || '';
-            if (fastLink) AndroidNativeApp.downloadAndInstallApk(fastLink);
-            showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
+            if (!invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
+              isAppDownloading = false;
+              showGameNotice('当前安装包需要先安装新版安全客户端，请先手动安装最新版 APK', true);
+            } else {
+              showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
+            }
           }
         }
 
@@ -5542,13 +5579,20 @@
 
           const btnFast = document.getElementById('btnFastDownload');
           if (btnFast) {
-            btnFast.href = fastLink;
+            btnFast.removeAttribute('href');
             btnFast.innerHTML = '<span>⚡ 正在全自动高速下载中...</span>';
             btnFast.onclick = (e) => {
-              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.downloadAndInstallApk) {
-                e.preventDefault();
-                AndroidNativeApp.downloadAndInstallApk(fastLink);
+              e.preventDefault();
+              if (versionData.apkTicket && typeof AndroidNativeApp !== 'undefined' && invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
+                return;
               }
+              if (versionData.apkTicket && fastLink) {
+                downloadProtectedApk(fastLink, versionData.apkTicket)
+                  .then(() => showGameNotice('✅ 安装包已开始下载，请在浏览器下载列表中安装', false))
+                  .catch(() => showGameNotice('更新下载授权已失效，请重新检查更新', true));
+                return;
+              }
+              showGameNotice('更新服务暂未提供有效授权，请重新检查更新', true);
             };
           }
 

@@ -17,6 +17,10 @@ let lastLeaderboardTime = 0;
 const UPDATE_REPOSITORY = 'xnnb04664-afk/gomoku';
 const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
+const UPDATE_TICKET_TTL_SECONDS = 90;
+const UPDATE_CLIENT_HEADER = 'X-Gomoku-Client';
+const UPDATE_CLIENT_VALUE = 'gomoku-app-client-v2';
+const UPDATE_TICKET_HEADER = 'X-Gomoku-Update-Ticket';
 
 export default {
     async fetch(request, env) {
@@ -24,7 +28,7 @@ export default {
 
       const corsHeaders = {
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket',
       'Vary': 'Origin',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
@@ -272,9 +276,90 @@ export default {
       return { token: latest.token, release: latest.release, asset };
     };
 
-    const streamPrivateReleaseAsset = async (assetType) => {
+    // 更新票据只在请求头中传输，不放入 URL，避免被浏览器历史、代理或日志长期记录。
+    // UPDATE_TICKET_SECRET 可单独配置；未配置时暂时回退到已有 GitHub Secret，便于平滑迁移。
+    const getUpdateTicketSecret = () => String(env.UPDATE_TICKET_SECRET || env.GITHUB_READ_TOKEN || '').trim();
+
+    const base64UrlEncode = (bytes) => {
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    };
+
+    const base64UrlDecode = (value) => {
+      const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+      if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) throw new Error('invalid base64url');
+      const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+      const binary = atob(padded);
+      return Uint8Array.from(binary, char => char.charCodeAt(0));
+    };
+
+    const issueUpdateTicket = async (assetType, releaseTag) => {
+      const secret = getUpdateTicketSecret();
+      if (!secret) return '';
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const payload = JSON.stringify({
+        asset: assetType,
+        release: releaseTag,
+        iat: issuedAt,
+        exp: issuedAt + UPDATE_TICKET_TTL_SECONDS,
+        nonce: generateSecureHex(12)
+      });
+      const encodedPayload = base64UrlEncode(new TextEncoder().encode(payload));
+      const key = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
+      const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(encodedPayload));
+      return `${encodedPayload}.${base64UrlEncode(new Uint8Array(signature))}`;
+    };
+
+    const verifyUpdateTicket = async (assetType) => {
+      if (request.headers.get(UPDATE_CLIENT_HEADER) !== UPDATE_CLIENT_VALUE) return null;
+      const rawTicket = String(request.headers.get(UPDATE_TICKET_HEADER) || '').trim();
+      if (rawTicket.length < 20 || rawTicket.length > 4096) return null;
+      const parts = rawTicket.split('.');
+      if (parts.length !== 2) return null;
+      try {
+        const payloadBytes = base64UrlDecode(parts[0]);
+        const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
+        const now = Math.floor(Date.now() / 1000);
+        if (!payload || payload.asset !== assetType || typeof payload.release !== 'string' ||
+            !/^v\d+\.\d+\.\d+$/.test(payload.release) ||
+            !Number.isInteger(payload.iat) || !Number.isInteger(payload.exp) ||
+            payload.exp < now || payload.exp - payload.iat > UPDATE_TICKET_TTL_SECONDS ||
+            payload.iat > now + 30) return null;
+        const secret = getUpdateTicketSecret();
+        if (!secret) return null;
+        const key = await crypto.subtle.importKey(
+          'raw',
+          new TextEncoder().encode(secret),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['verify']
+        );
+        const valid = await crypto.subtle.verify(
+          'HMAC',
+          key,
+          base64UrlDecode(parts[1]),
+          new TextEncoder().encode(parts[0])
+        );
+        return valid ? payload : null;
+      } catch (_) {
+        return null;
+      }
+    };
+
+    const streamPrivateReleaseAsset = async (assetType, ticketPayload = null) => {
       const result = await getPrivateReleaseAsset(assetType);
       if (result.error) return json({ code: 503, msg: result.error }, 503);
+      const releaseTag = String(result.release?.tag_name || '').trim();
+      if (ticketPayload && ticketPayload.release !== releaseTag) {
+        return json({ code: 401, msg: '更新票据已过期，请重新检查更新' }, 401);
+      }
 
       const assetResponse = await fetch(result.asset.url, {
         headers: githubHeaders(result.token, 'application/octet-stream')
@@ -309,19 +394,32 @@ export default {
         const digest = String(releaseAssets.find(item => item.name === name)?.digest || '').trim();
         return /^sha256:[0-9a-f]{64}$/i.test(digest) ? digest.slice(7).toLowerCase() : '';
       };
+      const [apkTicket, htmlTicket] = await Promise.all([
+        issueUpdateTicket('apk', releaseTag),
+        issueUpdateTicket('html', releaseTag)
+      ]);
       return json({
         code: 0,
         tag: releaseTag,
         updateLog: latest.release.body || '五子棋版本更新与稳定性优化',
-        apkDownload: `${url.origin}/api/update/apk`,
-        htmlDownload: `${url.origin}/api/update/html`,
+        apkPath: '/api/update/apk',
+        htmlPath: '/api/update/html',
+        apkTicket,
+        htmlTicket,
         apkSha256: assetDigest('gomoku.apk'),
         htmlSha256: assetDigest('gomoku.html'),
         officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
       });
     }
-    if (url.pathname === "/api/update/apk") return streamPrivateReleaseAsset('apk');
-    if (url.pathname === "/api/update/html") return streamPrivateReleaseAsset('html');
+    if (url.pathname === "/api/update/apk" || url.pathname === "/api/update/html") {
+      const assetType = url.pathname === "/api/update/apk" ? 'apk' : 'html';
+      const ticketPayload = await verifyUpdateTicket(assetType);
+      const ticketProtectionEnabled = String(env.UPDATE_TICKET_ENFORCED || '').trim() === '1';
+      if (ticketProtectionEnabled && !ticketPayload) {
+        return json({ code: 401, msg: '更新下载需要应用内短时授权' }, 401);
+      }
+      return streamPrivateReleaseAsset(assetType, ticketPayload);
+    }
 
     // 🛡️ 终极安全第一网关：全量强制校验客户端专属安全暗号，阻断一切外部未授权访问！
     const isDocNav = request.headers.get("sec-fetch-dest") === "document" || request.headers.get("sec-fetch-mode") === "navigate";

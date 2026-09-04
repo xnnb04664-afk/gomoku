@@ -43,6 +43,9 @@ public class MainActivity extends Activity {
     private static final String UPDATE_PROXY_APK_URL = "https://gomoku-api.pages.dev/api/update/apk";
     private static final String UPDATE_PROXY_VERSION_PATH = "/api/version";
     private static final String UPDATE_PROXY_APK_PATH = "/api/update/apk";
+    private static final String UPDATE_CLIENT_HEADER = "X-Gomoku-Client";
+    private static final String UPDATE_CLIENT_HEADER_VALUE = "gomoku-app-client-v2";
+    private static final String UPDATE_TICKET_HEADER = "X-Gomoku-Update-Ticket";
     private static final int MAX_APK_BYTES = 50 * 1024 * 1024;
     private static volatile String sExpectedApkSha256 = null;
 
@@ -303,7 +306,8 @@ public class MainActivity extends Activity {
             return false;
         }
         if (isTrustedApkUrl(uri)) {
-            startApkDownload();
+            // 不能通过地址栏或普通导航绕过应用内短时票据。
+            Toast.makeText(MainActivity.this, "请从应用内更新入口操作", Toast.LENGTH_SHORT).show();
             return true;
         }
         if (uri == null || (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme()))) {
@@ -335,6 +339,14 @@ public class MainActivity extends Activity {
     }
 
     private HttpURLConnection openTrustedConnection(String rawUrl, String expectedPath) throws Exception {
+        return openTrustedConnection(rawUrl, expectedPath, "");
+    }
+
+    private HttpURLConnection openTrustedConnection(String rawUrl, String expectedPath, String updateTicket) throws Exception {
+        String cleanTicket = updateTicket == null ? "" : updateTicket.trim();
+        if (UPDATE_PROXY_APK_PATH.equals(expectedPath) && cleanTicket.isEmpty()) {
+            throw new SecurityException("缺少更新下载授权");
+        }
         URL current = new URL(rawUrl);
         for (int redirectCount = 0; redirectCount <= 3; redirectCount++) {
             if (!isTrustedUpdateUrl(current, expectedPath)) {
@@ -345,6 +357,10 @@ public class MainActivity extends Activity {
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(40000);
             connection.setRequestProperty("User-Agent", "GomokuMasterApp/1");
+            connection.setRequestProperty(UPDATE_CLIENT_HEADER, UPDATE_CLIENT_HEADER_VALUE);
+            if (UPDATE_PROXY_APK_PATH.equals(expectedPath)) {
+                connection.setRequestProperty(UPDATE_TICKET_HEADER, cleanTicket);
+            }
             int responseCode = connection.getResponseCode();
             if (!isRedirectResponse(responseCode)) return connection;
             if (redirectCount == 3) {
@@ -507,8 +523,13 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
             public void downloadAndInstallApk(String ignoredUrl) {
-                // 忽略网页传入的地址，始终走固定 HTTPS 中转出口，杜绝任意 URL 下载/安装。
-                startApkDownload();
+                // 旧版网页桥接保留但不再具备下载权限，防止旧调用绕过票据校验。
+                startApkDownload("");
+            }
+
+            @android.webkit.JavascriptInterface
+            public void downloadAndInstallApkWithTicket(String updateTicket) {
+                startApkDownload(updateTicket);
             }
 
             @android.webkit.JavascriptInterface
@@ -715,6 +736,15 @@ public class MainActivity extends Activity {
     }
 
     public void startApkDownload() {
+        startApkDownload("");
+    }
+
+    public void startApkDownload(String updateTicket) {
+        final String cleanUpdateTicket = updateTicket == null ? "" : updateTicket.trim();
+        if (cleanUpdateTicket.isEmpty()) {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新授权已失效，请重新检查更新", Toast.LENGTH_LONG).show());
+            return;
+        }
         // 防重入锁必须先于删除旧文件，避免第二次点击破坏正在进行的下载。
         if (sIsDownloading) {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
@@ -752,7 +782,7 @@ public class MainActivity extends Activity {
 
                 HttpURLConnection connection = null;
                 try {
-                    connection = openTrustedConnection(UPDATE_PROXY_APK_URL, UPDATE_PROXY_APK_PATH);
+                    connection = openTrustedConnection(UPDATE_PROXY_APK_URL, UPDATE_PROXY_APK_PATH, cleanUpdateTicket);
                     int responseCode = connection.getResponseCode();
                     if (responseCode < 200 || responseCode >= 300) throw new SecurityException("更新文件接口不可用");
                     int declaredSize = connection.getContentLength();
@@ -792,7 +822,7 @@ public class MainActivity extends Activity {
                 if (destFile.exists()) destFile.delete();
                 android.util.Log.e("MainActivity", "Direct download or integrity check failed: " + e.getMessage());
                 if (expectedHash != null && !expectedHash.isEmpty()) {
-                    handedOffToDownloadManager = fallbackDownloadManager(expectedHash);
+                    handedOffToDownloadManager = fallbackDownloadManager(expectedHash, cleanUpdateTicket);
                 } else {
                     runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新清单校验失败，已停止安装", Toast.LENGTH_LONG).show());
                 }
@@ -832,13 +862,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean fallbackDownloadManager(final String expectedHash) {
-        if (expectedHash == null || !expectedHash.matches("(?i)[0-9a-f]{64}")) return false;
+    private boolean fallbackDownloadManager(final String expectedHash, final String updateTicket) {
+        if (expectedHash == null || !expectedHash.matches("(?i)[0-9a-f]{64}")
+                || updateTicket == null || updateTicket.trim().isEmpty()) return false;
         runOnUiThread(() -> {
             try {
                 final DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
                 if (dm == null) throw new IllegalStateException("系统下载服务不可用");
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(UPDATE_PROXY_APK_URL));
+                req.addRequestHeader(UPDATE_CLIENT_HEADER, UPDATE_CLIENT_HEADER_VALUE);
+                req.addRequestHeader(UPDATE_TICKET_HEADER, updateTicket.trim());
                 req.setMimeType("application/vnd.android.package-archive");
                 req.setTitle("五子棋 最新版全自动更新");
                 req.setDescription("正在极速下载安装包...");
