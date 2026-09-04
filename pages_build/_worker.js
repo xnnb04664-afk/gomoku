@@ -167,6 +167,7 @@ export default {
             uid TEXT NOT NULL,
             mode TEXT NOT NULL,
             is_win INTEGER NOT NULL,
+            is_draw INTEGER NOT NULL DEFAULT 0,
             winner_color INTEGER NOT NULL,
             my_color INTEGER NOT NULL,
             opp_name TEXT,
@@ -179,6 +180,8 @@ export default {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `).run();
+        // 兼容已存在的 D1：为旧版 game_history 增加和棋标记，不影响历史记录。
+        try { await env.DB.prepare(`ALTER TABLE game_history ADD COLUMN is_draw INTEGER NOT NULL DEFAULT 0`).run(); } catch(e) {}
         try {
           await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_history_uid ON game_history(uid)`).run();
         } catch(e) {}
@@ -998,7 +1001,7 @@ async function allocateNextAvailableUid(env) {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
         const body = await request.json().catch(() => ({}));
-        const { uid, mode, isWin, winnerColor, myColor, oppName, oppAvatar, moves, movesData, boardData, time, date } = body;
+        const { uid, mode, isWin, isDraw, winnerColor, myColor, oppName, oppAvatar, moves, movesData, boardData, time, date } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
         const auth = await requireUser(uid, getRequestToken(request, body));
@@ -1009,16 +1012,18 @@ async function allocateNextAvailableUid(env) {
         if (movesJson.length > 120000 || boardJson.length > 120000) {
           return json({ code: 413, msg: '棋谱数据过大' }, 413);
         }
+        const cleanWinnerColor = winnerColor === 0 ? 0 : (Number(winnerColor) === 2 ? 2 : 1);
 
         await env.DB.prepare(`
           INSERT INTO game_history (
-            uid, mode, is_win, winner_color, my_color, opp_name, opp_avatar, moves_count, moves_data, board_data, time, date
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            uid, mode, is_win, is_draw, winner_color, my_color, opp_name, opp_avatar, moves_count, moves_data, board_data, time, date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           cleanUid,
           String(mode || 'ai'),
           isWin ? 1 : 0,
-          parseInt(winnerColor || 1, 10),
+          isDraw === true ? 1 : 0,
+          cleanWinnerColor,
           parseInt(myColor || 1, 10),
           String(oppName || '对手').slice(0, 32),
           String(oppAvatar || '🤖').slice(0, 100),
@@ -1056,7 +1061,7 @@ async function allocateNextAvailableUid(env) {
         if (auth.response) return auth.response;
 
         const rows = await env.DB.prepare(`
-          SELECT id, uid, mode, is_win as isWin, winner_color as winnerColor, my_color as myColor,
+          SELECT id, uid, mode, is_win as isWin, is_draw as isDraw, winner_color as winnerColor, my_color as myColor,
                  opp_name as oppName, opp_avatar as oppAvatar, moves_count as moves,
                  moves_data as movesData, board_data as boardData, time, date, created_at
           FROM game_history
@@ -1068,6 +1073,7 @@ async function allocateNextAvailableUid(env) {
         const list = (rows.results || []).map(r => ({
           ...r,
           isWin: r.isWin === 1,
+          isDraw: r.isDraw === 1,
           movesData: (() => {
             try { return JSON.parse(r.movesData); } catch(e) { return []; }
           })(),
@@ -1291,12 +1297,12 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/report_game' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const { uid, token, isWin } = await request.json().catch(() => ({}));
+        const { uid, token, isWin, isDraw = false } = await request.json().catch(() => ({}));
 
         if (!uid || !token) {
           return json({ code: 401, msg: '未授权：缺失身份凭证' }, 401);
         }
-        if (typeof isWin !== 'boolean') {
+        if (typeof isWin !== 'boolean' || typeof isDraw !== 'boolean' || (isDraw && isWin)) {
           return json({ code: 400, msg: '战绩结果必须是布尔值' }, 400);
         }
 
@@ -1316,7 +1322,7 @@ async function allocateNextAvailableUid(env) {
         }
 
         const oldScore = Number.isFinite(Number(user.score)) ? Number(user.score) : 1000;
-        const scoreDelta = isWin ? 25 : -15;
+        const scoreDelta = isDraw ? 0 : (isWin ? 25 : -15);
         const newScore = Math.max(0, oldScore + scoreDelta);
 
         // 15 秒冷却放进 UPDATE 条件，避免并发请求同时通过预检查刷分。
@@ -1339,14 +1345,15 @@ async function allocateNextAvailableUid(env) {
         const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(String(uid)).first();
         return json({
           code: 0,
-          msg: '战绩安全归档成功',
+          msg: isDraw ? '和棋战绩安全归档成功' : '战绩安全归档成功',
           data: {
             score: updated.score,
             wins: updated.wins,
             total_games: updated.total_games,
             oldScore,
             newScore: updated.score,
-            scoreDelta
+            scoreDelta,
+            isDraw
           }
         });
       } catch (err) {

@@ -234,6 +234,13 @@
     6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk` 与 `gomoku.html`；
   - 整个流程全自动完成，0 维护负担！
 
+### 19. 🤝 和棋闭环与神抽技能额度修复（本次代码审查）
+- **满盘判定**：15×15 棋盘在最后一手未形成五连时调用 `triggerGameDraw()`，统一结束对局、展示和棋卡片、保存完整棋谱并停止继续落子。
+- **战绩同步**：`game_history` 增加 `is_draw` 字段，Worker/Pages 启动时会为旧 D1 自动补列；`/api/report_game` 接收 `isDraw=true`，总局数增加、胜场不增加、积分保持不变。
+- **联机技能额度**：无目标的 `skill_use` 也进入接收端额度账本；每组三张手牌最多接受 3 次技能，`reforge_cards` 每局最多一次并将对手额度重置到新手牌阶段，防止神抽后的合法技能被误拦截，也防止重复神抽无限绕过上限。
+- **同步范围**：修复已同步到 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html`、`backend/worker.js` 与 `pages_build/_worker.js`；本次只更新源码和单文件资源，尚未重新签名构建 APK 或创建新 Release。
+- **其余审查项结论**：`js/board.js`、`js/game.js`、`js/rule.js` 属于旧模块化代码，虽未被当前主页面直接加载，但仍由旧 `js/main.js` 组成一套兼容资源，暂不拆删；AI 字符串置换表和 MQTT 房间会话密钥属于需要独立性能/协议迁移测试的长期项，本次不冒险混入功能修复。
+
 ---
 
 ## 四、⚠️ 最重要用户规则与绝对红线 (CRITICAL RULES)
@@ -423,7 +430,7 @@ node publish.js
   - **Database ID**：`4cd53ea1-ef41-450e-843c-b48f6121cf7c`
   - **核心数据表**：
     - `users`：全服玩家 UID、用户名、加盐 Hash 密码、ELO 天梯分、胜平负总场次、自选头像数据；
-    - `game_history`：全服每局对局历史、对弈时间、对手类型、胜负结果与落子步数（支持玩家主动抹除）；
+    - `game_history`：全服每局对局历史、对弈时间、对手类型、胜/负/和棋结果与落子步数（支持玩家主动抹除）；
     - `matchmaking`：在线对战撮合队列；
     - `feedback`：用户提交的问题 Bug 与体验优化建议。
 
@@ -498,4 +505,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略与修改密码功能已完成；Worker/Pages 已重新部署，客户端源码与单文件版已同步，但仍需重新构建并发布 APK/HTML 才能让手机端获得最新前端功能。确认新客户端登录、改密和检查更新正常后，再开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署。后续发布请先阅读本文件并使用 `node publish.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录已完成源码修改；Worker/Pages 源码已同步，单文件版与 Android 资源已同步，但本次尚未重新签名构建 APK、创建新 Release 或部署线上 Worker/Pages。发布前请先运行完整语法/浏览器回归，再使用正式签名密钥执行 `node publish.js`。*

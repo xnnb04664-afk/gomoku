@@ -3182,6 +3182,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         👥 双人同屏娱乐对战，不计入天梯积分
       </div>
 
+      <!-- 🤝 和棋提示卡片 -->
+      <div id="resultDrawCard" style="display:none; background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:12px; padding:10px; margin-bottom:12px; font-size:11px; color:#1d4ed8; font-weight:800;">
+        🤝 本局和棋，天梯积分不变
+        <div id="resultDrawStatsSub" style="font-size:10px; color:#64748b; margin-top:5px; font-weight:700;">正在同步本局结果...</div>
+      </div>
+
       <!-- 操作按钮 -->
       <div style="display:flex; flex-direction:column; gap:7px;">
         <button type="button" class="btn-confirm-ok" onclick="restartGameFromResultModal()" style="padding:9px 0; border-radius:10px; font-weight:900; font-size:13px; background:#10b981; border-color:#059669; box-shadow:0 3px 0 #047857; color:#fff; cursor:pointer;">
@@ -3458,6 +3464,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         opponentFreeMove: opponentFreeMove,
         winningLine: winningLine ? [...winningLine] : null,
         isOver: isOver,
+        isDraw: gameResultIsDraw,
         ...metadata
       };
       undoStack.push(snap);
@@ -4908,6 +4915,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         history: history,
         turn: turn,
         isOver: isOver,
+        isDraw: gameResultIsDraw,
         p1Name: p1Name,
         p1Avatar: p1Avatar,
         p2Name: p2Name,
@@ -4934,16 +4942,45 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     let onlineHeartbeatTimer = null;
-    // 🛡️ P2P 技能反作弊拦截审计层：严密防止恶意发包、无限施法、越界攻击与虚假改子
+    // 🛡️ 联机技能反作弊拦截审计层：每轮手牌最多使用 3 次，神抽最多重铸 1 次
+    const MAX_OPPONENT_SKILLS_PER_HAND = 3;
     let opponentSkillsUsedCount = 0;
+    let opponentReforgeUsed = false;
+
+    function rejectIncomingSkill(reason = '⚠️ 拦截到对手异常技能数据包，已自动防御！') {
+      console.warn(reason);
+      showGameNotice(reason, true);
+      return false;
+    }
+
+    // 无坐标的技能（双星连珠、天降神抽）也必须进入同一额度账本，不能绕过校验。
+    function validateIncomingSkillUse(data) {
+      if (!data || data.type !== 'skill_use' || typeof data.skillId !== 'string') return false;
+      const card = SKILL_CARD_POOL.find(item => item.id === data.skillId);
+      if (!card) return rejectIncomingSkill();
+
+      if (data.skillId === 'reforge_cards') {
+        if (opponentReforgeUsed) {
+          return rejectIncomingSkill('⚠️ 对手重复发动【天降神抽】，已自动拦截！');
+        }
+        // 神抽会生成一套全新的三张手牌，额度从新手牌阶段重新计算。
+        opponentReforgeUsed = true;
+        opponentSkillsUsedCount = 0;
+        return true;
+      }
+
+      if (opponentSkillsUsedCount >= MAX_OPPONENT_SKILLS_PER_HAND) {
+        return rejectIncomingSkill('⚠️ 对手本轮技能额度已用尽，异常数据包已拦截！');
+      }
+      opponentSkillsUsedCount++;
+      return true;
+    }
 
     function validateIncomingSkill(data) {
       if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return false;
-      // 1. 施法上限风控：每位玩家单局最多只能使用 3 张干扰牌（神抽偶发额外计 1 次容限）
-      if (opponentSkillsUsedCount >= 4) {
-        console.warn("⚠️ 拦截到对手过度施法攻击，已自动丢弃作弊数据包！");
-        showGameNotice("⚠️ 拦截到对手异常技能数据包，已自动防御！", true);
-        return false;
+      // 1. 施法上限风控：当前手牌阶段最多只能使用 3 张技能牌。
+      if (opponentSkillsUsedCount >= MAX_OPPONENT_SKILLS_PER_HAND) {
+        return rejectIncomingSkill('⚠️ 对手本轮技能额度已用尽，异常数据包已拦截！');
       }
       
       // 2. 严格坐标类型与 15x15 越界数值校验（杜绝 NaN、负数或越界崩溃注入）
@@ -5013,6 +5050,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
       if (data.turn !== BLACK && data.turn !== WHITE) return false;
       if (typeof data.isOver !== 'boolean') return false;
+      if (data.isDraw !== undefined && typeof data.isDraw !== 'boolean') return false;
       if (data.cardUsedStatus !== undefined &&
           (!Array.isArray(data.cardUsedStatus) || data.cardUsedStatus.length !== 3 ||
            data.cardUsedStatus.some(value => typeof value !== 'boolean'))) return false;
@@ -5137,6 +5175,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           history = data.history;
           turn = data.turn;
           isOver = data.isOver;
+          gameResultIsDraw = data.isDraw === true;
           p2Name = data.p1Name || p2Name;
           p2Avatar = data.p1Avatar || p2Avatar;
           if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards.map(card => SKILL_CARD_POOL.find(localCard => localCard.id === card.id));
@@ -5215,7 +5254,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             showGameNotice("已拒绝对手的重开申请，继续本局", false);
           }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
         } else if (data.type === "skill_use") {
-          alert(`⚡ 对方发动了干扰卡【${data.cardName}】！`);
+          const incomingCard = SKILL_CARD_POOL.find(card => card.id === data.skillId);
+          if (!incomingCard || !validateIncomingSkillUse(data)) {
+            console.warn("[AntiCheat] 无效的无目标技能报文，已被裁判拦截");
+            return;
+          }
+          alert(`⚡ 对方发动了干扰卡【${incomingCard.name}】！`);
         } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
           if (!validateIncomingSkill(data)) {
             console.warn("[AntiCheat] 技能报文非法，已被裁判拦截丢弃:", data);
@@ -5245,6 +5289,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
                 }
               }
               if (hasWin) break;
+            }
+            if (!hasWin && isBoardFull()) {
+              triggerGameDraw('对方发动身份互换后棋盘已无空位，双方本局和棋！');
             }
           } else if (data.type === 'skill_prophecy') {
           prophecyPoint = { r: data.r, c: data.c, by: data.by };
@@ -5304,6 +5351,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
               break;
             }
           }
+          if (!isOver && isBoardFull()) {
+            triggerGameDraw('对方引爆炸弹后棋盘已无空位，双方本局和棋！');
+          }
         } else if (data.type === 'destiny_point_1') {
           opponentFreeMove = true;
           turn = myOnlineColor;
@@ -5338,6 +5388,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           playSkillSound('victory');
           showSkillBanner('👑', '对方发动【天命降临】！', '2×2 区域瞬间天降 4 颗连星！');
           draw(); updateUI(); persistGameState();
+          let hasWinner = false;
+          for (const pos of data.cells) {
+            if (checkWin(pos.r, pos.c, data.p)) {
+              triggerGameEnd(data.p, `对方发动天命降临后，【${getPlayerNameByColor(data.p)} (${data.p === BLACK ? '黑子' : '白子'})】达成五子连珠！`);
+              hasWinner = true;
+              break;
+            }
+          }
+          if (!hasWinner && isBoardFull()) {
+            triggerGameDraw('对方发动天命降临后棋盘已无空位，双方本局和棋！');
+          }
         }
       }
       });
@@ -5671,6 +5732,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             }
             if (hasWinner) break;
           }
+          if (!hasWinner && isBoardFull()) {
+            triggerGameDraw('身份互换后棋盘已无空位，双方本局和棋！');
+          }
           updateUI(); persistGameState();
         } else if (card.id === 'mega_bomb') {
           if (history.length < 2) {
@@ -5723,6 +5787,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           }
           if (bombWinColor) {
             triggerGameEnd(bombWinColor, `炸弹洗牌后，【${getPlayerNameByColor(bombWinColor)} (${bombWinColor === BLACK ? '黑子' : '白子'})】意外凑成五子连珠获胜！`);
+          } else if (isBoardFull()) {
+            triggerGameDraw('炸弹洗牌后棋盘已无空位，双方本局和棋！');
           }
 
           draw(); updateUI(); persistGameState();
@@ -5982,11 +6048,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           conn.send({ type: 'destiny_place_2x2', cells, p: myColor });
         }
         winningLine = null;
+        let hasWinner = false;
         for (const pos of cells) {
           if (checkWin(pos.r, pos.c, myColor)) {
             triggerGameEnd(myColor, `天命神域助力【${getPlayerNameByColor(myColor)} (${myColor === BLACK ? '黑子' : '白子'})】五子连珠获胜！`);
+            hasWinner = true;
             break;
           }
+        }
+        if (!hasWinner && isBoardFull()) {
+          triggerGameDraw('天命降临后棋盘已无空位，双方本局和棋！');
         }
       }
     }
@@ -7705,7 +7776,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     function getLocalStats() {
       try {
         const raw = localStorage.getItem('gomoku_local_stats');
-        return raw ? JSON.parse(raw) : { wins: 0, losses: 0, draws: 0 };
+        const parsed = raw ? JSON.parse(raw) : {};
+        return {
+          wins: Number.isFinite(Number(parsed.wins)) ? Math.max(0, Number(parsed.wins)) : 0,
+          losses: Number.isFinite(Number(parsed.losses)) ? Math.max(0, Number(parsed.losses)) : 0,
+          draws: Number.isFinite(Number(parsed.draws)) ? Math.max(0, Number(parsed.draws)) : 0
+        };
       } catch { return { wins: 0, losses: 0, draws: 0 }; }
     }
     function saveLocalStats(stats) {
@@ -7725,19 +7801,26 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (el) el.textContent = `本局战绩 胜${s.wins} 负${s.losses} 平${s.draws}`;
     }
 
-    async function reportMatchResult(isWin) {
+    async function reportMatchResult(isWin, isDraw = false) {
+      isDraw = !!isDraw;
+      if (isDraw) isWin = false;
       if (isReportingMatch) return;
       isReportingMatch = true;
       setTimeout(() => { isReportingMatch = false; }, 2000);
 
       // 🏠 游客：纯本地存储，不上天梯榜
       if (!hasRegisteredAccountSession()) {
-        addLocalResult(isWin);
+        addLocalResult(isWin, isDraw);
         const s = getLocalStats();
-        updateGameResultModalGuest(s);
-        showGameNotice(isWin
-          ? `🎉 本局胜利！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`
-          : `💔 本局落败！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`, false);
+        if (isDraw) {
+          updateGameResultModalDrawStats(`本地战绩: ${s.wins} 胜 ${s.losses} 负 ${s.draws} 和`);
+          showGameNotice(`🤝 本局和棋！本地战绩 ${s.wins}胜${s.losses}负${s.draws}和（登录账号可上天梯榜）`, false);
+        } else {
+          updateGameResultModalGuest(s);
+          showGameNotice(isWin
+            ? `🎉 本局胜利！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`
+            : `💔 本局落败！本地战绩 ${s.wins}胜${s.losses}负（登录账号可上天梯榜）`, false);
+        }
         return;
       }
 
@@ -7749,34 +7832,46 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           body: JSON.stringify({
             uid: currentUserUid,
             token: currentUserToken,
-            isWin: !!isWin
+            isWin: !!isWin,
+            isDraw
           })
         });
         const data = await res.json();
         if (data && data.code === 0 && data.data) {
           const oldScore = (typeof data.data.oldScore === 'number') ? data.data.oldScore : currentUserScore;
           const newScore = data.data.newScore;
-          const delta = data.data.scoreDelta || (isWin ? 25 : -15);
+          const delta = typeof data.data.scoreDelta === 'number' ? data.data.scoreDelta : (isWin ? 25 : -15);
           
           currentUserScore = newScore;
           localStorage.setItem('gomoku_user_score', currentUserScore);
           updateLadderBadgeUI(currentUserScore);
-          updateGameResultModalScore({ isWin, oldScore, newScore, delta, data: data.data });
+          if (isDraw) {
+            updateGameResultModalDrawStats(`云端天梯战绩: ${data.data.wins || 0}胜/${data.data.total_games || 0}局 · 本局和棋，积分不变`);
+          } else {
+            updateGameResultModalScore({ isWin, oldScore, newScore, delta, data: data.data });
+          }
 
-          const toastMsg = isWin ? `🏆 天梯胜利！积分 +25 (${newScore}分)，已同步云端` : `💔 天梯惜败！积分 -15 (${newScore}分)，已同步云端`;
+          const toastMsg = isDraw
+            ? `🤝 本局和棋，积分不变（${newScore}分），已同步云端`
+            : (isWin ? `🏆 天梯胜利！积分 +25 (${newScore}分)，已同步云端` : `💔 天梯惜败！积分 -15 (${newScore}分)，已同步云端`);
           showGameNotice(toastMsg, true);
           leaderboardLoadedAt = 0;
           setTimeout(() => fetchGlobalLeaderboard(false), 800);
         } else if (data && data.code === 403) {
-          addLocalResult(isWin);
+          addLocalResult(isWin, isDraw);
           const s = getLocalStats();
-          updateGameResultModalGuest(s, '登录已过期，请重新登录同步天梯分');
-          showGameNotice('⚠️ 登录已过期，本局战绩暂存本地，请重新登录后同步', true);
+          if (isDraw) updateGameResultModalDrawStats(`本地暂存: ${s.wins} 胜 ${s.losses} 负 ${s.draws} 和 · 登录已过期`);
+          else updateGameResultModalGuest(s, '登录已过期，请重新登录同步天梯分');
+          showGameNotice(isDraw ? '⚠️ 登录已过期，本局和棋已暂存本地' : '⚠️ 登录已过期，本局战绩暂存本地，请重新登录后同步', true);
         } else if (data && data.code === 429) {
           console.log('对局结算过于频繁，冷却中');
         }
       } catch (err) {
-        addLocalResult(isWin);
+        addLocalResult(isWin, isDraw);
+        if (isDraw) {
+          const s = getLocalStats();
+          updateGameResultModalDrawStats(`本地暂存: ${s.wins} 胜 ${s.losses} 负 ${s.draws} 和 · 云端稍后重试`);
+        }
         console.warn("上报天梯战绩失败:", err);
       }
     }
@@ -7822,7 +7917,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
 
     // 🏆 对局终局战报与积分变动弹窗控制器
-    function showGameResultModal({ isPvp, isWin, winnerName }) {
+    function showGameResultModal({ isPvp, isWin, isDraw, winnerName }) {
       const modal = document.getElementById('gameResultModal');
       if (!modal) return;
 
@@ -7832,19 +7927,38 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       const scoreCard = document.getElementById('resultScoreCard');
       const guestCard = document.getElementById('resultGuestCard');
       const pvpCard = document.getElementById('resultPvpCard');
+      const drawCard = document.getElementById('resultDrawCard');
 
-      if (isPvp) {
+      if (isDraw) {
+        if (iconEl) iconEl.textContent = '🤝';
+        if (titleEl) titleEl.textContent = '棋逢对手 · 和棋！';
+        if (subEl) subEl.textContent = '棋盘已无空位且没有五连，双方本局势均力敌！';
+        if (scoreCard) scoreCard.style.display = 'none';
+        if (guestCard) guestCard.style.display = 'none';
+        if (pvpCard) pvpCard.style.display = 'none';
+        if (drawCard) drawCard.style.display = 'block';
+        if (isPvp) {
+          updateGameResultModalDrawStats('双人同屏娱乐局：和棋不计入天梯积分');
+        } else if (hasRegisteredAccountSession()) {
+          updateGameResultModalDrawStats('正在同步本局结果，和棋不改变天梯积分...');
+        } else {
+          const localStats = getLocalStats();
+          updateGameResultModalDrawStats(`本地战绩: ${localStats.wins} 胜 ${localStats.losses} 负 ${localStats.draws} 和`);
+        }
+      } else if (isPvp) {
         if (iconEl) iconEl.textContent = '👑';
         if (titleEl) titleEl.textContent = '五子连珠 · 对局结束！';
         if (subEl) subEl.textContent = `恭喜【${winnerName}】达成五连珠，获得胜利！`;
         if (scoreCard) scoreCard.style.display = 'none';
         if (guestCard) guestCard.style.display = 'none';
         if (pvpCard) pvpCard.style.display = 'block';
+        if (drawCard) drawCard.style.display = 'none';
       } else if (isWin) {
         if (iconEl) iconEl.textContent = '👑';
         if (titleEl) titleEl.textContent = '五子连珠 · 绝杀获胜！';
         if (subEl) subEl.textContent = `恭喜【${p1Name}】技高一筹，勇夺对局胜利！`;
         if (pvpCard) pvpCard.style.display = 'none';
+        if (drawCard) drawCard.style.display = 'none';
 
         if (hasRegisteredAccountSession()) {
           if (scoreCard) {
@@ -7872,6 +7986,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (titleEl) titleEl.textContent = '棋局惜败 · 胜败常事！';
         if (subEl) subEl.textContent = `【${winnerName}】达成五连珠，再战一局必定逆袭！`;
         if (pvpCard) pvpCard.style.display = 'none';
+        if (drawCard) drawCard.style.display = 'none';
 
         if (hasRegisteredAccountSession()) {
           if (scoreCard) {
@@ -7929,12 +8044,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
     }
 
+    function updateGameResultModalDrawStats(text) {
+      const statsEl = document.getElementById('resultDrawStatsSub');
+      if (statsEl && text) statsEl.textContent = text;
+    }
+
     function closeGameResultModal() {
       const modal = document.getElementById('gameResultModal');
       if (modal) {
         modal.style.display = 'none';
         modal.classList.remove('show');
       }
+      // 关闭后清理条件卡片，避免下一局打开结算层时短暂残留上一局内容。
+      ['resultScoreCard', 'resultGuestCard', 'resultPvpCard', 'resultDrawCard'].forEach(id => {
+        const card = document.getElementById(id);
+        if (card) card.style.display = 'none';
+      });
     }
 
     function restartGameFromResultModal() {
@@ -8021,8 +8146,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
         if (oppLabel) oppLabel.textContent = `VS ${item.oppName || "对手"}`;
         if (badgeLabel) {
-          badgeLabel.textContent = item.isWin ? "🏆 胜利" : "💔 惜败";
-          badgeLabel.style.background = item.isWin ? "#10b981" : "#ef4444";
+          badgeLabel.textContent = item.isDraw ? "🤝 和棋" : (item.isWin ? "🏆 胜利" : "💔 惜败");
+          badgeLabel.style.background = item.isDraw ? "#3b82f6" : (item.isWin ? "#10b981" : "#ef4444");
         }
         if (slider) {
           slider.min = 0;
@@ -8279,13 +8404,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         return;
       }
 
-      const wins = list.filter(x => x.isWin).length;
+      const wins = list.filter(x => x.isWin && !x.isDraw).length;
+      const draws = list.filter(x => x.isDraw).length;
       const winRate = Math.round((wins / list.length) * 100);
-      if (sumEl) sumEl.textContent = `共记录 ${list.length} 局 · 胜 ${wins} 局 (胜率: ${winRate}%)`;
+      if (sumEl) sumEl.textContent = `共记录 ${list.length} 局 · 胜 ${wins} 局 · 和 ${draws} 局 (胜率: ${winRate}%)`;
 
       listEl.innerHTML = list.map((item, idx) => {
-        const isWin = item.isWin;
-        const tagBadge = isWin
+        const isDraw = item.isDraw === true;
+        const isWin = item.isWin && !isDraw;
+        const tagBadge = isDraw
+          ? `<span style="background:#3b82f6; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:900;">🤝 和棋</span>`
+          : isWin
           ? `<span style="background:#10b981; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:900;">🏆 胜利</span>`
           : `<span style="background:#ef4444; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:900;">💔 惜败</span>`;
         const modeName = item.mode === "online" ? "🌐 全服联机" : (item.mode === "ai" ? "🤖 大师AI" : "👥 同屏对战");
@@ -8319,9 +8448,54 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }).join("");
     }
 
+    // 🤝 满盘和棋统一结算：无胜者、不加减分，但保留完整历史战报
+    function triggerGameDraw(customDrawReason = '') {
+      if (isOver) return;
+      isOver = true;
+      gameResultIsDraw = true;
+      winningLine = null;
+      try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
+
+      const drawReason = customDrawReason || '棋盘已无空位且没有五连，双方本局和棋！';
+      showSkillBanner('🤝', '【棋逢对手】和棋！', drawReason, true);
+      playPopSound();
+      setTimeout(() => showGameResultModal({ isPvp: gameMode === 'pvp', isWin: false, isDraw: true, winnerName: '' }), 350);
+
+      // AI/联机和棋计入总局数但不改变积分；同屏娱乐局不上传天梯。
+      if (gameMode === 'online' || gameMode === 'ai') {
+        reportMatchResult(false, true);
+      }
+
+      const movesSnapshot = (history || []).map(step => {
+        if (step.action) return { ...step };
+        return { r: step.r, c: step.c, p: step.p };
+      });
+      const boardSnapshot = (board || []).map(row => [...row]);
+      recordGameHistory({
+        mode: gameMode,
+        isWin: false,
+        isDraw: true,
+        winnerColor: 0,
+        myColor: (gameMode === 'online' ? myOnlineColor : BLACK),
+        oppName: (gameMode === 'ai' ? '大师AI' : (p2Name || '棋友')),
+        oppAvatar: (gameMode === 'ai' ? '🤖' : (p2Avatar || '👧')),
+        moves: history ? history.filter(h => h && h.r >= 0).length : 0,
+        movesData: movesSnapshot,
+        boardData: boardSnapshot,
+        time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        date: new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+      });
+
+      // 和胜负结算一样，把终局状态落入会话存储，避免进程被系统回收后回到最后一步前的旧棋盘。
+      draw();
+      updateUI();
+      persistGameState();
+    }
+
     // 🏆 胜负终局统一结算与音效调度器 (严格区分胜利方与失败方的专属音效)
     function triggerGameEnd(winnerColor, customWinReason = '') {
       isOver = true;
+      gameResultIsDraw = false;
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
 
       let isPlayerWin = false;
@@ -8371,6 +8545,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       recordGameHistory({
         mode: gameMode,
         isWin: (gameMode === 'pvp' ? true : isPlayerWin),
+        isDraw: false,
         winnerColor: winnerColor,
         myColor: (gameMode === "online" ? myOnlineColor : BLACK),
         oppName: (gameMode === "ai" ? "大师AI" : (p2Name || "棋友")),
@@ -9374,6 +9549,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     let winningLine = null;
+    let gameResultIsDraw = false;
     function checkWin(r, c, p) {
       const dirs = [[0,1],[1,0],[1,1],[1,-1]];
       for (const [dr,dc] of dirs) {
@@ -9392,6 +9568,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
       }
       return false;
+    }
+
+    function isBoardFull() {
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (board[r][c] === EMPTY) return false;
+        }
+      }
+      return true;
     }
 
     function makeMove(r, c, p, fromRemote = false) {
@@ -9434,6 +9619,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
       if (checkWin(r, c, p)) {
         triggerGameEnd(p);
+        return;
+      }
+
+      if (isBoardFull()) {
+        triggerGameDraw();
         return;
       }
 
@@ -9612,8 +9802,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
     function resetBoardOnly() {
       opponentSkillsUsedCount = 0;
+      opponentReforgeUsed = false;
       board = Array.from({length: 15}, () => Array(15).fill(0));
-      turn = BLACK; history = []; isOver = false; winningLine = null;
+      turn = BLACK; history = []; isOver = false; winningLine = null; gameResultIsDraw = false;
       activeVFX = [];
       undoStack = [];
       if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelAnimationFrame(vfxRAF); vfxRAF = null; }
@@ -9667,6 +9858,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       opponentFreeMove = snap.opponentFreeMove || false;
       winningLine = null;
       isOver = false;
+      gameResultIsDraw = false;
 
       // 💫 粒子反馈：检测被撤销的棋子，触发金色倒流粒子动效
       for (let r = 0; r < 15; r++) {
@@ -10128,7 +10320,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     function persistGameState() {
       try {
         const state = {
-          board, history, turn, stepCount: history.length, isOver, gameMode,
+          board, history, turn, stepCount: history.length, isOver, isDraw: gameResultIsDraw, gameMode,
           p1Name, p2Name, p1Avatar, p2Avatar,
           currentDrawnCards, cardUsedStatus,
           undoStack: undoStack.slice(-30)
@@ -10143,6 +10335,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             myRole: myOnlineColor === BLACK ? 'host' : 'client',
             p1Name, p1Avatar, p2Name, p2Avatar,
             board, history, turn,
+            isDraw: gameResultIsDraw,
             currentDrawnCards, cardUsedStatus,
             undoStack: undoStack.slice(-30),
             timestamp: Date.now()
@@ -10174,6 +10367,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             if (session.turn) turn = session.turn;
             if (session.currentDrawnCards) currentDrawnCards = session.currentDrawnCards;
             if (session.cardUsedStatus) cardUsedStatus = session.cardUsedStatus;
+            gameResultIsDraw = session.isDraw === true;
             if (Array.isArray(session.undoStack)) undoStack = session.undoStack;
             gameMode = 'online';
 
@@ -10198,6 +10392,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             history = s.history;
             turn = s.turn;
             isOver = s.isOver || false;
+            gameResultIsDraw = s.isDraw === true;
             if (s.currentDrawnCards) currentDrawnCards = s.currentDrawnCards;
             if (s.cardUsedStatus) cardUsedStatus = s.cardUsedStatus;
             if (Array.isArray(s.undoStack)) undoStack = s.undoStack;
