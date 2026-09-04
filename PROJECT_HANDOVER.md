@@ -251,7 +251,7 @@
 
 ---
 
-## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.88 关键迭代与避坑总结)
+## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.89 关键迭代与避坑总结)
 
 ### 1. 🎯 主棋盘大屏原位复盘体系 (`startMainBoardReplay`)
 - **用户原始需求**：“我点查看棋局的时候，怎么在下面，点查看棋局就跳转到棋盘上呀”；
@@ -300,6 +300,9 @@
 - **v1.0.88（Build 89）发布结果**：已完成全量代码同步、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时重新部署 Cloudflare Worker 与 Pages；线上 `/api/version` 已返回 `v1.0.88`，APK 与 HTML 中转接口均返回 HTTP 200，并返回 Release 资产 SHA-256 摘要供客户端校验。
 - **v1.0.88 安全加固结果**：永久签名密钥已迁出仓库并设置为本机账户专属访问；`.gitignore`、构建脚本和发布脚本均拒绝提交/使用仓库内密钥；GitHub `master` 及现有版本标签已清理 `release.keystore` 历史；Android WebView 已关闭调试、明文流量、第三方 Cookie、文件跨域访问和媒体权限；更新链路固定为 Pages 中转地址并校验 HTML SHA-256；Worker 仅允许固定资产名、GET 方法并补充 CORS 与安全响应头。
 - **安全边界说明**：Git 历史重写只能清理当前远端分支与标签，无法召回历史克隆、旧 APK 或维护者本机备份；曾经暴露过的 GitHub PAT 必须在 GitHub 立即撤销并换发最小权限的新令牌，再重新写入 Pages Secret 并部署。
+- **v1.0.89（Build 90）发布结果**：完成六大主题、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建并上传 GitHub Release `v1.0.89` 的 `gomoku.apk`、`gomoku.html`，并成功部署 Cloudflare Worker 与 Pages。
+- **v1.0.89 安全审计与清理结果**：六大主题统一增加动态文本/头像转义、远端快照与 P2P 消息结构校验、消息大小限制和严格房间码校验；Android 更新器固定官方 HTTPS 出口、限制重定向、限制响应大小，并在下载和安装前校验 APK SHA-256，移除 file URI 暴露配置；Worker 禁止游客进入全服匹配、只信任 Cloudflare 来源 IP、增加反馈限流和安全响应头；部署脚本改为配置严格校验、Worker 失败即停止、Pages 失败返回非零状态；发布脚本新增全主题语法门禁、敏感内容扫描和失败即停机制。
+- **v1.0.89 无用产物清理**：删除旧代码快照 `GOMOKU_CODEBASE_FOR_REVIEW.md`、旧审计笔记 `findings.md`/`progress.md`/`task_plan.md`、重复且未被发布流程使用的 `build_apk.ps1`、旧版 `android_src/classes/*.class`，以及被 Git 错误跟踪的 `.wrangler/` 部署缓存；构建产物统一在临时目录重新生成。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：
@@ -420,7 +423,7 @@ node publish.js
   ```
 - **安全隔离规范**：
   - 为防止 Token 意外泄露到公共代码仓库，`.cloudflare_config.json` 受到 `.gitignore` 的严格保护，**绝不提交至 GitHub**；
-  - **当前机器上该文件永久存在且完整**，任何在此电脑上启动的后续 AI、发布脚本（`publish.js`）与运维工具（`admin.js`、`deploy_worker.js`）均已具备 100% 完整的控制权限，**无需手动登录网页版 Cloudflare 控制台**。
+  - 当前文件 ACL 已收紧为 `XN\ZhuanZ1` 可读写、SYSTEM 与 Administrators 完全控制，已移除 `Authenticated Users` 和普通用户权限；发布脚本、`admin.js`、`deploy_worker.js` 仅从本机读取，不会把令牌写入仓库或客户端。
 
 ### 3. 🛠️ 开发者专属管理运维工具 (`admin.js`)
 项目根目录配备了安全加固后的命令行管理工具 `admin.js`。它只在本机读取 `.cloudflare_config.json`，不会输出 Token、密码哈希、Salt 或密保字段：
@@ -471,5 +474,5 @@ node publish.js
 
 ---
 *交接文档最后更新时间：2026年9月4日*  
-*当前工程正式版本：v1.0.88 (Build 89)*
-*当前工程状态：全量代码、构建管线、真机联调与 Cloudflare 云端控制体系交接 100% 就绪。*
+*当前工程正式版本：v1.0.89 (Build 90)*
+*当前工程状态：安全加固、无用产物清理、全量构建发布与 Cloudflare 云端部署均已完成；后续发布请先阅读本文件并使用 `node publish.js`。*

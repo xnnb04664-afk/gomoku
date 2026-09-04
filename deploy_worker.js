@@ -30,7 +30,7 @@ const { accountId, deployToken, d1DatabaseId, scriptName } = config || {};
 if (!/^[a-f0-9]{32}$/i.test(String(accountId || ''))) {
   fail('Cloudflare accountId 格式无效，已停止部署。');
 }
-if (!/^[a-f0-9]{32}$/i.test(String(d1DatabaseId || ''))) {
+if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(String(d1DatabaseId || ''))) {
   fail('Cloudflare d1DatabaseId 格式无效，已停止部署。');
 }
 if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(String(scriptName || ''))) {
@@ -90,15 +90,16 @@ async function deployWorker() {
 
 function deployPages() {
   console.log(`>>> [2/2] 正在部署到 Cloudflare Pages (${PAGES_PROJECT_NAME})...`);
-  execFileSync(
-    process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    ['wrangler', 'pages', 'deploy', PAGES_BUILD_DIR, '--project-name', PAGES_PROJECT_NAME, '--branch', 'main', '--commit-dirty=true'],
-    {
-      cwd: ROOT_DIR,
-      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken.trim() },
-      stdio: 'inherit'
-    }
-  );
+  // cwd 已固定为项目根目录，使用相对目录可避免 Windows cmd 在中文绝对路径上的引号转义问题。
+  const deployArgs = ['wrangler', 'pages', 'deploy', 'pages_build', '--project-name', PAGES_PROJECT_NAME, '--branch', 'main', '--commit-dirty=true'];
+  const command = deployArgs.join(' ');
+  const commandName = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'npx';
+  const commandArgs = process.platform === 'win32' ? ['/d', '/s', '/c', `npx.cmd ${command}`] : deployArgs;
+  execFileSync(commandName, commandArgs, {
+    cwd: ROOT_DIR,
+    env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken.trim() },
+    stdio: 'inherit'
+  });
   console.log('✅ [2/2] Cloudflare Pages deployed successfully!');
 }
 
