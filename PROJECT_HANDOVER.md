@@ -219,7 +219,7 @@
 - **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本，并通过 `/api/update/apk`、`/api/update/html` 获取文件；不会直连 GitHub、Raw、jsDelivr 或第三方反代。
 - **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。每次新建或轮换 Pages Secret 后，都要重新部署 Pages Function 才能让当前生产部署绑定新值。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
-  - 在【个人资料】中常驻版本显示当前正式版本（本次为 `v1.0.86`）与【🚀 检查更新】按钮；
+  - 在【个人资料】中常驻版本显示当前正式版本（本次为 `v1.0.87`）与【🚀 检查更新】按钮；
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
   - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
@@ -231,7 +231,7 @@
     3. 自动使用永久正式密钥编译签署原生 `五子棋.apk`；
     4. 自动执行 `git add .` 与 `git commit`；
     5. 自动推送到 GitHub (`git push origin master`)；
-    6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk`；
+    6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk` 与 `gomoku.html`；
   - 整个流程全自动完成，0 维护负担！
 
 ---
@@ -251,7 +251,7 @@
 
 ---
 
-## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.86 关键迭代与避坑总结)
+## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.87 关键迭代与避坑总结)
 
 ### 1. 🎯 主棋盘大屏原位复盘体系 (`startMainBoardReplay`)
 - **用户原始需求**：“我点查看棋局的时候，怎么在下面，点查看棋局就跳转到棋盘上呀”；
@@ -293,7 +293,9 @@
   - 支持技能产生的禁止落点与禁手过滤，保持人机模式的既有玩法兼容。
 - **v1.0.86（Build 87）发布结果**：已完成单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时部署 Cloudflare Worker 与 Pages。
 - **维护发布记录**：[`v1.0.86 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.86)；上述地址仅供维护者留档，已不再在软件界面公开展示。
-- **首屏启动优化（待下一 APK 构建生效）**：联机库、音频与头像资源改为首帧后延迟执行；账号会话、头像初始化和历史统计移到首帧后；单文件版同步采用延迟内联资源；Android WebView 关闭不必要的离屏预栅格化并使用浅色启动底色，减少冷启动蓝屏等待感。
+- **v1.0.87（Build 88）发布结果**：已完成全量代码同步、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时重新部署 Cloudflare Worker 与 Pages；线上 `/api/version` 已返回 `v1.0.87`，APK 与 HTML 中转接口均返回 HTTP 200。
+- **维护发布记录**：[`v1.0.87 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.87)；上述地址仅供维护者留档，已不再在软件界面公开展示。
+- **首屏启动优化（已在 v1.0.87 生效）**：联机库、音频与头像资源改为首帧后延迟执行；账号会话、头像初始化和历史统计移到首帧后；单文件版同步采用延迟内联资源；Android WebView 关闭不必要的离屏预栅格化并使用浅色启动底色，减少冷启动蓝屏等待感。
 - **客户端地址保护与私有仓库中转（源码完成，线上代理已验证）**：移除个人中心的公开开源发布卡片、复制链接入口和更新弹窗官方通道；客户端更新器统一访问 Cloudflare Pages Function 的 `/api/version`、`/api/update/apk`、`/api/update/html`，由 Pages 项目 `gomoku-api` 使用 `GITHUB_READ_TOKEN` Secret 读取私有 Release 并中转文件。Token 不进入 APK、网页或 Git；Token 轮换无需更新客户端，但轮换后必须重新部署 Pages Function。该方案仍不能阻止运行时调试观察最终请求。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
@@ -466,5 +468,5 @@ node publish.js
 
 ---
 *交接文档最后更新时间：2026年9月4日*  
-*当前工程正式版本：v1.0.86 (Build 87)*
+*当前工程正式版本：v1.0.87 (Build 88)*
 *当前工程状态：全量代码、构建管线、真机联调与 Cloudflare 云端控制体系交接 100% 就绪。*
