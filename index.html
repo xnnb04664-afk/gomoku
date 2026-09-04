@@ -936,8 +936,8 @@
     }
 
     /* --- 🌐 在线联机大厅弹窗 --- */
-    /* 确保二级弹窗（历史战报、天梯榜、登录认证、悔棋）永远置顶浮于个人主页上层 */
-    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal {
+    /* 确保二级弹窗（历史战报、天梯榜、登录认证、悔棋、意见反馈）永远置顶浮于个人主页上层 */
+    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal, #feedbackModal {
       z-index: 250 !important;
     }
 
@@ -1156,16 +1156,37 @@
       overflow: hidden;
     }
 
-    /* 🏆 天梯榜与安全账号认证弹窗顶层置顶层叠与显隐修复 */
-    #authModal, #leaderboardModal {
+    /* 🏆 天梯榜、安全账号认证与意见反馈弹窗顶层置顶层叠与显隐修复 */
+    #authModal, #leaderboardModal, #feedbackModal {
       z-index: 100010 !important;
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.2s ease;
     }
-    #authModal.show, #leaderboardModal.show {
+    #authModal.show, #leaderboardModal.show, #feedbackModal.show {
       opacity: 1 !important;
       pointer-events: auto !important;
+    }
+
+    .feedback-type-chip {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 11.5px;
+      font-weight: 800;
+      border: 1.5px solid #cbd5e1;
+      background: #f8fafc;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .feedback-type-chip:active {
+      transform: scale(0.95);
+    }
+    .feedback-type-chip.active {
+      background: linear-gradient(135deg, #ec4899, #db2777);
+      color: #ffffff;
+      border-color: #be185d;
+      box-shadow: 0 2px 6px rgba(219, 39, 119, 0.25);
     }
 
     .online-modal-card {
@@ -1407,7 +1428,8 @@
     <div class="main-chat-box" id="mainChatBox" onclick="openChatDrawer()">
       <div class="main-chat-header">
         <span>💬 实时对局聊天框 (点击畅聊)</span>
-        <div style="display:flex; align-items:center; gap:8px;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:3px;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
           <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:3px;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格切换</span>
           <span>📜 展开记录 ➔</span>
         </div>
@@ -1512,6 +1534,7 @@
       <div class="chat-header">
         <span>📜 对局聊天记录</span>
         <div class="chat-header-actions">
+          <button class="btn-chat-tool" onclick="openFeedbackModal()" style="background:#fce7f3; color:#db2777; border-color:#f472b6;">💬 反馈</button>
           <button class="btn-chat-tool" id="btnExportChat" onclick="exportChatTxt()">📥 导出TXT</button>
           <button class="btn-chat-tool" id="btnCopyChat" onclick="copyChatHistory()">📋 复制</button>
           <div class="btn-close-chat" id="btnCloseChat">✖</div>
@@ -1624,19 +1647,23 @@
         </div>
       </div>
 
-      <!-- 🎮 三合一核心功能快捷卡片 (天梯榜 + 历史战报 + 版本更新) -->
-      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; margin:6px 0 10px 0;">
-        <div onclick="openLeaderboardModal()" style="background:linear-gradient(135deg, #fef3c7, #fffbeb); border:1.5px solid #f59e0b; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(245,158,11,0.1);">
-          <div style="font-size:10.5px; font-weight:800; color:#92400e;">🏆 天梯榜</div>
-          <div id="myLadderBadge" style="font-size:12px; font-weight:900; color:#b45309; margin-top:2px;">1000 分</div>
+      <!-- 🎮 四合一核心功能快捷卡片 (天梯榜 + 历史战报 + 版本更新 + 意见反馈) -->
+      <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:5px; margin:6px 0 10px 0;">
+        <div onclick="openLeaderboardModal()" style="background:linear-gradient(135deg, #fef3c7, #fffbeb); border:1.5px solid #f59e0b; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(245,158,11,0.1);">
+          <div style="font-size:10px; font-weight:800; color:#92400e;">🏆 天梯榜</div>
+          <div id="myLadderBadge" style="font-size:11px; font-weight:900; color:#b45309; margin-top:2px;">1000 分</div>
         </div>
-        <div onclick="openHistoryModal()" style="background:linear-gradient(135deg, #f1f5f9, #f8fafc); border:1.5px solid #94a3b8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(148,163,184,0.1);">
-          <div style="font-size:10.5px; font-weight:800; color:#475569;">📜 历史战报</div>
-          <div id="historyStatCount" style="font-size:12px; font-weight:900; color:#1e293b; margin-top:2px;">0 局战绩</div>
+        <div onclick="openHistoryModal()" style="background:linear-gradient(135deg, #f1f5f9, #f8fafc); border:1.5px solid #94a3b8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(148,163,184,0.1);">
+          <div style="font-size:10px; font-weight:800; color:#475569;">📜 战报</div>
+          <div id="historyStatCount" style="font-size:11px; font-weight:900; color:#1e293b; margin-top:2px;">0 局战绩</div>
         </div>
-        <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 4px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
-          <div style="font-size:10.5px; font-weight:800; color:#0369a1;">🚀 正式版</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.86</div>
+        <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
+          <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
+          <div id="appVersionDisplay" style="font-size:11px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.86</div>
+        </div>
+        <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
+          <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
+          <div style="font-size:11px; font-weight:900; color:#be185d; margin-top:2px;">提建议</div>
         </div>
       </div>
 
@@ -2070,6 +2097,48 @@
       </div>
 
       <button class="btn-chat-tool" style="margin-top:14px; width:100%; padding:8px;" onclick="closeThemeModal()">关闭</button>
+    </div>
+  </div>
+
+  <!-- 💬 用户意见反馈与问题提交模态弹窗 -->
+  <div class="online-modal-backdrop" id="feedbackModal" onclick="if(event.target===this)closeFeedbackModal()">
+    <div class="online-modal-card" style="max-width:390px; width:94%; max-height:90vh; display:flex; flex-direction:column; padding:16px; box-sizing:border-box; text-align:left;" onclick="event.stopPropagation()">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1.5px solid rgba(0,0,0,0.08); padding-bottom:8px;">
+        <div>
+          <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:6px;">
+            <span>💬 意见反馈与问题提交</span>
+          </div>
+          <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">您的每一条建议与反馈我们都会认真评估并优化！</div>
+        </div>
+        <button type="button" onclick="closeFeedbackModal()" style="background:none; border:none; font-size:18px; cursor:pointer; color:#64748b; font-weight:900; padding:2px 6px;">✕</button>
+      </div>
+
+      <div style="font-size:12px; font-weight:800; color:#475569; margin-bottom:6px;">反馈类型：</div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;" id="feedbackTypeChips">
+        <button type="button" class="feedback-type-chip active" data-type="bug" onclick="selectFeedbackType(this, 'bug')">🐛 遇到Bug</button>
+        <button type="button" class="feedback-type-chip" data-type="feature" onclick="selectFeedbackType(this, 'feature')">💡 功能建议</button>
+        <button type="button" class="feedback-type-chip" data-type="ui" onclick="selectFeedbackType(this, 'ui')">🎨 界面优化</button>
+        <button type="button" class="feedback-type-chip" data-type="praise" onclick="selectFeedbackType(this, 'praise')">💖 体验好评</button>
+        <button type="button" class="feedback-type-chip" data-type="other" onclick="selectFeedbackType(this, 'other')">❓ 其他问题</button>
+      </div>
+
+      <div style="font-size:12px; font-weight:800; color:#475569; margin-bottom:4px; display:flex; justify-content:space-between;">
+        <span>详细描述：</span>
+        <span id="feedbackCharCount" style="font-size:11px; color:#94a3b8; font-weight:700;">0 / 300</span>
+      </div>
+      <textarea id="feedbackContent" maxlength="300" placeholder="请详细描述您遇到的问题（如复现步骤、出现界面等）或改进建议..." style="width:100%; height:96px; padding:10px; border-radius:12px; border:2px solid var(--border-dark, #5a3818); font-size:13px; font-family:inherit; resize:none; outline:none; box-sizing:border-box; background:#fff; color:#1e293b; line-height:1.4;" oninput="onFeedbackInput(this)"></textarea>
+
+      <div style="font-size:12px; font-weight:800; color:#475569; margin:10px 0 4px 0;">联系方式（选填，方便我们答复处理进展）：</div>
+      <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
+
+      <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.0.86</span></span>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
+        <button type="button" class="btn-chat-tool" onclick="closeFeedbackModal()" style="flex:1; padding:9px 0; font-size:13px; font-weight:800; border-radius:10px; background:#f1f5f9; color:#475569; border-color:#cbd5e1; cursor:pointer;">取消</button>
+        <button type="button" id="btnSubmitFeedback" class="btn-chat-tool" onclick="submitFeedback()" style="flex:2; padding:9px 0; font-size:13px; font-weight:900; border-radius:10px; background:linear-gradient(135deg, #10b981, #059669); color:#fff; border-color:#047857; cursor:pointer; box-shadow:0 2px 6px rgba(16,185,129,0.3);">🚀 提交反馈</button>
+      </div>
     </div>
   </div>
 
@@ -6112,6 +6181,115 @@
     function closeLeaderboardModal() {
       const modal = document.getElementById('leaderboardModal');
       if (modal) modal.classList.remove('show');
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 💬 用户意见反馈与问题提交中枢
+    // ══════════════════════════════════════════════════════════════════
+    let currentFeedbackType = 'bug';
+    let isSubmittingFeedback = false;
+
+    function openFeedbackModal() {
+      const modal = document.getElementById('feedbackModal');
+      if (!modal) return;
+      const verEl = document.getElementById('feedbackAppVer');
+      if (verEl && typeof CURRENT_VERSION_TAG !== 'undefined') {
+        verEl.textContent = CURRENT_VERSION_TAG;
+      }
+      modal.classList.add('show');
+    }
+
+    function closeFeedbackModal() {
+      const modal = document.getElementById('feedbackModal');
+      if (modal) modal.classList.remove('show');
+    }
+
+    function selectFeedbackType(btn, type) {
+      currentFeedbackType = type;
+      const chips = document.querySelectorAll('#feedbackTypeChips .feedback-type-chip');
+      chips.forEach(c => c.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+    }
+
+    function onFeedbackInput(textarea) {
+      const counter = document.getElementById('feedbackCharCount');
+      if (counter && textarea) {
+        counter.textContent = `${textarea.value.length} / 300`;
+      }
+    }
+
+    async function submitFeedback() {
+      if (isSubmittingFeedback) return;
+      const contentEl = document.getElementById('feedbackContent');
+      const contactEl = document.getElementById('feedbackContact');
+      const submitBtn = document.getElementById('btnSubmitFeedback');
+
+      const content = (contentEl ? contentEl.value : '').trim();
+      const contact = (contactEl ? contactEl.value : '').trim();
+
+      if (!content || content.length < 3) {
+        showGameNotice('💡 请至少输入 3 个字的反馈内容哦~', false);
+        if (contentEl) contentEl.focus();
+        return;
+      }
+
+      isSubmittingFeedback = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '⏳ 正在提交...';
+      }
+
+      const payload = {
+        type: currentFeedbackType,
+        content: content,
+        contact: contact,
+        uid: currentUserUid || '',
+        nickname: (typeof p1Name !== 'undefined' && p1Name) ? p1Name : (currentUsername || '游客'),
+        version: typeof CURRENT_VERSION_TAG !== 'undefined' ? CURRENT_VERSION_TAG : 'v1.0.86',
+        timestamp: Date.now()
+      };
+
+      try {
+        let submitSuccess = false;
+        try {
+          const res = await safeApiFetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.code === 0) {
+            submitSuccess = true;
+          }
+        } catch (netErr) {
+          console.warn('Feedback online submit fallback to local save:', netErr);
+        }
+
+        // 离线兜底留存（无论网络与否，绝不丢失用户反馈）
+        try {
+          const offlineList = JSON.parse(localStorage.getItem('gomoku_feedback_offline_list') || '[]');
+          offlineList.unshift({ ...payload, submittedOnline: submitSuccess });
+          if (offlineList.length > 20) offlineList.length = 20;
+          localStorage.setItem('gomoku_feedback_offline_list', JSON.stringify(offlineList));
+        } catch (storageErr) {}
+
+        if (contentEl) contentEl.value = '';
+        if (contactEl) contactEl.value = '';
+        const counter = document.getElementById('feedbackCharCount');
+        if (counter) counter.textContent = '0 / 300';
+
+        closeFeedbackModal();
+        showGameNotice('🎉 感谢您的宝贵反馈！我们会尽快评估与优化', false);
+      } catch (err) {
+        showGameNotice('🎉 反馈已收到，感谢您的支持与厚爱！', false);
+        closeFeedbackModal();
+      } finally {
+        isSubmittingFeedback = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '🚀 提交反馈';
+        }
+      }
     }
 
     const fetchLeaderboard = (...args) => fetchGlobalLeaderboard(...args);

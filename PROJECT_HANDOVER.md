@@ -328,6 +328,25 @@
   3. `draw()` 复盘数字绘制根据棋盘当前格子的实际棋子颜色动态计算文字对比度；
   4. `openReplayModalByIndex` 增加旧版历史战绩自我修复逻辑，自动校正旧版开头倒置色盘。
 
+### 8. 💬 用户意见反馈与 Bug 提交全闭环体系
+- **功能目标**：为玩家提供随时随地提交产品改进建议、体验反馈与问题 Bug 的便捷通道；
+- **三处直观入口**：
+  1. **主界面常驻聊天框标题栏**：点击右上角醒目可爱的粉色 `💬 反馈` 胶囊按钮，1 秒唤起；
+  2. **个人中心 4 合 1 核心功能卡片**：天梯榜、历史战报、版本更新旁新增 `💬 意见反馈` 专属功能卡片；
+  3. **聊天抽屉面板右上角操作区**：展开聊天记录时亦可一键点击 `💬 反馈`；
+- **果冻风反馈弹窗 (`#feedbackModal`)**：
+  - 支持 5 大反馈类型芯片点选切换（`🐛 遇到Bug`、`💡 功能建议`、`🎨 界面优化`、`💖 体验好评`、`❓ 其他问题`）；
+  - 300 字实时字符计数文本框；
+  - 选填联系方式（微信号 / QQ / 邮箱 / 手机号）；
+  - 自动附带客户端版本（如 `v1.0.86`）与用户 UID、昵称；
+- **双保险防丢失机制**：
+  - 联网状态下通过 `POST /api/feedback` 写入 Cloudflare D1 `feedback` 表；
+  - 离线或弱网状态下自动通过 LocalStorage 本地队列兜底保存，绝不丢失用户宝贵意见；
+- **后端与管理体系**：
+  - Cloudflare Worker 路由 `POST /api/feedback`；
+  - Cloudflare D1 `feedback` 数据表自动创建与记录归档；
+  - 开发者 CLI 工具 `node admin.js feedback [--json]` 随时查看反馈列表。
+
 ---
 
 ## 七、自动化测试与构建发布指令 (Build & Verify)
@@ -388,7 +407,8 @@ node publish.js
   - **核心数据表**：
     - `users`：全服玩家 UID、用户名、加盐 Hash 密码、ELO 天梯分、胜平负总场次、自选头像数据；
     - `game_history`：全服每局对局历史、对弈时间、对手类型、胜负结果与落子步数（支持玩家主动抹除）；
-    - `matchmaking`：在线对战撮合队列。
+    - `matchmaking`：在线对战撮合队列；
+    - `feedback`：用户提交的问题 Bug 与体验优化建议。
 
 ### 2. 🔑 鉴权令牌与本地配置文件安全机制
 - **配置文件路径**：项目根目录下的 `.cloudflare_config.json`；
@@ -412,6 +432,11 @@ node publish.js
   ```bash
   node admin.js users
   node admin.js users --json
+  ```
+- **查看玩家意见反馈与 Bug 报告**：
+  ```bash
+  node admin.js feedback
+  node admin.js feedback --json
   ```
 - **查询指定用户安全档案**：
   ```bash

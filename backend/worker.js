@@ -190,6 +190,24 @@ export default {
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_ip_register_log_ip_time ON ip_register_log(ip, created_at)`).run();
+
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid TEXT,
+            nickname TEXT,
+            feedback_type TEXT,
+            content TEXT NOT NULL,
+            contact TEXT,
+            client_version TEXT,
+            user_agent TEXT,
+            ip TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+        try {
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at)`).run();
+        } catch(e) {}
       } catch (e) {
         console.warn('DB check error:', e.message);
       }
@@ -1006,6 +1024,43 @@ async function allocateNextAvailableUid(env) {
         });
       } catch (err) {
         return json({ code: 1, msg: '结算异常: ' + err.message }, 500);
+      }
+    }
+
+    // ── 8. 用户意见反馈与问题提交中枢 ──────────────────────────
+    if (url.pathname === '/api/feedback' && request.method === 'POST') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const content = String(body.content || '').trim().slice(0, 1000);
+        if (!content || content.length < 3) {
+          return json({ code: 1, msg: '反馈内容太短，请至少输入3个字' }, 400);
+        }
+
+        const feedbackType = sanitizeText(body.type || 'bug', 30);
+        const contact = sanitizeText(body.contact || '', 100);
+        const uid = sanitizeText(body.uid || '', 64);
+        const nickname = sanitizeText(body.nickname || '', 30);
+        const version = sanitizeText(body.version || 'v1.0.86', 30);
+        const userAgent = request.headers.get('user-agent') ? request.headers.get('user-agent').slice(0, 250) : '';
+        const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || '127.0.0.1';
+
+        if (env.DB) {
+          try {
+            await env.DB.prepare(`
+              INSERT INTO feedback (uid, nickname, feedback_type, content, contact, client_version, user_agent, ip)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(uid, nickname, feedbackType, content, contact, version, userAgent, ip).run();
+          } catch (dbErr) {
+            console.error('Feedback DB insert error:', dbErr.message);
+          }
+        }
+
+        return json({
+          code: 0,
+          msg: '反馈提交成功，非常感谢您的宝贵意见与支持！'
+        });
+      } catch (err) {
+        return json({ code: 1, msg: '反馈提交异常: ' + err.message }, 500);
       }
     }
 

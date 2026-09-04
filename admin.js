@@ -74,6 +74,7 @@ function printHelp() {
   node admin.js set-score <UID或用户名> <积分>         - 修改天梯积分
   node admin.js lock <UID或用户名> [分钟]              - 临时锁定账号（默认 60 分钟）
   node admin.js unlock <UID或用户名>                   - 解锁账号并清除登录失败计数
+  node admin.js feedback [--json]                     - 查看玩家提交的意见与Bug反馈
   node admin.js sql "SELECT ..."                      - 执行只读 SQL
   node admin.js sql --write "UPDATE ..." [--yes]      - 明确授权后执行写 SQL
 
@@ -115,7 +116,8 @@ async function queryD1(sql, params = []) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.success) {
-    throw new Error('D1 执行错误，请检查网络、权限或 SQL。');
+    const errorDetail = (data.errors && data.errors[0] && data.errors[0].message) ? data.errors[0].message : 'D1 执行错误，请检查网络、权限或 SQL。';
+    throw new Error(errorDetail);
   }
   return data.result && data.result[0] ? data.result[0].results : [];
 }
@@ -414,6 +416,37 @@ async function runCustomSql(sql, flags) {
   else console.table(results);
 }
 
+async function listFeedback(flags) {
+  try {
+    const rows = await queryD1('SELECT id, uid, nickname, feedback_type, content, contact, client_version, created_at FROM feedback ORDER BY id DESC LIMIT 50;');
+    if (flags.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (!rows || rows.length === 0) {
+      console.log('💬 暂无用户提交的反馈信息。');
+      return;
+    }
+    console.log(`\n💬 用户意见反馈列表（共 ${rows.length} 条）：\n`);
+    console.table(rows.map(r => ({
+      ID: r.id,
+      时间: r.created_at,
+      类型: r.feedback_type,
+      昵称: r.nickname || '匿名',
+      UID: r.uid || '-',
+      内容: r.content,
+      联系方式: r.contact || '-',
+      版本: r.client_version || '-'
+    })));
+  } catch (err) {
+    if (err.message.includes('no such table')) {
+      console.log('💬 反馈数据表暂未创建（将在接收到首条反馈时由 Worker 自动生成）。');
+    } else {
+      throw err;
+    }
+  }
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const cmd = rawArgs.shift();
@@ -443,6 +476,10 @@ async function main() {
       break;
     case 'unlock':
       await unlockUser(args[0], flags);
+      break;
+    case 'feedback':
+    case 'feedbacks':
+      await listFeedback(flags);
       break;
     case 'sql':
       await runCustomSql(args[0], flags);
