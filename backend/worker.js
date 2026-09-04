@@ -29,6 +29,9 @@ export default {
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'Permissions-Policy': 'camera=(), microphone=()',
+      'X-Frame-Options': 'DENY',
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      'X-Permitted-Cross-Domain-Policies': 'none',
     };
 
     // 允许本地开发/Android 内嵌 localhost 与无 Origin 请求；拒绝任意第三方网页跨站调用。
@@ -325,7 +328,7 @@ export default {
     if (url.pathname === "/" || url.pathname === "/index.html" || isDocNav) {
       return new Response('<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style="font-family:sans-serif;text-align:center;padding:120px 20px;"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style="color:#888;font-size:12px;">nginx</div></body></html>', {
         status: 404,
-        headers: { "Content-Type": "text/html; charset=utf-8" }
+        headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" }
       });
     }
 
@@ -354,7 +357,11 @@ export default {
 
     async function requireMatchIdentity(uid, token) {
       const cleanUid = String(uid || '').trim();
-      if (cleanUid.startsWith('guest_')) return { uid: cleanUid, user: null };
+      // 全服匹配和积分结算必须绑定正式账号；游客只允许使用 P2P 房间。
+      // 不能接受客户端自造 guest_* 身份，否则任何人都可以占用撮合队列并污染匹配状态。
+      if (cleanUid.startsWith('guest_')) {
+        return { response: json({ code: 401, msg: '全服匹配需要先登录正式账号' }, 401) };
+      }
       const auth = await requireUser(cleanUid, token);
       return auth.response ? auth : { uid: cleanUid, user: auth.user };
     }
@@ -422,7 +429,8 @@ async function allocateNextAvailableUid(env) {
         }
 
         // IP rate limit: max 3 registrations per IP per 24h
-        const clientIp = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+        // 只信任 Cloudflare 注入的真实来源地址；客户端可伪造 X-Forwarded-For，不能拿它做限流依据。
+        const clientIp = String(request.headers.get('CF-Connecting-IP') || 'unknown').slice(0, 64);
         try {
           const oneDayAgo = Date.now() - 86400000;
           const ipCount = await env.DB.prepare('SELECT COUNT(*) as cnt FROM ip_register_log WHERE ip = ? AND created_at > ?').bind(clientIp, oneDayAgo).first();
@@ -431,7 +439,10 @@ async function allocateNextAvailableUid(env) {
           }
         } catch(e) {}
 
-                const safeUsername = username.trim().replace(/[<>'"`]/g, '');
+        const safeUsername = sanitizeText(username, 32);
+        if (!safeUsername) {
+          return json({ code: 1, msg: '账号名称包含无效字符，请重新输入' }, 400);
+        }
         const safeNick = sanitizeText(nickname, 12) || safeUsername;
         const safeAvatar = sanitizeAvatar(avatar);
 
@@ -1136,10 +1147,14 @@ async function allocateNextAvailableUid(env) {
         const nickname = sanitizeText(body.nickname || '', 30);
         const version = sanitizeText(body.version || 'v1.0.86', 30);
         const userAgent = request.headers.get('user-agent') ? request.headers.get('user-agent').slice(0, 250) : '';
-        const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || '127.0.0.1';
+        const ip = String(request.headers.get('cf-connecting-ip') || 'unknown').slice(0, 64);
 
         if (env.DB) {
           try {
+            const recent = await env.DB.prepare("SELECT COUNT(*) AS cnt FROM feedback WHERE ip = ? AND created_at >= datetime('now', '-1 hour')").bind(ip).first();
+            if (recent && Number(recent.cnt) >= 5) {
+              return json({ code: 429, msg: '反馈提交过于频繁，请稍后再试' }, 429);
+            }
             await env.DB.prepare(`
               INSERT INTO feedback (uid, nickname, feedback_type, content, contact, client_version, user_agent, ip)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?)

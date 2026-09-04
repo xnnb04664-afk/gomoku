@@ -1,69 +1,111 @@
-﻿const fs = require("fs");
-const path = require("path");
-const { execSync } = require("child_process");
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
 
-const configPath = path.join(__dirname, ".cloudflare_config.json");
-if (!fs.existsSync(configPath)) {
-  console.error("Missing .cloudflare_config.json");
-  process.exit(1);
+const ROOT_DIR = __dirname;
+const CONFIG_PATH = path.join(ROOT_DIR, '.cloudflare_config.json');
+const WORKER_PATH = path.join(ROOT_DIR, 'backend', 'worker.js');
+const PAGES_BUILD_DIR = path.join(ROOT_DIR, 'pages_build');
+const PAGES_PROJECT_NAME = 'gomoku-api';
+
+function fail(message) {
+  throw new Error(message);
 }
 
-const { accountId, deployToken, d1DatabaseId, scriptName } = JSON.parse(fs.readFileSync(configPath, "utf8"));
+if (!fs.existsSync(CONFIG_PATH)) {
+  fail('缺少 .cloudflare_config.json；部署凭据必须只保存在本机配置文件中。');
+}
+if (!fs.existsSync(WORKER_PATH)) {
+  fail('缺少 backend/worker.js，已停止部署。');
+}
 
-const workerPath = path.join(__dirname, "backend", "worker.js");
-const workerCode = fs.readFileSync(workerPath, "utf8");
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+} catch (error) {
+  fail(`.cloudflare_config.json 不是有效 JSON：${error.message}`);
+}
 
-// Ensure pages_build exists
-if (!fs.existsSync("pages_build")) fs.mkdirSync("pages_build");
-fs.writeFileSync("pages_build/index.html", "<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style=\"font-family:sans-serif;text-align:center;padding:120px 20px;\"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style=\"color:#888;font-size:12px;\">nginx</div></body></html>", "utf8");
-fs.writeFileSync("pages_build/_worker.js", workerCode, "utf8");
+const { accountId, deployToken, d1DatabaseId, scriptName } = config || {};
+if (!/^[a-f0-9]{32}$/i.test(String(accountId || ''))) {
+  fail('Cloudflare accountId 格式无效，已停止部署。');
+}
+if (!/^[a-f0-9]{32}$/i.test(String(d1DatabaseId || ''))) {
+  fail('Cloudflare d1DatabaseId 格式无效，已停止部署。');
+}
+if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(String(scriptName || ''))) {
+  fail('Cloudflare scriptName 格式无效，已停止部署。');
+}
+if (typeof deployToken !== 'string' || deployToken.trim().length < 20) {
+  fail('Cloudflare deployToken 缺失或格式异常，已停止部署。');
+}
 
-async function deploy() {
-  console.log(">>> [1/2] 正在部署到 Cloudflare Workers (脚本: " + scriptName + ")...");
-  
+const workerCode = fs.readFileSync(WORKER_PATH, 'utf8');
+fs.mkdirSync(PAGES_BUILD_DIR, { recursive: true });
+fs.writeFileSync(
+  path.join(PAGES_BUILD_DIR, 'index.html'),
+  '<!DOCTYPE html><html><head><title>404 Not Found</title></head><body style="font-family:sans-serif;text-align:center;padding:120px 20px;"><h1>404 Not Found</h1><p>The requested resource was not found on this server.</p><hr/><div style="color:#888;font-size:12px;">nginx</div></body></html>',
+  'utf8'
+);
+fs.writeFileSync(path.join(PAGES_BUILD_DIR, '_worker.js'), workerCode, 'utf8');
+
+async function deployWorker() {
+  console.log(`>>> [1/2] 正在部署到 Cloudflare Workers (脚本: ${scriptName})...`);
+
   const form = new FormData();
   const metadata = {
-    main_module: "worker.js",
-    compatibility_date: "2024-09-03",
+    main_module: 'worker.js',
+    compatibility_date: '2024-09-03',
     bindings: [
       {
-        type: "d1",
-        name: "DB",
+        type: 'd1',
+        name: 'DB',
         id: d1DatabaseId
       }
     ]
   };
 
-  form.append("metadata", JSON.stringify(metadata));
-  const fileBlob = new Blob([workerCode], { type: "application/javascript+module" });
-  form.append("worker.js", fileBlob, "worker.js");
+  form.append('metadata', JSON.stringify(metadata));
+  form.append('worker.js', new Blob([workerCode], { type: 'application/javascript+module' }), 'worker.js');
 
   const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${scriptName}`;
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: {
-      "Authorization": `Bearer ${deployToken}`
-    },
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${deployToken.trim()}` },
     body: form
   });
 
-  const data = await res.json();
-  if (data.success) {
-    console.log("✅ [1/2] Cloudflare Worker deployed successfully!");
-  } else {
-    console.error("Deploy Worker error:", data.errors);
-  }
-
-  console.log(">>> [2/2] 正在部署到 Cloudflare Pages (国内极速直连: gomoku-api.pages.dev)...");
+  let data;
   try {
-    const out = execSync("npx wrangler pages deploy pages_build --project-name gomoku-api --branch main --commit-dirty=true", {
-      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken },
-      encoding: "utf8"
-    });
-    console.log("✅ [2/2] Cloudflare Pages deployed successfully!");
-  } catch(e) {
-    console.warn("Pages deploy warning:", e.stdout || e.message);
+    data = await response.json();
+  } catch (error) {
+    fail(`Worker 部署返回了无法解析的响应（HTTP ${response.status}）。`);
   }
+  if (!response.ok || !data || data.success !== true) {
+    const detail = Array.isArray(data?.errors) ? data.errors.map(item => item.message || item.code || '未知错误').join('; ') : `HTTP ${response.status}`;
+    fail(`Worker 部署失败：${detail}`);
+  }
+  console.log('✅ [1/2] Cloudflare Worker deployed successfully!');
 }
 
-deploy();
+function deployPages() {
+  console.log(`>>> [2/2] 正在部署到 Cloudflare Pages (${PAGES_PROJECT_NAME})...`);
+  execFileSync(
+    process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    ['wrangler', 'pages', 'deploy', PAGES_BUILD_DIR, '--project-name', PAGES_PROJECT_NAME, '--branch', 'main', '--commit-dirty=true'],
+    {
+      cwd: ROOT_DIR,
+      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken.trim() },
+      stdio: 'inherit'
+    }
+  );
+  console.log('✅ [2/2] Cloudflare Pages deployed successfully!');
+}
+
+(async () => {
+  await deployWorker();
+  deployPages();
+})().catch(error => {
+  console.error(`❌ 云端部署失败：${error.message}`);
+  process.exitCode = 1;
+});

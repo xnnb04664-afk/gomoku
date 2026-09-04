@@ -1,5 +1,6 @@
 node_modules/
 android_build_tmp/
+android_src/classes/
 .DS_Store
 Thumbs.db
 *.log

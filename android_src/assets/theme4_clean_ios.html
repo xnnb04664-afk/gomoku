@@ -1010,12 +1010,41 @@
       { sender: 1, name: p1Name, avatar: p1Avatar, text: 'Clean iOS · 自然暖白。📱', time: getNowTime() }
     ];
 
-    function renderAvatarElement(avatar) {
-      if (!avatar) return '👦';
-      if (avatar.startsWith('data:image') || avatar.startsWith('http') || avatar.startsWith('img/') || avatar.includes('.png') || avatar.includes('.webp') || avatar.includes('.jpg')) {
-        return `<img src="${avatar}" alt="avatar">`;
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
+
+    function getSafeAvatarSource(avatar) {
+      if (avatar === 'anime_boy' || avatar === 'img/avatar_boy.png') {
+        avatar = window.ANIME_AVATAR_BOY || 'img/avatar_boy.png';
+      } else if (avatar === 'anime_girl' || avatar === 'img/avatar_girl.png') {
+        avatar = window.ANIME_AVATAR_GIRL || 'img/avatar_girl.png';
       }
-      return avatar;
+      if (typeof avatar !== 'string') return null;
+      if (avatar === 'img/avatar_boy.png' || avatar === 'img/avatar_girl.png') return avatar;
+      if (avatar.startsWith('data:image/')) {
+        if (avatar.length > 150000 || !/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(avatar)) return null;
+        return avatar;
+      }
+      if (avatar.startsWith('https://')) {
+        try {
+          const parsed = new URL(avatar);
+          if (parsed.protocol === 'https:' && !parsed.username && !parsed.password && parsed.hostname && parsed.href.length <= 300) return parsed.href;
+        } catch (_) {}
+      }
+      return null;
+    }
+
+    function renderAvatarElement(avatar, size = null) {
+      const src = getSafeAvatarSource(avatar);
+      if (src) {
+        const sStyle = size ? `width:${size}px; height:${size}px;` : 'width:100%; height:100%;';
+        return `<img src="${escapeHtml(src)}" alt="avatar" style="${sStyle} border-radius:50%; object-fit:cover; display:block;" />`;
+      }
+      const label = String(avatar == null ? '👦' : avatar).slice(0, 32);
+      return `<span style="display:inline-block; line-height:1; font-size:${size ? Math.round(size * 0.75) : 22}px;">${escapeHtml(label)}</span>`;
     }
 
     function updatePlayerHeaderUI() {
@@ -1042,8 +1071,8 @@
         <div class="msg-row ${msg.sender === 1 ? 'right' : 'left'}">
           <div class="msg-avatar">${renderAvatarElement(msg.avatar)}</div>
           <div class="msg-body">
-            <div class="msg-info">${msg.name} · ${msg.time}</div>
-            <div class="msg-text">${msg.text}</div>
+            <div class="msg-info">${escapeHtml(msg.name)} · ${escapeHtml(msg.time)}</div>
+            <div class="msg-text">${escapeHtml(msg.text)}</div>
           </div>
         </div>
       `).join('');
@@ -1062,7 +1091,7 @@
         mainContent.innerHTML = recent3.map(m => `
           <div class="main-chat-line">
             <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${m.text}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:800;">${escapeHtml(m.text)}</span>
           </div>
         `).join('');
       }
@@ -1127,7 +1156,7 @@
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
           if (prevEl) {
-            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
+            prevEl.innerHTML = renderAvatarElement(compressedBase64);
           }
           document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
           _applyAvatarChange(compressedBase64);
@@ -1221,7 +1250,7 @@
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar">`;
+        prevEl.innerHTML = renderAvatarElement(dataUrl);
       }
       _applyAvatarChange(dataUrl);
       showGameNotice('✨ 头像已更换！');
@@ -1722,7 +1751,9 @@
         this.messageHandler = (topic, payload) => {
           if (topic !== this.subTopic) return;
           try {
-            const data = JSON.parse(payload.toString());
+            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+            if (rawPayload.length > 64 * 1024) return;
+            const data = JSON.parse(rawPayload);
             this.emit('data', data);
           } catch(e) {
             console.warn('[MqttRoom parse error]', e);
@@ -1912,7 +1943,9 @@
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
-            const data = JSON.parse(payload.toString());
+            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+            if (rawPayload.length > 64 * 1024) return;
+            const data = JSON.parse(rawPayload);
             if (data.type === 'join_request') {
               // 连续回送 join_accepted（0ms, 150ms, 350ms），确保 4G/5G 弱网下对方必能收到
               const sendAccept = () => {
@@ -2113,6 +2146,37 @@
     }
 
     let onlineHeartbeatTimer = null;
+    let opponentSkillsUsedCount = 0;
+    function validateIncomingSkill(data) {
+      if (!data || typeof data !== 'object' || typeof data.type !== 'string' || opponentSkillsUsedCount >= 4) return false;
+      const isValidCoord = (n) => Number.isInteger(n) && n >= 0 && n < 15;
+      for (const key of ['r', 'c', 'fromR', 'fromC', 'toR', 'toC', 'r1', 'c1', 'r2', 'c2']) if (key in data && !isValidCoord(data[key])) return false;
+      if ('p' in data && data.p !== BLACK && data.p !== WHITE) return false;
+      if ('by' in data && data.by !== BLACK && data.by !== WHITE) return false;
+      if ('stones' in data) { if (!Array.isArray(data.stones) || data.stones.length > 225) return false; for (const stone of data.stones) if (!stone || !isValidCoord(stone.r) || !isValidCoord(stone.c) || (stone.p !== undefined && stone.p !== BLACK && stone.p !== WHITE)) return false; }
+      if ('cells' in data) { if (!Array.isArray(data.cells) || data.cells.length !== 4) return false; const seen = new Set(); for (const cell of data.cells) { if (!cell || !isValidCoord(cell.r) || !isValidCoord(cell.c) || seen.has(`${cell.r},${cell.c}`)) return false; seen.add(`${cell.r},${cell.c}`); } }
+      if (data.type === 'skill_remove_stone' && board[data.r][data.c] === EMPTY) return false;
+      if (data.type === 'skill_shift_stone' && (board[data.fromR][data.fromC] === EMPTY || board[data.toR][data.toC] !== EMPTY || Math.abs(data.fromR - data.toR) > 1 || Math.abs(data.fromC - data.toC) > 1)) return false;
+      if (data.type === 'skill_swap_color' && board[data.r][data.c] === EMPTY) return false;
+      if (data.type === 'skill_swap_positions' && (board[data.r1][data.c1] === EMPTY || board[data.r2][data.c2] === EMPTY)) return false;
+      if (data.type === 'skill_mega_bomb') { let count = 0; for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] !== EMPTY) count++; if (!Array.isArray(data.stones) || data.stones.length !== count) return false; }
+      opponentSkillsUsedCount++;
+      return true;
+    }
+
+    function validateIncomingSnapshot(data) {
+      const isValidCoord = (n) => Number.isInteger(n) && n >= 0 && n < 15;
+      if (!data || typeof data !== 'object' || !Array.isArray(data.board) || data.board.length !== 15 || data.board.some(row => !Array.isArray(row) || row.length !== 15 || row.some(cell => cell !== EMPTY && cell !== BLACK && cell !== WHITE))) return false;
+      if (!Array.isArray(data.history) || data.history.length > 512) return false;
+      for (const item of data.history) { if (!item || typeof item !== 'object') return false; const special = item.r === -1 && item.c === -1 && item.p === 0 && ((typeof item.action === 'string' && item.action.length <= 64) || (typeof item.type === 'string' && item.type.length <= 64)); if (!special && (!isValidCoord(item.r) || !isValidCoord(item.c) || (item.p !== BLACK && item.p !== WHITE))) return false; }
+      if ((data.turn !== BLACK && data.turn !== WHITE) || typeof data.isOver !== 'boolean') return false;
+      if (data.cardUsedStatus !== undefined && (!Array.isArray(data.cardUsedStatus) || data.cardUsedStatus.length !== 3 || data.cardUsedStatus.some(v => typeof v !== 'boolean'))) return false;
+      if (data.currentDrawnCards !== undefined && (!Array.isArray(data.currentDrawnCards) || data.currentDrawnCards.length !== 3 || data.currentDrawnCards.some(card => !card || typeof card.id !== 'string' || !SKILL_CARD_POOL.some(local => local.id === card.id)))) return false;
+      for (const value of [data.p1Name, data.p2Name]) if (value !== undefined && (typeof value !== 'string' || value.length > 128)) return false;
+      for (const value of [data.p1Avatar, data.p2Avatar]) if (value !== undefined && (typeof value !== 'string' || value.length > 150000)) return false;
+      return true;
+    }
+
     function setupConn() {
       if (!conn) return;
       if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
@@ -2141,6 +2205,8 @@
       });
 
       conn.on('data', (data) => {
+        if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return;
+        if (data.type.startsWith('skill_') || data.type.startsWith('destiny_')) { if (!validateIncomingSkill(data)) return; }
         if (data.type === 'ping') {
           try { conn.send({ type: 'pong' }); } catch(e) {}
           return;
@@ -2157,14 +2223,15 @@
         }
         if (data.type === 'state_snapshot') {
           // 客方收到全量快照，瞬间恢复局势
+          if (!validateIncomingSnapshot(data)) return;
           board = data.board;
           history = data.history;
           turn = data.turn;
           isOver = data.isOver;
           p2Name = data.p1Name;
           p2Avatar = data.p1Avatar;
-          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards;
-          if (data.cardUsedStatus) cardUsedStatus = data.cardUsedStatus;
+          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards.map(card => SKILL_CARD_POOL.find(local => local.id === card.id));
+          if (data.cardUsedStatus) cardUsedStatus = [...data.cardUsedStatus];
           updatePlayerHeaderUI();
           draw();
           updateUI();
@@ -2351,10 +2418,10 @@
         return `
           <div class="card-slot ${isUsed ? 'used' : ''} ${isCasting ? 'casting' : ''}"
                onclick="handleCardClick(${idx})"
-               title="${desc}">
-            <div class="slot-icon">${icon}</div>
-            <div class="slot-title">${name}</div>
-            <div class="slot-sub">${isUsed ? '已使用' : desc}</div>
+               title="${escapeHtml(desc)}">
+            <div class="slot-icon">${escapeHtml(icon)}</div>
+            <div class="slot-title">${escapeHtml(name)}</div>
+            <div class="slot-sub">${isUsed ? '已使用' : escapeHtml(desc)}</div>
           </div>
         `;
       }).join('');
@@ -2947,7 +3014,7 @@
     }
 
     async function joinMqttRoom(code, btn) {
-      if (!code) return showGameNotice("请输入 6 位房间码！", true);
+      if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
       if (btn) {
         btn.disabled = true;
@@ -2978,7 +3045,9 @@
         const onClientInvite = (topic, payload) => {
           if (topic !== h2cTopic) return;
           try {
-            const data = JSON.parse(payload.toString());
+            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+            if (rawPayload.length > 64 * 1024) return;
+            const data = JSON.parse(rawPayload);
             if (data.type === 'join_accepted' && !hasJoined) {
               hasJoined = true;
               clearInterval(joinInterval);
@@ -3044,7 +3113,7 @@
     async function joinOnlineRoom() {
       const codeInput = document.getElementById('inputJoinCode');
       const code = codeInput ? codeInput.value.trim() : '';
-      if (!code) return showGameNotice("请输入 6 位房间码！", true);
+      if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
       const btn = document.getElementById('btnConnectRoom');
       if (btn) {
@@ -3899,6 +3968,7 @@
     }
 
     function makeMove(r, c, p, fromRemote = false) {
+      if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= 15 || c < 0 || c >= 15 || (p !== BLACK && p !== WHITE)) return;
       if (board[r][c] !== EMPTY || isOver) return;
       board[r][c] = p;
       history.push({r, c, p});
@@ -4077,6 +4147,13 @@
     } catch (e) {
       customPhrases = [...DEFAULT_IOS_PHRASES];
     }
+    if (!Array.isArray(customPhrases)) customPhrases = [...DEFAULT_IOS_PHRASES];
+    customPhrases = customPhrases
+      .filter(p => typeof p === 'string')
+      .map(p => p.trim().slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 30);
+    if (customPhrases.length === 0) customPhrases = [...DEFAULT_IOS_PHRASES];
 
     function savePhrases() {
       localStorage.setItem('gomoku_ios_phrases', JSON.stringify(customPhrases));
@@ -4087,16 +4164,19 @@
       if (!container) return;
       let html = `<div class="phrase-chip-manage" onclick="openPhraseManageModal()">⚙️ 自定义</div>`;
       html += customPhrases.map((phrase) => `
-        <div class="phrase-chip" onclick="sendChat('${phrase.replace(/'/g, "\\'")}')">${phrase}</div>
+        <div class="phrase-chip" data-phrase="${escapeHtml(phrase)}">${escapeHtml(phrase)}</div>
       `).join('');
       container.innerHTML = html;
+      container.querySelectorAll('.phrase-chip').forEach(el => {
+        el.onclick = () => sendChat(el.getAttribute('data-phrase') || '');
+      });
     }
 
     function openPhraseManageModal() {
       const modal = document.getElementById('phraseManageModal');
       const list = document.getElementById('managePhraseList');
       list.innerHTML = customPhrases.map((p, idx) => `
-        <div class="phrase-manage-item" draggable="true" data-index="${idx}" data-phrase="${p.replace(/"/g, '&quot;')}"
+        <div class="phrase-manage-item" draggable="true" data-index="${idx}" data-phrase="${escapeHtml(p)}"
              style="display:flex; align-items:center; justify-content:space-between; background:var(--surface, #1e293b); padding:7px 10px; border-radius:8px; border:1.5px solid var(--surface-border, #475569); font-size:12.5px; font-weight:800; cursor:grab; user-select:none; opacity:1 !important; touch-action:none;"
              ondragstart="handlePhraseDragStart(event)"
              ondragover="handlePhraseDragOver(event)"
@@ -4106,7 +4186,7 @@
              ontouchend="handlePhraseTouchEnd(event)">
           <div style="display:flex; align-items:center; gap:8px; overflow:hidden; flex:1;">
             <span class="drag-handle" style="font-size:16px; color:#94a3b8; cursor:grab; padding:0 2px;">⠿</span>
-            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; color:var(--text-main, #f8fafc);">${idx + 1}. ${p}</span>
+            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; color:var(--text-main, #f8fafc);">${idx + 1}. ${escapeHtml(p)}</span>
           </div>
           <div style="display:flex; align-items:center; gap:4px; flex-shrink:0;">
             <button class="btn-move-up" onclick="event.stopPropagation(); movePhrase(${idx}, -1)" ${idx === 0 ? 'disabled style="opacity:0.25;"' : ''} style="background:rgba(255,255,255,0.1); color:var(--text-main, #f8fafc); border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer; font-weight:900;">▲</button>
@@ -4261,8 +4341,12 @@
 
     function addNewPhrase() {
       const input = document.getElementById('inputNewPhrase');
-      const val = input.value.trim();
+      if (!input) return;
+      const raw = input.value.trim();
+      if (raw.length > 80) return alert("快捷短语最多 80 个字符！");
+      const val = raw;
       if (!val) return alert("请输入快捷短语内容！");
+      if (customPhrases.length >= 30) return alert("最多保存 30 条快捷短语！");
       customPhrases.push(val);
       savePhrases();
       input.value = '';
@@ -4360,14 +4444,14 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 Cloudflare Worker 私有仓库更新中转
-    const CURRENT_VERSION_TAG = 'v1.0.88';
+    const CURRENT_VERSION_TAG = 'v1.0.89';
     const UPDATE_API_URL = 'https://gomoku-api.pages.dev/api/version';
     const UPDATE_PROXY_APK_URL = 'https://gomoku-api.pages.dev/api/update/apk';
     const UPDATE_PROXY_HTML_URL = 'https://gomoku-api.pages.dev/api/update/html';
     function isTrustedUpdateUrl(value, expectedPath) {
       try {
         const parsed = new URL(value, UPDATE_API_URL);
-        return parsed.protocol === 'https:' && parsed.hostname === 'gomoku-api.pages.dev' && parsed.pathname === expectedPath;
+        return parsed.origin === 'https://gomoku-api.pages.dev' && !parsed.username && !parsed.password && parsed.pathname === expectedPath;
       } catch (_) { return false; }
     }
     async function sha256Hex(value) {

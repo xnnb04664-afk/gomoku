@@ -80,10 +80,15 @@ runPreflightChecks();
 
 // 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量或云端 Secret 注入。
 function runSecretFileGuard() {
-  const sensitivePath = /(^|[\\/])(?:\.env(?:\.[^\\/]*)?|.*\.(?:keystore|jks|p12|pfx|pem))$/i;
+  const sensitivePath = /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:keystore|jks|p12|pfx|pem))$/i;
   const tracked = execSync('git ls-files', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
   const untracked = execSync('git ls-files --others --exclude-standard', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
-  const blocked = [...new Set([...tracked, ...untracked].filter(file => sensitivePath.test(file)))];
+  const candidates = [...new Set([...tracked, ...untracked])];
+  const blocked = candidates.filter(file => {
+    if (!sensitivePath.test(file)) return false;
+    const baseName = path.basename(file);
+    return !/^\.env\.(?:example|sample)$/i.test(baseName);
+  });
   if (blocked.length > 0) {
     throw new Error(`发布安全门禁拦截：以下敏感文件不能进入 Git：${blocked.join(', ')}`);
   }
@@ -91,10 +96,62 @@ function runSecretFileGuard() {
   if (fs.existsSync(rootKey)) {
     throw new Error('发布安全门禁拦截：项目根目录仍存在 release.keystore，请使用仓库外签名密钥。');
   }
+
+  // 文件名过滤挡不住把令牌/私钥写进普通源码；对可读文本做内容扫描，命中时只报告路径，不回显秘密。
+  const credentialPatterns = [
+    /\bgithub_pat_[A-Za-z0-9_]{20,}\b/i,
+    /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/i,
+    /-----BEGIN (?:RSA|EC|OPENSSH|PRIVATE) KEY-----/i,
+    /\bAKIA[0-9A-Z]{16}\b/i,
+    /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/i
+  ];
+  const binaryExtensions = /\.(?:apk|aab|class|gif|ico|jpeg?|jpg|mp3|mp4|png|svg|webp|woff2?|zip)$/i;
+  const credentialFiles = [];
+  for (const file of candidates) {
+    if (binaryExtensions.test(file)) continue;
+    const fullPath = path.join(ROOT_DIR, file);
+    try {
+      if (!fs.existsSync(fullPath)) continue; // 已删除文件会由 git add 记录删除，不应阻断本次发布。
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile() || stat.size > 8 * 1024 * 1024) continue;
+      const content = fs.readFileSync(fullPath);
+      if (content.includes(0)) continue;
+      const text = content.toString('utf8');
+      if (credentialPatterns.some(pattern => pattern.test(text))) credentialFiles.push(file);
+    } catch (error) {
+      throw new Error(`发布安全门禁无法读取待发布文件 ${file}：${error.message}`);
+    }
+  }
+  if (credentialFiles.length > 0) {
+    throw new Error(`发布安全门禁拦截：普通文件内容疑似包含令牌或私钥，请检查：${credentialFiles.join(', ')}`);
+  }
   console.log('✅ 发布安全门禁通过：未发现可提交的签名密钥或凭据文件。');
 }
 
 runSecretFileGuard();
+
+// 六套主题都必须在发包前单独解析，避免某个切换主题携带语法错误或截断代码。
+function runAllThemeSyntaxChecks() {
+  const files = ['index.html', 'theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'];
+  for (const file of files) {
+    const html = fs.readFileSync(path.join(ROOT_DIR, file), 'utf8');
+    const scripts = html.match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) || [];
+    scripts.forEach((script, index) => {
+      const code = script.replace(/^<script\b[^>]*>/i, '').replace(/<\/script>$/i, '').trim();
+      if (code) new vm.Script(code, { filename: `${file}#script[${index + 1}]` });
+    });
+  }
+  execSync('node --check deploy_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  execSync('node --check publish.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  console.log('✅ 六大主题、发布脚本和部署脚本语法校验通过。');
+}
+
+try {
+  runAllThemeSyntaxChecks();
+} catch (error) {
+  console.error(`\n❌ [发布致命拦截] 全主题/发布链路语法校验失败：${error.message}`);
+  process.exit(1);
+}
 
 // 1. 自动解析并递增 Android 版本号
 console.log('>>> [1/8] 读取并递增应用版本号...');
@@ -220,7 +277,8 @@ try {
   execSync('git push origin master', { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log('🎉 GitHub 仓库同步推送成功！');
 } catch(e) {
-  console.log('ℹ️ Git 提交或推送提示: ' + e.message);
+  console.error('❌ Git 提交或推送失败，已停止后续发版与部署：' + e.message);
+  process.exit(1);
 }
 
 // 7. 自动在 GitHub Releases 上创建发版并上传 APK
@@ -252,7 +310,8 @@ console.log('>>> 正在同步部署 Cloudflare Pages & Worker 官方安全中枢
 try {
   execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 } catch(e) {
-  console.warn('Worker 部署提示:', e.message);
+  console.error('❌ Worker/Pages 部署失败，发布流程未完成：', e.message);
+  process.exit(1);
 }
 
 console.log('======================================================');

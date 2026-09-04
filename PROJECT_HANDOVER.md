@@ -223,12 +223,12 @@
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
   - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
-  - **固化根目录永久正式签名证书 (`release.keystore`)**：签名密钥永久锁定，彻底解决 Android 系统“签名冲突无法安装”的致命痛点，手机用户直接安装最新 APK 即可 1 秒覆盖升级，无需卸载，保留全部对局历史与自定义头像；
+  - **固化永久正式签名证书（密钥仅保存在仓库外的本机受限目录）**：签名密钥永久锁定，彻底解决 Android 系统“签名冲突无法安装”的致命痛点；密钥不再进入项目目录、Git 跟踪或 Git 历史，手机用户直接安装最新 APK 仍可覆盖升级，无需卸载，保留全部对局历史与自定义头像；
 - **全平台一键极速发布流水线 (`publish.js`)**：
   - 运行 `node publish.js`（或对 AI 说“更新/打包”）：
     1. 自动自增版本号（`1.0.X`）；
     2. 自动同步更新 6 大主题与单文件版；
-    3. 自动使用永久正式密钥编译签署原生 `五子棋.apk`；
+     3. 自动从仓库外的受限密钥目录读取环境变量指定的永久正式密钥，编译签署原生 `五子棋.apk`；
     4. 自动执行 `git add .` 与 `git commit`；
     5. 自动推送到 GitHub (`git push origin master`)；
     6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk` 与 `gomoku.html`；
@@ -251,7 +251,7 @@
 
 ---
 
-## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.87 关键迭代与避坑总结)
+## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.88 关键迭代与避坑总结)
 
 ### 1. 🎯 主棋盘大屏原位复盘体系 (`startMainBoardReplay`)
 - **用户原始需求**：“我点查看棋局的时候，怎么在下面，点查看棋局就跳转到棋盘上呀”；
@@ -297,6 +297,9 @@
 - **维护发布记录**：[`v1.0.87 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.87)；上述地址仅供维护者留档，已不再在软件界面公开展示。
 - **首屏启动优化（已在 v1.0.87 生效）**：联机库、音频与头像资源改为首帧后延迟执行；账号会话、头像初始化和历史统计移到首帧后；单文件版同步采用延迟内联资源；Android WebView 关闭不必要的离屏预栅格化并使用浅色启动底色，减少冷启动蓝屏等待感。
 - **客户端地址保护与私有仓库中转（源码完成，线上代理已验证）**：移除个人中心的公开开源发布卡片、复制链接入口和更新弹窗官方通道；客户端更新器统一访问 Cloudflare Pages Function 的 `/api/version`、`/api/update/apk`、`/api/update/html`，由 Pages 项目 `gomoku-api` 使用 `GITHUB_READ_TOKEN` Secret 读取私有 Release 并中转文件。Token 不进入 APK、网页或 Git；Token 轮换无需更新客户端，但轮换后必须重新部署 Pages Function。该方案仍不能阻止运行时调试观察最终请求。
+- **v1.0.88（Build 89）发布结果**：已完成全量代码同步、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时重新部署 Cloudflare Worker 与 Pages；线上 `/api/version` 已返回 `v1.0.88`，APK 与 HTML 中转接口均返回 HTTP 200，并返回 Release 资产 SHA-256 摘要供客户端校验。
+- **v1.0.88 安全加固结果**：永久签名密钥已迁出仓库并设置为本机账户专属访问；`.gitignore`、构建脚本和发布脚本均拒绝提交/使用仓库内密钥；GitHub `master` 及现有版本标签已清理 `release.keystore` 历史；Android WebView 已关闭调试、明文流量、第三方 Cookie、文件跨域访问和媒体权限；更新链路固定为 Pages 中转地址并校验 HTML SHA-256；Worker 仅允许固定资产名、GET 方法并补充 CORS 与安全响应头。
+- **安全边界说明**：Git 历史重写只能清理当前远端分支与标签，无法召回历史克隆、旧 APK 或维护者本机备份；曾经暴露过的 GitHub PAT 必须在 GitHub 立即撤销并换发最小权限的新令牌，再重新写入 Pages Secret 并部署。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：
@@ -468,5 +471,5 @@ node publish.js
 
 ---
 *交接文档最后更新时间：2026年9月4日*  
-*当前工程正式版本：v1.0.87 (Build 88)*
+*当前工程正式版本：v1.0.88 (Build 89)*
 *当前工程状态：全量代码、构建管线、真机联调与 Cloudflare 云端控制体系交接 100% 就绪。*

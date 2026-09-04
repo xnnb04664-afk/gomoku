@@ -207,7 +207,10 @@ public class LocalWebServer extends Thread {
                 pw.print("Content-Type: " + mime + "\r\n");
                 pw.print("Content-Length: " + body.length + "\r\n");
                 pw.print("Cache-Control: no-cache\r\n");
-                pw.print("Access-Control-Allow-Origin: *\r\n");
+                pw.print("X-Content-Type-Options: nosniff\r\n");
+                pw.print("Referrer-Policy: no-referrer\r\n");
+                pw.print("X-Frame-Options: DENY\r\n");
+                pw.print("Permissions-Policy: camera=(), microphone=()\r\n");
                 pw.print("Connection: close\r\n");
                 pw.print("\r\n");
                 pw.flush();

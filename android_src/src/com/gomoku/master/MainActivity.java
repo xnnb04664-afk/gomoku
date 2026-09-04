@@ -23,7 +23,6 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.content.SharedPreferences;
-import android.os.StrictMode;
 import android.provider.Settings;
 import android.widget.Toast;
 import java.io.File;
@@ -32,13 +31,20 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
 
 public class MainActivity extends Activity {
 
     // 🛡️ 原厂官方数字签名 SHA-256 指纹（严密防止第三方重打包）
     private static final String OFFICIAL_SIGNATURE_SHA256 = "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e";
     // 客户端只保留 Cloudflare 中转出口；仓库地址和 GitHub 直链不进入 APK。
+    private static final String UPDATE_PROXY_HOST = "gomoku-api.pages.dev";
+    private static final String UPDATE_PROXY_VERSION_URL = "https://gomoku-api.pages.dev/api/version";
     private static final String UPDATE_PROXY_APK_URL = "https://gomoku-api.pages.dev/api/update/apk";
+    private static final String UPDATE_PROXY_VERSION_PATH = "/api/version";
+    private static final String UPDATE_PROXY_APK_PATH = "/api/update/apk";
+    private static final int MAX_APK_BYTES = 50 * 1024 * 1024;
+    private static volatile String sExpectedApkSha256 = null;
 
     private boolean verifyApkSignatureIntegrity() {
         try {
@@ -136,12 +142,6 @@ public class MainActivity extends Activity {
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         );
-
-        // 允许跨进程共享安装包 URI，保障所有 Android 版本全自动呼起安装器
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            StrictMode.VmPolicy.Builder builder = new StrictMode.VmPolicy.Builder();
-            StrictMode.setVmPolicy(builder.build());
-        }
 
         // 2. 常亮防灭屏
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -275,6 +275,153 @@ public class MainActivity extends Activity {
         return "application/octet-stream";
     }
 
+    private static boolean isTrustedLocalUrl(Uri uri) {
+        if (uri == null || uri.getUserInfo() != null) return false;
+        String scheme = uri.getScheme();
+        if ("file".equalsIgnoreCase(scheme)) {
+            String host = uri.getHost();
+            return host == null || host.isEmpty();
+        }
+        if (!"http".equalsIgnoreCase(scheme)) return false;
+        String host = uri.getHost();
+        return ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "::1".equals(host))
+                && uri.getPort() == LocalWebServer.getPort();
+    }
+
+    private static boolean isTrustedApkUrl(Uri uri) {
+        return uri != null
+                && "https".equalsIgnoreCase(uri.getScheme())
+                && UPDATE_PROXY_HOST.equalsIgnoreCase(uri.getHost())
+                && uri.getUserInfo() == null
+                && (uri.getPort() == -1 || uri.getPort() == 443)
+                && UPDATE_PROXY_APK_PATH.equals(uri.getPath());
+    }
+
+    private boolean handleWebViewNavigation(WebView view, Uri uri) {
+        if (isTrustedLocalUrl(uri)) {
+            // 返回 false 让 WebView 自己加载可信本地页面，避免重复触发导航回调。
+            return false;
+        }
+        if (isTrustedApkUrl(uri)) {
+            startApkDownload();
+            return true;
+        }
+        if (uri == null || (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme()))) {
+            // javascript:, data:, intent: 等协议一律不交给 WebView 执行。
+            return true;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, uri));
+        } catch (Exception ignored) {
+        }
+        // 外部页面交给系统浏览器；即使设备没有浏览器，也不让它回流到带原生桥的 WebView。
+        return true;
+    }
+
+    private static boolean isRedirectResponse(int responseCode) {
+        return responseCode == HttpURLConnection.HTTP_MOVED_PERM
+                || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
+                || responseCode == HttpURLConnection.HTTP_SEE_OTHER
+                || responseCode == 307 || responseCode == 308;
+    }
+
+    private static boolean isTrustedUpdateUrl(URL url, String expectedPath) {
+        return url != null
+                && "https".equalsIgnoreCase(url.getProtocol())
+                && UPDATE_PROXY_HOST.equalsIgnoreCase(url.getHost())
+                && (url.getPort() == -1 || url.getPort() == 443)
+                && url.getUserInfo() == null
+                && expectedPath.equals(url.getPath());
+    }
+
+    private HttpURLConnection openTrustedConnection(String rawUrl, String expectedPath) throws Exception {
+        URL current = new URL(rawUrl);
+        for (int redirectCount = 0; redirectCount <= 3; redirectCount++) {
+            if (!isTrustedUpdateUrl(current, expectedPath)) {
+                throw new SecurityException("拒绝连接非官方更新地址");
+            }
+            HttpURLConnection connection = (HttpURLConnection) current.openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(40000);
+            connection.setRequestProperty("User-Agent", "GomokuMasterApp/1");
+            int responseCode = connection.getResponseCode();
+            if (!isRedirectResponse(responseCode)) return connection;
+            if (redirectCount == 3) {
+                connection.disconnect();
+                throw new SecurityException("更新地址重定向次数过多");
+            }
+            String location = connection.getHeaderField("Location");
+            connection.disconnect();
+            if (location == null || location.trim().isEmpty()) {
+                throw new SecurityException("更新服务返回了无效重定向");
+            }
+            current = new URL(current, location.trim());
+        }
+        throw new SecurityException("更新地址解析失败");
+    }
+
+    private static String readLimitedText(InputStream input, int maxBytes) throws Exception {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int total = 0;
+        int len;
+        while ((len = input.read(buffer)) != -1) {
+            total += len;
+            if (total > maxBytes) throw new SecurityException("更新元数据过大");
+            output.write(buffer, 0, len);
+        }
+        return output.toString("UTF-8");
+    }
+
+    private String fetchExpectedApkSha256() throws Exception {
+        HttpURLConnection connection = null;
+        try {
+            connection = openTrustedConnection(UPDATE_PROXY_VERSION_URL, UPDATE_PROXY_VERSION_PATH);
+            int responseCode = connection.getResponseCode();
+            if (responseCode < 200 || responseCode >= 300) throw new SecurityException("版本接口不可用");
+            try (InputStream input = connection.getInputStream()) {
+                String raw = readLimitedText(input, 64 * 1024);
+                org.json.JSONObject json = new org.json.JSONObject(raw);
+                if (json.optInt("code", -1) != 0) throw new SecurityException("版本接口未返回成功状态");
+                String digest = json.optString("apkSha256", "").trim();
+                if (!digest.matches("(?i)[0-9a-f]{64}")) throw new SecurityException("版本接口缺少有效 APK 摘要");
+                return digest;
+            }
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static String sha256File(File file) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = input.read(buffer)) != -1) digest.update(buffer, 0, len);
+        }
+        byte[] bytes = digest.digest();
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            String hex = Integer.toHexString(value & 0xff);
+            if (hex.length() == 1) result.append('0');
+            result.append(hex);
+        }
+        return result.toString();
+    }
+
+    private static boolean isVerifiedApk(File apkFile, String expectedSha256) {
+        if (apkFile == null || expectedSha256 == null || !expectedSha256.matches("(?i)[0-9a-f]{64}")
+                || !apkFile.exists() || !apkFile.isFile()) return false;
+        long size = apkFile.length();
+        if (size < 500000L || size > MAX_APK_BYTES) return false;
+        try {
+            return expectedSha256.equalsIgnoreCase(sha256File(apkFile));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private void setupWebView() {
         WebSettings settings = mWebView.getSettings();
 
@@ -329,16 +476,18 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
             public boolean saveHotUpdateFile(String fileName, String content) {
-                if (!"index.html".equals(fileName) || content == null || content.length() < 50000 || content.length() > 4 * 1024 * 1024) {
+                if (!"index.html".equals(fileName) || content == null) {
                     return false;
                 }
                 try {
+                    byte[] contentBytes = content.getBytes("UTF-8");
+                    if (contentBytes.length < 50000 || contentBytes.length > 4 * 1024 * 1024) return false;
                     File dir = new File(getFilesDir(), "hot_update");
                     if (!dir.exists()) dir.mkdirs();
                     File target = new File(dir, "index.html");
                     File temp = new File(dir, "index.html.tmp");
                     try (FileOutputStream fos = new FileOutputStream(temp)) {
-                        fos.write(content.getBytes("UTF-8"));
+                        fos.write(contentBytes);
                         fos.flush();
                     }
                     if (target.exists() && !target.delete()) {
@@ -441,23 +590,17 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                // localhost 内的跳转保持在 WebView
-                if (url.startsWith("http://localhost") || url.startsWith("file://")) {
-                    view.loadUrl(url);
-                    return true;
-                }
-                // APK 链接自动由原生 DownloadManager 接管并弹出安装
-                if (url.endsWith(".apk") || url.contains("/download/") || url.contains("releases/latest/download")) {
-                    startApkDownload();
-                    return true;
-                }
-                // 其他外链交给系统浏览器
                 try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                    startActivity(intent);
+                    return handleWebViewNavigation(view, url == null ? null : Uri.parse(url));
+                } catch (Exception ignored) {
                     return true;
-                } catch (Exception ignored) {}
-                return false;
+                }
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                if (request == null || !request.isForMainFrame()) return false;
+                return handleWebViewNavigation(view, request.getUrl());
             }
         });
 
@@ -565,15 +708,24 @@ public class MainActivity extends Activity {
     private void notifyWebProgress(final int percent, final String status) {
         runOnUiThread(() -> {
             if (mWebView != null) {
-                mWebView.evaluateJavascript("if (window.onApkDownloadProgress) window.onApkDownloadProgress(" + percent + ", '" + status + "');", null);
+                String safeStatus = org.json.JSONObject.quote(status == null ? "" : status);
+                mWebView.evaluateJavascript("if (window.onApkDownloadProgress) window.onApkDownloadProgress(" + percent + ", " + safeStatus + ");", null);
             }
         });
     }
 
     public void startApkDownload() {
+        // 防重入锁必须先于删除旧文件，避免第二次点击破坏正在进行的下载。
+        if (sIsDownloading) {
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
+            return;
+        }
         File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (destDir == null) destDir = getFilesDir();
-        if (!destDir.exists()) destDir.mkdirs();
+        if (!destDir.exists() && !destDir.mkdirs()) {
+            Toast.makeText(MainActivity.this, "更新目录不可用，请稍后重试", Toast.LENGTH_SHORT).show();
+            return;
+        }
         final File destFile = new File(destDir, "gomoku_latest.apk");
 
         // 每次重新下载前清理旧缓存，确保进度条 100% 完整展示
@@ -581,11 +733,6 @@ public class MainActivity extends Activity {
             destFile.delete();
         }
 
-        // 防重入锁：已有后台下载正在进行时，杜绝重复并发下载导致文件冲突
-        if (sIsDownloading) {
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
-            return;
-        }
         sIsDownloading = true;
 
         runOnUiThread(() -> {
@@ -594,76 +741,74 @@ public class MainActivity extends Activity {
         });
 
         new Thread(() -> {
+            boolean handedOffToDownloadManager = false;
+            String expectedHash = null;
             try {
                 if (destFile.exists()) destFile.delete();
 
-                // 优先使用极速流式 HTTP 下载；地址固定为 HTTPS 中转出口，不接受网页传入地址。
-                URL url = new URL(UPDATE_PROXY_APK_URL);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setInstanceFollowRedirects(true);
-                conn.setConnectTimeout(15000);
-                conn.setReadTimeout(40000);
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) GomokuMasterApp");
+                // 先读取 Worker 发布清单中的摘要，再下载；摘要接口与下载接口均严格限制为官方 HTTPS 出口。
+                expectedHash = fetchExpectedApkSha256();
+                sExpectedApkSha256 = expectedHash;
 
-                int responseCode = conn.getResponseCode();
-                if (responseCode == HttpURLConnection.HTTP_MOVED_TEMP || responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == 307 || responseCode == 308) {
-                    String newUrl = conn.getHeaderField("Location");
-                    if (newUrl != null && !newUrl.isEmpty()) {
-                        conn.disconnect();
-                        url = new URL(newUrl);
-                        conn = (HttpURLConnection) url.openConnection();
-                        conn.setInstanceFollowRedirects(true);
-                        conn.setConnectTimeout(15000);
-                        conn.setReadTimeout(40000);
-                        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) GomokuMasterApp");
-                        responseCode = conn.getResponseCode();
-                    }
-                }
+                HttpURLConnection connection = null;
+                try {
+                    connection = openTrustedConnection(UPDATE_PROXY_APK_URL, UPDATE_PROXY_APK_PATH);
+                    int responseCode = connection.getResponseCode();
+                    if (responseCode < 200 || responseCode >= 300) throw new SecurityException("更新文件接口不可用");
+                    int declaredSize = connection.getContentLength();
+                    if (declaredSize > MAX_APK_BYTES) throw new SecurityException("更新文件超过大小限制");
 
-                if (responseCode >= 200 && responseCode < 300) {
-                    int totalSize = conn.getContentLength();
-                    InputStream in = conn.getInputStream();
-                    FileOutputStream fos = new FileOutputStream(destFile);
-                    byte[] buf = new byte[8192];
-                    int len;
-                    int downloaded = 0;
-                    int lastPercent = 5;
-
-                    while ((len = in.read(buf)) != -1) {
-                        fos.write(buf, 0, len);
-                        downloaded += len;
-                        if (totalSize > 0) {
-                            int percent = (int) ((downloaded * 100L) / totalSize);
-                            if (percent - lastPercent >= 5) {
-                                lastPercent = percent;
-                                notifyWebProgress(percent, "downloading");
+                    try (InputStream input = connection.getInputStream(); FileOutputStream output = new FileOutputStream(destFile)) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        long downloaded = 0;
+                        int lastPercent = 5;
+                        while ((len = input.read(buffer)) != -1) {
+                            downloaded += len;
+                            if (downloaded > MAX_APK_BYTES) throw new SecurityException("更新文件超过大小限制");
+                            output.write(buffer, 0, len);
+                            if (declaredSize > 0) {
+                                int percent = Math.min(99, (int) ((downloaded * 100L) / declaredSize));
+                                if (percent - lastPercent >= 5) {
+                                    lastPercent = percent;
+                                    notifyWebProgress(percent, "downloading");
+                                }
                             }
                         }
+                        output.flush();
                     }
-                    fos.flush();
-                    fos.close();
-                    in.close();
-                    conn.disconnect();
-
-                    if (destFile.exists() && destFile.length() > 500000) {
-                        sIsDownloading = false;
-                        notifyWebProgress(100, "done");
-                        runOnUiThread(() -> installDownloadedApk(destFile));
-                        return;
-                    }
+                } finally {
+                    if (connection != null) connection.disconnect();
                 }
-                fallbackDownloadManager();
+
+                if (!isVerifiedApk(destFile, expectedHash)) {
+                    if (destFile.exists()) destFile.delete();
+                    throw new SecurityException("更新包完整性校验失败");
+                }
+                notifyWebProgress(100, "done");
+                runOnUiThread(() -> installDownloadedApk(destFile));
+                return;
             } catch (Exception e) {
-                android.util.Log.e("MainActivity", "Direct download error, falling back to DownloadManager: " + e.getMessage());
-                fallbackDownloadManager();
+                if (destFile.exists()) destFile.delete();
+                android.util.Log.e("MainActivity", "Direct download or integrity check failed: " + e.getMessage());
+                if (expectedHash != null && !expectedHash.isEmpty()) {
+                    handedOffToDownloadManager = fallbackDownloadManager(expectedHash);
+                } else {
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新清单校验失败，已停止安装", Toast.LENGTH_LONG).show());
+                }
             } finally {
-                sIsDownloading = false;
+                if (!handedOffToDownloadManager) sIsDownloading = false;
             }
         }).start();
     }
 
     private void installDownloadedApk(File apkFile) {
         try {
+            if (!isVerifiedApk(apkFile, sExpectedApkSha256)) {
+                if (apkFile != null && apkFile.exists()) apkFile.delete();
+                Toast.makeText(MainActivity.this, "更新包完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
+                return;
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!getPackageManager().canRequestPackageInstalls()) {
                     Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋安装应用，以完成全自动更新", Toast.LENGTH_LONG).show();
@@ -680,25 +825,19 @@ public class MainActivity extends Activity {
             installIntent.setDataAndType(contentUri, "application/vnd.android.package-archive");
             installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            try {
-                java.lang.reflect.Method m = StrictMode.class.getMethod("disableDeathOnFileUriExposure");
-                m.invoke(null);
-            } catch (Exception ignored) {}
             startActivity(installIntent);
             Toast.makeText(MainActivity.this, "🎉 正在唤起系统安装更新，请点击确认！", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-            try {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(UPDATE_PROXY_APK_URL));
-                startActivity(intent);
-            } catch (Exception ignored) {}
+            Toast.makeText(MainActivity.this, "自动呼起安装失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
-    private void fallbackDownloadManager() {
+    private boolean fallbackDownloadManager(final String expectedHash) {
+        if (expectedHash == null || !expectedHash.matches("(?i)[0-9a-f]{64}")) return false;
         runOnUiThread(() -> {
             try {
                 final DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) throw new IllegalStateException("系统下载服务不可用");
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(UPDATE_PROXY_APK_URL));
                 req.setMimeType("application/vnd.android.package-archive");
                 req.setTitle("五子棋 最新版全自动更新");
@@ -706,10 +845,12 @@ public class MainActivity extends Activity {
                 req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
 
                 File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-                if (destDir != null && !destDir.exists()) destDir.mkdirs();
+                if (destDir == null) throw new IllegalStateException("系统下载目录不可用");
+                if (!destDir.exists() && !destDir.mkdirs()) throw new IllegalStateException("更新目录不可用");
                 final File destFile = new File(destDir, "gomoku_latest.apk");
                 if (destFile.exists()) destFile.delete();
-                req.setDestinationUri(Uri.fromFile(destFile));
+                // 使用 DownloadManager 的应用专属目录接口，不构造 file:// URI，避免跨进程文件 URI 暴露。
+                req.setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, "gomoku_latest.apk");
 
                 final long downloadId = dm.enqueue(req);
 
@@ -720,18 +861,12 @@ public class MainActivity extends Activity {
                         if (id == downloadId) {
                             try { unregisterReceiver(this); } catch (Exception ignored) {}
                             sIsDownloading = false;
-                            notifyWebProgress(100, "done");
-                            if (destFile.exists() && destFile.length() > 500000) {
+                            if (isVerifiedApk(destFile, expectedHash)) {
+                                notifyWebProgress(100, "done");
                                 installDownloadedApk(destFile);
                             } else {
-                                Uri downloadUri = dm.getUriForDownloadedFile(downloadId);
-                                if (downloadUri != null) {
-                                    Intent installIntent = new Intent(Intent.ACTION_VIEW);
-                                    installIntent.setDataAndType(downloadUri, "application/vnd.android.package-archive");
-                                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                                    try { startActivity(installIntent); } catch (Exception ignored) {}
-                                }
+                                if (destFile.exists()) destFile.delete();
+                                Toast.makeText(MainActivity.this, "下载完成但完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
                             }
                         }
                     }
@@ -739,13 +874,10 @@ public class MainActivity extends Activity {
 
             } catch (Exception e) {
                 sIsDownloading = false;
-                Toast.makeText(MainActivity.this, "启动下载失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(UPDATE_PROXY_APK_URL));
-                    startActivity(intent);
-                } catch (Exception ignored) {}
+                Toast.makeText(MainActivity.this, "备用下载启动失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
+        return true;
     }
 
     @Override

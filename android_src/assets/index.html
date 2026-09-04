@@ -1692,7 +1692,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.88</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.89</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2521,22 +2521,41 @@
       { sender: 1, name: p1Name, avatar: p1Avatar, text: '你好呀~ 晴空草坪见！🌿', time: getNowTime() }
     ];
 
-    function renderAvatarElement(avatar, size = null) {
-      if (!avatar) return "👦";
-      let src = null;
-      if (avatar === "anime_boy" || avatar === "img/avatar_boy.png" || avatar === window.ANIME_AVATAR_BOY) {
-        src = window.ANIME_AVATAR_BOY || "img/avatar_boy.png";
-      } else if (avatar === "anime_girl" || avatar === "img/avatar_girl.png" || avatar === window.ANIME_AVATAR_GIRL) {
-        src = window.ANIME_AVATAR_GIRL || "img/avatar_girl.png";
-      } else if (typeof avatar === "string" && (avatar.startsWith("data:image") || avatar.startsWith("http") || avatar.startsWith("img/") || avatar.includes(".png") || avatar.includes(".webp") || avatar.includes(".jpg"))) {
-        src = avatar;
-      }
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
 
+    function getSafeAvatarSource(avatar) {
+      if (avatar === "anime_boy" || avatar === "img/avatar_boy.png") {
+        avatar = window.ANIME_AVATAR_BOY || "img/avatar_boy.png";
+      } else if (avatar === "anime_girl" || avatar === "img/avatar_girl.png") {
+        avatar = window.ANIME_AVATAR_GIRL || "img/avatar_girl.png";
+      }
+      if (typeof avatar !== "string") return null;
+      if (avatar === "img/avatar_boy.png" || avatar === "img/avatar_girl.png") return avatar;
+      if (avatar.startsWith("data:image/")) {
+        if (avatar.length > 150000 || !/^data:image\/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(avatar)) return null;
+        return avatar;
+      }
+      if (avatar.startsWith("https://")) {
+        try {
+          const parsed = new URL(avatar);
+          if (parsed.protocol === "https:" && !parsed.username && !parsed.password && parsed.hostname && parsed.href.length <= 300) return parsed.href;
+        } catch (_) {}
+      }
+      return null;
+    }
+
+    function renderAvatarElement(avatar, size = null) {
+      const src = getSafeAvatarSource(avatar);
       if (src) {
         const sStyle = size ? `width:${size}px; height:${size}px;` : "width:100%; height:100%;";
-        return `<img src="${src}" alt="avatar" style="${sStyle} border-radius:50%; object-fit:cover; display:block;" />`;
+        return `<img src="${escapeHtml(src)}" alt="avatar" style="${sStyle} border-radius:50%; object-fit:cover; display:block;" />`;
       }
-      return `<span style="display:inline-block; line-height:1; font-size:${size ? Math.round(size * 0.75) : 22}px;">${avatar}</span>`;
+      const label = String(avatar == null ? '👦' : avatar).slice(0, 32);
+      return `<span style="display:inline-block; line-height:1; font-size:${size ? Math.round(size * 0.75) : 22}px;">${escapeHtml(label)}</span>`;
     }
 
     function updatePlayerHeaderUI() {
@@ -2611,8 +2630,8 @@
         <div class="msg-row ${msg.sender === 1 ? 'right' : 'left'}">
           <div class="msg-avatar">${renderAvatarElement(msg.avatar)}</div>
           <div class="msg-body">
-            <div class="msg-info">${msg.name} · ${msg.time}</div>
-            <div class="msg-text">${msg.text}</div>
+            <div class="msg-info">${escapeHtml(msg.name)} · ${escapeHtml(msg.time)}</div>
+            <div class="msg-text">${escapeHtml(msg.text)}</div>
           </div>
         </div>
       `).join('');
@@ -2631,7 +2650,7 @@
         mainContent.innerHTML = recent3.map(m => `
           <div class="main-chat-line">
             <span class="${m.sender === 1 ? 'chat-tag-me' : 'chat-tag-other'}">${m.sender === 1 ? '我方' : '对方'}</span>
-            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:900;">${m.text}</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; font-weight:900;">${escapeHtml(m.text)}</span>
           </div>
         `).join('');
       }
@@ -2710,7 +2729,7 @@
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
           if (prevEl) {
-            prevEl.innerHTML = `<img src="${compressedBase64}" alt="avatar">`;
+            prevEl.innerHTML = renderAvatarElement(compressedBase64);
           }
           document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
           _applyAvatarChange(compressedBase64);
@@ -2755,7 +2774,7 @@
       const syncTip = document.getElementById('profileSyncTip');
       if (syncTip) {
         if (currentUserUid || currentUsername) {
-          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${currentUsername || p1Name})</span> · 修改后登录账号与全服天梯将同步变更`;
+          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · 修改后登录账号与全服天梯将同步变更`;
         } else {
           syncTip.innerHTML = `⚠️ <span style="color:#d97706;">当前为游客模式 (未登录)</span> · 修改仅在本地生效，登录正式账号后方可上天梯榜`;
         }
@@ -2857,7 +2876,7 @@
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
-        prevEl.innerHTML = `<img src="${dataUrl}" alt="avatar">`;
+        prevEl.innerHTML = renderAvatarElement(dataUrl);
       }
       _applyAvatarChange(dataUrl);
       showGameNotice('✨ 头像已更换！');
@@ -3450,14 +3469,18 @@
         this.messageHandler = (topic, payload) => {
           if (topic === this.sigTopic) {
             try {
-              const sig = JSON.parse(payload.toString());
+              const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+              if (rawPayload.length > 64 * 1024) return;
+              const sig = JSON.parse(rawPayload);
               this._handleWebRtcSignal(sig);
             } catch(e) {}
             return;
           }
           if (topic !== this.subTopic) return;
           try {
-            const data = JSON.parse(payload.toString());
+            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+            if (rawPayload.length > 64 * 1024) return;
+            const data = JSON.parse(rawPayload);
             // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
             if (data._mid) {
               if (this.processedMsgIds.has(data._mid)) return;
@@ -3564,6 +3587,7 @@
         };
         dc.onmessage = (e) => {
           try {
+            if (!e || typeof e.data !== 'string' || e.data.length > 64 * 1024) return;
             const data = JSON.parse(e.data);
             if (data._mid) {
               if (this.processedMsgIds.has(data._mid)) return;
@@ -3713,7 +3737,9 @@
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
-            const data = JSON.parse(payload.toString());
+            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+            if (rawPayload.length > 64 * 1024) return;
+            const data = JSON.parse(rawPayload);
             if (data.type === 'join_request') {
               const reqUid = data.uid || data.name || 'guest';
 
@@ -3935,6 +3961,7 @@
     let opponentSkillsUsedCount = 0;
 
     function validateIncomingSkill(data) {
+      if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return false;
       // 1. 施法上限风控：每位玩家单局最多只能使用 3 张干扰牌（神抽偶发额外计 1 次容限）
       if (opponentSkillsUsedCount >= 4) {
         console.warn("⚠️ 拦截到对手过度施法攻击，已自动丢弃作弊数据包！");
@@ -3955,6 +3982,23 @@
       if ("c1" in data && !isValidCoord(data.c1)) return false;
       if ("r2" in data && !isValidCoord(data.r2)) return false;
       if ("c2" in data && !isValidCoord(data.c2)) return false;
+      if ("p" in data && data.p !== BLACK && data.p !== WHITE) return false;
+      if ("by" in data && data.by !== BLACK && data.by !== WHITE) return false;
+      if ("stones" in data) {
+        if (!Array.isArray(data.stones) || data.stones.length > 225) return false;
+        for (const stone of data.stones) {
+          if (!stone || !isValidCoord(stone.r) || !isValidCoord(stone.c) ||
+              (stone.p !== undefined && stone.p !== BLACK && stone.p !== WHITE)) return false;
+        }
+      }
+      if ("cells" in data) {
+        if (!Array.isArray(data.cells) || data.cells.length !== 4) return false;
+        const seen = new Set();
+        for (const cell of data.cells) {
+          if (!cell || !isValidCoord(cell.r) || !isValidCoord(cell.c) || seen.has(`${cell.r},${cell.c}`)) return false;
+          seen.add(`${cell.r},${cell.c}`);
+        }
+      }
 
       // 3. 目标物理实体合法性校验（防凭空捏造）
       if (data.type === "skill_remove_stone") {
@@ -3974,6 +4018,37 @@
       }
 
       opponentSkillsUsedCount++;
+      return true;
+    }
+
+    function validateIncomingSnapshot(data) {
+      const isValidCoord = (n) => Number.isInteger(n) && n >= 0 && n < 15;
+      if (!data || typeof data !== 'object' || !Array.isArray(data.board) || data.board.length !== 15 ||
+          data.board.some(row => !Array.isArray(row) || row.length !== 15 ||
+            row.some(cell => cell !== EMPTY && cell !== BLACK && cell !== WHITE))) return false;
+      if (!Array.isArray(data.history) || data.history.length > 512) return false;
+      for (const item of data.history) {
+        if (!item || typeof item !== 'object') return false;
+        const special = item.r === -1 && item.c === -1 && item.p === 0 &&
+          ((typeof item.action === 'string' && item.action.length <= 64) || (typeof item.type === 'string' && item.type.length <= 64));
+        const move = isValidCoord(item.r) && isValidCoord(item.c) && (item.p === BLACK || item.p === WHITE);
+        if (!special && !move) return false;
+      }
+      if (data.turn !== BLACK && data.turn !== WHITE) return false;
+      if (typeof data.isOver !== 'boolean') return false;
+      if (data.cardUsedStatus !== undefined &&
+          (!Array.isArray(data.cardUsedStatus) || data.cardUsedStatus.length !== 3 ||
+           data.cardUsedStatus.some(value => typeof value !== 'boolean'))) return false;
+      if (data.currentDrawnCards !== undefined &&
+          (!Array.isArray(data.currentDrawnCards) || data.currentDrawnCards.length !== 3 ||
+           data.currentDrawnCards.some(card => !card || typeof card.id !== 'string' ||
+             !SKILL_CARD_POOL.some(localCard => localCard.id === card.id)))) return false;
+      for (const value of [data.p1Name, data.p2Name]) {
+        if (value !== undefined && (typeof value !== 'string' || value.length > 128)) return false;
+      }
+      for (const value of [data.p1Avatar, data.p2Avatar]) {
+        if (value !== undefined && (typeof value !== 'string' || value.length > 150000)) return false;
+      }
       return true;
     }
 
@@ -4008,6 +4083,7 @@
       });
 
       conn.on('data', (data) => {
+        if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return;
         if (data.type === "leave_room") {
           showGameNotice(`⚠️ 对手【${data.name || p2Name}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
@@ -4047,7 +4123,10 @@
         }
         if (data.type === 'state_snapshot') {
           // 🛡️ 收到全量快照：对等双向安全审计与防倒退/防篡改校验
-          if (!data.history || !Array.isArray(data.history)) return;
+          if (!validateIncomingSnapshot(data)) {
+            console.warn('[state_snapshot] 拦截结构非法的棋局快照');
+            return;
+          }
 
           // 1. 防倒退校验：如果发来的步数少于本地步数，说明对方因卡顿落后！
           // 本地绝不倒退，而是立即反向将最新步数补发给对方，拉齐对方进度
@@ -4083,8 +4162,8 @@
           isOver = data.isOver;
           p2Name = data.p1Name || p2Name;
           p2Avatar = data.p1Avatar || p2Avatar;
-          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards;
-          if (data.cardUsedStatus) cardUsedStatus = data.cardUsedStatus;
+          if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards.map(card => SKILL_CARD_POOL.find(localCard => localCard.id === card.id));
+          if (data.cardUsedStatus) cardUsedStatus = [...data.cardUsedStatus];
           updatePlayerHeaderUI();
           draw();
           updateUI();
@@ -4322,10 +4401,10 @@
         return `
           <div class="card-slot ${isUsed ? 'used' : ''} ${isCasting ? 'casting' : ''}"
                onclick="handleCardClick(${idx})"
-               title="${desc}">
-            <div class="slot-icon">${icon}</div>
-            <div class="slot-title">${name}</div>
-            <div class="slot-sub">${isUsed ? '已使用' : desc}</div>
+               title="${escapeHtml(desc)}">
+            <div class="slot-icon">${escapeHtml(icon)}</div>
+            <div class="slot-title">${escapeHtml(name)}</div>
+            <div class="slot-sub">${isUsed ? '已使用' : escapeHtml(desc)}</div>
           </div>
         `;
       }).join('');
@@ -4936,7 +5015,7 @@
     }
 
     async function joinMqttRoom(code, btn) {
-      if (!code) return showGameNotice("请输入 6 位房间码！", true);
+      if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
       if (btn) {
         btn.disabled = true;
@@ -4968,7 +5047,9 @@
         const onClientInvite = (topic, payload) => {
           if (topic !== h2cTopic) return;
           try {
-            const data = JSON.parse(payload.toString());
+            const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
+            if (rawPayload.length > 64 * 1024) return;
+            const data = JSON.parse(rawPayload);
 
             // 🛡️ 接收到满员拒绝信号：立即停止重试，给用户明确提示
             if (data.type === 'room_full') {
@@ -5054,7 +5135,7 @@
       const codeInput = document.getElementById('inputJoinCode');
       const code = (targetCode || (codeInput ? codeInput.value : "")).trim();
       if (codeInput && targetCode) codeInput.value = targetCode;
-      if (!code) return showGameNotice("请输入 6 位房间码！", true);
+      if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
       const btn = document.getElementById('btnConnectRoom');
       return await joinMqttRoom(code, btn);
@@ -5095,6 +5176,11 @@
 
     async function startQuickMatch() {
       if (isMatchmaking) return;
+      if (!currentUserUid || !currentUserToken) {
+        showGameNotice('⚡ 全服匹配需要先登录正式账号，游客仍可使用房间联机。', true);
+        if (typeof openAuthModal === 'function') openAuthModal('login');
+        return;
+      }
       isMatchmaking = true;
       matchStartTime = Date.now();
 
@@ -5750,7 +5836,11 @@
         try {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 7000);
-          const url = endpoint.startsWith("http") ? endpoint : `${host}${endpoint}`;
+          const endpointUrl = endpoint.startsWith("http") ? new URL(endpoint) : new URL(endpoint, host);
+          if (endpointUrl.protocol !== "https:" || !CLOUDFLARE_API_HOSTS.includes(endpointUrl.origin) || endpointUrl.username || endpointUrl.password) {
+            throw new Error('拒绝访问非官方 API 地址');
+          }
+          const url = endpointUrl.href;
           const mergedHeaders = {
             ...(options.headers || {}),
             "X-Gomoku-Client": "gomoku-app-client-auth"
@@ -5939,7 +6029,7 @@
       const btnLogout = document.getElementById("btnLogoutAction");
       if (currentUsername) {
         if (icon) icon.textContent = "✅";
-        if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${currentUsername}</span>`;
+        if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${escapeHtml(currentUsername)}</span>`;
         if (subText) subText.innerHTML = `账号名与天梯展示完全统一 · 随时可改`;
         if (btnAuth) {
           btnAuth.textContent = "🔄 切换";
@@ -7102,14 +7192,14 @@
                   ${tagBadge}
                 </div>
                 <div style="font-size:10px; color:#64748b; font-weight:700;">
-                  ${modeName} · 共 ${item.moves || 0} 手
+                  ${modeName} · 共 ${Number.isFinite(Number(item.moves)) ? Math.max(0, Math.min(512, Number(item.moves))) : 0} 手
                 </div>
               </div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
               <div style="text-align:right; font-size:10px; color:#94a3b8; font-weight:700; line-height:1.2;">
-                <div>${item.date || ""}</div>
-                <div>${item.time || ""}</div>
+                <div>${escapeRankHTML(String(item.date || '').slice(0, 20))}</div>
+                <div>${escapeRankHTML(String(item.time || '').slice(0, 20))}</div>
               </div>
               <button type="button" onclick="openReplayModalByIndex(${idx})" style="background:linear-gradient(135deg, #38bdf8, #0284c7); color:#fff; border:none; border-radius:7px; padding:5px 9px; font-size:11px; font-weight:900; cursor:pointer; box-shadow:0 2px 4px rgba(2,132,199,0.25); white-space:nowrap;">
                 🔍 查看棋局
@@ -8196,6 +8286,7 @@
     }
 
     function makeMove(r, c, p, fromRemote = false) {
+      if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= 15 || c < 0 || c >= 15 || (p !== BLACK && p !== WHITE)) return;
       if (board[r][c] !== EMPTY || isOver) return;
 
       // 检查是否命中对手布下的预言封锁
@@ -8669,6 +8760,13 @@
     } catch (e) {
       customPhrases = [...DEFAULT_PHRASES];
     }
+    if (!Array.isArray(customPhrases)) customPhrases = [...DEFAULT_PHRASES];
+    customPhrases = customPhrases
+      .filter(p => typeof p === 'string')
+      .map(p => p.trim().slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 30);
+    if (customPhrases.length === 0) customPhrases = [...DEFAULT_PHRASES];
 
     function savePhrases() {
       localStorage.setItem('gomoku_custom_phrases', JSON.stringify(customPhrases));
@@ -8679,16 +8777,19 @@
       if (!container) return;
       let html = `<div class="phrase-chip-manage" onclick="openPhraseManageModal()">⚙️ 自定义</div>`;
       html += customPhrases.map((phrase) => `
-        <div class="phrase-chip" onclick="sendChat('${phrase.replace(/'/g, "\\'")}')">${phrase}</div>
+        <div class="phrase-chip" data-phrase="${escapeHtml(phrase)}">${escapeHtml(phrase)}</div>
       `).join('');
       container.innerHTML = html;
+      container.querySelectorAll('.phrase-chip').forEach(el => {
+        el.onclick = () => sendChat(el.getAttribute('data-phrase') || '');
+      });
     }
 
     function openPhraseManageModal() {
       const modal = document.getElementById('phraseManageModal');
       const list = document.getElementById('managePhraseList');
       list.innerHTML = customPhrases.map((p, idx) => `
-        <div class="phrase-manage-item" draggable="true" data-index="${idx}" data-phrase="${p.replace(/"/g, '&quot;')}"
+        <div class="phrase-manage-item" draggable="true" data-index="${idx}" data-phrase="${escapeHtml(p)}"
              style="display:flex; align-items:center; justify-content:space-between; background:#fff; padding:7px 10px; border-radius:8px; border:1.5px solid #cbd5e1; font-size:12.5px; font-weight:800; cursor:grab; user-select:none; opacity:1 !important; touch-action:none;"
              ondragstart="handlePhraseDragStart(event)"
              ondragover="handlePhraseDragOver(event)"
@@ -8698,7 +8799,7 @@
              ontouchend="handlePhraseTouchEnd(event)">
           <div style="display:flex; align-items:center; gap:8px; overflow:hidden; flex:1;">
             <span class="drag-handle" style="font-size:16px; color:#94a3b8; cursor:grab; padding:0 2px;">⠿</span>
-            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; color:#2d3436;">${idx + 1}. ${p}</span>
+            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; color:#2d3436;">${idx + 1}. ${escapeHtml(p)}</span>
           </div>
           <div style="display:flex; align-items:center; gap:4px; flex-shrink:0;">
             <button class="btn-move-up" onclick="event.stopPropagation(); movePhrase(${idx}, -1)" ${idx === 0 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer; font-weight:900;">▲</button>
@@ -8857,8 +8958,12 @@
 
     function addNewPhrase() {
       const input = document.getElementById('inputNewPhrase');
-      const val = input.value.trim();
+      if (!input) return;
+      const raw = input.value.trim();
+      if (raw.length > 80) return alert("快捷短语最多 80 个字符！");
+      const val = raw;
       if (!val) return alert("请输入快捷短语内容！");
+      if (customPhrases.length >= 30) return alert("最多保存 30 条快捷短语！");
       customPhrases.push(val);
       savePhrases();
       input.value = '';
@@ -9030,7 +9135,7 @@
       "🛡️ 【视觉与稳定性】消灭启动暗紫色，全面采用清爽天蓝，彻底修复底层崩溃闪退",
       "🚀 【免安装在线热更新】支持游戏内一键秒更，2 秒无感热更新，无需反复安装 APK"
     ];
-    const CURRENT_VERSION_TAG = 'v1.0.88';
+    const CURRENT_VERSION_TAG = 'v1.0.89';
     try {
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
@@ -9042,7 +9147,7 @@
     function isTrustedUpdateUrl(value, expectedPath) {
       try {
         const parsed = new URL(value, UPDATE_API_URL);
-        return parsed.protocol === 'https:' && parsed.hostname === 'gomoku-api.pages.dev' && parsed.pathname === expectedPath;
+        return parsed.origin === 'https://gomoku-api.pages.dev' && !parsed.username && !parsed.password && parsed.pathname === expectedPath;
       } catch (_) {
         return false;
       }
@@ -9053,6 +9158,35 @@
       const bytes = new TextEncoder().encode(value);
       const digest = await window.crypto.subtle.digest('SHA-256', bytes);
       return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function readLimitedResponseText(response, maxBytes) {
+      const declaredLength = Number(response.headers.get('content-length') || 0);
+      if (declaredLength > maxBytes) throw new Error('更新文件超过大小限制');
+      if (!response.body || typeof response.body.getReader !== 'function') {
+        const text = await response.text();
+        if (new TextEncoder().encode(text).byteLength > maxBytes) throw new Error('更新文件超过大小限制');
+        return text;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let total = 0;
+      let text = '';
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          total += chunk.value.byteLength;
+          if (total > maxBytes) {
+            try { await reader.cancel(); } catch (_) {}
+            throw new Error('更新文件超过大小限制');
+          }
+          text += decoder.decode(chunk.value, { stream: true });
+        }
+        return text + decoder.decode();
+      } finally {
+        try { reader.releaseLock(); } catch (_) {}
+      }
     }
 
     function compareVersions(v1, v2) {
@@ -9246,7 +9380,7 @@
                     .then(async (res) => {
                       clearTimeout(tId);
                       if (!res.ok) throw new Error("HTTP " + res.status);
-                      const txt = await res.text();
+                      const txt = await readLimitedResponseText(res, 4 * 1024 * 1024);
                       if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
                         throw new Error("Invalid html payload");
                       }
