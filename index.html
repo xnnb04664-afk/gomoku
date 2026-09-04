@@ -479,99 +479,30 @@
       line-height: 1.35;
     }
 
-    /* --- 📍 对方上一步落子高能视觉指示系统 --- */
-    .opponent-move-indicator,
-    .opponent-move-indicator * {
+    /* --- 📍 最后一手落子温和微光环指示器 (低调优雅，呼吸微光，绝不突兀或遮挡) --- */
+    .last-move-indicator,
+    .last-move-indicator * {
       pointer-events: none !important;
     }
-    .opponent-move-indicator {
+    .last-move-indicator {
       position: absolute;
       left: 0; top: 0;
       z-index: 25;
       transform: translate(-50%, -50%);
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      transition: left 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.25s ease;
+      transition: left 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
     }
-
-    /* 动态雷达波纹圈 */
-    .opponent-radar-ring {
-      position: absolute;
-      left: 50%; top: 50%;
-      transform: translate(-50%, -50%);
+    .last-move-ring {
       border-radius: 50%;
-      pointer-events: none;
-      border: 2.5px solid #f59e0b;
-      box-shadow: 0 0 16px rgba(245, 158, 11, 0.75), inset 0 0 8px rgba(251, 191, 36, 0.5);
-      animation: oppRadarPulse 1.6s infinite ease-out;
+      border: 2px solid #ef4444;
+      box-shadow: 0 0 7px rgba(239, 68, 68, 0.55);
+      animation: gentleBreath 1.8s infinite ease-in-out;
     }
-    .opponent-radar-ring::after {
-      content: '';
-      position: absolute;
-      inset: -5px;
-      border-radius: 50%;
-      border: 1.5px dashed rgba(251, 191, 36, 0.85);
-      animation: oppRadarRotate 6s infinite linear;
-    }
-    @keyframes oppRadarPulse {
-      0% { transform: translate(-50%, -50%) scale(0.85); opacity: 1; }
-      65% { transform: translate(-50%, -50%) scale(1.45); opacity: 0.3; }
-      100% { transform: translate(-50%, -50%) scale(1.7); opacity: 0; }
-    }
-    @keyframes oppRadarRotate {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
-
-    /* 悬浮地标指示牌 */
-    .opp-float-badge {
-      position: absolute;
-      bottom: calc(100% + 4px);
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      animation: oppFloatBounce 1.4s infinite alternate ease-in-out;
-      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
-      white-space: nowrap;
-      user-select: none;
-    }
-    .opp-badge-body {
-      background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
-      color: #fff;
-      border: 2px solid #ffffff;
-      border-radius: 20px;
-      padding: 2px 9px;
-      font-size: 11.5px;
-      font-weight: 900;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.4);
-      letter-spacing: 0.5px;
-    }
-    .opp-badge-coord {
-      background: rgba(0, 0, 0, 0.25);
-      padding: 1px 5px;
-      border-radius: 6px;
-      font-family: monospace, system-ui;
-      font-weight: 900;
-      color: #fef08a;
-    }
-    .opp-badge-arrow {
-      width: 0;
-      height: 0;
-      border-left: 5px solid transparent;
-      border-right: 5px solid transparent;
-      border-top: 6px solid #f97316;
-      margin-top: -1px;
-    }
-    @keyframes oppFloatBounce {
-      0% { transform: translateX(-50%) translateY(0); }
-      100% { transform: translateX(-50%) translateY(-5px); }
+    @keyframes gentleBreath {
+      0%, 100% { transform: scale(0.96); opacity: 0.85; }
+      50% { transform: scale(1.1); opacity: 0.4; }
     }
 
     @keyframes boardShake {
@@ -1624,17 +1555,9 @@
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
 
-    <!-- 📍 对方上一步落子高能指示器 (悬浮地标 + 动态雷达波圈) -->
-    <div id="opponentMoveIndicator" class="opponent-move-indicator" style="display:none;">
-      <div class="opponent-radar-ring" id="oppRadarRing"></div>
-      <div class="opp-float-badge" id="oppFloatBadge">
-        <div class="opp-badge-body">
-          <span id="oppBadgeIcon">🤖</span>
-          <span id="oppBadgeTitle">AI落子</span>
-          <span class="opp-badge-coord" id="oppBadgeCoord">H8</span>
-        </div>
-        <div class="opp-badge-arrow"></div>
-      </div>
+    <!-- 📍 最后一手落子温和微光环指示器 (低调雅致，不挡视线) -->
+    <div id="opponentMoveIndicator" class="last-move-indicator" style="display:none;">
+      <div class="last-move-ring" id="lastMoveRing"></div>
     </div>
 
     <!-- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 -->
@@ -7608,22 +7531,6 @@
           ctx.stroke();
         }
 
-        if (vfx.type === 'opponent_drop_wave') {
-          const waveR1 = radius * (0.8 + progress * 2.4);
-          const waveR2 = radius * (0.5 + progress * 1.5);
-          ctx.save();
-          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR1, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(245, 158, 11, ${(1 - progress) * 0.95})`;
-          ctx.lineWidth = 3.5 * (1 - progress);
-          ctx.stroke();
-
-          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR2, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(239, 68, 68, ${(1 - progress) * 0.8})`;
-          ctx.lineWidth = 2.5 * (1 - progress);
-          ctx.stroke();
-          ctx.restore();
-        }
-
         if (vfx.type === 'restart_wave') {
           const waveR = Math.min(cWidth, cHeight) * 0.75 * progress;
           ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR, 0, Math.PI * 2);
@@ -7735,15 +7642,11 @@
 
       // 寻找上一手落子（重点标出对手落子）
       let targetMove = null;
-      let badgeTitle = '对方落子';
-      let badgeIcon = '📍';
 
       if (gameMode === 'ai') {
         if (turn === BLACK) {
           // 当前是玩家回合：指示 AI (白方) 上一手落子
           targetMove = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === WHITE);
-          badgeTitle = 'AI落子';
-          badgeIcon = '🤖';
         } else {
           // AI 思考中，暂隐指示器
           ind.style.display = 'none';
@@ -7754,8 +7657,6 @@
         if (turn === myOnlineColor) {
           // 当前是本地玩家回合：指示联机对手上一手落子
           targetMove = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === oppColor);
-          badgeTitle = '对方落子';
-          badgeIcon = '📍';
         } else {
           // 对手回合中，暂隐指示器
           ind.style.display = 'none';
@@ -7766,8 +7667,6 @@
         const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
         if (last && last.p !== turn) {
           targetMove = last;
-          badgeTitle = `${last.p === BLACK ? '黑方' : '白方'}落子`;
-          badgeIcon = '📍';
         } else {
           ind.style.display = 'none';
           return;
@@ -7798,17 +7697,10 @@
       ind.style.top = `${posY}px`;
       ind.style.display = 'flex';
 
-      const titleEl = document.getElementById('oppBadgeTitle');
-      const iconEl = document.getElementById('oppBadgeIcon');
-      const coordEl = document.getElementById('oppBadgeCoord');
-      if (titleEl) titleEl.textContent = badgeTitle;
-      if (iconEl) iconEl.textContent = badgeIcon;
-      if (coordEl) coordEl.textContent = getCoordName(targetMove.r, targetMove.c);
-
-      // 自适应雷达波圈大小
-      const ring = document.getElementById('oppRadarRing');
+      // 自适应微光环大小 (比棋子略大一圈，温和贴合)
+      const ring = document.getElementById('lastMoveRing');
       if (ring) {
-        const ringSize = Math.max(28, Math.round(radius * 2.3));
+        const ringSize = Math.max(26, Math.round(radius * 2.25));
         ring.style.width = `${ringSize}px`;
         ring.style.height = `${ringSize}px`;
       }
@@ -7824,30 +7716,11 @@
         ? (turn === myOnlineColor)
         : (turn === BLACK);
 
-      // 获取对手上一手落子坐标（用于顶部木牌气泡联动提示）
-      let oppCoordText = '';
-      if (history && history.length > 0) {
-        let oppLast = null;
-        if (gameMode === 'ai') {
-          oppLast = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === WHITE);
-        } else if (gameMode === 'online') {
-          oppLast = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p !== myOnlineColor);
-        } else {
-          const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
-          if (last && last.p !== turn) oppLast = last;
-        }
-        if (oppLast) {
-          oppCoordText = ` · 对方【${getCoordName(oppLast.r, oppLast.c)}】`;
-        }
-      }
-
       if (isP1Turn) {
         if (p1Status) p1Status.textContent = '落子中';
         if (p2Status) p2Status.textContent = '等待';
         if (bubble) {
-          bubble.textContent = (gameMode === 'pvp')
-            ? `黑方回合${oppCoordText ? oppCoordText.replace('对方', '上手') : ''}`
-            : `你的回合${oppCoordText}`;
+          bubble.textContent = (gameMode === 'pvp') ? '黑方回合' : '你的回合';
           bubble.className = 'turn-bubble';
         }
         const c1 = document.getElementById('p1Card');
@@ -7858,9 +7731,7 @@
         if (p1Status) p1Status.textContent = '等待';
         if (p2Status) p2Status.textContent = (gameMode === 'ai') ? '思考中' : '落子中';
         if (bubble) {
-          bubble.textContent = (gameMode === 'pvp')
-            ? `白方回合${oppCoordText ? oppCoordText.replace('对方', '上手') : ''}`
-            : ((gameMode === 'ai') ? '思考中' : '对手回合');
+          bubble.textContent = (gameMode === 'pvp') ? '白方回合' : ((gameMode === 'ai') ? '思考中' : '对手回合');
           bubble.className = 'turn-bubble right';
         }
         const c1 = document.getElementById('p1Card');
@@ -8323,52 +8194,12 @@
         }
       }
 
-      // 3. 最后一手标记 (高对比度战术四角瞄准框 + 各主题自适应中心符号)
+      // 3. 最后一手标记 (各主题自适应)
       const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
       if (last) {
         const lx = paddingX + (last.c + 0.5) * gridX;
         const ly = paddingY + (last.r + 0.5) * gridY;
         const markSize = Math.max(12, Math.round(cWidth * 0.035));
-
-        // 🎯 绘制高对比度战术四角瞄准框 (四个金色 L 型角标，即便多子混乱也能瞬间定位)
-        ctx.save();
-        const boxHalf = radius * 0.96;
-        const cornerLen = Math.max(4.5, radius * 0.42);
-        ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = Math.max(2.2, cWidth * 0.0058);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
-        ctx.shadowBlur = 4;
-
-        // 左上角
-        ctx.beginPath();
-        ctx.moveTo(lx - boxHalf, ly - boxHalf + cornerLen);
-        ctx.lineTo(lx - boxHalf, ly - boxHalf);
-        ctx.lineTo(lx - boxHalf + cornerLen, ly - boxHalf);
-        ctx.stroke();
-
-        // 右上角
-        ctx.beginPath();
-        ctx.moveTo(lx + boxHalf - cornerLen, ly - boxHalf);
-        ctx.lineTo(lx + boxHalf, ly - boxHalf);
-        ctx.lineTo(lx + boxHalf, ly - boxHalf + cornerLen);
-        ctx.stroke();
-
-        // 左下角
-        ctx.beginPath();
-        ctx.moveTo(lx - boxHalf, ly + boxHalf - cornerLen);
-        ctx.lineTo(lx - boxHalf, ly + boxHalf);
-        ctx.lineTo(lx - boxHalf + cornerLen, ly + boxHalf);
-        ctx.stroke();
-
-        // 右下角
-        ctx.beginPath();
-        ctx.moveTo(lx + boxHalf - cornerLen, ly + boxHalf);
-        ctx.lineTo(lx + boxHalf, ly + boxHalf);
-        ctx.lineTo(lx + boxHalf, ly + boxHalf - cornerLen);
-        ctx.stroke();
-        ctx.restore();
 
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         if (activeThemeKey === 'sweet_romance') {
@@ -8503,27 +8334,6 @@
       history.push({r, c, p});
       playPopSound();
       triggerStoneDropVFX(r, c, p); // 💫 落子波纹与微光微粒反馈
-
-      // 💫 若为对手落子，触发专属金色雷达扩散冲击波特效
-      const isOpponentMove = (gameMode === 'ai' && p === WHITE) ||
-                             (gameMode === 'online' && p !== myOnlineColor) ||
-                             (gameMode === 'pvp' && history.length > 1);
-      if (isOpponentMove) {
-        const sx = paddingX + (c + 0.5) * gridX;
-        const sy = paddingY + (r + 0.5) * gridY;
-        activeVFX.push({
-          type: 'opponent_drop_wave',
-          tx: sx,
-          ty: sy,
-          startTime: performance.now(),
-          duration: 900
-        });
-        if (!vfxRAF) {
-          const raf = window.requestAnimationFrame || function(fn){ return setTimeout(fn, 16); };
-          vfxRAF = raf(vfxAnimLoop);
-        }
-      }
-
       draw();
 
       if (gameMode === 'online' && !fromRemote && conn && conn.open) {
