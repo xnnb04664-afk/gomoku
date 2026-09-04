@@ -74,6 +74,9 @@ class GomokuAI {
       table: new Map(),
       nodes: 0
     };
+    const rootHash = this.hashBoard(board);
+    context.rootHashA = rootHash.a;
+    context.rootHashB = rootHash.b;
 
     let best = rootCandidates[0];
     for (let depth = 1; depth <= maxDepth; depth++) {
@@ -407,8 +410,50 @@ class GomokuAI {
     return score;
   }
 
-  static boardKey(board, turnColor, depth) {
-    return `${turnColor}|${depth}|${board.map(row => row.join('')).join('/')}`;
+  // 用两路 32 位 Zobrist 哈希替代每个搜索节点拼接整盘字符串，显著减少移动端 GC 和置换表键分配。
+  // 搜索仍保留完整棋盘校验逻辑；双哈希只用于置换表索引，碰撞概率足够低且不会改变对局数据格式。
+  static ensureZobrist(size) {
+    if (this.zobristSize === size && this.zobristA && this.zobristB) return;
+    const length = size * size * 3;
+    const tableA = new Uint32Array(length);
+    const tableB = new Uint32Array(length);
+    let seed = 0x9e3779b9;
+    const nextRandom = () => {
+      seed = Math.imul(seed ^ (seed >>> 16), 0x21f0aaad);
+      seed = Math.imul(seed ^ (seed >>> 15), 0x735a2d97);
+      return (seed ^ (seed >>> 15)) >>> 0;
+    };
+    for (let i = 0; i < length; i++) {
+      tableA[i] = nextRandom();
+      tableB[i] = nextRandom();
+    }
+    this.zobristSize = size;
+    this.zobristA = tableA;
+    this.zobristB = tableB;
+  }
+
+  static hashBoard(board) {
+    const size = this.getBoardSize(board);
+    this.ensureZobrist(size);
+    const black = this.getBlack();
+    const opponent = this.getOpponent(black);
+    const empty = this.getEmpty();
+    let hashA = 0;
+    let hashB = 0;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const cell = board[r][c];
+        if (cell === empty || (cell !== black && cell !== opponent)) continue;
+        const index = (r * size + c) * 3 + cell;
+        hashA ^= this.zobristA[index];
+        hashB ^= this.zobristB[index];
+      }
+    }
+    return { a: hashA >>> 0, b: hashB >>> 0 };
+  }
+
+  static hashKey(hashA, hashB, turnColor, depth) {
+    return `${hashA >>> 0}:${hashB >>> 0}:${turnColor}:${depth}`;
   }
 
   static searchRoot(board, candidates, depth, context) {
@@ -417,17 +462,23 @@ class GomokuAI {
     let alpha = -Infinity;
     const beta = Infinity;
     const empty = this.getEmpty();
+    const size = this.getBoardSize(board);
 
     for (const move of candidates) {
       if (this.now() >= context.deadline) return { aborted: true };
       board[move.r][move.c] = context.aiColor;
+      const hashIndex = (move.r * size + move.c) * 3 + context.aiColor;
+      const childHashA = context.rootHashA ^ this.zobristA[hashIndex];
+      const childHashB = context.rootHashB ^ this.zobristB[hashIndex];
       let score;
       if (this.isWinningMoveAfterPlacement(board, move.r, move.c, context.aiColor)) {
         score = GOMOKU_AI_SCORE.WIN;
       } else {
-        const child = this.search(board, depth - 1, alpha, beta, context.opponent, context, 1);
-        board[move.r][move.c] = empty;
-        if (child.aborted) return child;
+        const child = this.search(board, depth - 1, alpha, beta, context.opponent, context, 1, childHashA, childHashB);
+        if (child.aborted) {
+          board[move.r][move.c] = empty;
+          return child;
+        }
         score = child.score;
       }
       board[move.r][move.c] = empty;
@@ -440,12 +491,17 @@ class GomokuAI {
     return { move: bestMove, score: bestScore, aborted: false };
   }
 
-  static search(board, depth, alpha, beta, turnColor, context, ply) {
+  static search(board, depth, alpha, beta, turnColor, context, ply, hashA, hashB) {
     context.nodes++;
     if (this.now() >= context.deadline) return { score: 0, aborted: true };
     if (depth <= 0) return { score: this.evaluateBoard(board, context.aiColor, context.opponent), aborted: false };
 
-    const key = this.boardKey(board, turnColor, depth);
+    if (hashA === undefined || hashB === undefined) {
+      const fallbackHash = this.hashBoard(board);
+      hashA = fallbackHash.a;
+      hashB = fallbackHash.b;
+    }
+    const key = this.hashKey(hashA, hashB, turnColor, depth);
     const cached = context.table.get(key);
     if (cached && cached.depth >= depth) return { score: cached.score, aborted: false };
 
@@ -453,6 +509,7 @@ class GomokuAI {
     const candidates = this.getCandidateMoves(board, turnColor, context.enableFoul, new Set(), depth >= 3 ? 10 : 14);
     if (!candidates.length) return { score: 0, aborted: false };
     const empty = this.getEmpty();
+    const size = this.getBoardSize(board);
     let bestScore = maximizing ? -Infinity : Infinity;
     let bestMove = null;
     let cutoff = false;
@@ -460,13 +517,18 @@ class GomokuAI {
     for (const move of candidates) {
       if (this.now() >= context.deadline) return { score: 0, aborted: true };
       board[move.r][move.c] = turnColor;
+      const hashIndex = (move.r * size + move.c) * 3 + turnColor;
+      const childHashA = hashA ^ this.zobristA[hashIndex];
+      const childHashB = hashB ^ this.zobristB[hashIndex];
       let score;
       if (this.isWinningMoveAfterPlacement(board, move.r, move.c, turnColor)) {
         score = maximizing ? GOMOKU_AI_SCORE.WIN - ply : -GOMOKU_AI_SCORE.WIN + ply;
       } else {
-        const child = this.search(board, depth - 1, alpha, beta, this.getOpponent(turnColor), context, ply + 1);
-        board[move.r][move.c] = empty;
-        if (child.aborted) return child;
+        const child = this.search(board, depth - 1, alpha, beta, this.getOpponent(turnColor), context, ply + 1, childHashA, childHashB);
+        if (child.aborted) {
+          board[move.r][move.c] = empty;
+          return child;
+        }
         score = child.score;
       }
       board[move.r][move.c] = empty;

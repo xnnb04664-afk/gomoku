@@ -530,6 +530,9 @@ class GomokuAI {
       table: new Map(),
       nodes: 0
     };
+    const rootHash = this.hashBoard(board);
+    context.rootHashA = rootHash.a;
+    context.rootHashB = rootHash.b;
 
     let best = rootCandidates[0];
     for (let depth = 1; depth <= maxDepth; depth++) {
@@ -863,8 +866,50 @@ class GomokuAI {
     return score;
   }
 
-  static boardKey(board, turnColor, depth) {
-    return `${turnColor}|${depth}|${board.map(row => row.join('')).join('/')}`;
+  // 用两路 32 位 Zobrist 哈希替代每个搜索节点拼接整盘字符串，显著减少移动端 GC 和置换表键分配。
+  // 搜索仍保留完整棋盘校验逻辑；双哈希只用于置换表索引，碰撞概率足够低且不会改变对局数据格式。
+  static ensureZobrist(size) {
+    if (this.zobristSize === size && this.zobristA && this.zobristB) return;
+    const length = size * size * 3;
+    const tableA = new Uint32Array(length);
+    const tableB = new Uint32Array(length);
+    let seed = 0x9e3779b9;
+    const nextRandom = () => {
+      seed = Math.imul(seed ^ (seed >>> 16), 0x21f0aaad);
+      seed = Math.imul(seed ^ (seed >>> 15), 0x735a2d97);
+      return (seed ^ (seed >>> 15)) >>> 0;
+    };
+    for (let i = 0; i < length; i++) {
+      tableA[i] = nextRandom();
+      tableB[i] = nextRandom();
+    }
+    this.zobristSize = size;
+    this.zobristA = tableA;
+    this.zobristB = tableB;
+  }
+
+  static hashBoard(board) {
+    const size = this.getBoardSize(board);
+    this.ensureZobrist(size);
+    const black = this.getBlack();
+    const opponent = this.getOpponent(black);
+    const empty = this.getEmpty();
+    let hashA = 0;
+    let hashB = 0;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const cell = board[r][c];
+        if (cell === empty || (cell !== black && cell !== opponent)) continue;
+        const index = (r * size + c) * 3 + cell;
+        hashA ^= this.zobristA[index];
+        hashB ^= this.zobristB[index];
+      }
+    }
+    return { a: hashA >>> 0, b: hashB >>> 0 };
+  }
+
+  static hashKey(hashA, hashB, turnColor, depth) {
+    return `${hashA >>> 0}:${hashB >>> 0}:${turnColor}:${depth}`;
   }
 
   static searchRoot(board, candidates, depth, context) {
@@ -873,17 +918,23 @@ class GomokuAI {
     let alpha = -Infinity;
     const beta = Infinity;
     const empty = this.getEmpty();
+    const size = this.getBoardSize(board);
 
     for (const move of candidates) {
       if (this.now() >= context.deadline) return { aborted: true };
       board[move.r][move.c] = context.aiColor;
+      const hashIndex = (move.r * size + move.c) * 3 + context.aiColor;
+      const childHashA = context.rootHashA ^ this.zobristA[hashIndex];
+      const childHashB = context.rootHashB ^ this.zobristB[hashIndex];
       let score;
       if (this.isWinningMoveAfterPlacement(board, move.r, move.c, context.aiColor)) {
         score = GOMOKU_AI_SCORE.WIN;
       } else {
-        const child = this.search(board, depth - 1, alpha, beta, context.opponent, context, 1);
-        board[move.r][move.c] = empty;
-        if (child.aborted) return child;
+        const child = this.search(board, depth - 1, alpha, beta, context.opponent, context, 1, childHashA, childHashB);
+        if (child.aborted) {
+          board[move.r][move.c] = empty;
+          return child;
+        }
         score = child.score;
       }
       board[move.r][move.c] = empty;
@@ -896,12 +947,17 @@ class GomokuAI {
     return { move: bestMove, score: bestScore, aborted: false };
   }
 
-  static search(board, depth, alpha, beta, turnColor, context, ply) {
+  static search(board, depth, alpha, beta, turnColor, context, ply, hashA, hashB) {
     context.nodes++;
     if (this.now() >= context.deadline) return { score: 0, aborted: true };
     if (depth <= 0) return { score: this.evaluateBoard(board, context.aiColor, context.opponent), aborted: false };
 
-    const key = this.boardKey(board, turnColor, depth);
+    if (hashA === undefined || hashB === undefined) {
+      const fallbackHash = this.hashBoard(board);
+      hashA = fallbackHash.a;
+      hashB = fallbackHash.b;
+    }
+    const key = this.hashKey(hashA, hashB, turnColor, depth);
     const cached = context.table.get(key);
     if (cached && cached.depth >= depth) return { score: cached.score, aborted: false };
 
@@ -909,6 +965,7 @@ class GomokuAI {
     const candidates = this.getCandidateMoves(board, turnColor, context.enableFoul, new Set(), depth >= 3 ? 10 : 14);
     if (!candidates.length) return { score: 0, aborted: false };
     const empty = this.getEmpty();
+    const size = this.getBoardSize(board);
     let bestScore = maximizing ? -Infinity : Infinity;
     let bestMove = null;
     let cutoff = false;
@@ -916,13 +973,18 @@ class GomokuAI {
     for (const move of candidates) {
       if (this.now() >= context.deadline) return { score: 0, aborted: true };
       board[move.r][move.c] = turnColor;
+      const hashIndex = (move.r * size + move.c) * 3 + turnColor;
+      const childHashA = hashA ^ this.zobristA[hashIndex];
+      const childHashB = hashB ^ this.zobristB[hashIndex];
       let score;
       if (this.isWinningMoveAfterPlacement(board, move.r, move.c, turnColor)) {
         score = maximizing ? GOMOKU_AI_SCORE.WIN - ply : -GOMOKU_AI_SCORE.WIN + ply;
       } else {
-        const child = this.search(board, depth - 1, alpha, beta, this.getOpponent(turnColor), context, ply + 1);
-        board[move.r][move.c] = empty;
-        if (child.aborted) return child;
+        const child = this.search(board, depth - 1, alpha, beta, this.getOpponent(turnColor), context, ply + 1, childHashA, childHashB);
+        if (child.aborted) {
+          board[move.r][move.c] = empty;
+          return child;
+        }
         score = child.score;
       }
       board[move.r][move.c] = empty;
@@ -2261,7 +2323,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         padding: 2px 2px 2px 7px !important;
       }
       .player-name {
-        font-size: 13.5px !important;
+        font-size: 12px !important;
       }
       .signs-row {
         margin-top: 0 !important;
@@ -2276,11 +2338,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       .turn-bubble {
         font-size: 11.5px !important;
         padding: 2px 6px !important;
-        left: 84px !important;
+        left: 90px !important;
       }
       .turn-bubble.right {
         left: auto !important;
-        right: 84px !important;
+        right: 90px !important;
       }
       .main-chat-box {
         height: 72px !important;
@@ -2293,7 +2355,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         font-size: 10.5px !important;
         line-height: 1 !important;
         padding-bottom: 2px !important;
-        height: 14px !important;
+        min-height: 20px !important;
+        height: auto !important;
       }
       .main-chat-content {
         height: 52px !important;
@@ -2406,8 +2469,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       <div class="main-chat-header">
         <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;">💬 实时对局聊天框</span>
         <div style="display:flex; align-items:center; gap:5px; flex-shrink:0;">
-          <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:2px 7px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
-          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:2px 7px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格</span>
+          <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
+          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格</span>
           <span style="white-space:nowrap;">📜 展开 ➔</span>
         </div>
       </div>
@@ -2612,22 +2675,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         <div class="avatar-opt" onclick="selectAvatar(this, '🦄')">🦄</div>
         <div class="avatar-opt" onclick="selectAvatar(this, '🌸')">🌸</div>
       </div>
-      <!-- 🛡️ 官方 UID 身份与快捷操作条 (双行立体舒展排版，100% 杜绝数字遮挡) -->
+      <!-- 🛡️ 官方 UID 身份与快捷操作条 (双行立体舒展排版，100% 杜绝遮挡) -->
       <div id="userAccountCard" style="background:linear-gradient(135deg, rgba(240,249,255,0.95), rgba(224,242,254,0.95)); border:1.5px solid #38bdf8; border-radius:12px; padding:8px 12px; margin:6px 0;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-          <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
-            <span id="accountStatusIcon" style="font-size:14px;">👤</span>
-            <span id="accountStatusTitle" style="font-size:12.5px; font-weight:900; color:#0369a1; white-space:nowrap;">游客身份</span>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px;">
+          <div style="display:flex; align-items:center; gap:6px; flex:1; min-width:0;">
+            <span id="accountStatusIcon" style="font-size:14px; flex-shrink:0;">👤</span>
+            <span id="accountStatusTitle" style="font-size:12.5px; font-weight:900; color:#0369a1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">游客身份 (未绑定)</span>
           </div>
-          <div style="display:flex; gap:5px; flex-shrink:0;">
-            <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
-            <button type="button" class="btn-chat-tool" id="btnChangePasswordAction" onclick="openChangePasswordModal()" style="display:none; background:#7c3aed; color:#fff; border-color:#6d28d9; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔒 改密</button>
-            <button type="button" class="btn-chat-tool" id="btnLogoutAction" onclick="confirmLogoutAccount()" style="display:none; background:#ef4444; color:#fff; border-color:#dc2626; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🚪 退出</button>
-          </div>
+          <span id="userUidBadge" style="background:#0284c7; color:#fff; font-size:11px; padding:2px 8px; border-radius:8px; font-weight:800; cursor:pointer; letter-spacing:0.5px; white-space:nowrap; flex-shrink:0;" onclick="copyMyUid()" title="点击复制UID">UID: ------ 📋</span>
         </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed rgba(56,189,248,0.4); padding-top:5px;">
-          <span id="userUidBadge" style="background:#0284c7; color:#fff; font-size:11px; padding:2px 8px; border-radius:8px; font-weight:800; cursor:pointer; letter-spacing:0.5px; white-space:nowrap;" onclick="copyMyUid()" title="点击复制UID">UID: ------ 📋</span>
-          <span id="accountSubText" style="font-size:10px; color:#0284c7; font-weight:700;">🔒 全链路 HTTPS / TLS 1.3 军工级加密</span>
+        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed rgba(56,189,248,0.4); padding-top:6px; gap:6px;">
+          <span id="accountSubText" style="font-size:10.5px; color:#0284c7; font-weight:700; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">💡 注册绑定后战绩永不丢失</span>
+          <div style="display:flex; gap:4px; flex-shrink:0; align-items:center;">
+            <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
+            <button type="button" class="btn-chat-tool" id="btnChangePasswordAction" onclick="openChangePasswordModal()" style="display:none; background:#7c3aed; color:#fff; border-color:#6d28d9; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔒 改密</button>
+            <button type="button" class="btn-chat-tool" id="btnLogoutAction" onclick="confirmLogoutAccount()" style="display:none; background:#ef4444; color:#fff; border-color:#dc2626; padding:3px 7px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🚪 退出</button>
+          </div>
         </div>
       </div>
 
@@ -3017,7 +3080,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
       <!-- 底部操作与我的战绩状态栏 -->
       <div style="margin-top:8px; border-top:1.5px solid rgba(0,0,0,0.08); padding-top:8px; display:flex; justify-content:space-between; align-items:center;">
-        <div id="myRankStatusText" style="font-size:11px; font-weight:800; color:#334155; text-align:left;">
+        <div id="myRankStatusText" style="font-size:11px; font-weight:800; color:#334155; text-align:left; flex:1; min-width:0; margin-right:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
           当前玩家: <span style="color:#0984e3;">小能</span>
         </div>
         <div style="display:flex; gap:6px;">
@@ -3039,74 +3102,74 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       <div style="display:flex; flex-direction:column; gap:9px;">
         <!-- 1. 晴空草坪版 (官方默认) -->
         <div style="display:flex; align-items:center; justify-content:space-between; background:#e8f5e9; border:2px solid #2e7d32; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('default')">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div style="font-size:22px;">🌿</div>
-            <div style="text-align:left;">
-              <div style="font-size:13px; font-weight:900; color:#1b5e20;">晴空浮岛草坪版 (官方默认)</div>
-              <div style="font-size:10px; font-weight:700; color:#2e7d32;">可爱手绘 · 猫爪肉垫 · 蓝天白云</div>
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <div style="font-size:22px; flex-shrink:0;">🌿</div>
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:900; color:#1b5e20; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">晴空浮岛草坪版 (官方默认)</div>
+              <div style="font-size:10px; font-weight:700; color:#2e7d32; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">可爱手绘 · 猫爪肉垫 · 蓝天白云</div>
             </div>
           </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#2e7d32; padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.15);">⚡ 秒换</span>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#2e7d32; padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.15); flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
         </div>
 
         <!-- 2. 草莓蜜桃恋爱版 -->
         <div style="display:flex; align-items:center; justify-content:space-between; background:radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%); border:2px solid #ff758c; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('sweet_romance')">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div style="font-size:22px;">💖</div>
-            <div style="text-align:left;">
-              <div style="font-size:13px; font-weight:900; color:#ff8fa3;">草莓蜜桃恋爱版 (晚霞柔光)</div>
-              <div style="font-size:10px; font-weight:700; color:#fbcfe8;">果冻心形棋子 · 💖爱心星位 · 奶茶圆盘</div>
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <div style="font-size:22px; flex-shrink:0;">💖</div>
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:900; color:#ff8fa3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">草莓蜜桃恋爱版 (晚霞柔光)</div>
+              <div style="font-size:10px; font-weight:700; color:#fbcfe8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">果冻心形棋子 · 💖爱心星位 · 奶茶圆盘</div>
             </div>
           </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:linear-gradient(135deg,#ff758c,#ff8fa3); padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.2);">⚡ 秒换</span>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:linear-gradient(135deg,#ff758c,#ff8fa3); padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.2); flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
         </div>
 
         <!-- 3. 极简禅意暗黑版 -->
         <div style="display:flex; align-items:center; justify-content:space-between; background:#18181b; border:2px solid #3f3f46; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('zen_dark')">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div style="font-size:22px;">禅</div>
-            <div style="text-align:left;">
-              <div style="font-size:13px; font-weight:900; color:#f4f4f5;">极简禅意暗黑版 (Zen Dark)</div>
-              <div style="font-size:10px; font-weight:700; color:#a1a1aa;">黑曜石白玉 · 哑光黑胡桃木</div>
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <div style="font-size:22px; flex-shrink:0;">禅</div>
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:900; color:#f4f4f5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">极简禅意暗黑版 (Zen Dark)</div>
+              <div style="font-size:10px; font-weight:700; color:#a1a1aa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">黑曜石白玉 · 哑光黑胡桃木</div>
             </div>
           </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#27272a; padding:3px 8px; border-radius:6px; border:1px solid #52525b;">⚡ 秒换</span>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#27272a; padding:3px 8px; border-radius:6px; border:1px solid #52525b; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
         </div>
 
         <!-- 4. 新中式宣纸榧木版 -->
         <div style="display:flex; align-items:center; justify-content:space-between; background:#fbf8f2; border:2px solid #dcb374; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('neo_trad')">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div style="font-size:22px;">📜</div>
-            <div style="text-align:left;">
-              <div style="font-size:13px; font-weight:900; color:#4a3b2c;">新中式宣纸榧木版 (雅集古风)</div>
-              <div style="font-size:10px; font-weight:700; color:#8c7866;">宣纸榧木年轮 · 水墨象牙玉石</div>
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <div style="font-size:22px; flex-shrink:0;">📜</div>
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:900; color:#4a3b2c; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">新中式宣纸榧木版 (雅集古风)</div>
+              <div style="font-size:10px; font-weight:700; color:#8c7866; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">宣纸榧木年轮 · 水墨象牙玉石</div>
             </div>
           </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#c88942; padding:3px 8px; border-radius:6px;">⚡ 秒换</span>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#c88942; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
         </div>
 
         <!-- 5. 现代奢华毛玻璃版 -->
         <div style="display:flex; align-items:center; justify-content:space-between; background:#0b0c10; border:2px solid #6366f1; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('luxury_glass')">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div style="font-size:22px;">✨</div>
-            <div style="text-align:left;">
-              <div style="font-size:13px; font-weight:900; color:#fff;">现代奢华毛玻璃版 (Luxury Glass)</div>
-              <div style="font-size:10px; font-weight:700; color:#818cf8;">Linear 冷光紫 · 悬浮黑胡桃木</div>
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <div style="font-size:22px; flex-shrink:0;">✨</div>
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:900; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">现代奢华毛玻璃版 (Luxury Glass)</div>
+              <div style="font-size:10px; font-weight:700; color:#818cf8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Linear 冷光紫 · 悬浮黑胡桃木</div>
             </div>
           </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#4f46e5; padding:3px 8px; border-radius:6px;">⚡ 秒换</span>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#4f46e5; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
         </div>
 
         <!-- 6. Clean iOS 极简暖白手机版 -->
         <div style="display:flex; align-items:center; justify-content:space-between; background:#f2f2f6; border:2px solid #0071e3; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('clean_ios')">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <div style="font-size:22px;">📱</div>
-            <div style="text-align:left;">
-              <div style="font-size:13px; font-weight:900; color:#1d1d1f;">Clean iOS 极简暖白手机版</div>
-              <div style="font-size:10px; font-weight:700; color:#86868b;">自然影棚柔光 · 悬浮抽屉微振感</div>
+          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+            <div style="font-size:22px; flex-shrink:0;">📱</div>
+            <div style="text-align:left; flex:1; min-width:0;">
+              <div style="font-size:13px; font-weight:900; color:#1d1d1f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Clean iOS 极简暖白手机版</div>
+              <div style="font-size:10px; font-weight:700; color:#86868b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">自然影棚柔光 · 悬浮抽屉微振感</div>
             </div>
           </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#0071e3; padding:3px 8px; border-radius:6px;">⚡ 秒换</span>
+          <span style="font-size:11px; font-weight:900; color:#fff; background:#0071e3; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
         </div>
       </div>
 
@@ -3517,6 +3580,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }[ch]));
     }
 
+    const MAX_NETWORK_PROFILE_NAME_CHARS = 32;
+    const MAX_NETWORK_AVATAR_CHARS = 12000;
+
+    function normalizeNetworkName(value, fallback = '') {
+      if (typeof value !== 'string') return fallback;
+      const normalized = value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, MAX_NETWORK_PROFILE_NAME_CHARS);
+      return normalized || fallback;
+    }
+
+    function isSafeNetworkAvatar(value) {
+      if (typeof value !== 'string' || value.length > MAX_NETWORK_AVATAR_CHARS) return false;
+      // 短文本/Emoji 只会作为转义后的文本渲染；长值必须通过头像来源校验。
+      return value.length <= 64 || !!getSafeAvatarSource(value);
+    }
+
     function getSafeAvatarSource(avatar) {
       if (avatar === "anime_boy" || avatar === "img/avatar_boy.png") {
         avatar = window.ANIME_AVATAR_BOY || "img/avatar_boy.png";
@@ -3683,7 +3761,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       showBubble(sender, normalizedText);
 
       if (gameMode === 'online' && conn && conn.open && sender === 1) {
-        conn.send({ type: 'chat', text: normalizedText, name: p1Name, avatar: p1Avatar });
+        // 对方已经有本地档案，聊天报文不重复携带头像，降低 MQTT/P2P 负载。
+        conn.send({ type: 'chat', text: normalizedText });
       }
     }
 
@@ -3805,7 +3884,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           localStorage.setItem('gomoku_p1Name', p1Name);
           updatePlayerHeaderUI();
           if (gameMode === 'online' && conn && conn.open) {
-            conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
+            conn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(selectedAvatarData) });
           }
         };
       }
@@ -3849,7 +3928,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       });
       updatePlayerHeaderUI();
       if (gameMode === 'online' && conn && conn.open) {
-        conn.send({ type: 'profile_sync', name: p1Name, avatar: selectedAvatarData });
+        conn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(selectedAvatarData) });
       }
       showGameNotice(`🎲 已为您随机分配昵称【${newName}】与头像 ${newAvatar}`);
     }
@@ -3890,7 +3969,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       updatePlayerHeaderUI();
       // 联机实时同步头像给对方
       if (gameMode === 'online' && conn && conn.open) {
-        conn.send({ type: 'profile_sync', name: curName, avatar: avatarData });
+        conn.send({ type: 'profile_sync', name: curName, avatar: getNetworkAvatarValue(avatarData) });
       }
     }
 
@@ -3900,6 +3979,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (typeof window.ANIME_AVATAR_BOY === 'string' && avatar === window.ANIME_AVATAR_BOY) return 'anime_boy';
       if (typeof window.ANIME_AVATAR_GIRL === 'string' && avatar === window.ANIME_AVATAR_GIRL) return 'anime_girl';
       return avatar;
+    }
+
+    function getNetworkAvatarValue(avatar) {
+      const value = getAvatarSyncValue(avatar);
+      return isSafeNetworkAvatar(value) ? value : '👦';
     }
 
     async function saveProfile() {
@@ -3980,7 +4064,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
       // 保存时再做一次完整同步（确保对方数据最终一致）
       if (gameMode === 'online' && conn && conn.open && editingPlayer === 1) {
-        conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+        conn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
       }
     }
 
@@ -4370,6 +4454,37 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     const MQTT_CONNECT_TIMEOUT_MS = 5000;
     const MQTT_LIBRARY_WAIT_MS = 8000;
 
+    const MAX_ONLINE_PAYLOAD_BYTES = 60 * 1024;
+    const MAX_ONLINE_MESSAGES_PER_SECOND = 80;
+    const MAX_ONLINE_SIGNAL_MESSAGES_PER_SECOND = 180;
+    const ONLINE_TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+    const ONLINE_MESSAGE_TYPES = new Set([
+      'chat', 'profile_sync', 'ping', 'pong', 'sync_req', 'state_snapshot', 'reconnect_handshake',
+      'move', 'leave_room', 'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
+      'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone', 'skill_shift_stone',
+      'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
+      'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2'
+    ]);
+    const P2P_SIGNAL_TYPES = new Set(['hello', 'offer', 'answer', 'ice', 'ice_batch']);
+
+    function getOnlinePayloadByteLength(value) {
+      if (ONLINE_TEXT_ENCODER) return ONLINE_TEXT_ENCODER.encode(value).byteLength;
+      return String(value).length;
+    }
+
+    function generateSecureId(byteLength = 12, prefix = '') {
+      try {
+        const cryptoApi = (typeof window !== 'undefined' && window.crypto) ||
+          (typeof crypto !== 'undefined' ? crypto : null);
+        if (cryptoApi && cryptoApi.getRandomValues) {
+          const bytes = new Uint8Array(byteLength);
+          cryptoApi.getRandomValues(bytes);
+          return prefix + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+      } catch (_) {}
+      return prefix + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12);
+    }
+
     function getMqttLibrary() {
       if (typeof mqtt !== 'undefined' && mqtt && mqtt.connect) return mqtt;
       if (typeof window !== 'undefined' && window.mqtt && window.mqtt.connect) return window.mqtt;
@@ -4437,7 +4552,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           }
 
           const brokerUrl = candidate.url;
-          const clientId = 'gk_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+          const clientId = generateSecureId(9, 'gk_');
           let settled = false;
           let timer = null;
           let client = null;
@@ -4533,30 +4648,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         this.remoteOfferSdp = '';
         this.signalRetryTimer = null;
         this.signalTask = Promise.resolve();
+        this.inboundWindowAt = Date.now();
+        this.inboundMessageCount = 0;
+        this.inboundSignalCount = 0;
 
         this.messageHandler = (topic, payload) => {
           const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
-          if (rawPayload.length > 64 * 1024) return;
           if (topic === this.sigTopic) {
-            try { this._queueWebRtcSignal(JSON.parse(rawPayload)); } catch(e) {}
+            this._handleIncomingPayload(rawPayload, true);
             return;
           }
           if (topic !== this.subTopic) return;
-          try {
-            const data = JSON.parse(rawPayload);
-            // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
-            if (data._mid) {
-              if (this.processedMsgIds.has(data._mid)) return;
-              this.processedMsgIds.add(data._mid);
-              if (this.processedMsgIds.size > 200) {
-                const first = this.processedMsgIds.values().next().value;
-                this.processedMsgIds.delete(first);
-              }
-            }
-            this.emit('data', data);
-          } catch(e) {
-            console.warn('[MqttRoom parse error]', e);
-          }
+          this._handleIncomingPayload(rawPayload, false);
         };
         this.mqttCloseHandler = () => this._markTransportClosed(new Error('信令连接已断开'));
         this.mqttOfflineHandler = () => this._markTransportClosed(new Error('信令连接已离线'));
@@ -4575,7 +4678,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       _createSessionId() {
-        return 'p2p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12);
+        return generateSecureId(12, 'p2p_');
       }
 
       _prepareConnection() {
@@ -4622,21 +4725,72 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       _publishSignal(type, extra = {}) {
-        if (!this.open || !this.client || !this.client.connected) return false;
-        const signal = { sender: this.role, type, ...extra };
+        if (!this.open || !this.client || !this.client.connected || !P2P_SIGNAL_TYPES.has(type)) return false;
+        const signal = { ...extra, sender: this.role, type };
         if (this.p2pSessionId) signal.sessionId = this.p2pSessionId;
         try {
-          this.client.publish(this.sigTopic, JSON.stringify(signal), { qos: 0 });
+          const payload = JSON.stringify(signal);
+          if (getOnlinePayloadByteLength(payload) > MAX_ONLINE_PAYLOAD_BYTES) return false;
+          this.client.publish(this.sigTopic, payload, { qos: 0 });
           return true;
         } catch (err) {
           return false;
         }
       }
 
+      _consumeInboundBudget(isSignal) {
+        const now = Date.now();
+        if (now - this.inboundWindowAt >= 1000) {
+          this.inboundWindowAt = now;
+          this.inboundMessageCount = 0;
+          this.inboundSignalCount = 0;
+        }
+        if (isSignal) {
+          if (this.inboundSignalCount >= MAX_ONLINE_SIGNAL_MESSAGES_PER_SECOND) return false;
+          this.inboundSignalCount++;
+          return true;
+        }
+        if (this.inboundMessageCount >= MAX_ONLINE_MESSAGES_PER_SECOND) return false;
+        this.inboundMessageCount++;
+        return true;
+      }
+
+      _handleIncomingPayload(rawPayload, isSignal = false) {
+        if (typeof rawPayload !== 'string' || !rawPayload || rawPayload.length > 64 * 1024 ||
+            getOnlinePayloadByteLength(rawPayload) > MAX_ONLINE_PAYLOAD_BYTES ||
+            !this._consumeInboundBudget(isSignal)) return;
+        let data;
+        try { data = JSON.parse(rawPayload); } catch (_) { return; }
+        if (!data || typeof data !== 'object' || Array.isArray(data) ||
+            typeof data.type !== 'string' || data.type.length > 64) return;
+
+        if (isSignal) {
+          if (!P2P_SIGNAL_TYPES.has(data.type) || (data.sender !== 'host' && data.sender !== 'client')) return;
+          this._queueWebRtcSignal(data);
+          return;
+        }
+
+        if (!ONLINE_MESSAGE_TYPES.has(data.type)) return;
+        if (data._mid !== undefined && (typeof data._mid !== 'string' || data._mid.length > 80)) return;
+        // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
+        if (data._mid) {
+          if (this.processedMsgIds.has(data._mid)) return;
+          this.processedMsgIds.add(data._mid);
+          if (this.processedMsgIds.size > 200) {
+            const first = this.processedMsgIds.values().next().value;
+            this.processedMsgIds.delete(first);
+          }
+        }
+        this.emit('data', data);
+      }
+
       _republishP2PSignals() {
         if (this.role === 'host') {
           if (this.localOffer) this._publishSignal('offer', { sdp: this.localOffer.sdp });
-          this.localIceCandidates.forEach((candidate) => this._publishSignal('ice', { candidate }));
+          if (this.localIceCandidates.length) {
+            // 重试时批量补发，避免每 900ms 为每个 ICE 候选重复制造 MQTT 报文。
+            this._publishSignal('ice_batch', { candidates: this.localIceCandidates.slice(-64) });
+          }
         } else if (this.localAnswer) {
           this._publishSignal('answer', { sdp: this.localAnswer.sdp });
         } else {
@@ -4714,6 +4868,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
       }
 
+      async _addRemoteIceCandidate(candidate) {
+        if (!this.pc || !candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return;
+        let candidateKey = '';
+        try { candidateKey = JSON.stringify(candidate); } catch (_) { return; }
+        if (!candidateKey || candidateKey.length > 4096 || this.remoteIceCandidates.has(candidateKey) ||
+            this.remoteIceCandidates.size >= MAX_P2P_REMOTE_ICE_CANDIDATES) return;
+        if (!this.remoteDescriptionSet && this.pendingRemoteIceCandidates.length >= MAX_P2P_REMOTE_ICE_CANDIDATES) return;
+        this.remoteIceCandidates.add(candidateKey);
+        if (!this.remoteDescriptionSet) {
+          this.pendingRemoteIceCandidates.push(candidate);
+          return;
+        }
+        try { await this.pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (_) {}
+      }
+
       async _handleWebRtcSignal(sig) {
         if (!sig || !this.open || !this.pc || sig.sender === this.role) return;
         if (typeof sig.type !== 'string' || sig.type.length > 16) return;
@@ -4757,17 +4926,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           return;
         }
 
-        if (sig.type === 'ice' && sig.candidate && typeof sig.candidate === 'object') {
-          const candidateKey = JSON.stringify(sig.candidate);
-          if (this.remoteIceCandidates.has(candidateKey)) return;
-          if (this.remoteIceCandidates.size >= MAX_P2P_REMOTE_ICE_CANDIDATES) return;
-          this.remoteIceCandidates.add(candidateKey);
-          if (!this.remoteDescriptionSet) {
-            if (this.pendingRemoteIceCandidates.length >= MAX_P2P_REMOTE_ICE_CANDIDATES) return;
-            this.pendingRemoteIceCandidates.push(sig.candidate);
-            return;
+        if (sig.type === 'ice') {
+          await this._addRemoteIceCandidate(sig.candidate);
+          return;
+        }
+
+        if (sig.type === 'ice_batch' && Array.isArray(sig.candidates) && sig.candidates.length <= 64) {
+          for (const candidate of sig.candidates) {
+            await this._addRemoteIceCandidate(candidate);
           }
-          try { await this.pc.addIceCandidate(new RTCIceCandidate(sig.candidate)); } catch(_) {}
         }
       }
 
@@ -4794,19 +4961,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           showGameNotice('⚡ 已无感激活 P2P 点对点低延迟直连', false);
         };
         dc.onmessage = (e) => {
-          try {
-            if (this.dc !== dc || !e || typeof e.data !== 'string' || e.data.length > 64 * 1024) return;
-            const data = JSON.parse(e.data);
-            if (data._mid) {
-              if (this.processedMsgIds.has(data._mid)) return;
-              this.processedMsgIds.add(data._mid);
-              if (this.processedMsgIds.size > 200) {
-                const first = this.processedMsgIds.values().next().value;
-                this.processedMsgIds.delete(first);
-              }
-            }
-            this.emit('data', data);
-          } catch(err) {}
+          if (this.dc !== dc || !e || typeof e.data !== 'string') return;
+          this._handleIncomingPayload(e.data, false);
         };
         const onClosed = () => {
           if (this.dc === dc) this.isP2pReady = false;
@@ -4850,8 +5006,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
       send(data) {
         if (!this.open || !data || typeof data !== 'object') return false;
-        if (!data._mid) data._mid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
-        const jsonStr = JSON.stringify(data);
+        if (!ONLINE_MESSAGE_TYPES.has(data.type)) return false;
+        const message = {
+          ...data,
+          _mid: typeof data._mid === 'string' && data._mid.length <= 80 ? data._mid : generateSecureId(10, 'm_')
+        };
+        let jsonStr;
+        try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
+        if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
 
         // P2P 打通后优先走 WebRTC；未打通或临时断开时自动回退 MQTT。
         if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
@@ -4992,6 +5154,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             if (rawPayload.length > 64 * 1024) return;
             const data = JSON.parse(rawPayload);
             if (data.type !== 'join_request' && data.type !== 'reconnect_handshake') return;
+            if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
+            if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
             const reqUid = String(data.uid || data.name || 'guest').slice(0, 128);
 
             // 🛡️ 第三人进房拦截：若房间已有客方在对局，且请求者不是当前对局客方，直接回绝人数已满
@@ -5016,7 +5180,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
                   type: 'join_accepted',
                   targetUid: activeGuestUid,
                   name: p1Name,
-                  avatar: p1Avatar
+                  avatar: getNetworkAvatarValue(p1Avatar)
                 }), { qos: 0 });
               } catch(_) {}
             };
@@ -5041,8 +5205,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             conn = nextConn;
             myOnlineColor = BLACK;
             lastActiveRoomCode = roomCode;
-            p2Name = data.name || p2Name || '好友';
-            p2Avatar = data.avatar || p2Avatar || '👧';
+            p2Name = normalizeNetworkName(data.name, p2Name || '好友');
+            p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (p2Avatar || '👧');
             updatePlayerHeaderUI();
             setupConn();
 
@@ -5054,7 +5218,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
                 showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
                 closeOnlineModal();
                 setMode('online');
-                nextConn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+                nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
               }
             }).catch((err) => {
               console.warn('[host room connection]', err);
@@ -5200,8 +5364,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           type: 'reconnect_handshake',
           role: 'client',
           uid: getOrCreateMatchUid(),
-          name: p1Name,
-          avatar: p1Avatar,
+          name: normalizeNetworkName(p1Name, '棋友'),
+          avatar: getNetworkAvatarValue(p1Avatar),
           stepCount: history.length
         });
       };
@@ -5237,9 +5401,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         isOver: isOver,
         isDraw: gameResultIsDraw,
         p1Name: p1Name,
-        p1Avatar: p1Avatar,
+        p1Avatar: getNetworkAvatarValue(p1Avatar),
         p2Name: p2Name,
-        p2Avatar: p2Avatar,
+        p2Avatar: getNetworkAvatarValue(p2Avatar),
         currentDrawnCards: currentDrawnCards,
         cardUsedStatus: cardUsedStatus
       });
@@ -5277,7 +5441,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
     // 无坐标的技能（双星连珠、天降神抽）也必须进入同一额度账本，不能绕过校验。
     function validateIncomingSkillUse(data) {
-      if (!data || data.type !== 'skill_use' || typeof data.skillId !== 'string') return false;
+      const remoteColor = myOnlineColor === BLACK ? WHITE : BLACK;
+      if (!data || data.type !== 'skill_use' || typeof data.skillId !== 'string' || data.skillId.length > 64 ||
+          turn !== remoteColor) return false;
       const card = SKILL_CARD_POOL.find(item => item.id === data.skillId);
       if (!card) return rejectIncomingSkill();
 
@@ -5300,6 +5466,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
     function validateIncomingSkill(data) {
       if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return false;
+      if (!ONLINE_MESSAGE_TYPES.has(data.type)) return false;
+      const localColor = myOnlineColor === BLACK ? BLACK : WHITE;
+      const remoteColor = localColor === BLACK ? WHITE : BLACK;
+      // 技能只能由当前回合的对手发动，避免利用公开 MQTT 信道注入跨回合操作。
+      if (turn !== remoteColor) return false;
       // 1. 施法上限风控：当前手牌阶段最多只能使用 3 张技能牌。
       if (opponentSkillsUsedCount >= MAX_OPPONENT_SKILLS_PER_HAND) {
         return rejectIncomingSkill('⚠️ 对手本轮技能额度已用尽，异常数据包已拦截！');
@@ -5337,20 +5508,67 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       // 3. 目标物理实体合法性校验（防凭空捏造）
-      if (data.type === "skill_remove_stone") {
-        if (board[data.r][data.c] === EMPTY) return false;
+      if (data.type === "skill_identity_swap") {
+        if (!board.some(row => row.some(cell => cell !== EMPTY))) return false;
+      } else if (data.type === "skill_prophecy") {
+        if (data.by !== remoteColor || board[data.r][data.c] !== EMPTY) return false;
+      } else if (data.type === "skill_remove_stone") {
+        if (board[data.r][data.c] !== localColor) return false;
       } else if (data.type === "skill_shift_stone") {
-        if (board[data.fromR][data.fromC] === EMPTY || board[data.toR][data.toC] !== EMPTY) return false;
+        if (data.p !== remoteColor || board[data.fromR][data.fromC] !== remoteColor || board[data.toR][data.toC] !== EMPTY) return false;
         if (Math.abs(data.fromR - data.toR) > 1 || Math.abs(data.fromC - data.toC) > 1) return false;
       } else if (data.type === "skill_swap_color") {
-        if (board[data.r][data.c] === EMPTY) return false;
+        if (data.p !== remoteColor || board[data.r][data.c] !== localColor) return false;
       } else if (data.type === "skill_swap_positions") {
-        if (board[data.r1][data.c1] === EMPTY || board[data.r2][data.c2] === EMPTY) return false;
+        if (board[data.r1][data.c1] !== remoteColor || board[data.r2][data.c2] !== localColor) return false;
       } else if (data.type === "skill_mega_bomb") {
         if (!Array.isArray(data.stones)) return false;
         let count = 0;
-        for (let r = 0; r < 15; r++) for (let col = 0; col < 15; col++) if (board[r][col] !== EMPTY) count++;
+        let localCount = 0;
+        let remoteCount = 0;
+        for (let r = 0; r < 15; r++) {
+          for (let col = 0; col < 15; col++) {
+            if (board[r][col] !== EMPTY) count++;
+            if (board[r][col] === localColor) localCount++;
+            if (board[r][col] === remoteColor) remoteCount++;
+          }
+        }
         if (data.stones.length !== count) return false;
+        const seen = new Set();
+        let nextLocalCount = 0;
+        let nextRemoteCount = 0;
+        for (const stone of data.stones) {
+          if (stone.p !== BLACK && stone.p !== WHITE) return false;
+          const key = `${stone.r},${stone.c}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          if (stone.p === localColor) nextLocalCount++;
+          if (stone.p === remoteColor) nextRemoteCount++;
+        }
+        if (nextLocalCount !== localCount || nextRemoteCount !== remoteCount) return false;
+      } else if (data.type === "destiny_point_2") {
+        if (board[data.fromR][data.fromC] !== remoteColor || board[data.toR][data.toC] !== EMPTY) return false;
+      } else if (data.type === "destiny_wipe_danger") {
+        if (!Array.isArray(data.stones) || data.stones.length < 3 || data.stones.length > 15) return false;
+        const seen = new Set();
+        for (const stone of data.stones) {
+          const key = `${stone.r},${stone.c}`;
+          if (seen.has(key) || board[stone.r][stone.c] !== localColor) return false;
+          seen.add(key);
+        }
+        const first = data.stones[0];
+        const second = data.stones[1];
+        const dr = Math.sign(second.r - first.r);
+        const dc = Math.sign(second.c - first.c);
+        if ((!dr && !dc) || (dr && dc && Math.abs(second.r - first.r) !== Math.abs(second.c - first.c))) return false;
+        for (let i = 1; i < data.stones.length; i++) {
+          if (data.stones[i].r !== first.r + dr * i || data.stones[i].c !== first.c + dc * i) return false;
+        }
+      } else if (data.type === "destiny_place_2x2") {
+        if (data.p !== remoteColor || data.cells.length !== 4 || data.cells.some(cell => board[cell.r][cell.c] !== EMPTY)) return false;
+        const rows = [...new Set(data.cells.map(cell => cell.r))].sort((a, b) => a - b);
+        const cols = [...new Set(data.cells.map(cell => cell.c))].sort((a, b) => a - b);
+        if (rows.length !== 2 || cols.length !== 2 || rows[1] !== rows[0] + 1 || cols[1] !== cols[0] + 1) return false;
       }
 
       opponentSkillsUsedCount++;
@@ -5381,12 +5599,35 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
            data.currentDrawnCards.some(card => !card || typeof card.id !== 'string' ||
              !SKILL_CARD_POOL.some(localCard => localCard.id === card.id)))) return false;
       for (const value of [data.p1Name, data.p2Name]) {
-        if (value !== undefined && (typeof value !== 'string' || value.length > 128)) return false;
+        if (value !== undefined && (typeof value !== 'string' || value.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return false;
       }
       for (const value of [data.p1Avatar, data.p2Avatar]) {
-        if (value !== undefined && (typeof value !== 'string' || value.length > 150000)) return false;
+        if (value !== undefined && !isSafeNetworkAvatar(value)) return false;
       }
       return true;
+    }
+
+    function validateIncomingUndoState(data) {
+      if (!data || typeof data !== 'object' || typeof data.agree !== 'boolean') return false;
+      if (!data.agree) return true;
+      // 悔棋响应复用快照的棋盘/棋谱校验，但不携带 isOver/isDraw 字段。
+      return validateIncomingSnapshot({
+        board: data.board,
+        history: data.history,
+        turn: data.turn,
+        isOver: false,
+        isDraw: false,
+        currentDrawnCards: data.currentDrawnCards,
+        cardUsedStatus: data.cardUsedStatus
+      });
+    }
+
+    function requestOnlineResync() {
+      if (!conn || !conn.open) return;
+      if (myOnlineColor === BLACK) sendFullStateSnapshot();
+      else {
+        try { conn.send({ type: 'sync_req' }); } catch (_) {}
+      }
     }
 
     function setupConn() {
@@ -5423,8 +5664,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
       conn.on('data', (data) => {
         if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return;
+        if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
+        if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
+        if (data.step !== undefined && (!Number.isInteger(data.step) || data.step < 0 || data.step > 1024)) return;
         if (data.type === "leave_room") {
-          showGameNotice(`⚠️ 对手【${data.name || p2Name}】已退出房间，已自动切回人机对弈模式~`, false);
+          showGameNotice(`⚠️ 对手【${normalizeNetworkName(data.name, p2Name)}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
           detachHostInviteListener();
           if (conn) { try { conn.close(true); } catch(_) {} conn = null; }
@@ -5501,8 +5745,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           turn = data.turn;
           isOver = data.isOver;
           gameResultIsDraw = data.isDraw === true;
-          p2Name = data.p1Name || p2Name;
-          p2Avatar = data.p1Avatar || p2Avatar;
+          p2Name = normalizeNetworkName(data.p1Name, p2Name);
+          if (isSafeNetworkAvatar(data.p1Avatar)) p2Avatar = data.p1Avatar;
           if (data.currentDrawnCards) currentDrawnCards = data.currentDrawnCards.map(card => SKILL_CARD_POOL.find(localCard => localCard.id === card.id));
           if (data.cardUsedStatus) cardUsedStatus = [...data.cardUsedStatus];
           updatePlayerHeaderUI();
@@ -5513,23 +5757,30 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           return;
         }
         if (data.type === 'move') {
-          // 🛡️ 步数连续性校验：若发现步数错位，立即主动请求对账快照
-          if (data.step !== undefined && Math.abs(history.length + 1 - data.step) > 0) {
-            if (myOnlineColor === WHITE) {
-              try { conn.send({ type: 'sync_req' }); } catch(_) {}
-            } else {
-              sendFullStateSnapshot();
-            }
+          const remoteColor = myOnlineColor === BLACK ? WHITE : BLACK;
+          const isValidMove = Number.isInteger(data.r) && Number.isInteger(data.c) &&
+            data.r >= 0 && data.r < 15 && data.c >= 0 && data.c < 15 &&
+            data.p === remoteColor && board[data.r][data.c] === EMPTY;
+          if (!isValidMove) return;
+          // 🛡️ 步数、回合和棋子颜色必须同时连续；错位后只请求对账，不继续执行可疑落子。
+          if ((data.step !== undefined && (!Number.isInteger(data.step) || data.step !== history.length + 1)) ||
+              turn !== remoteColor) {
+            requestOnlineResync();
+            return;
           }
           makeMove(data.r, data.c, data.p, true);
         } else if (data.type === 'chat') {
+          if (typeof data.text !== 'string' || data.text.length > MAX_CHAT_MESSAGE_CHARS) return;
           addMessage(2, data.text);
         } else if (data.type === 'profile_sync') {
-          p2Name = data.name || '好友';
-          p2Avatar = data.avatar || '👧';
+          if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
+          if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
+          if (data.isReply !== undefined && typeof data.isReply !== 'boolean') return;
+          p2Name = normalizeNetworkName(data.name, p2Name || '好友');
+          if (data.avatar !== undefined) p2Avatar = data.avatar;
           updatePlayerHeaderUI();
           if (!data.isReply && conn && conn.open) {
-            conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar, isReply: true });
+            conn.send({ type: 'profile_sync', name: normalizeNetworkName(p1Name, '棋友'), avatar: getNetworkAvatarValue(p1Avatar), isReply: true });
           }
         } else if (data.type === 'undo_req') {
           undoDescText.textContent = "对方发起了悔棋申请，是否同意？";
@@ -5537,6 +5788,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           document.getElementById('btnUndoRefuse').style.display = "block";
           undoModal.classList.add('show');
         } else if (data.type === 'undo_res') {
+          if (!validateIncomingUndoState(data)) {
+            console.warn('[undo_res] 拦截结构非法的悔棋响应');
+            return;
+          }
           if (data.agree) {
             doUndo();
             if (data.board && data.cardUsedStatus) {
@@ -5553,7 +5808,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             showGameNotice("❌ 对方拒绝了您的悔棋申请！落子无悔哦~", true);
           }
         } else if (data.type === 'restart_req') {
-          showCustomConfirm(`【${data.name || p2Name}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
+          showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
             if (conn && conn.open) conn.send({ type: 'restart_res', agree: true });
             resetBoardOnly();
             showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
@@ -5562,6 +5817,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             showGameNotice("已拒绝对手的重开申请，继续本局", false);
           }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
         } else if (data.type === 'restart_res') {
+          if (typeof data.agree !== 'boolean') return;
           if (data.agree) {
             resetBoardOnly();
             showGameNotice("🎉 对手同意了您的重开申请，新对局已开启！", false);
@@ -5570,7 +5826,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           }
         } else if (data.type === 'restart') {
           // 兼容旧版客户端指令：弹出协商弹窗，严禁单方面清空棋盘
-          showCustomConfirm(`【${data.name || p2Name}】向您发起重新开局申请，是否同意重开？`, () => {
+          showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重开？`, () => {
             if (conn && conn.open) conn.send({ type: 'restart_res', agree: true });
             resetBoardOnly();
             showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
@@ -5765,9 +6021,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           <div class="card-slot ${isUsed ? 'used' : ''} ${isCasting ? 'casting' : ''}"
                onclick="handleCardClick(${idx})"
                title="${escapeHtml(desc)}">
-            <div class="slot-icon">${escapeHtml(icon)}</div>
-            <div class="slot-title">${escapeHtml(name)}</div>
-            <div class="slot-sub">${isUsed ? '已使用' : escapeHtml(desc)}</div>
+            <div class="card-slot-header" style="display:flex; align-items:center; justify-content:center; gap:3px; max-width:98%;">
+              <span class="slot-icon" style="font-size:15px; line-height:1;">${escapeHtml(icon)}</span>
+              <span class="slot-title" style="font-size:12px; font-weight:900; color:#1e3a8a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(name)}</span>
+            </div>
+            <div class="slot-sub" style="font-size:10.5px; font-weight:700; color:#475569; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:96%; line-height:1.2; margin-top:2px;">${isUsed ? '已使用' : escapeHtml(desc)}</div>
           </div>
         `;
       }).join('');
@@ -6440,6 +6698,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
               if (data.targetUid && data.targetUid !== myJoinUid) {
                 return;
               }
+              if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
+              if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
               hasJoined = true;
               clearInterval(joinInterval);
               clearTimeout(joinTimeout);
@@ -6451,8 +6711,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
               lastActiveRoomCode = code;
               currentRoomCode = code;
               myOnlineColor = WHITE;
-              p2Name = data.name || '房主';
-              p2Avatar = data.avatar || '👦';
+              p2Name = normalizeNetworkName(data.name, '房主');
+              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👦';
               updatePlayerHeaderUI();
               showGameNotice('🎉 已成功连入好友房间！您执白~', false);
               closeOnlineModal();
@@ -6460,7 +6720,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
               setupConn();
               nextConn.readyPromise.then(() => {
                 if (conn === nextConn && nextConn.open) {
-                  nextConn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar });
+                  nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
                 }
               }).catch((err) => console.warn('[guest room connection]', err));
             }
@@ -6482,8 +6742,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             client.publish(c2hTopic, JSON.stringify({
               type: 'join_request',
               uid: myJoinUid,
-              name: p1Name,
-              avatar: p1Avatar
+              name: normalizeNetworkName(p1Name, '棋友'),
+              avatar: getNetworkAvatarValue(p1Avatar)
             }), { qos: 0 });
           };
 
@@ -6619,8 +6879,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             uid: matchUid,
-            nickname: p1Name,
-            avatar: p1Avatar,
+            nickname: normalizeNetworkName(p1Name, '棋友'),
+            avatar: getNetworkAvatarValue(p1Avatar),
             score: 1000
           })
         });
@@ -7453,8 +7713,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       const btnLogout = document.getElementById("btnLogoutAction");
       if (hasRegisteredAccountSession()) {
         if (icon) icon.textContent = "✅";
-        if (title) title.innerHTML = `正式账号: <span style="color:#0284c7;">${escapeHtml(currentUsername)}</span>`;
-        if (subText) subText.innerHTML = `账号名与天梯展示完全统一 · 随时可改`;
+        if (title) {
+          title.innerHTML = `正式账号: <span style="color:#0284c7;">${escapeHtml(currentUsername)}</span>`;
+          title.title = `正式账号: ${currentUsername}`;
+        }
+        if (subText) {
+          subText.textContent = "💡 战绩全服同步";
+          subText.title = "战绩已在全服云端实时同步";
+        }
         if (btnAuth) {
           btnAuth.textContent = "🔄 切换";
           btnAuth.onclick = () => openAuthModal("login");
@@ -7467,8 +7733,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
       } else {
         if (icon) icon.textContent = "👤";
-        if (title) title.textContent = "游客身份 (未绑定)";
-        if (subText) subText.textContent = "注册绑定账号密码，换手机重装不丢积分！";
+        if (title) {
+          title.textContent = "游客身份 (未绑定)";
+          title.title = "游客身份 (未绑定)";
+        }
+        if (subText) {
+          subText.textContent = "💡 注册绑定后战绩永不丢失";
+          subText.title = "注册绑定账号密码，换手机重装不丢积分";
+        }
         if (btnAuth) {
           btnAuth.textContent = "🔑 登录/注册";
           btnAuth.onclick = () => openAuthModal("login");
@@ -8102,22 +8374,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
         return `
           <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; border-radius:10px; ${cardBg}">
-            <div style="display:flex; align-items:center; gap:8px;">
+            <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0; margin-right:8px;">
               ${rankBadge}
               <div style="width:28px; height:28px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
                 ${avatarEl}
               </div>
-              <div style="text-align:left; line-height:1.25;">
-                <div style="font-size:12.5px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
-                  <span>${escapeRankHTML(item.name)}</span>
-                  ${isP1 ? '<span style="font-size:9.5px; background:#ef4444; color:#fff; padding:1px 4px; border-radius:4px; font-weight:800;">我</span>' : ''}
-                  <span style="font-size:9.5px; color:${tierColor}; font-weight:800; border:1px solid ${tierColor}; padding:0 3px; border-radius:4px;">${tierName}</span>
+              <div style="text-align:left; line-height:1.25; flex:1; min-width:0;">
+                <div style="font-size:12.5px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px; min-width:0;">
+                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex-shrink:1;">${escapeRankHTML(item.name)}</span>
+                  ${isP1 ? '<span style="font-size:9.5px; background:#ef4444; color:#fff; padding:1px 4px; border-radius:4px; font-weight:800; flex-shrink:0; white-space:nowrap;">我</span>' : ''}
+                  <span style="font-size:9.5px; color:${tierColor}; font-weight:800; border:1px solid ${tierColor}; padding:0 3px; border-radius:4px; flex-shrink:0; white-space:nowrap;">${tierName}</span>
                 </div>
-                <div style="font-size:10px; color:#64748b; font-weight:700;">胜率: ${winRate}% (${item.wins}胜/${item.total_games}局)</div>
+                <div style="font-size:10px; color:#64748b; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">胜率: ${winRate}% (${item.wins}胜/${item.total_games}局)</div>
               </div>
             </div>
-            <div style="text-align:right;">
-              <div style="font-size:13px; font-weight:900; color:#b45309;">🏆 ${item.score}</div>
+            <div style="text-align:right; flex-shrink:0;">
+              <div style="font-size:13px; font-weight:900; color:#b45309; white-space:nowrap;">🏆 ${item.score}</div>
               <div style="font-size:9px; color:#94a3b8; font-weight:800;">积分</div>
             </div>
           </div>
@@ -8131,9 +8403,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           statusText.innerHTML = `我的排名: <b style="color:#b45309;">第 ${myRankNum} 名</b> (积分: <b style="color:#0ea5e9;">${myScore}</b>)`;
         } else {
           if (!hasRegisteredAccountSession()) {
-            statusText.innerHTML = `当前身份: <b style="color:#64748b;">${escapeRankHTML(p1Name)} (游客未登录)</b> · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">点此登录正式账号</a>`;
+            statusText.innerHTML = `游客未登录 · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">登录账号入榜</a>`;
+            statusText.title = "游客身份未登录，点击登录或注册正式账号上榜";
           } else {
-            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (暂未入榜，赢下一局即上榜)`;
+            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (赢局即可入榜)`;
+            statusText.title = `当前玩家: ${p1Name}`;
           }
         }
       }
@@ -9761,9 +10035,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     let cachedBoardKey = '';
     let cachedBoardW = 0;
     let cachedBoardH = 0;
+    let cachedPiecesCanvas = null;
+    let cachedPiecesKey = '';
 
     function invalidateBoardCache() {
       cachedBoardKey = '';
+      cachedPiecesKey = '';
     }
 
     function getCachedBoardBitmap() {
@@ -9793,43 +10070,101 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return cachedBoardCanvas;
     }
 
+    // 棋子与复盘序号也做离屏缓存。动画帧只贴图，避免每帧重复创建 225 个渐变/阴影对象。
+    function hashBoardVisual() {
+      let hash = 2166136261;
+      for (let r = 0; r < 15; r++) {
+        const row = board[r] || [];
+        for (let c = 0; c < 15; c++) {
+          hash ^= ((row[c] == null ? EMPTY : row[c]) + 1) & 0xff;
+          hash = Math.imul(hash, 16777619);
+        }
+      }
+      return hash >>> 0;
+    }
+
+    function hashReplayVisual() {
+      if (!isReplayMode || !Array.isArray(history) || history.length === 0) return 0;
+      let hash = 2166136261;
+      for (const item of history) {
+        if (!item) continue;
+        hash ^= ((Number(item.r) + 2) || 0) & 0xff;
+        hash = Math.imul(hash, 16777619);
+        hash ^= ((Number(item.c) + 2) || 0) & 0xff;
+        hash = Math.imul(hash, 16777619);
+        hash ^= (Number(item.p) || 0) & 0xff;
+        hash = Math.imul(hash, 16777619);
+        hash ^= (Number(item.moveNum) || 0) & 0xff;
+        hash = Math.imul(hash, 16777619);
+        const label = typeof item.action === 'string' ? item.action : (typeof item.type === 'string' ? item.type : '');
+        hash ^= label.length & 0xff;
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function getCachedPiecesBitmap() {
+      const key = `${activeThemeKey}|${cWidth}|${cHeight}|${radius}|${isReplayMode ? 1 : 0}|${hashBoardVisual()}|${hashReplayVisual()}`;
+      if (cachedPiecesCanvas && cachedPiecesKey === key) return cachedPiecesCanvas;
+      if (!cachedPiecesCanvas) cachedPiecesCanvas = document.createElement('canvas');
+      cachedPiecesCanvas.width = cWidth;
+      cachedPiecesCanvas.height = cHeight;
+      const piecesCtx = cachedPiecesCanvas.getContext('2d');
+      piecesCtx.clearRect(0, 0, cWidth, cHeight);
+
+      const originalCtx = ctx;
+      ctx = piecesCtx;
+      try {
+        for (let r = 0; r < 15; r++) {
+          for (let c = 0; c < 15; c++) {
+            if (board[r][c] !== EMPTY) {
+              const x = paddingX + (c + 0.5) * gridX;
+              const y = paddingY + (r + 0.5) * gridY;
+              drawThemedStone(x, y, radius, board[r][c], activeThemeKey);
+            }
+          }
+        }
+
+        if (isReplayMode && history && history.length > 0) {
+          for (let i = 0; i < history.length; i++) {
+            const st = history[i];
+            if (!st || st.r < 0 || st.c < 0) continue;
+            const sx = paddingX + (st.c + 0.5) * gridX;
+            const sy = paddingY + (st.r + 0.5) * gridY;
+            piecesCtx.font = `bold ${Math.round(radius * 0.95)}px Arial, sans-serif`;
+            piecesCtx.textAlign = 'center';
+            piecesCtx.textBaseline = 'middle';
+            const curColor = (board[st.r] && board[st.r][st.c]) || st.p;
+            piecesCtx.fillStyle = (curColor === 1) ? '#f8fafc' : '#1e293b';
+            const displayNum = st.moveNum || (i + 1);
+            piecesCtx.fillText(String(displayNum), sx, sy + 1);
+          }
+        }
+      } finally {
+        ctx = originalCtx;
+      }
+      cachedPiecesKey = key;
+      return cachedPiecesCanvas;
+    }
+
     function draw() {
       ctx.clearRect(0, 0, cWidth, cHeight);
 
       // 1. 硬件加速单次贴图：极速离屏底盘位图 (GPU Blit 零回流零重绘)
       ctx.drawImage(getCachedBoardBitmap(), 0, 0);
 
-      // 2. 根据当前无缝主题绘制全部已落棋子 (对局进度 100% 保持)
-      for (let r = 0; r < 15; r++) {
-        for (let c = 0; c < 15; c++) {
-          if (board[r][c] !== EMPTY) {
-            const x = paddingX + (c + 0.5) * gridX;
-            const y = paddingY + (r + 0.5) * gridY;
-            drawThemedStone(x, y, radius, board[r][c], activeThemeKey);
-          }
-        }
-      }
-
-      // 🔍 复盘模式：在大棋盘棋子上绘制清晰的落子步数序号 (1, 2, 3...)
-      if (isReplayMode && history && history.length > 0) {
-        for (let i = 0; i < history.length; i++) {
-          const st = history[i];
-          if (!st || st.r < 0 || st.c < 0) continue;
-          const sx = paddingX + (st.c + 0.5) * gridX;
-          const sy = paddingY + (st.r + 0.5) * gridY;
-          ctx.font = `bold ${Math.round(radius * 0.95)}px Arial, sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          const curColor = (board[st.r] && board[st.r][st.c]) || st.p;
-          ctx.fillStyle = (curColor === 1) ? '#f8fafc' : '#1e293b';
-          const displayNum = st.moveNum || (i + 1);
-          ctx.fillText(String(displayNum), sx, sy + 1);
-        }
-      }
+      // 2. 棋子与复盘序号使用离屏缓存；动态标记和粒子特效仍在主画布绘制。
+      ctx.drawImage(getCachedPiecesBitmap(), 0, 0);
 
       // 3. 最后一手落子标记 (采用五子棋行业公认标准：中心经典高反差正红圆点 + 纯白轮廓，全主题全棋色通用)
       if (!isReplayMode) {
-        const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+        let last = null;
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i] && history[i].r >= 0 && history[i].c >= 0) {
+            last = history[i];
+            break;
+          }
+        }
         if (last) {
           const lx = paddingX + (last.c + 0.5) * gridX;
           const ly = paddingY + (last.r + 0.5) * gridY;
@@ -10472,14 +10807,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
              ontouchstart="handlePhraseTouchStart(event)"
              ontouchmove="handlePhraseTouchMove(event)"
              ontouchend="handlePhraseTouchEnd(event)">
-          <div style="display:flex; align-items:center; gap:8px; overflow:hidden; flex:1;">
-            <span class="drag-handle" style="font-size:16px; color:#94a3b8; cursor:grab; padding:0 2px;">⠿</span>
-            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; color:#2d3436;">${idx + 1}. ${escapeHtml(p)}</span>
+          <div style="display:flex; align-items:center; gap:8px; overflow:hidden; flex:1; min-width:0; margin-right:6px;">
+            <span class="drag-handle" style="font-size:16px; color:#94a3b8; cursor:grab; padding:0 2px; flex-shrink:0;">⠿</span>
+            <span class="phrase-item-text" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; color:#2d3436;">${idx + 1}. ${escapeHtml(p)}</span>
           </div>
           <div style="display:flex; align-items:center; gap:4px; flex-shrink:0;">
-            <button class="btn-move-up" onclick="event.stopPropagation(); movePhrase(${idx}, -1)" ${idx === 0 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer; font-weight:900;">▲</button>
-            <button class="btn-move-down" onclick="event.stopPropagation(); movePhrase(${idx}, 1)" ${idx === customPhrases.length - 1 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer; font-weight:900;">▼</button>
-            <button onclick="event.stopPropagation(); deletePhrase(${idx})" style="background:#ff7675; color:#fff; border:none; border-radius:5px; padding:2px 7px; font-size:11px; cursor:pointer;">❌</button>
+            <button class="btn-move-up" onclick="event.stopPropagation(); movePhrase(${idx}, -1)" ${idx === 0 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:3px 7px; font-size:11px; cursor:pointer; font-weight:900; min-height:22px;">▲</button>
+            <button class="btn-move-down" onclick="event.stopPropagation(); movePhrase(${idx}, 1)" ${idx === customPhrases.length - 1 ? 'disabled style="opacity:0.25;"' : ''} style="background:#e2e8f0; color:#334155; border:none; border-radius:5px; padding:3px 7px; font-size:11px; cursor:pointer; font-weight:900; min-height:22px;">▼</button>
+            <button onclick="event.stopPropagation(); deletePhrase(${idx})" style="background:#ff7675; color:#fff; border:none; border-radius:5px; padding:3px 7px; font-size:11px; cursor:pointer; min-height:22px;">❌</button>
           </div>
         </div>
       `).join('');
