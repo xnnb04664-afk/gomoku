@@ -220,7 +220,7 @@
   - 官方通道：`https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
   - ⚡ 国内高速免翻墙镜像：`https://ghproxy.net/https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`
 - **游戏内免服务器智能检查更新系统**：
-  - 在【个人资料】中常驻版本显示 `v1.0.1` 与【🚀 检查更新】按钮；
+  - 在【个人资料】中常驻版本显示当前正式版本（本次为 `v1.0.86`）与【🚀 检查更新】按钮；
   - **国内极速 CDN 双重加速架构（彻底解决国内访问 GitHub 慢的痛点）**：
     1. **毫秒级版本检测**：优先走国内备案极速 jsDelivr 边缘节点（`fastly.jsdelivr.net`）读取 `version.json`，响应耗时仅 20ms~50ms，彻底避开 GitHub 官方 API 偶尔的网络阻断；
     2. **满速极速下载**：下载直链自动通过 `ghproxy.net` 与 `mirror.ghproxy.com` 国内高速反代镜像，手机下载 1.06MB APK 只要 1~2 秒！
@@ -255,7 +255,7 @@
 
 ---
 
-## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.85 关键迭代与避坑总结)
+## 六、近期重大功能与底层加固详情 (v1.0.80 ~ v1.0.86 关键迭代与避坑总结)
 
 ### 1. 🎯 主棋盘大屏原位复盘体系 (`startMainBoardReplay`)
 - **用户原始需求**：“我点查看棋局的时候，怎么在下面，点查看棋局就跳转到棋盘上呀”；
@@ -291,7 +291,7 @@
   - 检查更新与下载时采用 `Promise.any` 竞速模式，**哪路最快就取哪路**，彻底根除单通道丢包或卡住的问题；
   - 结合安卓本地热更沙盒，用户无需重新下载大包安装即可秒更至最新版本代码。
 
-### 5. 🤖 最强大师级人机 AI 与算力深度剪枝
+### 5. 🤖 最强大师级人机 AI 与算力深度剪枝（v1.0.86）
 - **用户原始需求**：“人机要最强的，还有为什么AI有时候还要思考一段时间”；
 - **当前实现架构**：
   - 主网页、单文件版与 Android 资源统一加载 `js/ai.js` 强力引擎；
@@ -299,6 +299,8 @@
   - 叶节点综合评估活四、冲四、活三、活二、连续棋型和中心控制，不再只按位置分判断；
   - 大师搜索使用单步时间预算（桌面约 420ms、移动端约 260ms），只采用完整搜索层，超时自动回退到上一层最佳着；
   - 支持技能产生的禁止落点与禁手过滤，保持人机模式的既有玩法兼容。
+- **v1.0.86（Build 87）发布结果**：已完成单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建 GitHub Release 并上传 `gomoku.apk`、`gomoku.html`，同时部署 Cloudflare Worker 与 Pages。
+- **正式发布地址**：[`v1.0.86 Release`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.86)；APK 永久直链为 `https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk`。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)
 - **坑位 1：`LocalWebServer` 端口冲突回退 (`EADDRINUSE`)**：
@@ -436,5 +438,5 @@ node publish.js
 
 ---
 *交接文档最后更新时间：2026年9月4日*  
-*当前工程正式版本：v1.0.85 (Build 86)*  
+*当前工程正式版本：v1.0.86 (Build 87)*
 *当前工程状态：全量代码、构建管线、真机联调与 Cloudflare 云端控制体系交接 100% 就绪。*
