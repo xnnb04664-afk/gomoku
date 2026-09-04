@@ -411,19 +411,19 @@ node publish.js
     - `feedback`：用户提交的问题 Bug 与体验优化建议。
 
 ### 2. 🔑 鉴权令牌与本地配置文件安全机制
-- **配置文件路径**：项目根目录下的 `.cloudflare_config.json`；
+- **配置文件路径**：项目根目录下的 `.cloudflare_config.json`（仅保存 accountId、D1 ID 和脚本名，不保存令牌）；
 - **文件结构示例**：
   ```json
   {
     "accountId": "d3d45abb414d31df16085961b1161ab2",
-    "deployToken": "<仅保存在本机 .cloudflare_config.json，严禁写入文档或提交仓库>",
     "d1DatabaseId": "4cd53ea1-ef41-450e-843c-b48f6121cf7c",
     "scriptName": "gomoku-backend"
   }
   ```
 - **安全隔离规范**：
-  - 为防止 Token 意外泄露到公共代码仓库，`.cloudflare_config.json` 受到 `.gitignore` 的严格保护，**绝不提交至 GitHub**；
+  - 为防止 Token 意外泄露，`.cloudflare_config.json` 受到 `.gitignore` 的严格保护，**绝不提交至 GitHub**；部署令牌不再写入该文件，只能临时放在当前 PowerShell 会话的 `CLOUDFLARE_API_TOKEN` 环境变量中；
   - 当前文件 ACL 已收紧为 `XN\ZhuanZ1` 可读写、SYSTEM 与 Administrators 完全控制，已移除 `Authenticated Users` 和普通用户权限；发布脚本、`admin.js`、`deploy_worker.js` 仅从本机读取，不会把令牌写入仓库或客户端。
+  - **令牌轮换要求**：此前曾在聊天/本地配置中出现过的 GitHub PAT 与 Cloudflare 部署令牌均按已泄露处理，必须在对应控制台撤销并重新创建；新令牌不要粘贴到聊天、源码、命令行参数或截图中。
 
 ### 3. 🛠️ 开发者专属管理运维工具 (`admin.js`)
 项目根目录配备了安全加固后的命令行管理工具 `admin.js`。它只在本机读取 `.cloudflare_config.json`，不会输出 Token、密码哈希、Salt 或密保字段：
@@ -468,9 +468,15 @@ node publish.js
   ```
   工具会自动兼容尚未完成 Worker 迁移的旧版 `users` 表；首次通过管理员工具重置密码时，会在确认后补齐 `password_algo` 字段。
 - **手动触发 Worker 部署**：
-  ```bash
-  node deploy_worker.js
+  ```powershell
+  # 令牌只在当前 PowerShell 会话暂存，完成后立即清除；不要写入 .cloudflare_config.json 或提交 Git
+  $secure = Read-Host "输入 Cloudflare API Token" -AsSecureString
+  $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try { $env:CLOUDFLARE_API_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr); node deploy_worker.js }
+  finally { if ($ptr) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }; Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue }
   ```
+  `admin.js` 使用同一个 `CLOUDFLARE_API_TOKEN` 环境变量；不要把令牌粘贴到聊天、源码、命令行参数或截图中。
+  执行 `node publish.js`、`node deploy_worker.js` 或 `node admin.js ...` 前均需先设置该环境变量；任务完成后按上面示例自动清除。
 
 ---
 *交接文档最后更新时间：2026年9月4日*  

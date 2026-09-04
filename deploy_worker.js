@@ -26,7 +26,9 @@ try {
   fail(`.cloudflare_config.json 不是有效 JSON：${error.message}`);
 }
 
-const { accountId, deployToken, d1DatabaseId, scriptName } = config || {};
+const { accountId, d1DatabaseId, scriptName } = config || {};
+// 部署令牌只从当前 PowerShell 会话读取，禁止落盘到项目配置文件。
+const deployToken = String(process.env.CLOUDFLARE_API_TOKEN || '').trim();
 if (!/^[a-f0-9]{32}$/i.test(String(accountId || ''))) {
   fail('Cloudflare accountId 格式无效，已停止部署。');
 }
@@ -36,8 +38,8 @@ if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(Stri
 if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(String(scriptName || ''))) {
   fail('Cloudflare scriptName 格式无效，已停止部署。');
 }
-if (typeof deployToken !== 'string' || deployToken.trim().length < 20) {
-  fail('Cloudflare deployToken 缺失或格式异常，已停止部署。');
+if (deployToken.length < 20) {
+  fail('缺少 CLOUDFLARE_API_TOKEN 环境变量或其格式异常，已停止部署。');
 }
 
 const workerCode = fs.readFileSync(WORKER_PATH, 'utf8');

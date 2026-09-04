@@ -80,6 +80,9 @@ runPreflightChecks();
 
 // 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量或云端 Secret 注入。
 function runSecretFileGuard() {
+  if (String(process.env.CLOUDFLARE_API_TOKEN || '').trim().length < 20) {
+    throw new Error('发布安全门禁拦截：请先在当前 PowerShell 会话设置 CLOUDFLARE_API_TOKEN，令牌不会从配置文件读取。');
+  }
   const sensitivePath = /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:keystore|jks|p12|pfx|pem))$/i;
   const tracked = execSync('git ls-files', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
   const untracked = execSync('git ls-files --others --exclude-standard', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);

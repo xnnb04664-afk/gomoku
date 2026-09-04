@@ -2,7 +2,7 @@
  * 🛠️ 五子棋大师 - 开发者专用云端数据管理工具（Cloudflare D1）
  *
  * 只在受信任的开发机上运行。本工具读取项目根目录的
- * .cloudflare_config.json，但不会输出其中的 Token。
+ * .cloudflare_config.json；Cloudflare API Token 只从当前进程环境变量读取，绝不落盘。
  *
  * 常用命令：
  *   node admin.js users [--json]
@@ -45,9 +45,10 @@ try {
   process.exit(1);
 }
 
-const { accountId, deployToken, d1DatabaseId } = config;
+const { accountId, d1DatabaseId } = config;
+const deployToken = String(process.env.CLOUDFLARE_API_TOKEN || '').trim();
 if (!accountId || !deployToken || !d1DatabaseId) {
-  console.error('❌ Cloudflare 配置缺少 accountId、deployToken 或 d1DatabaseId。');
+  console.error('❌ Cloudflare 配置或 CLOUDFLARE_API_TOKEN 环境变量不完整。');
   process.exit(1);
 }
 
