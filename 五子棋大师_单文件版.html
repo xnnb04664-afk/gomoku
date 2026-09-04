@@ -1406,6 +1406,102 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       text-align: left;
       line-height: 1.35;
     }
+
+    /* --- 📍 对方上一步落子高能视觉指示系统 --- */
+    .opponent-move-indicator,
+    .opponent-move-indicator * {
+      pointer-events: none !important;
+    }
+    .opponent-move-indicator {
+      position: absolute;
+      left: 0; top: 0;
+      z-index: 25;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: left 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.25s ease;
+    }
+
+    /* 动态雷达波纹圈 */
+    .opponent-radar-ring {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      pointer-events: none;
+      border: 2.5px solid #f59e0b;
+      box-shadow: 0 0 16px rgba(245, 158, 11, 0.75), inset 0 0 8px rgba(251, 191, 36, 0.5);
+      animation: oppRadarPulse 1.6s infinite ease-out;
+    }
+    .opponent-radar-ring::after {
+      content: '';
+      position: absolute;
+      inset: -5px;
+      border-radius: 50%;
+      border: 1.5px dashed rgba(251, 191, 36, 0.85);
+      animation: oppRadarRotate 6s infinite linear;
+    }
+    @keyframes oppRadarPulse {
+      0% { transform: translate(-50%, -50%) scale(0.85); opacity: 1; }
+      65% { transform: translate(-50%, -50%) scale(1.45); opacity: 0.3; }
+      100% { transform: translate(-50%, -50%) scale(1.7); opacity: 0; }
+    }
+    @keyframes oppRadarRotate {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* 悬浮地标指示牌 */
+    .opp-float-badge {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      animation: oppFloatBounce 1.4s infinite alternate ease-in-out;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
+      white-space: nowrap;
+      user-select: none;
+    }
+    .opp-badge-body {
+      background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+      color: #fff;
+      border: 2px solid #ffffff;
+      border-radius: 20px;
+      padding: 2px 9px;
+      font-size: 11.5px;
+      font-weight: 900;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.4);
+      letter-spacing: 0.5px;
+    }
+    .opp-badge-coord {
+      background: rgba(0, 0, 0, 0.25);
+      padding: 1px 5px;
+      border-radius: 6px;
+      font-family: monospace, system-ui;
+      font-weight: 900;
+      color: #fef08a;
+    }
+    .opp-badge-arrow {
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 6px solid #f97316;
+      margin-top: -1px;
+    }
+    @keyframes oppFloatBounce {
+      0% { transform: translateX(-50%) translateY(0); }
+      100% { transform: translateX(-50%) translateY(-5px); }
+    }
+
     @keyframes boardShake {
       0%, 100% { transform: translate(0, 0); }
       20% { transform: translate(-4px, 3px) rotate(-0.5deg); }
@@ -2257,8 +2353,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         font-size: 13px !important;
       }
       .turn-bubble {
-        font-size: 13px !important;
-        padding: 2px 7px !important;
+        font-size: 11.5px !important;
+        padding: 2px 6px !important;
+        left: 84px !important;
+      }
+      .turn-bubble.right {
+        left: auto !important;
+        right: 84px !important;
       }
       .main-chat-box {
         height: 72px !important;
@@ -2450,6 +2551,19 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
   <!-- 手机全屏最大化棋盘容器 -->
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
+
+    <!-- 📍 对方上一步落子高能指示器 (悬浮地标 + 动态雷达波圈) -->
+    <div id="opponentMoveIndicator" class="opponent-move-indicator" style="display:none;">
+      <div class="opponent-radar-ring" id="oppRadarRing"></div>
+      <div class="opp-float-badge" id="oppFloatBadge">
+        <div class="opp-badge-body">
+          <span id="oppBadgeIcon">🤖</span>
+          <span id="oppBadgeTitle">AI落子</span>
+          <span class="opp-badge-coord" id="oppBadgeCoord">H8</span>
+        </div>
+        <div class="opp-badge-arrow"></div>
+      </div>
+    </div>
 
     <!-- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 -->
     <div id="skillBanner" class="skill-vfx-banner" onclick="closeSkillBanner()">
@@ -6313,6 +6427,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       radius = gridX * 0.44; // 棋子饱满大号，触摸体验极佳
       invalidateBoardCache();
       draw();
+      if (typeof updateOpponentMoveIndicator === 'function') updateOpponentMoveIndicator();
     }
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
@@ -7734,6 +7849,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         // 4. 激活主棋盘复盘模式
         isReplayMode = true;
         replayStepIndex = replayAllMoves.length; // 默认展示终局决胜盘面
+        if (typeof updateOpponentMoveIndicator === 'function') updateOpponentMoveIndicator();
 
         // 更新顶部状态栏与 Dock
         const topBar = document.getElementById("replayTopBar");
@@ -7914,6 +8030,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       draw();
+      updateUI();
       showGameNotice("已退出复盘模式");
     }
 
@@ -8419,6 +8536,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           ctx.stroke();
         }
 
+        if (vfx.type === 'opponent_drop_wave') {
+          const waveR1 = radius * (0.8 + progress * 2.4);
+          const waveR2 = radius * (0.5 + progress * 1.5);
+          ctx.save();
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR1, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(245, 158, 11, ${(1 - progress) * 0.95})`;
+          ctx.lineWidth = 3.5 * (1 - progress);
+          ctx.stroke();
+
+          ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR2, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(239, 68, 68, ${(1 - progress) * 0.8})`;
+          ctx.lineWidth = 2.5 * (1 - progress);
+          ctx.stroke();
+          ctx.restore();
+        }
+
         if (vfx.type === 'restart_wave') {
           const waveR = Math.min(cWidth, cHeight) * 0.75 * progress;
           ctx.beginPath(); ctx.arc(vfx.tx, vfx.ty, waveR, 0, Math.PI * 2);
@@ -8483,29 +8616,130 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           ctx.stroke();
         }
 
-        for (const p of vfx.particles) {
-          const pAge = now - p.birth;
-          if (pAge < p.life) {
-            const pProgress = pAge / p.life;
-            const alpha = 1 - pProgress;
-            ctx.fillStyle = p.color;
-            ctx.globalAlpha = Math.max(0, alpha);
-            ctx.beginPath();
-            let px = p.x, py = p.y;
-            if (p.angle !== undefined) {
-              p.angle += p.rotSpeed;
-              px = vfx.tx + Math.cos(p.angle) * (p.dist + progress * 16);
-              py = vfx.ty + Math.sin(p.angle) * (p.dist + progress * 16);
-            } else {
-              px = p.x + p.vx * (pAge / 16);
-              py = p.y + p.vy * (pAge / 16);
+        if (Array.isArray(vfx.particles)) {
+          for (const p of vfx.particles) {
+            const pAge = now - p.birth;
+            if (pAge < p.life) {
+              const pProgress = pAge / p.life;
+              const alpha = 1 - pProgress;
+              ctx.fillStyle = p.color;
+              ctx.globalAlpha = Math.max(0, alpha);
+              ctx.beginPath();
+              let px = p.x, py = p.y;
+              if (p.angle !== undefined) {
+                p.angle += p.rotSpeed;
+                px = vfx.tx + Math.cos(p.angle) * (p.dist + progress * 16);
+                py = vfx.ty + Math.sin(p.angle) * (p.dist + progress * 16);
+              } else {
+                px = p.x + p.vx * (pAge / 16);
+                py = p.y + p.vy * (pAge / 16);
+              }
+              ctx.arc(px, py, Math.max(1, p.size * (1 - pProgress * 0.6)), 0, Math.PI * 2);
+              ctx.fill();
             }
-            ctx.arc(px, py, Math.max(1, p.size * (1 - pProgress * 0.6)), 0, Math.PI * 2);
-            ctx.fill();
           }
         }
       }
       ctx.restore();
+    }
+
+    // 🗺️ 棋盘标准坐标转换 (横轴 A-O, 纵轴 15-1，与标准围棋/五子棋记谱法完全一致)
+    const COL_LABELS = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O'];
+    function getCoordName(r, c) {
+      if (r < 0 || r >= 15 || c < 0 || c >= 15) return '';
+      return `${COL_LABELS[c]}${15 - r}`;
+    }
+
+    // 📍 对方上一步落子高能视觉指示系统：动态跟随定位与状态自适应
+    function updateOpponentMoveIndicator() {
+      const ind = document.getElementById('opponentMoveIndicator');
+      if (!ind) return;
+
+      // 若处于对局结束、复盘模式或尚未落子，隐藏指示器
+      if (isOver || isReplayMode || !history || history.length === 0) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      // 寻找上一手落子（重点标出对手落子）
+      let targetMove = null;
+      let badgeTitle = '对方落子';
+      let badgeIcon = '📍';
+
+      if (gameMode === 'ai') {
+        if (turn === BLACK) {
+          // 当前是玩家回合：指示 AI (白方) 上一手落子
+          targetMove = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === WHITE);
+          badgeTitle = 'AI落子';
+          badgeIcon = '🤖';
+        } else {
+          // AI 思考中，暂隐指示器
+          ind.style.display = 'none';
+          return;
+        }
+      } else if (gameMode === 'online') {
+        const oppColor = (myOnlineColor === BLACK ? WHITE : BLACK);
+        if (turn === myOnlineColor) {
+          // 当前是本地玩家回合：指示联机对手上一手落子
+          targetMove = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === oppColor);
+          badgeTitle = '对方落子';
+          badgeIcon = '📍';
+        } else {
+          // 对手回合中，暂隐指示器
+          ind.style.display = 'none';
+          return;
+        }
+      } else {
+        // 本地双人对战 (PvP)
+        const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+        if (last && last.p !== turn) {
+          targetMove = last;
+          badgeTitle = `${last.p === BLACK ? '黑方' : '白方'}落子`;
+          badgeIcon = '📍';
+        } else {
+          ind.style.display = 'none';
+          return;
+        }
+      }
+
+      if (!targetMove || targetMove.r < 0 || targetMove.c < 0) {
+        ind.style.display = 'none';
+        return;
+      }
+
+      // 计算相对于 islandWrapper 的绝对坐标 (兼容各种屏幕与缩放)
+      const lx = paddingX + (targetMove.c + 0.5) * gridX;
+      const ly = paddingY + (targetMove.r + 0.5) * gridY;
+      const cvsRect = cvs.getBoundingClientRect();
+      const wrapRect = islandWrapper ? islandWrapper.getBoundingClientRect() : null;
+
+      let posX, posY;
+      if (wrapRect && wrapRect.width > 0) {
+        posX = Math.round(cvsRect.left - wrapRect.left + lx);
+        posY = Math.round(cvsRect.top - wrapRect.top + ly);
+      } else {
+        posX = Math.round(cvs.offsetLeft + lx);
+        posY = Math.round(cvs.offsetTop + ly);
+      }
+
+      ind.style.left = `${posX}px`;
+      ind.style.top = `${posY}px`;
+      ind.style.display = 'flex';
+
+      const titleEl = document.getElementById('oppBadgeTitle');
+      const iconEl = document.getElementById('oppBadgeIcon');
+      const coordEl = document.getElementById('oppBadgeCoord');
+      if (titleEl) titleEl.textContent = badgeTitle;
+      if (iconEl) iconEl.textContent = badgeIcon;
+      if (coordEl) coordEl.textContent = getCoordName(targetMove.r, targetMove.c);
+
+      // 自适应雷达波圈大小
+      const ring = document.getElementById('oppRadarRing');
+      if (ring) {
+        const ringSize = Math.max(28, Math.round(radius * 2.3));
+        ring.style.width = `${ringSize}px`;
+        ring.style.height = `${ringSize}px`;
+      }
     }
 
     function updateUI() {
@@ -8518,11 +8752,30 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         ? (turn === myOnlineColor)
         : (turn === BLACK);
 
+      // 获取对手上一手落子坐标（用于顶部木牌气泡联动提示）
+      let oppCoordText = '';
+      if (history && history.length > 0) {
+        let oppLast = null;
+        if (gameMode === 'ai') {
+          oppLast = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p === WHITE);
+        } else if (gameMode === 'online') {
+          oppLast = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0 && h.p !== myOnlineColor);
+        } else {
+          const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+          if (last && last.p !== turn) oppLast = last;
+        }
+        if (oppLast) {
+          oppCoordText = ` · 对方【${getCoordName(oppLast.r, oppLast.c)}】`;
+        }
+      }
+
       if (isP1Turn) {
         if (p1Status) p1Status.textContent = '落子中';
         if (p2Status) p2Status.textContent = '等待';
         if (bubble) {
-          bubble.textContent = (gameMode === 'pvp') ? '黑方回合' : '你的回合';
+          bubble.textContent = (gameMode === 'pvp')
+            ? `黑方回合${oppCoordText ? oppCoordText.replace('对方', '上手') : ''}`
+            : `你的回合${oppCoordText}`;
           bubble.className = 'turn-bubble';
         }
         const c1 = document.getElementById('p1Card');
@@ -8533,7 +8786,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (p1Status) p1Status.textContent = '等待';
         if (p2Status) p2Status.textContent = (gameMode === 'ai') ? '思考中' : '落子中';
         if (bubble) {
-          bubble.textContent = (gameMode === 'pvp') ? '白方回合' : ((gameMode === 'ai') ? '思考中' : '对手回合');
+          bubble.textContent = (gameMode === 'pvp')
+            ? `白方回合${oppCoordText ? oppCoordText.replace('对方', '上手') : ''}`
+            : ((gameMode === 'ai') ? '思考中' : '对手回合');
           bubble.className = 'turn-bubble right';
         }
         const c1 = document.getElementById('p1Card');
@@ -8541,6 +8796,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (c1) c1.style.opacity = '0.75';
         if (c2) c2.style.opacity = '1';
       }
+
+      updateOpponentMoveIndicator();
     }
 
     // 晴空浮岛草坪版是官方默认版本，默认始终展示青草绿地与猫爪棋子
@@ -8994,12 +9251,52 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
       }
 
-      // 3. 最后一手标记 (各主题自适应)
+      // 3. 最后一手标记 (高对比度战术四角瞄准框 + 各主题自适应中心符号)
       const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
       if (last) {
         const lx = paddingX + (last.c + 0.5) * gridX;
         const ly = paddingY + (last.r + 0.5) * gridY;
         const markSize = Math.max(12, Math.round(cWidth * 0.035));
+
+        // 🎯 绘制高对比度战术四角瞄准框 (四个金色 L 型角标，即便多子混乱也能瞬间定位)
+        ctx.save();
+        const boxHalf = radius * 0.96;
+        const cornerLen = Math.max(4.5, radius * 0.42);
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = Math.max(2.2, cWidth * 0.0058);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+        ctx.shadowBlur = 4;
+
+        // 左上角
+        ctx.beginPath();
+        ctx.moveTo(lx - boxHalf, ly - boxHalf + cornerLen);
+        ctx.lineTo(lx - boxHalf, ly - boxHalf);
+        ctx.lineTo(lx - boxHalf + cornerLen, ly - boxHalf);
+        ctx.stroke();
+
+        // 右上角
+        ctx.beginPath();
+        ctx.moveTo(lx + boxHalf - cornerLen, ly - boxHalf);
+        ctx.lineTo(lx + boxHalf, ly - boxHalf);
+        ctx.lineTo(lx + boxHalf, ly - boxHalf + cornerLen);
+        ctx.stroke();
+
+        // 左下角
+        ctx.beginPath();
+        ctx.moveTo(lx - boxHalf, ly + boxHalf - cornerLen);
+        ctx.lineTo(lx - boxHalf, ly + boxHalf);
+        ctx.lineTo(lx - boxHalf + cornerLen, ly + boxHalf);
+        ctx.stroke();
+
+        // 右下角
+        ctx.beginPath();
+        ctx.moveTo(lx + boxHalf - cornerLen, ly + boxHalf);
+        ctx.lineTo(lx + boxHalf, ly + boxHalf);
+        ctx.lineTo(lx + boxHalf, ly + boxHalf - cornerLen);
+        ctx.stroke();
+        ctx.restore();
 
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         if (activeThemeKey === 'sweet_romance') {
@@ -9134,6 +9431,27 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       history.push({r, c, p});
       playPopSound();
       triggerStoneDropVFX(r, c, p); // 💫 落子波纹与微光微粒反馈
+
+      // 💫 若为对手落子，触发专属金色雷达扩散冲击波特效
+      const isOpponentMove = (gameMode === 'ai' && p === WHITE) ||
+                             (gameMode === 'online' && p !== myOnlineColor) ||
+                             (gameMode === 'pvp' && history.length > 1);
+      if (isOpponentMove) {
+        const sx = paddingX + (c + 0.5) * gridX;
+        const sy = paddingY + (r + 0.5) * gridY;
+        activeVFX.push({
+          type: 'opponent_drop_wave',
+          tx: sx,
+          ty: sy,
+          startTime: performance.now(),
+          duration: 900
+        });
+        if (!vfxRAF) {
+          const raf = window.requestAnimationFrame || function(fn){ return setTimeout(fn, 16); };
+          vfxRAF = raf(vfxAnimLoop);
+        }
+      }
+
       draw();
 
       if (gameMode === 'online' && !fromRemote && conn && conn.open) {
