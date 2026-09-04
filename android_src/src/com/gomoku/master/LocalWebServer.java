@@ -22,6 +22,8 @@ public class LocalWebServer extends Thread {
     private final File          updateDir;
     private       ServerSocket  serverSocket;
     private volatile boolean    running  = false;
+    private static final int MAX_REQUEST_LINE = 8192;
+    private static final int MAX_HEADER_LINES = 64;
 
     // ── MIME 映射表 ─────────────────────────────────────────────────
     private static final Map<String, String> MIME = new HashMap<>();
@@ -116,16 +118,27 @@ public class LocalWebServer extends Thread {
             OutputStream rawOut = client.getOutputStream();
 
             // 读取请求行
-            String requestLine = readLine(rawIn);
+            String requestLine = readLine(rawIn, MAX_REQUEST_LINE);
             if (requestLine == null || requestLine.isEmpty()) {
                 client.close();
                 return;
             }
 
             // 耗尽请求头（必须读完，否则客户端无法接收响应）
+            int headerLines = 0;
             while (true) {
-                String hdr = readLine(rawIn);
-                if (hdr == null || hdr.isEmpty()) break;
+                if (++headerLines > MAX_HEADER_LINES) {
+                    sendError(rawOut, 431, "Request Header Fields Too Large");
+                    client.close();
+                    return;
+                }
+                String hdr = readLine(rawIn, MAX_REQUEST_LINE);
+                if (hdr == null) {
+                    sendError(rawOut, 431, "Request Header Fields Too Large");
+                    client.close();
+                    return;
+                }
+                if (hdr.isEmpty()) break;
             }
 
             String[] parts = requestLine.split(" ");
@@ -134,6 +147,11 @@ public class LocalWebServer extends Thread {
             // 仅支持 GET / HEAD
             String method = parts[0];
             String rawPath = parts[1];
+            if (!method.equals("GET") && !method.equals("HEAD")) {
+                sendError(rawOut, 405, "Method Not Allowed");
+                client.close();
+                return;
+            }
 
             // 去掉查询字符串，URL 解码
             String path = rawPath.split("\\?")[0];
@@ -142,7 +160,7 @@ public class LocalWebServer extends Thread {
             if (path.startsWith("/")) path = path.substring(1);
 
             // 安全检查：禁止路径穿越
-            if (path.contains("..")) {
+            if (path.contains("..") || path.indexOf('\0') >= 0 || path.indexOf('\\') >= 0) {
                 sendError(rawOut, 403, "Forbidden");
                 client.close();
                 return;
@@ -155,12 +173,15 @@ public class LocalWebServer extends Thread {
 
             try {
                 InputStream assetIn = null;
-                if (updateDir != null && updateDir.exists()) {
-                    File localFile = new File(updateDir, path);
-                    if (localFile.exists() && localFile.isFile() && localFile.length() > 0) {
-                        try {
+                // 热更新仅允许提供根目录 index.html，且必须位于沙盒目录内。
+                if (updateDir != null && updateDir.exists() && path.equals("index.html")) {
+                    try {
+                        File baseDir = updateDir.getCanonicalFile();
+                        File localFile = new File(baseDir, "index.html").getCanonicalFile();
+                        if (localFile.getParentFile().equals(baseDir) && localFile.exists() && localFile.isFile() && localFile.length() > 0) {
                             assetIn = new FileInputStream(localFile);
-                        } catch (Exception ignored) {}
+                        }
+                    } catch (Exception ignored) {
                     }
                 }
                 if (assetIn == null) {
@@ -208,7 +229,7 @@ public class LocalWebServer extends Thread {
 
     // ── 工具方法 ─────────────────────────────────────────────────
 
-    private static String readLine(InputStream in) throws IOException {
+    private static String readLine(InputStream in, int maxLength) throws IOException {
         StringBuilder sb = new StringBuilder();
         int b;
         while ((b = in.read()) != -1) {
@@ -220,6 +241,7 @@ public class LocalWebServer extends Thread {
                 break;
             }
             if (b == '\n') break;
+            if (sb.length() >= maxLength) return null;
             sb.append((char) b);
         }
         return sb.toString();

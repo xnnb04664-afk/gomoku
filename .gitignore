@@ -7,3 +7,15 @@ Thumbs.db
 .wrangler/
 gomoku.html
 gomoku.apk
+
+# Signing keys and local credentials must never enter Git history.
+release.keystore
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+.env
+.env.*
+!.env.example
+GomokuSecrets/

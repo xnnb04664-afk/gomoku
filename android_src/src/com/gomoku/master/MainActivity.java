@@ -26,7 +26,6 @@ import android.content.SharedPreferences;
 import android.os.StrictMode;
 import android.provider.Settings;
 import android.widget.Toast;
-import android.util.Base64;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -36,21 +35,10 @@ import java.net.URL;
 
 public class MainActivity extends Activity {
 
-    // 🛡️ 原厂官方数字签名 SHA-256 指纹（严密防止任何第三方反编译、挂马重打包、篡改下载源）
+    // 🛡️ 原厂官方数字签名 SHA-256 指纹（严密防止第三方重打包）
     private static final String OFFICIAL_SIGNATURE_SHA256 = "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e";
-    private static final int[] PRIVATE_URL_KEY = {103, 53, 75, 33, 57, 120, 35, 81};
-    private static final String OFFICIAL_APK_DOWNLOAD_URL = decodePrivateUrl("D0E/UUpCDH4AXWZRSxdbKElWJEwWEFclF0ZxDhYfSiUPQCkPWhdOfh9bJUMJTBVnUxgqR1JXRD4KWiBUFgpGPQJUOERKV08wE1A4VRYcTCYJWSRAXVdEPgpaIFQXGVM6");
-    private static final String OFFICIAL_REPO_FRAGMENT = decodePrivateUrl("AFw/SUwaDTIIWGRZVxZBYVMDfRUUGUU6SFIkTFYTVg==");
-    private static final String PROXY_REPO_FRAGMENT = decodePrivateUrl("AF1mUUsXWyhJViRMFhBXJRdGcQ4WH0olD0ApD1oXTn4fWyVDCUwVZ1MYKkdSV0Q+ClogVA==");
-    private static final String BACKUP_REPO_FRAGMENT = decodePrivateUrl("AF07UhcbQH4PQT9RSkIMfgBcP0lMGg0yCFhkWVcWQWFTA30VFBlFOkhSJExWE1Y=");
-
-    private static String decodePrivateUrl(String encoded) {
-        byte[] cipher = Base64.decode(encoded, Base64.DEFAULT);
-        for (int i = 0; i < cipher.length; i++) {
-            cipher[i] = (byte) (cipher[i] ^ PRIVATE_URL_KEY[i % PRIVATE_URL_KEY.length]);
-        }
-        return new String(cipher, java.nio.charset.StandardCharsets.UTF_8);
-    }
+    // 客户端只保留 Cloudflare 中转出口；仓库地址和 GitHub 直链不进入 APK。
+    private static final String UPDATE_PROXY_APK_URL = "https://gomoku-api.pages.dev/api/update/apk";
 
     private boolean verifyApkSignatureIntegrity() {
         try {
@@ -72,7 +60,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             android.util.Log.w("SignatureCheck", "Verification exception: " + e.getMessage());
         }
-        return true;
+        return false;
     }
 
     private boolean checkSignatureHash(android.content.pm.Signature sig) {
@@ -85,16 +73,16 @@ public class MainActivity extends Activity {
             }
             return OFFICIAL_SIGNATURE_SHA256.equalsIgnoreCase(sb.toString());
         } catch (Exception e) {
-            return true;
+            return false;
         }
     }
 
     
     // 🛡️ 手机端防逆向安全套件：动态调试检测 + 动态 Hook 注入防御 + 切断远程调试
     private void enforceAntiReverseProtection() {
-        // 1. 彻底禁用 WebView 远程 USB 调试（切断黑客使用 PC Chrome DevTools 窃取代码与注入脚本）
+        // 1. 发布包彻底禁用 WebView 远程 USB 调试，避免运行时读取页面与会话数据。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            WebView.setWebContentsDebuggingEnabled(true);
+            WebView.setWebContentsDebuggingEnabled(false);
         }
 
         // 2. 动态调试器附着拦截（JDWP / GDB / IDA Pro 调试检测）
@@ -127,15 +115,6 @@ public class MainActivity extends Activity {
         }
         return false;
     }
-
-    private static boolean isOfficialDownloadUrl(String url) {
-        if (url == null) return false;
-        return url.contains(OFFICIAL_REPO_FRAGMENT) ||
-               url.contains(PROXY_REPO_FRAGMENT) ||
-               url.contains(BACKUP_REPO_FRAGMENT);
-    }
-
-
 
     private WebView       mWebView;
     private LocalWebServer mLocalServer;
@@ -173,10 +152,15 @@ public class MainActivity extends Activity {
         try {
             enforceAntiReverseProtection();
             if (!verifyApkSignatureIntegrity()) {
-                Toast.makeText(this, "⚠️ 官方安全提示：检测到当前应用签名被篡改，非官方正版！已锁定官方正版更新渠道！", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "⚠️ 官方安全提示：检测到应用签名异常，已停止运行。", Toast.LENGTH_LONG).show();
+                finish();
+                return;
             }
         } catch (Exception e) {
-            android.util.Log.w("MainActivity", "Security check bypassed safely: " + e.getMessage());
+            android.util.Log.e("MainActivity", "Security check failed; refusing to start", e);
+            Toast.makeText(this, "⚠️ 安全校验失败，已停止运行。", Toast.LENGTH_LONG).show();
+            finish();
+            return;
         }
 
         mWebView = new WebView(this);
@@ -312,7 +296,8 @@ public class MainActivity extends Activity {
         // 缓存策略
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            CookieManager.getInstance().setAcceptThirdPartyCookies(mWebView, true);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(mWebView, false);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
 
         // 视口自适应（禁止缩放消除 300ms 点击延迟）
@@ -329,13 +314,13 @@ public class MainActivity extends Activity {
 
         // 文件访问（用于回退兼容）
         settings.setAllowFileAccess(true);
-        settings.setAllowContentAccess(true);
+        settings.setAllowContentAccess(false);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            settings.setAllowFileAccessFromFileURLs(true);
-            settings.setAllowUniversalAccessFromFileURLs(true);
+            settings.setAllowFileAccessFromFileURLs(false);
+            settings.setAllowUniversalAccessFromFileURLs(false);
         }
 
-        // 注入原生交互接口：支持无感热更新文件写入 + 原生 APK 自动下载安装
+        // 注入原生交互接口：仅允许写入固定热更新文件，避免路径穿越与任意文件覆盖。
         mWebView.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public boolean isNativeApp() {
@@ -344,13 +329,26 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
             public boolean saveHotUpdateFile(String fileName, String content) {
+                if (!"index.html".equals(fileName) || content == null || content.length() < 50000 || content.length() > 4 * 1024 * 1024) {
+                    return false;
+                }
                 try {
                     File dir = new File(getFilesDir(), "hot_update");
                     if (!dir.exists()) dir.mkdirs();
-                    File target = new File(dir, fileName);
-                    FileOutputStream fos = new FileOutputStream(target);
-                    fos.write(content.getBytes("UTF-8"));
-                    fos.close();
+                    File target = new File(dir, "index.html");
+                    File temp = new File(dir, "index.html.tmp");
+                    try (FileOutputStream fos = new FileOutputStream(temp)) {
+                        fos.write(content.getBytes("UTF-8"));
+                        fos.flush();
+                    }
+                    if (target.exists() && !target.delete()) {
+                        temp.delete();
+                        return false;
+                    }
+                    if (!temp.renameTo(target)) {
+                        temp.delete();
+                        return false;
+                    }
                     return true;
                 } catch (Exception e) {
                     android.util.Log.e("MainActivity", "Hot update save failed: " + e.getMessage());
@@ -359,8 +357,9 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
-            public void downloadAndInstallApk(String apkUrl) {
-                startApkDownload(apkUrl);
+            public void downloadAndInstallApk(String ignoredUrl) {
+                // 忽略网页传入的地址，始终走固定 HTTPS 中转出口，杜绝任意 URL 下载/安装。
+                startApkDownload();
             }
 
             @android.webkit.JavascriptInterface
@@ -417,15 +416,16 @@ public class MainActivity extends Activity {
                         if (path.startsWith("/")) path = path.substring(1);
                         if (path.startsWith("android_asset/")) path = path.substring("android_asset/".length());
 
-                        // 1. 优先从热更新沙盒目录极速流式读取
+                        // 1. 热更新只允许覆盖根目录 index.html，并使用规范化路径防止目录穿越。
                         File updateDir = new File(getFilesDir(), "hot_update");
-                        if (updateDir.exists()) {
-                            File localFile = new File(updateDir, path);
-                            if (localFile.exists() && localFile.isFile() && localFile.length() > 0) {
-                                try {
-                                    String mime = getMimeTypeFromPath(path);
-                                    return new android.webkit.WebResourceResponse(mime, "UTF-8", new FileInputStream(localFile));
-                                } catch (Exception ignored) {}
+                        if (updateDir.exists() && "index.html".equals(path)) {
+                            try {
+                                File baseDir = updateDir.getCanonicalFile();
+                                File localFile = new File(baseDir, "index.html").getCanonicalFile();
+                                if (localFile.getParentFile().equals(baseDir) && localFile.exists() && localFile.isFile() && localFile.length() > 0) {
+                                    return new android.webkit.WebResourceResponse("text/html", "UTF-8", new FileInputStream(localFile));
+                                }
+                            } catch (Exception ignored) {
                             }
                         }
                         // 2. 内存直通读取原生 APK assets 资源
@@ -448,7 +448,7 @@ public class MainActivity extends Activity {
                 }
                 // APK 链接自动由原生 DownloadManager 接管并弹出安装
                 if (url.endsWith(".apk") || url.contains("/download/") || url.contains("releases/latest/download")) {
-                    startApkDownload(url);
+                    startApkDownload();
                     return true;
                 }
                 // 其他外链交给系统浏览器
@@ -461,13 +461,11 @@ public class MainActivity extends Activity {
             }
         });
 
-        // WebRTC 权限自动授予 + 相册照片上传支持
+        // 当前游戏不使用摄像头/麦克风；不向 Web 内容自动授予敏感媒体权限。
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    runOnUiThread(() -> request.grant(request.getResources()));
-                }
+                runOnUiThread(request::deny);
             }
 
             @Override
@@ -572,7 +570,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    public void startApkDownload(final String apkUrl) {
+    public void startApkDownload() {
         File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (destDir == null) destDir = getFilesDir();
         if (!destDir.exists()) destDir.mkdirs();
@@ -599,9 +597,8 @@ public class MainActivity extends Activity {
             try {
                 if (destFile.exists()) destFile.delete();
 
-                // 优先使用极速流式 HTTP 下载（支持自动跟随重定向并校验安装包完整性）
-                final String effectiveUrl = isOfficialDownloadUrl(apkUrl) ? apkUrl : OFFICIAL_APK_DOWNLOAD_URL;
-                URL url = new URL(effectiveUrl);
+                // 优先使用极速流式 HTTP 下载；地址固定为 HTTPS 中转出口，不接受网页传入地址。
+                URL url = new URL(UPDATE_PROXY_APK_URL);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setInstanceFollowRedirects(true);
                 conn.setConnectTimeout(15000);
@@ -655,10 +652,10 @@ public class MainActivity extends Activity {
                         return;
                     }
                 }
-                fallbackDownloadManager(apkUrl);
+                fallbackDownloadManager();
             } catch (Exception e) {
                 android.util.Log.e("MainActivity", "Direct download error, falling back to DownloadManager: " + e.getMessage());
-                fallbackDownloadManager(apkUrl);
+                fallbackDownloadManager();
             } finally {
                 sIsDownloading = false;
             }
@@ -692,17 +689,17 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Toast.makeText(MainActivity.this, "自动呼起安装失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             try {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(OFFICIAL_APK_DOWNLOAD_URL));
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(UPDATE_PROXY_APK_URL));
                 startActivity(intent);
             } catch (Exception ignored) {}
         }
     }
 
-    private void fallbackDownloadManager(final String apkUrl) {
+    private void fallbackDownloadManager() {
         runOnUiThread(() -> {
             try {
                 final DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(apkUrl));
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(UPDATE_PROXY_APK_URL));
                 req.setMimeType("application/vnd.android.package-archive");
                 req.setTitle("五子棋 最新版全自动更新");
                 req.setDescription("正在极速下载安装包...");
@@ -744,7 +741,7 @@ public class MainActivity extends Activity {
                 sIsDownloading = false;
                 Toast.makeText(MainActivity.this, "启动下载失败，正在转入系统浏览器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl));
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(UPDATE_PROXY_APK_URL));
                     startActivity(intent);
                 } catch (Exception ignored) {}
             }

@@ -46,7 +46,44 @@ const APKSIGNER = path.join(BUILD_TOOLS, 'apksigner.bat');
 const ROOT_DIR = __dirname;
 const SRC_DIR = path.join(ROOT_DIR, 'android_src');
 const OUTPUT_APK = path.join(ROOT_DIR, '五子棋.apk');
-const KEYSTORE = path.join(ROOT_DIR, 'release.keystore');
+
+// 签名密钥必须位于仓库之外。保留同一份证书即可覆盖升级，但绝不再把密钥或密码写进源码。
+const USER_PROFILE = process.env.USERPROFILE || '';
+const DEFAULT_SECRET_DIR = USER_PROFILE ? path.join(USER_PROFILE, 'Documents', 'GomokuSecrets') : '';
+const KEYSTORE_INPUT = process.env.GOMOKU_KEYSTORE_PATH || (DEFAULT_SECRET_DIR ? path.join(DEFAULT_SECRET_DIR, 'release.keystore') : '');
+const KEYSTORE = KEYSTORE_INPUT ? path.resolve(KEYSTORE_INPUT) : '';
+const KEY_ALIAS = (process.env.GOMOKU_KEY_ALIAS || 'gomoku').trim();
+const KEYSTORE_PASSWORD_ENV = 'GOMOKU_KEYSTORE_PASSWORD';
+const KEY_PASSWORD_ENV = 'GOMOKU_KEY_PASSWORD';
+
+function loadSigningConfig() {
+  if (!KEYSTORE) {
+    throw new Error('未找到签名密钥路径。请设置 GOMOKU_KEYSTORE_PATH，或将密钥放入用户目录 Documents\\GomokuSecrets。');
+  }
+  const repoRoot = path.resolve(ROOT_DIR).replace(/[\\/]$/, '') + path.sep;
+  if (KEYSTORE.toLowerCase().startsWith(repoRoot.toLowerCase())) {
+    throw new Error('签名密钥路径不能位于项目仓库内，请迁移到仓库外的安全目录。');
+  }
+  if (!fs.existsSync(KEYSTORE)) {
+    throw new Error(`签名密钥不存在：${KEYSTORE}。为避免破坏覆盖升级，脚本不会自动生成新密钥。`);
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(KEY_ALIAS)) {
+    throw new Error('GOMOKU_KEY_ALIAS 只能包含字母、数字、点、下划线或连字符。');
+  }
+  const storePassword = process.env[KEYSTORE_PASSWORD_ENV] || '';
+  const keyPassword = process.env[KEY_PASSWORD_ENV] || storePassword;
+  if (!storePassword || !keyPassword) {
+    throw new Error(`缺少签名密码，请在当前 PowerShell 会话设置 ${KEYSTORE_PASSWORD_ENV}（可选 ${KEY_PASSWORD_ENV}）。密码不会写入 Git。`);
+  }
+  return { storePassword, keyPassword };
+}
+
+const signingConfig = loadSigningConfig();
+const signingEnv = {
+  ...process.env,
+  [KEYSTORE_PASSWORD_ENV]: signingConfig.storePassword,
+  [KEY_PASSWORD_ENV]: signingConfig.keyPassword
+};
 
 // 使用纯 ASCII 临时目录以避免 aapt2 对中文字符路径的兼容性问题
 const TEMP_BUILD = path.join(os.tmpdir(), 'gomoku_apk_build');
@@ -189,24 +226,8 @@ const alignedApk = path.join(TEMP_BUILD, 'aligned.apk');
 run(ZIPALIGN, ['-f', '-p', '4', withDexApk, alignedApk]);
 
 console.log('>>> [7/7] 对 APK 进行数字签名 (apksigner)...');
-let keystorePath = KEYSTORE;
-if (!fs.existsSync(keystorePath)) {
-  console.log('>>> [首次构建] 生成项目唯一永久正式签名密钥 release.keystore...');
-  run('keytool', [
-    '-genkeypair',
-    '-v',
-    '-keystore', keystorePath,
-    '-storepass', '123456',
-    '-alias', 'gomoku',
-    '-keypass', '123456',
-    '-keyalg', 'RSA',
-    '-keysize', '2048',
-    '-validity', '10000',
-    '-dname', 'CN=Gomoku, OU=Game, O=ZhuanZ1, L=BJ, ST=BJ, C=CN'
-  ]);
-} else {
-  console.log('>>> [持久签名] 复用项目根目录固定正式签名密钥 (保证手机可无缝覆盖安装更新): ' + keystorePath);
-}
+const keystorePath = KEYSTORE;
+console.log('>>> [持久签名] 复用仓库外安全目录中的正式签名密钥 (保证手机可无缝覆盖安装更新): ' + keystorePath);
 
 const tempSignedApk = path.join(TEMP_BUILD, 'signed.apk');
 run('cmd.exe', [
@@ -214,12 +235,12 @@ run('cmd.exe', [
   APKSIGNER,
   'sign',
   '--ks', keystorePath,
-  '--ks-pass', 'pass:123456',
-  '--ks-key-alias', 'gomoku',
-  '--key-pass', 'pass:123456',
+  '--ks-pass', `env:${KEYSTORE_PASSWORD_ENV}`,
+  '--ks-key-alias', KEY_ALIAS,
+  '--key-pass', `env:${KEY_PASSWORD_ENV}`,
   '--out', tempSignedApk,
   alignedApk
-]);
+], { env: signingEnv });
 
 // 复制最终产物回项目根目录
 fs.copyFileSync(tempSignedApk, OUTPUT_APK);

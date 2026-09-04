@@ -5279,6 +5279,19 @@
     // 🚀 Cloudflare Worker 私有仓库更新中转
     const CURRENT_VERSION_TAG = 'v1.0.87';
     const UPDATE_API_URL = 'https://gomoku-api.pages.dev/api/version';
+    const UPDATE_PROXY_APK_URL = 'https://gomoku-api.pages.dev/api/update/apk';
+    const UPDATE_PROXY_HTML_URL = 'https://gomoku-api.pages.dev/api/update/html';
+    function isTrustedUpdateUrl(value, expectedPath) {
+      try {
+        const parsed = new URL(value, UPDATE_API_URL);
+        return parsed.protocol === 'https:' && parsed.hostname === 'gomoku-api.pages.dev' && parsed.pathname === expectedPath;
+      } catch (_) { return false; }
+    }
+    async function sha256Hex(value) {
+      if (!window.crypto || !window.crypto.subtle) throw new Error('当前环境不支持更新完整性校验');
+      const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+      return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
     function compareVersions(v1, v2) {
       const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
       const p2 = (v2 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
@@ -5336,12 +5349,14 @@
           clearTimeout(timeoutId);
           if (res.ok) {
             const data = await res.json();
-            if (data && (data.tag || data.versionName || data.releaseTag)) {
+            const releaseTag = String(data && (data.tag || data.releaseTag || ('v' + data.versionName)) || '').trim();
+            if (data && /^v\d+\.\d+\.\d+$/.test(releaseTag)) {
               return {
-                tag: data.tag || data.releaseTag || ('v' + data.versionName),
+                tag: releaseTag,
                 notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-                fastUrl: data.apkDownload || (data.download && data.download.fastUrl) || '',
-                htmlUrl: data.htmlDownload || (data.download && data.download.htmlUrl) || ''
+                fastUrl: isTrustedUpdateUrl(data.apkDownload || (data.download && data.download.fastUrl), '/api/update/apk') ? (data.apkDownload || data.download.fastUrl) : UPDATE_PROXY_APK_URL,
+                htmlUrl: isTrustedUpdateUrl(data.htmlDownload || (data.download && data.download.htmlUrl), '/api/update/html') ? (data.htmlDownload || data.download.htmlUrl) : UPDATE_PROXY_HTML_URL,
+                htmlSha256: /^[0-9a-f]{64}$/i.test(String(data.htmlSha256 || '')) ? String(data.htmlSha256).toLowerCase() : ''
               };
             }
           }
@@ -5385,8 +5400,7 @@
                 clearTimeout(timeoutId);
                 if (res.ok) {
                   const htmlText = await res.text();
-                  if (htmlText && htmlText.length > 50000) {
-                    AndroidNativeApp.saveHotUpdateFile('index.html', htmlText);
+                  if (htmlText && htmlText.length > 50000 && versionData.htmlSha256 && await sha256Hex(htmlText) === versionData.htmlSha256 && AndroidNativeApp.saveHotUpdateFile('index.html', htmlText)) {
                     showGameNotice('🎉 自动更新成功！正在载入最新版...', false);
                     setTimeout(() => { location.reload(); }, 1000);
                     return;

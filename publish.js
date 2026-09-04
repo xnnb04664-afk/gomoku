@@ -78,6 +78,24 @@ function runPreflightChecks() {
 
 runPreflightChecks();
 
+// 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量或云端 Secret 注入。
+function runSecretFileGuard() {
+  const sensitivePath = /(^|[\\/])(?:\.env(?:\.[^\\/]*)?|.*\.(?:keystore|jks|p12|pfx|pem))$/i;
+  const tracked = execSync('git ls-files', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+  const untracked = execSync('git ls-files --others --exclude-standard', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+  const blocked = [...new Set([...tracked, ...untracked].filter(file => sensitivePath.test(file)))];
+  if (blocked.length > 0) {
+    throw new Error(`发布安全门禁拦截：以下敏感文件不能进入 Git：${blocked.join(', ')}`);
+  }
+  const rootKey = path.join(ROOT_DIR, 'release.keystore');
+  if (fs.existsSync(rootKey)) {
+    throw new Error('发布安全门禁拦截：项目根目录仍存在 release.keystore，请使用仓库外签名密钥。');
+  }
+  console.log('✅ 发布安全门禁通过：未发现可提交的签名密钥或凭据文件。');
+}
+
+runSecretFileGuard();
+
 // 1. 自动解析并递增 Android 版本号
 console.log('>>> [1/8] 读取并递增应用版本号...');
 let manifestContent = fs.readFileSync(MANIFEST_PATH, 'utf8');

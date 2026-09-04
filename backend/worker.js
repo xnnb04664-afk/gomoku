@@ -19,14 +19,36 @@ const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
 
 export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+    async fetch(request, env) {
+      const url = new URL(request.url);
 
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
+      const corsHeaders = {
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client',
+      'Vary': 'Origin',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'Permissions-Policy': 'camera=(), microphone=()',
     };
+
+    // 允许本地开发/Android 内嵌 localhost 与无 Origin 请求；拒绝任意第三方网页跨站调用。
+    const requestOrigin = request.headers.get('Origin') || '';
+    let originAllowed = !requestOrigin || requestOrigin === 'null';
+    if (requestOrigin && requestOrigin !== 'null') {
+      try {
+        const parsedOrigin = new URL(requestOrigin);
+        originAllowed = (parsedOrigin.protocol === 'http:' &&
+          (parsedOrigin.hostname === 'localhost' || parsedOrigin.hostname === '127.0.0.1' || parsedOrigin.hostname === '[::1]')) ||
+          requestOrigin === 'https://gomoku-api.pages.dev';
+      } catch (_) {
+        originAllowed = false;
+      }
+    }
+    if (requestOrigin === 'null' || !requestOrigin) {
+      corsHeaders['Access-Control-Allow-Origin'] = '*';
+    } else if (originAllowed) {
+      corsHeaders['Access-Control-Allow-Origin'] = requestOrigin;
+    }
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
@@ -241,9 +263,8 @@ export default {
       const latest = await getLatestPrivateRelease();
       if (latest.error) return latest;
       const assets = Array.isArray(latest.release.assets) ? latest.release.assets : [];
-      const asset = assetType === 'apk'
-        ? assets.find(item => item.name === 'gomoku.apk' || /\.apk$/i.test(item.name || ''))
-        : assets.find(item => item.name === 'gomoku.html' || /\.html?$/i.test(item.name || ''));
+      const expectedName = assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html';
+      const asset = assets.find(item => item.name === expectedName);
       if (!asset || !asset.url) return { error: `最新 Release 中没有可用的 ${assetType.toUpperCase()} 文件` };
       return { token: latest.token, release: latest.release, asset };
     };
@@ -269,17 +290,30 @@ export default {
     };
 
     // 版本检测与文件下载统一从 Worker 出口完成，客户端不再直连私有仓库。
+    if (url.pathname === "/api/version" && request.method !== 'GET') {
+      return json({ code: 405, msg: '仅支持 GET 请求' }, 405);
+    }
+    if ((url.pathname === "/api/update/apk" || url.pathname === "/api/update/html") && request.method !== 'GET') {
+      return json({ code: 405, msg: '仅支持 GET 请求' }, 405);
+    }
     if (url.pathname === "/api/version") {
       const latest = await getLatestPrivateRelease();
       if (latest.error) return json({ code: 503, msg: latest.error }, 503);
       const releaseTag = String(latest.release.tag_name || '').trim();
       if (!releaseTag) return json({ code: 502, msg: '私有仓库最新 Release 缺少版本号' }, 502);
+      const releaseAssets = Array.isArray(latest.release.assets) ? latest.release.assets : [];
+      const assetDigest = (name) => {
+        const digest = String(releaseAssets.find(item => item.name === name)?.digest || '').trim();
+        return /^sha256:[0-9a-f]{64}$/i.test(digest) ? digest.slice(7).toLowerCase() : '';
+      };
       return json({
         code: 0,
         tag: releaseTag,
         updateLog: latest.release.body || '五子棋版本更新与稳定性优化',
         apkDownload: `${url.origin}/api/update/apk`,
         htmlDownload: `${url.origin}/api/update/html`,
+        apkSha256: assetDigest('gomoku.apk'),
+        htmlSha256: assetDigest('gomoku.html'),
         officialSignatureSha256: "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e"
       });
     }

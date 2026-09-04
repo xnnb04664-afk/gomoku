@@ -16,11 +16,27 @@ $D8 = "$BUILD_TOOLS\d8.bat"
 $ZIPALIGN = "$BUILD_TOOLS\zipalign.exe"
 $APKSIGNER = "$BUILD_TOOLS\apksigner.bat"
 
-$ROOT_DIR = "d:\小游戏\五子棋"
+$ROOT_DIR = $PSScriptRoot
 $SRC_DIR = "$ROOT_DIR\android_src"
 $BUILD_DIR = "$ROOT_DIR\android_build_tmp"
 $OUTPUT_APK = "$ROOT_DIR\五子棋大师.apk"
-$KEYSTORE = "$ROOT_DIR\release.keystore"
+$SECRETS_DIR = if ($env:GOMOKU_SECRETS_DIR) { $env:GOMOKU_SECRETS_DIR } else { Join-Path $env:USERPROFILE "Documents\GomokuSecrets" }
+$KEYSTORE = if ($env:GOMOKU_KEYSTORE_PATH) { $env:GOMOKU_KEYSTORE_PATH } else { Join-Path $SECRETS_DIR "release.keystore" }
+$KEY_ALIAS = if ($env:GOMOKU_KEY_ALIAS) { $env:GOMOKU_KEY_ALIAS } else { "gomoku" }
+$KEYSTORE_PASSWORD = $env:GOMOKU_KEYSTORE_PASSWORD
+$KEY_PASSWORD = if ($env:GOMOKU_KEY_PASSWORD) { $env:GOMOKU_KEY_PASSWORD } else { $KEYSTORE_PASSWORD }
+
+$rootFull = ([System.IO.Path]::GetFullPath($ROOT_DIR)).TrimEnd('\') + '\'
+$keyFull = [System.IO.Path]::GetFullPath($KEYSTORE)
+if ($keyFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "签名密钥路径不能位于项目仓库内，请迁移到仓库外的安全目录。"
+}
+if (-not (Test-Path -LiteralPath $KEYSTORE -PathType Leaf)) {
+    throw "签名密钥不存在：$KEYSTORE。为避免破坏覆盖升级，脚本不会自动生成新密钥。"
+}
+if ([string]::IsNullOrWhiteSpace($KEYSTORE_PASSWORD) -or [string]::IsNullOrWhiteSpace($KEY_PASSWORD)) {
+    throw "缺少签名密码，请在当前 PowerShell 会话设置 GOMOKU_KEYSTORE_PASSWORD（可选 GOMOKU_KEY_PASSWORD）。密码不会写入 Git。"
+}
 
 # 清理并重建临时目录
 if (Test-Path $BUILD_DIR) {
@@ -75,11 +91,7 @@ Pop-Location
 if ($LASTEXITCODE -ne 0) { throw "zipalign failed" }
 
 Write-Host ">>> [7/7] 对 APK 进行 V1+V2 签名 (apksigner)..." -ForegroundColor Cyan
-if (-not (Test-Path $KEYSTORE)) {
-    & keytool -genkeypair -v -keystore $KEYSTORE -storepass 123456 -alias gomoku -keypass 123456 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=GomokuMaster, OU=Game, O=ZhuanZ1, L=BJ, ST=BJ, C=CN"
-}
-
-& $APKSIGNER sign --ks $KEYSTORE --ks-pass pass:123456 --ks-key-alias gomoku --key-pass pass:123456 --out $OUTPUT_APK "$BUILD_DIR\aligned.apk"
+& $APKSIGNER sign --ks $KEYSTORE --ks-pass env:GOMOKU_KEYSTORE_PASSWORD --ks-key-alias $KEY_ALIAS --key-pass env:GOMOKU_KEY_PASSWORD --out $OUTPUT_APK "$BUILD_DIR\aligned.apk"
 if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
 # 清理临时文件
