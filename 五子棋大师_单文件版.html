@@ -3723,8 +3723,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       const girlVal = window.ANIME_AVATAR_GIRL;
       const boyCard = document.getElementById('animeCardBoy');
       const girlCard = document.getElementById('animeCardGirl');
-      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === boyVal || selectedAvatarData === 'img/avatar_boy.png');
-      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === girlVal || selectedAvatarData === 'img/avatar_girl.png');
+      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === boyVal || selectedAvatarData === 'anime_boy' || selectedAvatarData === 'img/avatar_boy.png');
+      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === girlVal || selectedAvatarData === 'anime_girl' || selectedAvatarData === 'img/avatar_girl.png');
 
       // ✨ 实时预览：昵称输入框每次按键都立即更新 UI + 联机同步
       if (inputEl) {
