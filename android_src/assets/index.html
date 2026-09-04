@@ -565,6 +565,14 @@
       letter-spacing: 1px;
       background: rgba(255,255,255,0.75);
     }
+    .card-slot.restored {
+      animation: cardRestorePop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes cardRestorePop {
+      0% { transform: scale(0.8); opacity: 0.6; filter: drop-shadow(0 0 10px #f59e0b); }
+      50% { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 18px #f59e0b); }
+      100% { transform: scale(1); filter: none; }
+    }
     .slot-icon { font-size: 19px; line-height: 1.1; }
     .slot-title { font-size: 13px; font-weight: 900; color: #1e3a8a; }
     .slot-sub { font-size: 11px; font-weight: 800; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 95%; }
@@ -2461,6 +2469,28 @@
     let hasExtraMove = false; // 双星连珠额外落子状态
     let consecutiveMovesLeft = 0; // 连击落子计数器 (命运神抽狂暴连击等)
     let opponentFreeMove = false; // 命运神抽点数1: 对手免费补落一子状态
+    let undoStack = []; // 包含棋盘 + 干扰牌 + 技能状态的高精度撤销快照栈
+
+    function saveUndoSnapshot(type, metadata = {}) {
+      const snap = {
+        type: type, // 'move' | 'skill'
+        board: board.map(row => [...row]),
+        history: history.map(h => ({ ...h })),
+        turn: turn,
+        currentDrawnCards: JSON.parse(JSON.stringify(currentDrawnCards)),
+        cardUsedStatus: [...cardUsedStatus],
+        prophecyPoint: prophecyPoint ? { ...prophecyPoint } : null,
+        hasExtraMove: hasExtraMove,
+        consecutiveMovesLeft: consecutiveMovesLeft,
+        opponentFreeMove: opponentFreeMove,
+        winningLine: winningLine ? [...winningLine] : null,
+        isOver: isOver,
+        ...metadata
+      };
+      undoStack.push(snap);
+      if (undoStack.length > 50) undoStack.shift();
+      return snap;
+    }
 
     const cvs = document.getElementById('cvs');
     let ctx = cvs.getContext('2d');
@@ -4083,9 +4113,18 @@
         } else if (data.type === 'undo_res') {
           if (data.agree) {
             doUndo();
-            alert("✅ 对方同意了您的悔棋申请！");
+            if (data.board && data.cardUsedStatus) {
+              board = data.board.map(r => [...r]);
+              history = data.history.map(h => ({ ...h }));
+              cardUsedStatus = [...data.cardUsedStatus];
+              if (data.currentDrawnCards) currentDrawnCards = JSON.parse(JSON.stringify(data.currentDrawnCards));
+              if (data.turn !== undefined) turn = data.turn;
+              renderCardSlots();
+              draw(); updateUI(); persistGameState();
+            }
+            showGameNotice("✅ 对方同意了悔棋申请！已连同干扰牌一并恢复！", false);
           } else {
-            alert("❌ 对方拒绝了您的悔棋申请！");
+            showGameNotice("❌ 对方拒绝了您的悔棋申请！落子无悔哦~", true);
           }
         } else if (data.type === 'restart_req') {
           showCustomConfirm(`【${data.name || p2Name}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
@@ -4505,8 +4544,10 @@
       const cardTitle = card.name;
       if (!card.needTarget) {
         if (card.id === 'destiny_dice') {
+          saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'destiny_dice', player: turn });
           executeDestinyDice(idx, card);
         } else if (card.id === 'double_move') {
+          saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'double_move', player: turn });
           hasExtraMove = true;
           markCardUsed(idx);
           triggerSkillVFX('double_move');
@@ -4517,6 +4558,7 @@
             conn.send({ type: 'skill_use', skillId: card.id, cardName: card.name });
           }
         } else if (card.id === 'reforge_cards') {
+          saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'reforge_cards', player: turn });
           // 排除天降神抽自身，从其他8大技能中随机洗牌抽出3张全新神技牌
           const pool = SKILL_CARD_POOL.filter(c => c.id !== 'reforge_cards');
           const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
@@ -4537,6 +4579,7 @@
         } else if (card.id === 'identity_swap') {
           const placedStonesCount = history.filter(h => h && h.r >= 0).length;
           if (placedStonesCount === 0) return alert('🔄 棋盘上还没有棋子，无法互换身份！');
+          saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'identity_swap', player: turn });
           // 全盘颜色互换
           for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
             if (board[r][c] === BLACK) board[r][c] = WHITE;
@@ -4571,6 +4614,7 @@
           if (history.length < 2) {
             return alert("💣 棋盘上棋子太少，无法引爆大炸弹！至少需要 2 颗棋子~");
           }
+          saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'mega_bomb', player: turn });
           markCardUsed(idx);
 
           // 收集全部棋子颜色并打乱全盘坐标
@@ -4697,6 +4741,7 @@
         if (board[row][col] !== EMPTY) {
           return invalidAction('🔮 预言封锁只能指向空白格子！', row, col);
         }
+        saveUndoSnapshot('skill', { slotIdx, skillId: 'prophecy_block', player: myColor });
         prophecyPoint = { r: row, c: col, by: myColor };
         markCardUsed(slotIdx);
         triggerSkillVFX('freeze', row, col); // 复用冰花特效做视觉标记
@@ -4709,6 +4754,7 @@
         if (board[row][col] !== enemyColor) {
           return invalidAction("💥 只能抹除对方的棋子！", row, col);
         }
+        saveUndoSnapshot('skill', { slotIdx, skillId: 'remove_stone', player: myColor });
         board[row][col] = EMPTY;
         history = history.filter(h => !(h.r === row && h.c === col));
         markCardUsed(slotIdx);
@@ -4739,6 +4785,7 @@
           if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) {
             return invalidAction("🌟 只能平移到相邻的 8 个方向空格之一！", row, col);
           }
+          saveUndoSnapshot('skill', { slotIdx, skillId: 'shift_stone', player: myColor });
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = EMPTY;
           board[row][col] = myColor;
@@ -4759,6 +4806,7 @@
         if (board[row][col] !== enemyColor) {
           return invalidAction("🪞 偷天换日只能策反对方的棋子！", row, col);
         }
+        saveUndoSnapshot('skill', { slotIdx, skillId: 'swap_color', player: myColor });
         board[row][col] = myColor;
         const histItem = history.find(h => h.r === row && h.c === col);
         if (histItem) histItem.p = myColor;
@@ -4788,6 +4836,7 @@
           if (board[row][col] !== enemyColor) {
             return invalidAction("💫 目标必须是对方的棋子！", row, col);
           }
+          saveUndoSnapshot('skill', { slotIdx, skillId: 'swap_positions', player: myColor });
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = enemyColor;
           board[row][col] = myColor;
@@ -4811,6 +4860,7 @@
         if (board[row][col] !== enemyColor) {
           return invalidAction('💥 请点击对方的一颗棋子！', row, col);
         }
+        saveUndoSnapshot('skill', { slotIdx: activeSkill.slotIdx, skillId: 'destiny_remove', player: myColor });
         board[row][col] = EMPTY;
         history = history.filter(h => !(h.r === row && h.c === col));
         cancelActiveSkill();
@@ -4826,6 +4876,7 @@
         if (board[row][col] !== enemyColor) {
           return invalidAction('🪞 请点击对方的一颗棋子！', row, col);
         }
+        saveUndoSnapshot('skill', { slotIdx: activeSkill.slotIdx, skillId: 'destiny_convert', player: myColor });
         board[row][col] = myColor;
         const histItem = history.find(h => h.r === row && h.c === col);
         if (histItem) histItem.p = myColor;
@@ -4854,6 +4905,7 @@
         if (cells.some(pos => board[pos.r][pos.c] !== EMPTY)) {
           return invalidAction('👑 2×2 区域必须 4 个格子全为空！', row, col);
         }
+        saveUndoSnapshot('skill', { slotIdx: activeSkill.slotIdx, skillId: 'destiny_2x2', player: myColor });
         cancelActiveSkill();
         cells.forEach(pos => {
           board[pos.r][pos.c] = myColor;
@@ -8149,6 +8201,7 @@
         prophecyPoint = null;
       }
 
+      saveUndoSnapshot('move', { r, c, p, turn });
       board[r][c] = p;
       history.push({r, c, p});
       playPopSound();
@@ -8342,6 +8395,7 @@
       board = Array.from({length: 15}, () => Array(15).fill(0));
       turn = BLACK; history = []; isOver = false; winningLine = null;
       activeVFX = [];
+      undoStack = [];
       if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelAnimationFrame(vfxRAF); vfxRAF = null; }
       drawRandomThreeCards();
       playSkillSound('dice');
@@ -8377,9 +8431,108 @@
       }
     };
 
-    function doUndo() {
-      if (history.length === 0 || isOver) return;
+    function restoreSnapshot(snap) {
+      if (!snap) return;
+      const prevBoard = board.map(r => [...r]);
+      const prevCardsUsed = [...cardUsedStatus];
+
+      board = snap.board.map(r => [...r]);
+      history = snap.history.map(h => ({ ...h }));
+      turn = snap.turn;
+      currentDrawnCards = JSON.parse(JSON.stringify(snap.currentDrawnCards));
+      cardUsedStatus = [...snap.cardUsedStatus];
+      prophecyPoint = snap.prophecyPoint ? { ...snap.prophecyPoint } : null;
+      hasExtraMove = snap.hasExtraMove || false;
+      consecutiveMovesLeft = snap.consecutiveMovesLeft || 0;
+      opponentFreeMove = snap.opponentFreeMove || false;
       winningLine = null;
+      isOver = false;
+
+      // 💫 粒子反馈：检测被撤销的棋子，触发金色倒流粒子动效
+      for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 15; c++) {
+          if (prevBoard[r][c] !== EMPTY && board[r][c] === EMPTY) {
+            triggerUndoVFX(r, c);
+          }
+        }
+      }
+
+      // 🃏 恢复反馈：检测哪些已使用的干扰牌被满血复活
+      const restoredIndices = [];
+      for (let i = 0; i < 3; i++) {
+        if (prevCardsUsed[i] === true && cardUsedStatus[i] === false) {
+          restoredIndices.push(i);
+        }
+      }
+
+      cancelActiveSkill();
+      renderCardSlots();
+      draw();
+      updateUI();
+      persistGameState();
+      playSkillSound('rewind');
+
+      // 为被恢复的卡牌添加视觉弹跳光晕动效
+      if (restoredIndices.length > 0) {
+        setTimeout(() => {
+          const slots = document.querySelectorAll('.card-slot');
+          restoredIndices.forEach(idx => {
+            if (slots[idx]) {
+              slots[idx].classList.add('restored');
+              setTimeout(() => slots[idx] && slots[idx].classList.remove('restored'), 1000);
+            }
+          });
+        }, 60);
+        showGameNotice(`↩️ 悔棋成功！已连同本回合使用的 ${restoredIndices.length} 张干扰牌一并满血恢复！`, false);
+      } else {
+        showGameNotice("↩️ 悔棋成功！已撤回上一步落子", false);
+      }
+    }
+
+    function doUndo() {
+      if ((undoStack.length === 0 && history.length === 0) || (isOver && gameMode === 'online')) return;
+
+      // 🚀 优先使用高精度全息快照恢复（完美还原棋盘 + 干扰牌 + 技能全部状态）
+      if (undoStack.length > 0) {
+        let targetSnap = null;
+
+        // 1. 如果当前栈顶直接是刚刚单独发动的技能牌（尚未落子），直接撤销该技能牌与棋盘变化
+        if (undoStack[undoStack.length - 1].type === 'skill') {
+          targetSnap = undoStack.pop();
+          restoreSnapshot(targetSnap);
+          return;
+        }
+
+        if (gameMode === 'ai') {
+          // 🤖 人机模式：撤销一整轮（包括：AI的一手落子 + 玩家的一手落子 + 玩家本回合使用的所有干扰牌）
+          while (undoStack.length > 0 && (undoStack[undoStack.length - 1].turn === WHITE || undoStack[undoStack.length - 1].p === WHITE)) {
+            undoStack.pop();
+          }
+          while (undoStack.length > 0) {
+            targetSnap = undoStack.pop();
+            const next = undoStack[undoStack.length - 1];
+            if (!next) break;
+            if (next.turn === WHITE || next.p === WHITE) break;
+          }
+        } else {
+          // 👥 双人同屏或联机模式：撤销最后这一手（含伴随发动的技能牌）
+          if (undoStack.length > 0) {
+            targetSnap = undoStack.pop();
+          }
+          while (undoStack.length > 0 && undoStack[undoStack.length - 1].type === 'skill') {
+            targetSnap = undoStack.pop();
+          }
+        }
+
+        if (targetSnap) {
+          restoreSnapshot(targetSnap);
+          return;
+        }
+      }
+
+      // 兜底降级处理（防旧局数据无 undoStack 时的兼容）
+      winningLine = null;
+      isOver = false;
       const last = history[history.length - 1];
       if (last && last.action === 'identity_swap') {
         history.pop();
@@ -8415,21 +8568,35 @@
     const undoDescText = document.getElementById('undoDescText');
 
     document.getElementById('btnUndo').onclick = () => {
-      if (history.length === 0 || isOver) return;
+      if ((undoStack.length === 0 && history.length === 0) || (isOver && gameMode === 'online')) return;
 
       if (gameMode === 'ai') {
-        undoDescText.textContent = "正在向大师AI申请悔棋一步...";
+        let hasCardToRestore = false;
+        if (undoStack.length > 0) {
+          for (let i = undoStack.length - 1; i >= 0; i--) {
+            if (undoStack[i].type === 'skill' || undoStack[i].cardUsedStatus.some((s, idx) => s !== cardUsedStatus[idx])) {
+              hasCardToRestore = true;
+              break;
+            }
+            if (undoStack[i].turn === BLACK) break;
+          }
+        }
+        if (hasCardToRestore) {
+          undoDescText.textContent = "正在向大师AI申请悔棋，将连同本回合使用的干扰牌一并满血恢复！";
+        } else {
+          undoDescText.textContent = "正在向大师AI申请悔棋一步...";
+        }
         undoModal.classList.add('show');
         document.getElementById('btnUndoAgree').textContent = "确认悔棋";
         document.getElementById('btnUndoRefuse').style.display = "none";
       } else if (gameMode === 'online') {
         if (conn && conn.open) {
           conn.send({ type: 'undo_req' });
-          alert("📡 已向联机好友发送悔棋申请，等待对方同意...");
+          showGameNotice("📡 已向联机好友发送悔棋申请，等待对方同意...", false);
         }
       } else {
         const applicant = turn === BLACK ? `${p2Name} (白方)` : `${p1Name} (黑方)`;
-        undoDescText.textContent = `【${applicant}】请求悔棋一步，是否同意？`;
+        undoDescText.textContent = `【${applicant}】请求悔棋一步（含使用的干扰牌），是否同意？`;
         document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
         document.getElementById('btnUndoRefuse').style.display = "block";
         undoModal.classList.add('show');
@@ -8438,10 +8605,18 @@
 
     document.getElementById('btnUndoAgree').onclick = () => {
       undoModal.classList.remove('show');
-      if (gameMode === 'online' && conn && conn.open) {
-        conn.send({ type: 'undo_res', agree: true });
-      }
       doUndo();
+      if (gameMode === 'online' && conn && conn.open) {
+        conn.send({
+          type: 'undo_res',
+          agree: true,
+          board,
+          history,
+          cardUsedStatus,
+          currentDrawnCards,
+          turn
+        });
+      }
     };
 
     document.getElementById('btnUndoRefuse').onclick = () => {
@@ -8449,7 +8624,7 @@
       if (gameMode === 'online' && conn && conn.open) {
         conn.send({ type: 'undo_res', agree: false });
       } else {
-        alert("❌ 对方拒绝了您的悔棋申请！落子无悔哦~");
+        showGameNotice("❌ 已拒绝悔棋申请，落子无悔哦~", true);
       }
     };
 
@@ -8720,7 +8895,9 @@
       try {
         const state = {
           board, history, turn, stepCount: history.length, isOver, gameMode,
-          p1Name, p2Name, p1Avatar, p2Avatar
+          p1Name, p2Name, p1Avatar, p2Avatar,
+          currentDrawnCards, cardUsedStatus,
+          undoStack: undoStack.slice(-30)
         };
         sessionStorage.setItem('gomoku_active_game_state', JSON.stringify(state));
 
@@ -8733,6 +8910,7 @@
             p1Name, p1Avatar, p2Name, p2Avatar,
             board, history, turn,
             currentDrawnCards, cardUsedStatus,
+            undoStack: undoStack.slice(-30),
             timestamp: Date.now()
           };
           localStorage.setItem('gomoku_active_online_room', JSON.stringify(session));
@@ -8762,6 +8940,7 @@
             if (session.turn) turn = session.turn;
             if (session.currentDrawnCards) currentDrawnCards = session.currentDrawnCards;
             if (session.cardUsedStatus) cardUsedStatus = session.cardUsedStatus;
+            if (Array.isArray(session.undoStack)) undoStack = session.undoStack;
             gameMode = 'online';
 
             setTimeout(() => {
@@ -8785,6 +8964,9 @@
             history = s.history;
             turn = s.turn;
             isOver = s.isOver || false;
+            if (s.currentDrawnCards) currentDrawnCards = s.currentDrawnCards;
+            if (s.cardUsedStatus) cardUsedStatus = s.cardUsedStatus;
+            if (Array.isArray(s.undoStack)) undoStack = s.undoStack;
             if (s.gameMode) gameMode = s.gameMode;
             if (gameMode === 'ai' && turn === WHITE && !isOver) {
               setTimeout(smartAiMove, 300);
