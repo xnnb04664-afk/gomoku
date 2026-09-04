@@ -18,3 +18,4 @@
 - 已将主页面 `smartAiMove` 接入新引擎，保留 `forbiddenPoints` 参数；已同步 Android 资源并重新生成 `五子棋大师_单文件版.html`。
 - 已通过 Node 棋力用例、3 个 HTML 文件脚本语法检查，以及主页面和单文件版的 Playwright 实际落子测试。
 - 本轮尚未执行 APK 打包、GitHub 推送、Release 创建或线上 Worker 部署，等待明确发布指令。
+- AI 升级已提交 Git commit：`3b5226e feat: 升级大师级人机 AI 引擎`；工作区仅待记录本计划收尾。

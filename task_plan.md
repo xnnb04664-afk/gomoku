@@ -55,15 +55,15 @@
 
 ### Phase 7: 回归验证与提交
 
-**Status:** in_progress
+**Status:** completed
 
 - [x] 运行棋力单元测试、网页脚本检查和 Playwright 实际落子测试
 - [x] 检查主网页、Android 资源和单文件版同步
-- [ ] 更新交接文档并提交代码
+- [x] 更新交接文档并提交代码
 
 ## Next Step
 
-提交 AI 升级改动，并确认未执行 APK 打包、GitHub 推送或线上部署。
+AI 升级已完成并提交；后续若需交付到 GitHub，须明确执行“打包并上传 GitHub”。
 
 ## Errors Encountered
 
