@@ -8,9 +8,20 @@ const CONFIG_PATH = path.join(ROOT_DIR, '.cloudflare_config.json');
 const WORKER_PATH = path.join(ROOT_DIR, 'backend', 'worker.js');
 const PAGES_BUILD_DIR = path.join(ROOT_DIR, 'pages_build');
 const PAGES_PROJECT_NAME = 'gomoku-api';
+const CLOUDFLARE_REQUEST_TIMEOUT_MS = 30000;
 
 function fail(message) {
   throw new Error(message);
+}
+
+async function fetchWithTimeout(resource, init = {}, timeoutMs = CLOUDFLARE_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(resource, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // 部署令牌优先使用当前环境变量；未设置时自动读取仓库外的本机 DPAPI 凭据。
@@ -75,7 +86,7 @@ async function deployWorker() {
   form.append('worker.js', new Blob([workerCode], { type: 'application/javascript+module' }), 'worker.js');
 
   const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${scriptName}`;
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${deployToken.trim()}` },
     body: form
@@ -104,7 +115,8 @@ function deployPages() {
   execFileSync(commandName, commandArgs, {
     cwd: ROOT_DIR,
     env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken.trim() },
-    stdio: 'inherit'
+    stdio: 'inherit',
+    timeout: 120000
   });
   console.log('✅ [2/2] Cloudflare Pages deployed successfully!');
 }

@@ -212,7 +212,7 @@
 - **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本；版本响应不再下发 APK/HTML 完整下载 URL，只下发固定路径和一次性短时票据。文件请求必须使用 `X-Gomoku-Client: gomoku-app-client-v2` 与 `X-Gomoku-Update-Ticket` 请求头，不会直连 GitHub、Raw、jsDelivr 或第三方反代。
 - **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。每次新建或轮换 Pages Secret 后，都要重新部署 Pages Function 才能让当前生产部署绑定新值。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
-  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.90`）与【🚀 检查更新】按钮；
+  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.91`）与【🚀 检查更新】按钮；
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
   - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
@@ -234,7 +234,7 @@
 - **满盘判定**：15×15 棋盘在最后一手未形成五连时调用 `triggerGameDraw()`，统一结束对局、展示和棋卡片、保存完整棋谱并停止继续落子。
 - **战绩同步**：`game_history` 增加 `is_draw` 字段，Worker/Pages 启动时会为旧 D1 自动补列；`/api/report_game` 接收 `isDraw=true`，总局数增加、胜场不增加、积分保持不变。
 - **联机技能额度**：无目标的 `skill_use` 也进入接收端额度账本；每组三张手牌最多接受 3 次技能，`reforge_cards` 每局最多一次并将对手额度重置到新手牌阶段，防止神抽后的合法技能被误拦截，也防止重复神抽无限绕过上限。
-- **同步范围**：修复已同步到 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html`、`backend/worker.js` 与 `pages_build/_worker.js`，随后纳入 v1.0.90 的正式构建与发布。
+- **同步范围**：修复已同步到 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html`、`backend/worker.js` 与 `pages_build/_worker.js`，随后纳入 v1.0.91 的正式构建与发布。
 - **其余审查项结论**：`js/board.js`、`js/game.js`、`js/rule.js` 属于旧模块化代码，虽未被当前主页面直接加载，但仍由旧 `js/main.js` 组成一套兼容资源，暂不拆删；AI 字符串置换表和 MQTT 房间会话密钥属于需要独立性能/协议迁移测试的长期项，本次不冒险混入功能修复。
 
 ### 20. ⚡ 联机模块升级记录（本次工作区变更）
@@ -245,6 +245,14 @@
 - **发布结果（2026-09-04）**：v1.0.90（Build 91）已完成六主题/单文件同步、正式签名 APK 构建、GitHub `master` 推送和 GitHub Release 创建；手机安装包为仓库外正式密钥签名的 `五子棋.apk`，可覆盖旧版本安装。
 - **线上部署结果（2026-09-04）**：自动发布脚本最后一步因旧的直接 Cloudflare API Token 返回 400 而停止；随后已使用 Wrangler OAuth 分别补发 Worker `gomoku-backend`（版本 ID：`ac2104f5-fb02-42f0-8a56-8d1163f56e2d`）和 Pages 项目 `gomoku-api`。生产与预览 `/api/version` 均返回 HTTP 200、`v1.0.90`，预览部署地址为 `https://1457eb89.gomoku-api.pages.dev`。
 - **更新凭据边界**：独立 Worker 的 `/api/version` 当前仍返回 503 `更新服务尚未配置私有仓库凭据`，因为 `GITHUB_READ_TOKEN` 只配置在 Pages；客户端更新器固定优先走 Pages，因此当前更新链路正常。若将来需要 Worker 作为更新接口备用出口，应把 GitHub 只读 Secret 直接配置到 Worker `gomoku-backend`，然后用 Wrangler 重新部署；不要把 Secret 写入仓库或聊天。
+
+### 21. 🛠️ 全面代码优化记录（2026-09-05）
+- **Worker 更新链路**：GitHub Release 查询增加 30 秒实例缓存、并发请求合并和 8 秒超时；更新资产 URL 强制校验为固定 GitHub API 仓库路径，响应增加 8 MB 大小上限；所有 JSON 请求统一限制 512 KB，并将内部异常改为通用错误，避免把数据库/服务端细节返回给客户端。
+- **Worker 数据与联机可靠性**：天梯榜冷缓存期间合并 D1 查询；全服匹配改为带状态和时间条件的条件领取，避免并发请求抢到同一对手或把已匹配记录覆盖回等待状态；房间码改用 Web Crypto 随机数。
+- **前端网络与联机体验**：API 出口记忆最近可用节点，对 5xx/超时自动切换备用节点并清理定时器；匹配轮询增加单飞保护，避免网络慢时请求叠加；WebRTC 远端 ICE 候选增加上限；聊天文本限制为 500 字、历史最多 100 条；窗口调整合并到下一帧，减少手机旋转/拖拽时的重复重绘。
+- **本地服务与 Android 启动**：Node 本地静态服务改为流式读取，增加 `HEAD`、ETag/304、Content-Length 和隐藏文件拒绝；Android 内嵌服务在单次启动期间缓存不超过 4 MB 的静态资源，热更新目录仍保持独立读取。
+- **构建/部署脚本**：构建脚本跳过不存在的可选资源；Cloudflare Worker 上传和 Pages 部署增加超时，避免网络异常时无限等待。派生的 Pages Worker、Android 资源、单文件版已重新同步，正式签名 APK 已重新构建。
+- **本地验证结果**：`python tests/optimization_smoke.py`、`node tests/worker_unit.js`、六主题内嵌脚本语法检查、单文件版 Playwright 启动检查、APK v1/v2/v3 签名检查均通过；同时验证了本地服务的 GET/HEAD、ETag 304 和 `.git/config` 拒绝访问。本次只完成代码、派生文件和本地构建/测试，未自动部署 Cloudflare；后续明确要求线上发布时再执行部署脚本。
 
 ---
 
@@ -508,6 +516,6 @@ node publish.js
   如果已完成本机凭据首次设置，执行 `node publish.js`、`node deploy_worker.js` 或 `node admin.js ...` 会自动读取 DPAPI 凭据；否则才需要先设置该环境变量。任务完成后，临时环境变量按上面示例自动清除。
 
 ---
-*交接文档最后更新时间：2026年9月4日*  
-*当前工程正式版本：v1.0.90 (Build 91)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录，以及 MQTT/WebRTC 联机稳定性升级均已完成；源码、单文件版、Android 资源、正式签名 APK 和 GitHub Release 已同步，Worker/Pages 已部署，Pages 生产更新接口检查返回 HTTP 200 和 `v1.0.90`。独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`；当前客户端固定优先使用 Pages，不受影响。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；仅补发线上资源时不要重复运行发布脚本，直接使用 Wrangler 部署命令。*
+*交接文档最后更新时间：2026年9月5日*
+*当前工程正式版本：v1.0.91 (Build 92)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性以及本次运行时/服务端全面优化均已完成；源码、单文件版、Android 资源和正式签名 APK 已在本地同步并通过回归测试。本次未自动部署 Cloudflare，线上仍以已部署版本为准；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；仅补发线上资源时不要重复运行发布脚本，直接使用 Wrangler 部署命令。*

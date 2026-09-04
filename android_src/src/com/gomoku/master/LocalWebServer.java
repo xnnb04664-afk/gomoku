@@ -4,6 +4,7 @@ import android.content.res.AssetManager;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 内嵌轻量 HTTP 服务器 —— 从 assets 目录提供游戏文件
@@ -20,10 +21,13 @@ public class LocalWebServer extends Thread {
 
     private final AssetManager  assets;
     private final File          updateDir;
+    // APK 内的静态资源在一次启动期间不会变化，缓存小资源可减少 WebView 首屏连续打开文件的 I/O。
+    private final Map<String, byte[]> assetCache = new ConcurrentHashMap<>();
     private       ServerSocket  serverSocket;
     private volatile boolean    running  = false;
     private static final int MAX_REQUEST_LINE = 8192;
     private static final int MAX_HEADER_LINES = 64;
+    private static final int MAX_CACHED_ASSET_BYTES = 4 * 1024 * 1024;
 
     // ── MIME 映射表 ─────────────────────────────────────────────────
     private static final Map<String, String> MIME = new HashMap<>();
@@ -173,6 +177,7 @@ public class LocalWebServer extends Thread {
 
             try {
                 InputStream assetIn = null;
+                boolean fromHotUpdate = false;
                 // 热更新仅允许提供根目录 index.html，且必须位于沙盒目录内。
                 if (updateDir != null && updateDir.exists() && path.equals("index.html")) {
                     try {
@@ -180,11 +185,13 @@ public class LocalWebServer extends Thread {
                         File localFile = new File(baseDir, "index.html").getCanonicalFile();
                         if (localFile.getParentFile().equals(baseDir) && localFile.exists() && localFile.isFile() && localFile.length() > 0) {
                             assetIn = new FileInputStream(localFile);
+                            fromHotUpdate = true;
                         }
                     } catch (Exception ignored) {
                     }
                 }
-                if (assetIn == null) {
+                byte[] body = fromHotUpdate ? null : assetCache.get(path);
+                if (body == null && assetIn == null) {
                     try {
                         assetIn = assets.open(path);
                     } catch (IOException e1) {
@@ -199,8 +206,18 @@ public class LocalWebServer extends Thread {
                         }
                     }
                 }
-                byte[] body = readFully(assetIn);
-                assetIn.close();
+                if (body == null) {
+                    try {
+                        body = readFully(assetIn);
+                    } finally {
+                        if (assetIn != null) {
+                            try { assetIn.close(); } catch (IOException ignored) {}
+                        }
+                    }
+                    if (!fromHotUpdate && body.length <= MAX_CACHED_ASSET_BYTES) {
+                        assetCache.putIfAbsent(path, body);
+                    }
+                }
 
                 PrintWriter pw = new PrintWriter(new OutputStreamWriter(rawOut, "UTF-8"), false);
                 pw.print("HTTP/1.1 200 OK\r\n");

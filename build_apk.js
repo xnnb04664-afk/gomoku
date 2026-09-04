@@ -20,7 +20,8 @@ function run(cmd, args, options = {}) {
 
 function copyRecursiveSync(src, dest) {
   const exists = fs.existsSync(src);
-  const stats = exists && fs.statSync(src);
+  if (!exists) return;
+  const stats = fs.statSync(src);
   if (stats.isDirectory()) {
     if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
     fs.readdirSync(src).forEach(child => {

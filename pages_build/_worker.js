@@ -13,9 +13,16 @@ let isDbInitialized = false;
 let dbInitializationPromise = null;
 let cachedLeaderboard = null;
 let lastLeaderboardTime = 0;
+let leaderboardQueryPromise = null;
+let privateReleaseCache = null;
+let privateReleasePromise = null;
 const PASSWORD_PBKDF2_ITERATIONS = 100000;
 const LEADERBOARD_CACHE_TTL_MS = 15000;
 const MAX_LEADERBOARD_AVATAR_CHARS = 300;
+const PRIVATE_RELEASE_CACHE_TTL_MS = 30000;
+const GITHUB_REQUEST_TIMEOUT_MS = 8000;
+const MAX_JSON_BODY_BYTES = 512 * 1024;
+const MAX_UPDATE_ASSET_BYTES = 8 * 1024 * 1024;
 
 // 私有仓库更新中转：GitHub 凭据只通过 Worker Secret 注入，绝不下发到客户端。
 const UPDATE_REPOSITORY = 'xnnb04664-afk/gomoku';
@@ -74,6 +81,67 @@ export default {
       }
     });
 
+    const publicServerError = (label, error) => {
+      if (error && error.code === 'PAYLOAD_TOO_LARGE') {
+        return json({ code: 413, msg: '请求数据过大' }, 413);
+      }
+      console.error(`[${label}]`, error?.stack || error?.message || error);
+      return json({ code: 1, msg: `${label}，请稍后重试` }, 500);
+    };
+
+    // 同时限制 Content-Length 与分块请求的实际大小，避免大包绕过请求头限制。
+    const readJsonBody = async (request) => {
+      const declaredLength = Number(request.headers.get('content-length') || 0);
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BODY_BYTES) {
+        const error = new Error('request body too large');
+        error.code = 'PAYLOAD_TOO_LARGE';
+        throw error;
+      }
+      if (!request.body) return {};
+
+      const reader = request.body.getReader();
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (!part.value) continue;
+        total += part.value.byteLength;
+        if (total > MAX_JSON_BODY_BYTES) {
+          try { await reader.cancel(); } catch (_) {}
+          const error = new Error('request body too large');
+          error.code = 'PAYLOAD_TOO_LARGE';
+          throw error;
+        }
+        chunks.push(part.value);
+      }
+
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const raw = new TextDecoder().decode(bytes).trim();
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch (_) {
+        return {};
+      }
+    };
+
+    const fetchWithTimeout = async (resource, init = {}, timeoutMs = GITHUB_REQUEST_TIMEOUT_MS) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(resource, { ...init, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
     const leaderboardJson = (data, status = 200) => new Response(JSON.stringify(data), {
       status,
       headers: {
@@ -93,6 +161,12 @@ export default {
       const bytes = new Uint8Array(len);
       crypto.getRandomValues(bytes);
       return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function generateRoomCode() {
+      const bytes = new Uint32Array(1);
+      crypto.getRandomValues(bytes);
+      return String(100000 + (bytes[0] % 900000));
     }
 
     async function hashWithSalt(text, salt) {
@@ -288,13 +362,43 @@ export default {
     const getLatestPrivateRelease = async () => {
       const token = String(env.GITHUB_READ_TOKEN || '').trim();
       if (!token) return { error: '更新服务尚未配置私有仓库凭据' };
-      const response = await fetch(`${GITHUB_API_ORIGIN}/repos/${UPDATE_REPOSITORY}/releases/latest`, {
-        headers: githubHeaders(token)
-      });
-      if (!response.ok) {
-        return { error: `私有仓库版本读取失败 (${response.status})` };
+
+      const now = Date.now();
+      if (privateReleaseCache && now - privateReleaseCache.fetchedAt < PRIVATE_RELEASE_CACHE_TTL_MS) {
+        return { token, release: privateReleaseCache.release };
       }
-      return { token, release: await response.json() };
+
+      // 同一个 Worker 实例内的并发版本请求共用一次 GitHub 请求，避免冷启动时请求风暴。
+      if (!privateReleasePromise) {
+        privateReleasePromise = (async () => {
+          try {
+            const response = await fetchWithTimeout(`${GITHUB_API_ORIGIN}/repos/${UPDATE_REPOSITORY}/releases/latest`, {
+              headers: githubHeaders(token)
+            });
+            if (!response.ok) {
+              console.warn(`[update proxy] GitHub latest release returned HTTP ${response.status}`);
+              return { error: `私有仓库版本读取失败 (${response.status})` };
+            }
+            const release = await response.json();
+            if (!release || typeof release !== 'object') {
+              return { error: '私有仓库版本响应无效' };
+            }
+            privateReleaseCache = { release, fetchedAt: Date.now() };
+            return { release };
+          } catch (error) {
+            const message = error?.name === 'AbortError'
+              ? '私有仓库版本读取超时，请稍后重试'
+              : '私有仓库版本读取失败，请稍后重试';
+            console.error('[update proxy] GitHub latest release request failed:', error?.message || error);
+            return { error: message };
+          } finally {
+            privateReleasePromise = null;
+          }
+        })();
+      }
+
+      const result = await privateReleasePromise;
+      return result.error ? result : { token, release: result.release };
     };
 
     const getPrivateReleaseAsset = async (assetType) => {
@@ -304,6 +408,15 @@ export default {
       const expectedName = assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html';
       const asset = assets.find(item => item.name === expectedName);
       if (!asset || !asset.url) return { error: `最新 Release 中没有可用的 ${assetType.toUpperCase()} 文件` };
+      try {
+        const assetUrl = new URL(asset.url);
+        const expectedPathPrefix = `/repos/${UPDATE_REPOSITORY}/releases/assets/`;
+        if (assetUrl.origin !== GITHUB_API_ORIGIN || !assetUrl.pathname.startsWith(expectedPathPrefix)) {
+          return { error: '最新 Release 文件地址不受信任' };
+        }
+      } catch (_) {
+        return { error: '最新 Release 文件地址无效' };
+      }
       return { token: latest.token, release: latest.release, asset };
     };
 
@@ -392,11 +505,15 @@ export default {
         return json({ code: 401, msg: '更新票据已过期，请重新检查更新' }, 401);
       }
 
-      const assetResponse = await fetch(result.asset.url, {
+      const assetResponse = await fetchWithTimeout(result.asset.url, {
         headers: githubHeaders(result.token, 'application/octet-stream')
-      });
+      }, 20000);
       if (!assetResponse.ok || !assetResponse.body) {
         return json({ code: 502, msg: `更新文件读取失败 (${assetResponse.status})` }, 502);
+      }
+      const declaredAssetSize = Number(assetResponse.headers.get('content-length') || 0);
+      if (Number.isFinite(declaredAssetSize) && declaredAssetSize > MAX_UPDATE_ASSET_BYTES) {
+        return json({ code: 413, msg: '更新文件超过允许大小' }, 413);
       }
 
       const headers = new Headers(corsHeaders);
@@ -536,7 +653,7 @@ async function allocateNextAvailableUid(env) {
           }
         });
       } catch (err) {
-        return json({ code: 1, msg: '游客创建异常: ' + err.message }, 500);
+        return publicServerError('游客创建异常', err);
       }
     }
 
@@ -544,7 +661,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/auth/register' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { username, password, nickname, avatar, uid, token, securityQuestion, securityAnswer } = body;
 
         if (!username || typeof username !== 'string' || !username.trim()) {
@@ -622,7 +739,7 @@ async function allocateNextAvailableUid(env) {
         lastLeaderboardTime = 0;
         return json({ code: 0, msg: '注册成功并已自动登录！', data: created });
       } catch (err) {
-        return json({ code: 1, msg: '注册异常: ' + err.message }, 500);
+        return publicServerError('注册异常', err);
       }
     }
 
@@ -630,7 +747,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/user/update_profile' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid, token, nickname, avatar } = body;
         if (!uid) return json({ code: 1, msg: '缺少 uid' });
 
@@ -672,7 +789,7 @@ async function allocateNextAvailableUid(env) {
           }
         });
       } catch (err) {
-        return json({ code: 1, msg: '资料更新异常: ' + err.message }, 500);
+        return publicServerError('资料更新异常', err);
       }
     }
 
@@ -680,7 +797,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === "/api/auth/verify_session" && request.method === "POST") {
       if (!env.DB) return json({ code: 1, msg: "数据库未连接" }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid, token } = body;
         if (!uid) return json({ code: 1, msg: "缺少 uid" });
 
@@ -743,7 +860,7 @@ async function allocateNextAvailableUid(env) {
           });
         }
       } catch (err) {
-        return json({ code: 1, msg: "会话验证异常: " + err.message }, 500);
+        return publicServerError('会话验证异常', err);
       }
     }
 
@@ -751,7 +868,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const { username, password } = await request.json().catch(() => ({}));
+        const { username, password } = await readJsonBody(request);
         if (!username || !password) return json({ code: 1, msg: '请输入账号与密码' });
 
         const now = Date.now();
@@ -803,7 +920,7 @@ async function allocateNextAvailableUid(env) {
           }
         });
       } catch (err) {
-        return json({ code: 1, msg: '登录异常: ' + err.message }, 500);
+        return publicServerError('登录异常', err);
       }
     }
 
@@ -811,7 +928,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/auth/change_password' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const uid = typeof body.uid === 'string' ? body.uid.trim() : '';
         const token = typeof body.token === 'string' ? body.token.trim() : '';
         const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
@@ -889,7 +1006,7 @@ async function allocateNextAvailableUid(env) {
           }
         });
       } catch (err) {
-        return json({ code: 1, msg: '修改密码异常: ' + err.message }, 500);
+        return publicServerError('修改密码异常', err);
       }
     }
 
@@ -897,7 +1014,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/auth/get_security_q' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const { username } = await request.json().catch(() => ({}));
+        const { username } = await readJsonBody(request);
         if (!username) return json({ code: 1, msg: '请输入要找回的账号' });
 
         const user = await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
@@ -917,7 +1034,7 @@ async function allocateNextAvailableUid(env) {
 
         return json({ code: 0, data: { username: user.username, question: user.security_q } });
       } catch (err) {
-        return json({ code: 1, msg: '查询密保异常: ' + err.message }, 500);
+        return publicServerError('查询密保异常', err);
       }
     }
 
@@ -925,7 +1042,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/auth/reset_password' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const { username, securityAnswer, newPassword } = await request.json().catch(() => ({}));
+        const { username, securityAnswer, newPassword } = await readJsonBody(request);
         if (!username || !securityAnswer || !newPassword) {
           return json({ code: 1, msg: '请完整填写账号、密保答案与新密码' });
         }
@@ -986,7 +1103,7 @@ async function allocateNextAvailableUid(env) {
           }
         });
       } catch (err) {
-        return json({ code: 1, msg: '重置密码异常: ' + err.message }, 500);
+        return publicServerError('重置密码异常', err);
       }
     }
 
@@ -1000,7 +1117,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/history/record' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid, mode, isWin, isDraw, winnerColor, myColor, oppName, oppAvatar, moves, movesData, boardData, time, date } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
@@ -1046,7 +1163,7 @@ async function allocateNextAvailableUid(env) {
 
         return json({ code: 0, msg: '对局历史战报与棋局谱已成功同步至云端！' });
       } catch (err) {
-        return json({ code: 1, msg: '云端同步战绩异常: ' + err.message }, 500);
+        return publicServerError('云端同步战绩异常', err);
       }
     }
 
@@ -1084,7 +1201,7 @@ async function allocateNextAvailableUid(env) {
 
         return json({ code: 0, data: list });
       } catch (err) {
-        return json({ code: 1, msg: '查询云端历史战绩异常: ' + err.message }, 500);
+        return publicServerError('查询云端历史战绩异常', err);
       }
     }
 
@@ -1092,7 +1209,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/history/clear' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
@@ -1101,7 +1218,7 @@ async function allocateNextAvailableUid(env) {
         await env.DB.prepare('DELETE FROM game_history WHERE uid = ?').bind(auth.user.uid).run();
         return json({ code: 0, msg: '云端历史战报已彻底同步清空！' });
       } catch (err) {
-        return json({ code: 1, msg: '清空云端战绩异常: ' + err.message }, 500);
+        return publicServerError('清空云端战绩异常', err);
       }
     }
 
@@ -1109,7 +1226,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/history/delete' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid, id } = body;
         if (!uid || !id) return json({ code: 1, msg: '缺少参数' });
 
@@ -1118,7 +1235,7 @@ async function allocateNextAvailableUid(env) {
         await env.DB.prepare('DELETE FROM game_history WHERE uid = ? AND id = ?').bind(auth.user.uid, parseInt(id, 10)).run();
         return json({ code: 0, msg: '该条云端战绩已同步删除！' });
       } catch (err) {
-        return json({ code: 1, msg: '删除云端战绩异常: ' + err.message }, 500);
+        return publicServerError('删除云端战绩异常', err);
       }
     }
 
@@ -1131,7 +1248,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/match/join' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid, nickname, avatar } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户信息' });
 
@@ -1152,44 +1269,55 @@ async function allocateNextAvailableUid(env) {
           'SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1'
         ).bind(matchUid, now - 20000).first();
 
+        const formatMatched = (record) => ({
+          code: 0,
+          status: 'matched',
+          role: record.matched_color === 'black' ? 'host' : 'client',
+          color: record.matched_color,
+          roomCode: record.room_code,
+          opponent: {
+            uid: record.matched_with,
+            nickname: sanitizeText(record.matched_nickname, 12) || '好友',
+            avatar: compactAvatar(record.matched_avatar),
+            score: Number.isFinite(Number(record.matched_score)) ? Number(record.matched_score) : 1000
+          }
+        });
+
+        let claimedOpponent = false;
         if (opponent) {
-          // 匹配成功！分配 6 位专属房间码
-          const roomCode = String(Math.floor(100000 + Math.random() * 900000));
-          
-          // 对手执黑（作为房主创建连接），当前玩家执白（加入连接）
-          await env.DB.prepare(`
+          // 只有仍处于 waiting 且未超时的记录才能被领取，避免两个请求同时匹配到同一个人。
+          const roomCode = generateRoomCode();
+          const claim = await env.DB.prepare(`
             UPDATE match_queue
             SET status = 'matched', matched_with = ?, matched_color = 'black',
                 matched_nickname = ?, matched_avatar = ?, matched_score = ?,
                 room_code = ?, updated_at = ?
-            WHERE uid = ?
-          `).bind(matchUid, safeNick, safeAvatar, safeScore, roomCode, now, opponent.uid).run();
+            WHERE uid = ? AND status = 'waiting' AND updated_at > ?
+          `).bind(matchUid, safeNick, safeAvatar, safeScore, roomCode, now, opponent.uid, now - 20000).run();
+          claimedOpponent = Number(claim.meta?.changes || 0) === 1;
 
-          await env.DB.prepare(`
-            INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
-            VALUES (?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?)
-            ON CONFLICT(uid) DO UPDATE SET
-              status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
-              matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
-              matched_score = excluded.matched_score, room_code = excluded.room_code, updated_at = excluded.updated_at
-          `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score, roomCode, now).run();
+          if (claimedOpponent) {
+            // 当前玩家若已被另一请求匹配，不覆盖已有对局；否则写入白方记录。
+            await env.DB.prepare(`
+              INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
+              VALUES (?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?)
+              ON CONFLICT(uid) DO UPDATE SET
+                status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
+                matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
+                matched_score = excluded.matched_score, room_code = excluded.room_code, updated_at = excluded.updated_at
+              WHERE match_queue.status != 'matched'
+            `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score, roomCode, now).run();
 
-          return json({
-            code: 0,
-            status: 'matched',
-            role: 'client',
-            color: 'white',
-            roomCode: roomCode,
-            opponent: {
-              uid: opponent.uid,
-              nickname: opponent.nickname,
-              avatar: compactAvatar(opponent.avatar),
-              score: opponent.score
-            }
-          });
+            const current = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
+            if (current?.status === 'matched') return json(formatMatched(current));
+          }
         }
 
-        // 暂无等待对手，将自己放入等待队列
+        // 抢占失败时可能已经被其他请求匹配；先读取现状，绝不把已匹配记录重置为 waiting。
+        const existing = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
+        if (existing?.status === 'matched') return json(formatMatched(existing));
+
+        // 暂无可领取的等待对手，将自己放入队列；ON CONFLICT 条件防止覆盖并发产生的 matched 状态。
         await env.DB.prepare(`
           INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
           VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, NULL, NULL, NULL, NULL, ?)
@@ -1197,11 +1325,14 @@ async function allocateNextAvailableUid(env) {
             nickname = excluded.nickname, avatar = excluded.avatar, score = excluded.score,
             status = 'waiting', matched_with = NULL, matched_color = NULL, matched_nickname = NULL,
             matched_avatar = NULL, matched_score = NULL, room_code = NULL, updated_at = excluded.updated_at
+          WHERE match_queue.status != 'matched'
         `).bind(matchUid, safeNick, safeAvatar, safeScore, now).run();
 
+        const finalRecord = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
+        if (finalRecord?.status === 'matched') return json(formatMatched(finalRecord));
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
-        return json({ code: 1, msg: '匹配服务异常: ' + err.message }, 500);
+        return publicServerError('匹配服务异常', err);
       }
     }
 
@@ -1209,7 +1340,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/match/poll' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid, token } = body;
         if (!uid) return json({ code: 1, msg: '缺少 uid' });
 
@@ -1245,7 +1376,7 @@ async function allocateNextAvailableUid(env) {
         await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ?').bind(now, matchUid).run();
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
-        return json({ code: 1, msg: '轮询异常: ' + err.message }, 500);
+        return publicServerError('轮询异常', err);
       }
     }
 
@@ -1253,7 +1384,7 @@ async function allocateNextAvailableUid(env) {
     if (url.pathname === '/api/match/cancel' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const { uid } = body;
         if (uid) {
           const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
@@ -1262,42 +1393,58 @@ async function allocateNextAvailableUid(env) {
         }
         return json({ code: 0, msg: '已成功取消匹配' });
       } catch (err) {
-        return json({ code: 1, msg: '取消异常: ' + err.message }, 500);
+        return publicServerError('取消异常', err);
       }
     }
 
     // ── 7. 全服天梯榜（仅正式注册账号上榜，游客与未注册用户绝不上榜） ──
     if (url.pathname === '/api/rank' && request.method === 'GET') {
-      if (env.DB) {
-        const cacheNow = Date.now();
-        if (Array.isArray(cachedLeaderboard) && cacheNow - lastLeaderboardTime < LEADERBOARD_CACHE_TTL_MS) {
-          return leaderboardJson({ code: 0, data: cachedLeaderboard });
-        }
-        const { results } = await env.DB.prepare(`
-          SELECT uid, nickname AS name,
-                 CASE
-                   WHEN avatar IS NULL OR avatar = '' OR avatar LIKE 'data:image/%' OR length(avatar) > ${MAX_LEADERBOARD_AVATAR_CHARS}
-                   THEN '👦'
-                   ELSE avatar
-                 END AS avatar,
-                 score, wins, total_games
-          FROM users
-          WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL
-          ORDER BY score DESC, wins DESC, uid ASC
-          LIMIT 30
-        `).all();
-        cachedLeaderboard = Array.isArray(results) ? results : [];
-        lastLeaderboardTime = cacheNow;
+      if (!env.DB) return leaderboardJson({ code: 0, data: [] });
+
+      const cacheNow = Date.now();
+      if (Array.isArray(cachedLeaderboard) && cacheNow - lastLeaderboardTime < LEADERBOARD_CACHE_TTL_MS) {
         return leaderboardJson({ code: 0, data: cachedLeaderboard });
       }
-      return leaderboardJson({ code: 0, data: [] });
+
+      // 冷缓存期间共用一次 D1 查询，避免多个客户端同时打开天梯榜造成查询风暴。
+      if (!leaderboardQueryPromise) {
+        leaderboardQueryPromise = (async () => {
+          const { results } = await env.DB.prepare(`
+            SELECT uid, nickname AS name,
+                   CASE
+                     WHEN avatar IS NULL OR avatar = '' OR avatar LIKE 'data:image/%' OR length(avatar) > ${MAX_LEADERBOARD_AVATAR_CHARS}
+                     THEN '👦'
+                     ELSE avatar
+                   END AS avatar,
+                   score, wins, total_games
+            FROM users
+            WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL
+            ORDER BY score DESC, wins DESC, uid ASC
+            LIMIT 30
+          `).all();
+          const data = Array.isArray(results) ? results : [];
+          cachedLeaderboard = data;
+          lastLeaderboardTime = Date.now();
+          return data;
+        })();
+      }
+
+      const queryPromise = leaderboardQueryPromise;
+      try {
+        const data = await queryPromise;
+        return leaderboardJson({ code: 0, data });
+      } catch (err) {
+        return publicServerError('排行榜查询异常', err);
+      } finally {
+        if (leaderboardQueryPromise === queryPromise) leaderboardQueryPromise = null;
+      }
     }
 
     // ── 8. 战绩安全上报（Token 验证 + 15 秒冷却防刷） ─────
     if (url.pathname === '/api/report_game' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const { uid, token, isWin, isDraw = false } = await request.json().catch(() => ({}));
+        const { uid, token, isWin, isDraw = false } = await readJsonBody(request);
 
         if (!uid || !token) {
           return json({ code: 401, msg: '未授权：缺失身份凭证' }, 401);
@@ -1357,14 +1504,14 @@ async function allocateNextAvailableUid(env) {
           }
         });
       } catch (err) {
-        return json({ code: 1, msg: '结算异常: ' + err.message }, 500);
+        return publicServerError('结算异常', err);
       }
     }
 
     // ── 8. 用户意见反馈与问题提交中枢 ──────────────────────────
     if (url.pathname === '/api/feedback' && request.method === 'POST') {
       try {
-        const body = await request.json().catch(() => ({}));
+        const body = await readJsonBody(request);
         const content = String(body.content || '').trim().slice(0, 1000);
         if (!content || content.length < 3) {
           return json({ code: 1, msg: '反馈内容太短，请至少输入3个字' }, 400);
@@ -1398,7 +1545,7 @@ async function allocateNextAvailableUid(env) {
           msg: '反馈提交成功，非常感谢您的宝贵意见与支持！'
         });
       } catch (err) {
-        return json({ code: 1, msg: '反馈提交异常: ' + err.message }, 500);
+        return publicServerError('反馈提交异常', err);
       }
     }
 

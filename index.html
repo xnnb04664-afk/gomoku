@@ -937,17 +937,25 @@
       border-color: #ff6b81; background: #ffeaa7; transform: scale(1.15); box-shadow: 0 2px 0 var(--border-dark);
     }
     .anime-avatar-card {
-      display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.8);
+      position: relative; box-sizing: border-box; width: 100%;
+      display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.85);
       border: 2px solid var(--border-dark); border-radius: 12px; padding: 6px 8px;
-      cursor: pointer; box-shadow: 0 2px 0 var(--border-dark); transition: all 0.15s;
+      cursor: pointer; box-shadow: 0 2px 0 var(--border-dark); transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     }
     .anime-avatar-card:active { transform: scale(0.97); }
     .anime-avatar-card.selected {
       border-color: #ff4757 !important;
-      background: #fff3c4 !important;
-      box-shadow: 0 0 0 2.5px #ff4757, 0 3px 0 var(--border-dark) !important;
-      transform: scale(1.02);
+      background: #fff8e7 !important;
+      box-shadow: inset 0 0 0 1px #ff4757, 0 2px 0 var(--border-dark) !important;
+      transform: none !important;
     }
+    .anime-avatar-card .card-check-badge {
+      position: absolute; top: -5px; right: -5px; width: 16px; height: 16px;
+      border-radius: 50%; background: #ff4757; color: #fff; font-size: 10px; font-weight: 900;
+      display: none; align-items: center; justify-content: center; border: 1.5px solid #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25); line-height: 1; z-index: 2;
+    }
+    .anime-avatar-card.selected .card-check-badge { display: flex; }
     .name-input-box {
       width: 100%; padding: 8px 10px; border-radius: 12px; border: 2px solid var(--border-dark);
       font-size: 14px; font-weight: 800; text-align: center; outline: none; margin-bottom: 8px;
@@ -1638,19 +1646,25 @@
       <div style="font-size:12px; font-weight:900; color:#e056fd; margin:6px 0 4px 0; display:flex; align-items:center; gap:4px;">
         <span>✨ 专属情侣动漫头像（点击选用）：</span>
       </div>
-      <div class="anime-avatar-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:6px; margin-bottom:8px;">
+      <div class="anime-avatar-grid" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:8px; margin-bottom:8px; align-items:stretch;">
         <div class="anime-avatar-card" id="animeCardBoy" onclick="selectImgAvatar(this, 'anime_boy')">
-          <img id="animeImgBoy" src="img/avatar_boy.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #70a1ff;" />
-          <div style="text-align:left; line-height:1.2;">
-            <div style="font-size:12px; font-weight:900; color:#2d3436;">银发少年 👦</div>
-            <div style="font-size:10px; color:#636e72;">优雅礼服</div>
+          <div class="card-check-badge">✓</div>
+          <img id="animeImgBoy" src="img/avatar_boy.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #70a1ff; flex-shrink:0; display:block;" />
+          <div style="flex:1; min-width:0; text-align:left; display:flex; flex-direction:column; justify-content:center;">
+            <div style="font-size:12px; font-weight:900; color:#2d3436; display:flex; align-items:center; gap:2px; white-space:nowrap;">
+              <span>银发少年</span><span style="font-size:13px; line-height:1;">👦</span>
+            </div>
+            <div style="font-size:10px; color:#636e72; margin-top:2px; white-space:nowrap;">优雅礼服</div>
           </div>
         </div>
         <div class="anime-avatar-card" id="animeCardGirl" onclick="selectImgAvatar(this, 'anime_girl')">
-          <img id="animeImgGirl" src="img/avatar_girl.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #ff9ff3;" />
-          <div style="text-align:left; line-height:1.2;">
-            <div style="font-size:12px; font-weight:900; color:#2d3436;">银发少女 👧</div>
-            <div style="font-size:10px; color:#636e72;">甜美眨眼</div>
+          <div class="card-check-badge">✓</div>
+          <img id="animeImgGirl" src="img/avatar_girl.png" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:1.5px solid #ff9ff3; flex-shrink:0; display:block;" />
+          <div style="flex:1; min-width:0; text-align:left; display:flex; flex-direction:column; justify-content:center;">
+            <div style="font-size:12px; font-weight:900; color:#2d3436; display:flex; align-items:center; gap:2px; white-space:nowrap;">
+              <span>银发少女</span><span style="font-size:13px; line-height:1;">👧</span>
+            </div>
+            <div style="font-size:10px; color:#636e72; margin-top:2px; white-space:nowrap;">甜美眨眼</div>
           </div>
         </div>
       </div>
@@ -2563,6 +2577,8 @@
 
     let p1ChatTimer = null;
     let p2ChatTimer = null;
+    const MAX_CHAT_HISTORY = 100;
+    const MAX_CHAT_MESSAGE_CHARS = 500;
     let chatHistory = [
       { sender: 1, name: p1Name, avatar: p1Avatar, text: '你好呀~ 晴空草坪见！🌿', time: getNowTime() }
     ];
@@ -2672,19 +2688,22 @@
 
     function renderChatHistory() {
       const box = document.getElementById('chatHistoryBox');
-      box.innerHTML = chatHistory.map(msg => `
-        <div class="msg-row ${msg.sender === 1 ? 'right' : 'left'}">
-          <div class="msg-avatar">${renderAvatarElement(msg.avatar)}</div>
-          <div class="msg-body">
-            <div class="msg-info">${escapeHtml(msg.name)} · ${escapeHtml(msg.time)}</div>
-            <div class="msg-text">${escapeHtml(msg.text)}</div>
+      if (box) {
+        box.innerHTML = chatHistory.map(msg => `
+          <div class="msg-row ${msg.sender === 1 ? 'right' : 'left'}">
+            <div class="msg-avatar">${renderAvatarElement(msg.avatar)}</div>
+            <div class="msg-body">
+              <div class="msg-info">${escapeHtml(msg.name)} · ${escapeHtml(msg.time)}</div>
+              <div class="msg-text">${escapeHtml(msg.text)}</div>
+            </div>
           </div>
-        </div>
-      `).join('');
-      box.scrollTop = box.scrollHeight;
+        `).join('');
+        box.scrollTop = box.scrollHeight;
+      }
 
       // 💬 常驻聊天框独占单行展示最新 3 条对局消息 (每条独占一行，绝不重叠挤压)
       const mainContent = document.getElementById('mainChatContent');
+      if (!mainContent) return;
       if (!chatHistory || chatHistory.length === 0) {
         mainContent.innerHTML = `
           <div class="main-chat-line" style="color:#8c7b75; font-size:12px; justify-content:center; height:100%;">
@@ -2724,14 +2743,19 @@
     }
 
     function addMessage(sender, text) {
+      const normalizedText = String(text == null ? '' : text).trim().slice(0, MAX_CHAT_MESSAGE_CHARS);
+      if (!normalizedText) return;
       const name = sender === 1 ? p1Name : (gameMode === 'ai' ? '大师AI' : p2Name);
       const avatar = sender === 1 ? p1Avatar : (gameMode === 'ai' ? '🤖' : p2Avatar);
-      chatHistory.push({ sender, name, avatar, text, time: getNowTime() });
+      chatHistory.push({ sender, name, avatar, text: normalizedText, time: getNowTime() });
+      if (chatHistory.length > MAX_CHAT_HISTORY) {
+        chatHistory.splice(0, chatHistory.length - MAX_CHAT_HISTORY);
+      }
       renderChatHistory();
-      showBubble(sender, text);
+      showBubble(sender, normalizedText);
 
       if (gameMode === 'online' && conn && conn.open && sender === 1) {
-        conn.send({ type: 'chat', text, name: p1Name, avatar: p1Avatar });
+        conn.send({ type: 'chat', text: normalizedText, name: p1Name, avatar: p1Avatar });
       }
     }
 
@@ -3550,6 +3574,7 @@
 
     const P2P_SIGNAL_RETRY_MS = 900;
     const P2P_SIGNAL_TIMEOUT_MS = 12000;
+    const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
 
     class MqttRoomConnection {
       constructor(client, roomCode, role) {
@@ -3807,8 +3832,10 @@
         if (sig.type === 'ice' && sig.candidate && typeof sig.candidate === 'object') {
           const candidateKey = JSON.stringify(sig.candidate);
           if (this.remoteIceCandidates.has(candidateKey)) return;
+          if (this.remoteIceCandidates.size >= MAX_P2P_REMOTE_ICE_CANDIDATES) return;
           this.remoteIceCandidates.add(candidateKey);
           if (!this.remoteDescriptionSet) {
+            if (this.pendingRemoteIceCandidates.length >= MAX_P2P_REMOTE_ICE_CANDIDATES) return;
             this.pendingRemoteIceCandidates.push(sig.candidate);
             return;
           }
@@ -3961,7 +3988,13 @@
     }
 
     function generateFastRoomCode() {
-      return String(Math.floor(100000 + Math.random() * 900000));
+      try {
+        const bytes = new Uint32Array(1);
+        crypto.getRandomValues(bytes);
+        return String(100000 + (bytes[0] % 900000));
+      } catch (_) {
+        return String(Math.floor(100000 + Math.random() * 900000));
+      }
     }
 
     // 统一采用高可用 MQTT Anycast 国内极速全双工中继（穿透所有移动 4G/5G、WiFi 与复杂内网对称 NAT）
@@ -5578,6 +5611,7 @@
     let matchTimerInterval = null;
     let matchStartTime = 0;
     let currentActiveMatchUid = "";
+    let matchPollInFlight = false;
 
     function getOrCreateMatchUid() {
       let uid = (typeof currentUserUid !== "undefined" && currentUserUid) ? currentUserUid : localStorage.getItem("gomoku_user_uid");
@@ -5600,6 +5634,9 @@
       }
       isMatchmaking = true;
       matchStartTime = Date.now();
+      clearInterval(matchPollInterval);
+      clearInterval(matchTimerInterval);
+      matchPollInFlight = false;
 
       const btnStart = document.getElementById('btnStartMatch');
       const btnCancel = document.getElementById('btnCancelMatch');
@@ -5666,10 +5703,11 @@
           } else {
             // 定时轮询对手是否加入（严格使用统一的 matchUid）
             matchPollInterval = setInterval(async () => {
-              if (!isMatchmaking) {
+              if (!isMatchmaking || matchPollInFlight) {
                 clearInterval(matchPollInterval);
                 return;
               }
+              matchPollInFlight = true;
               try {
                 const pRes = await safeApiFetch('/api/match/poll', {
                   method: 'POST',
@@ -5681,18 +5719,27 @@
                   clearInterval(matchPollInterval);
                   onMatchFound(pData);
                 }
-              } catch(e) {}
+              } catch(e) {
+                console.warn('[match poll]', e);
+              } finally {
+                matchPollInFlight = false;
+              }
             }, 1200);
           }
+        } else {
+          throw new Error(data?.msg || '匹配服务暂时不可用');
         }
       } catch (err) {
         console.warn('Match join error:', err);
+        if (isMatchmaking) await cancelQuickMatch();
+        showGameNotice('⚠️ 匹配连接失败，请稍后重试', true);
       }
     }
 
     function onMatchFound(data) {
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
+      matchPollInFlight = false;
       isMatchmaking = false;
       hideMatchingFloatingBar();
 
@@ -5739,6 +5786,7 @@
       isMatchmaking = false;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
+      matchPollInFlight = false;
 
       let aiName = "弈林少侠";
       let aiAvatar = "👦";
@@ -5780,6 +5828,7 @@
       isMatchmaking = false;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
+      matchPollInFlight = false;
       hideMatchingFloatingBar();
 
       const btnStart = document.getElementById('btnStartMatch');
@@ -5796,11 +5845,13 @@
       if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
       if (vsCard) vsCard.style.display = 'none';
 
+      const cancelUid = currentActiveMatchUid || getOrCreateMatchUid();
+      currentActiveMatchUid = '';
       try {
         await safeApiFetch('/api/match/cancel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: window.__gomokuMatchSessionUid || currentUserUid })
+          body: JSON.stringify({ uid: cancelUid })
         });
       } catch(e) {}
       showGameNotice('已取消匹配');
@@ -6249,17 +6300,29 @@
 
     async function safeApiFetch(endpoint, options = {}) {
       let lastErr = null;
-      for (const host of CLOUDFLARE_API_HOSTS) {
+      const orderedHosts = [
+        activeApiHost,
+        ...CLOUDFLARE_API_HOSTS.filter(host => host !== activeApiHost)
+      ];
+      const parsedTimeout = Number(options.timeoutMs);
+      const timeoutMs = Number.isFinite(parsedTimeout)
+        ? Math.max(1500, Math.min(15000, parsedTimeout))
+        : 7000;
+      const requestOptions = { ...options };
+      delete requestOptions.timeoutMs;
+
+      for (const [hostIndex, host] of orderedHosts.entries()) {
+        let timer = null;
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 7000);
+          timer = setTimeout(() => controller.abort(), timeoutMs);
           const endpointUrl = endpoint.startsWith("http") ? new URL(endpoint) : new URL(endpoint, host);
           if (endpointUrl.protocol !== "https:" || !CLOUDFLARE_API_HOSTS.includes(endpointUrl.origin) || endpointUrl.username || endpointUrl.password) {
             throw new Error('拒绝访问非官方 API 地址');
           }
           const url = endpointUrl.href;
           const mergedHeaders = {
-            ...(options.headers || {}),
+            ...(requestOptions.headers || {}),
             "X-Gomoku-Client": "gomoku-app-client-auth"
           };
           try {
@@ -6269,16 +6332,24 @@
             }
           } catch (_) {}
           const res = await fetch(url, {
-            ...options,
+            ...requestOptions,
             headers: mergedHeaders,
             signal: controller.signal
           });
-          clearTimeout(timer);
+
+          // 仅对服务端错误尝试备用出口；4xx 是业务响应，应原样交给调用方处理。
+          if (res.status >= 500 && hostIndex < orderedHosts.length - 1) {
+            try { await res.body?.cancel(); } catch (_) {}
+            lastErr = new Error(`${host} returned HTTP ${res.status}`);
+            continue;
+          }
           activeApiHost = host;
           return res;
         } catch(err) {
           lastErr = err;
           console.warn(`Host ${host} failed: ${err.message}, trying fallback...`);
+        } finally {
+          if (timer) clearTimeout(timer);
         }
       }
       throw lastErr || new Error('网络连接异常，请稍后再试');
@@ -7018,7 +7089,10 @@
 
       leaderboardRequest = (async () => {
         try {
-          const res = await safeApiFetch('/api/rank', isManualRefresh ? { cache: 'no-store' } : {});
+          const res = await safeApiFetch('/api/rank', {
+            ...(isManualRefresh ? { cache: 'no-store' } : {}),
+            timeoutMs: 5500
+          });
           const json = await res.json();
 
           if (json && json.code === 0 && Array.isArray(json.data)) {
@@ -9777,8 +9851,18 @@
       } catch(e) {}
     }
 
-    window.addEventListener('resize', resizeBoard);
-    window.addEventListener('orientationchange', () => setTimeout(resizeBoard, 150));
+    let boardResizeFrame = null;
+    function scheduleBoardResize() {
+      if (boardResizeFrame !== null) return;
+      const raf = window.requestAnimationFrame || (fn => setTimeout(fn, 16));
+      boardResizeFrame = raf(() => {
+        boardResizeFrame = null;
+        resizeBoard();
+      });
+    }
+    // 浏览器拖动窗口/手机旋转时可能连续触发几十次 resize，合并到下一帧避免重复重建棋盘缓存。
+    window.addEventListener('resize', scheduleBoardResize, { passive: true });
+    window.addEventListener('orientationchange', () => setTimeout(scheduleBoardResize, 150), { passive: true });
     
     // 初始化
     if (activeThemeKey && activeThemeKey !== 'default') {

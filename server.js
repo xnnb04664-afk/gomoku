@@ -6,8 +6,12 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 3000;
+const configuredPort = Number(process.env.GOMOKU_PORT || 3000);
+const PORT = Number.isInteger(configuredPort) && configuredPort >= 1 && configuredPort <= 65535
+  ? configuredPort
+  : 3000;
 const HOST = '127.0.0.1';
+const ROOT_DIR = path.resolve(__dirname);
 const PUBLIC_ROOT_FILES = new Set([
   'index.html',
   'theme1_zen_dark.html',
@@ -49,9 +53,13 @@ const server = http.createServer((req, res) => {
   // 解码后再拼接路径，既支持中文文件名，也阻止 ../ 路径穿越。
   requestPath = requestPath.replace(/^[/\\]+/, '');
   if (!requestPath) requestPath = 'index.html';
-  const rootDir = path.resolve(__dirname);
-  const filePath = path.resolve(rootDir, requestPath);
-  const relativePath = path.relative(rootDir, filePath);
+  if (requestPath.includes('\0')) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('400 Bad Request');
+    return;
+  }
+  const filePath = path.resolve(ROOT_DIR, requestPath);
+  const relativePath = path.relative(ROOT_DIR, filePath);
   if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('403 Forbidden');
@@ -59,6 +67,11 @@ const server = http.createServer((req, res) => {
   }
 
   const relativeParts = relativePath.split(path.sep);
+  if (relativeParts.some(part => part.startsWith('.'))) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('404 Not Found');
+    return;
+  }
   const isAllowed = relativeParts.length === 1
     ? PUBLIC_ROOT_FILES.has(relativeParts[0])
     : PUBLIC_ROOT_DIRS.has(relativeParts[0]);
@@ -71,24 +84,51 @@ const server = http.createServer((req, res) => {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-  fs.readFile(filePath, (err, content) => {
-    if (err) {
-      if (err.code === 'ENOENT') {
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) {
+      if (err && !['ENOENT', 'ENOTDIR'].includes(err.code)) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(`Server Error: ${err.code || 'STAT_FAILED'}`);
+      } else {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('404 Not Found');
-      } else {
-        res.writeHead(500);
-        res.end(`Server Error: ${err.code}`);
       }
-    } else {
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'no-store'
-      });
-      if (req.method === 'HEAD') res.end();
-      else res.end(content);
+      return;
     }
+
+    const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+    const headers = {
+      'Content-Type': contentType,
+      'Content-Length': stat.size,
+      'Last-Modified': stat.mtime.toUTCString(),
+      'ETag': etag,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-cache'
+    };
+    if (req.headers['if-none-match'] === etag || req.headers['if-none-match'] === '*') {
+      const notModifiedHeaders = { ...headers };
+      delete notModifiedHeaders['Content-Length'];
+      res.writeHead(304, notModifiedHeaders);
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, headers);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', streamErr => {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(`Server Error: ${streamErr.code || 'READ_FAILED'}`);
+      } else {
+        res.destroy(streamErr);
+      }
+    });
+    stream.pipe(res);
   });
 });
 
