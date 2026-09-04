@@ -303,10 +303,11 @@
 - **v1.0.89（Build 90）发布结果**：完成六大主题、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建并上传 GitHub Release `v1.0.89` 的 `gomoku.apk`、`gomoku.html`，并成功部署 Cloudflare Worker 与 Pages。
 - **v1.0.89 安全审计与清理结果**：六大主题统一增加动态文本/头像转义、远端快照与 P2P 消息结构校验、消息大小限制和严格房间码校验；Android 更新器固定官方 HTTPS 出口、限制重定向、限制响应大小，并在下载和安装前校验 APK SHA-256，移除 file URI 暴露配置；Worker 禁止游客进入全服匹配、只信任 Cloudflare 来源 IP、增加反馈限流和安全响应头；部署脚本改为配置严格校验、Worker 失败即停止、Pages 失败返回非零状态；发布脚本新增全主题语法门禁、敏感内容扫描和失败即停机制。
 - **v1.0.89 无用产物清理**：删除旧代码快照 `GOMOKU_CODEBASE_FOR_REVIEW.md`、旧审计笔记 `findings.md`/`progress.md`/`task_plan.md`、重复且未被发布流程使用的 `build_apk.ps1`、旧版 `android_src/classes/*.class`，以及被 Git 错误跟踪的 `.wrangler/` 部署缓存；构建产物统一在临时目录重新生成。
-- **本次更新下载保护改造（源码已完成，线上强制开关待安全版 APK 安装后开启）**：
+- **本次更新下载保护改造（源码与安全版 APK 已完成，线上强制开关待安全版 APK 安装后开启）**：
   - Worker 为 APK/HTML 生成 90 秒 HMAC 短时票据；票据只放在请求头，不进入 URL、二维码或页面链接，并绑定资源类型与 Release 版本；强制模式下直接打开或复制 `/api/update/apk`、`/api/update/html` 会返回 `401`，不会读取 GitHub 资产。
   - `index.html`、五套主题、单文件版构建链和 Android 原生桥均已改为票据请求；Android 继续执行 HTTPS 主机固定、APK SHA-256 校验、官方签名校验、禁止 WebView 调试、禁止明文流量，并明确禁止 `android:debuggable`。
   - Android 启动安全检查已改为失败即阻止进入游戏：确认检测到 APK 签名异常、调试器或 Frida/Xposed/Substrate 等注入特征时，统一显示“应用运行异常”对话框和错误码并退出；不单独以 Root 状态拦截，减少正常设备误伤。该检查仅能提高篡改成本，不能保证绝对防逆向。
+  - 本次安全版 APK 已按以上源码重新构建并推送到 GitHub `master`：版本 `1.0.89 (Build 90)`，正式签名校验通过，`五子棋.apk` SHA-256 为 `819118b528754fe2a3df6c26661dc64d0e5474ab3100bbbcDAFE35A731A9BA6`。
   - 为避免旧 APK 被线上开关立即锁死，`UPDATE_TICKET_ENFORCED` 未设置时是兼容阶段：新客户端已使用票据，旧客户端仍可暂时访问旧接口。安装本次重新签名的安全版 APK 后，再将该 Pages Secret 设置为 `1` 并重新部署，才算完成线上关闭直链。
   - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据，便于迁移。配置命令：
     ```powershell
@@ -495,4 +496,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：下载票据保护与客户端防篡改改造已完成源码实现，新增启动时签名/调试/注入异常拦截；新的签名 APK 需重新构建并手动安装，随后开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署，完成线上强制保护。后续发布请先阅读本文件并使用 `node publish.js`。*
+*当前工程状态：下载票据保护与客户端防篡改改造已完成源码实现，新的安全版 APK 已重新构建并推送；请先手动安装到手机并确认能正常检查更新，随后开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署，完成线上强制保护。后续发布请先阅读本文件并使用 `node publish.js`。*
