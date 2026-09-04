@@ -338,7 +338,10 @@ public class MainActivity extends Activity {
         String scheme = uri.getScheme();
         if ("file".equalsIgnoreCase(scheme)) {
             String host = uri.getHost();
-            return host == null || host.isEmpty();
+            String path = uri.getPath();
+            // 只允许本应用的固定 APK asset 入口，拒绝任意 file:/// 本地路径导航。
+            return (host == null || host.isEmpty())
+                    && ("/android_asset/index.html".equals(path));
         }
         if (!"http".equalsIgnoreCase(scheme)) return false;
         String host = uri.getHost();
@@ -731,9 +734,26 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (mWebView != null) {
+            mWebView.evaluateJavascript("typeof window.handleAndroidBack === 'function' ? window.handleAndroidBack() : false", new ValueCallback<String>() {
+                @Override
+                public void onReceiveValue(String value) {
+                    if ("true".equals(value)) {
+                        mLastBackPressTime = 0;
+                        return;
+                    }
+                    handleExitBackPressed();
+                }
+            });
+            return;
+        }
+        handleExitBackPressed();
+    }
+
+    private void handleExitBackPressed() {
         long now = System.currentTimeMillis();
         if (now - mLastBackPressTime < 2000) {
-            super.onBackPressed();
+            MainActivity.super.onBackPressed();
         } else {
             mLastBackPressTime = now;
             Toast.makeText(this, "再按一次退出游戏", Toast.LENGTH_SHORT).show();

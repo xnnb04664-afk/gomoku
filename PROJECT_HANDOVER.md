@@ -218,16 +218,17 @@
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
   - **固化永久正式签名证书（密钥仅保存在仓库外的本机受限目录）**：签名密钥永久锁定，彻底解决 Android 系统“签名冲突无法安装”的致命痛点；密钥不再进入项目目录、Git 跟踪或 Git 历史，手机用户直接安装最新 APK 仍可覆盖升级，无需卸载，保留全部对局历史与自定义头像；
 - **全平台一键极速发布流水线 (`publish.js`)**：
-  - 运行 `node publish.js`（或对 AI 说“更新/打包”）：
-    1. 自动自增版本号（`1.0.X`）；
-    2. 自动同步更新 6 大主题与单文件版；
+  - 运行 `node publish.js`（或对 AI 说“更新/打包”）时：
+     1. 自动自增版本号（`1.0.X`）；
+     2. 自动同步更新 6 大主题与单文件版；
      3. 自动从仓库外的受限密钥目录读取环境变量指定的永久正式密钥，编译签署原生 `五子棋.apk`；
-    4. 自动执行 `git add .` 与 `git commit`；
-    5. 自动推送到 GitHub (`git push origin master`)；
-    6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk` 与 `gomoku.html`；
-  - 整个流程全自动完成，0 维护负担！
+     4. 自动执行 `git add .` 与 `git commit`；
+     5. 自动推送到 GitHub (`git push origin master`)；
+     6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk` 与 `gomoku.html`；
+  - **默认不会读取 Cloudflare 令牌，也不会部署 Cloudflare 生产环境**；只有明确执行 `node publish.js --deploy-cloudflare`（或设置 `GOMOKU_DEPLOY_CLOUDFLARE=1`）才会在最后部署 Worker/Pages。`node publish.js --help` 可查看用法。
+  - 普通新版本只需发布 GitHub Release；线上 Worker 会动态读取最新 Release，不必每次改 APK/HTML 都重新部署 Cloudflare。
 - **本机凭据自动化（首次设置一次）**：签名密码与 Cloudflare 部署令牌可通过 `setup_gomoku_secret.ps1` 保存为当前 Windows 用户专属的 DPAPI 加密文件，位置为仓库外的 `Documents\GomokuSecrets`；之后 `build_apk.js`、`publish.js`、`deploy_worker.js` 和 `admin.js` 自动读取，不需要把密码交给 AI，也不会出现在 Git、命令行参数或截图中。
-  - 首次设置签名密码：`powershell -ExecutionPolicy Bypass -File .\setup_gomoku_secret.ps1 -Type Signing`；若希望 `node publish.js` 也自动部署，则使用 `-Type Both`，在本机隐藏输入两项凭据。
+  - 首次设置签名密码：`powershell -ExecutionPolicy Bypass -File .\setup_gomoku_secret.ps1 -Type Signing`；只有需要执行显式 Cloudflare 部署时才需要再设置 Cloudflare 凭据（可用 `-Type Both` 一次设置两项）。
   - DPAPI 凭据绑定当前 Windows 用户和电脑；换电脑、换用户或忘记原密码时不能恢复，只能在仍掌握原密码的情况下重新设置。环境变量仍可临时覆盖本机凭据。
 
 ### 19. 🤝 和棋闭环与神抽技能额度修复（本次代码审查）
@@ -235,7 +236,7 @@
 - **战绩同步**：`game_history` 增加 `is_draw` 字段，Worker/Pages 启动时会为旧 D1 自动补列；`/api/report_game` 接收 `isDraw=true`，总局数增加、胜场不增加、积分保持不变。
 - **联机技能额度**：无目标的 `skill_use` 也进入接收端额度账本；每组三张手牌最多接受 3 次技能，`reforge_cards` 每局最多一次并将对手额度重置到新手牌阶段，防止神抽后的合法技能被误拦截，也防止重复神抽无限绕过上限。
 - **同步范围**：修复已同步到 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html`、`backend/worker.js` 与 `pages_build/_worker.js`，随后纳入 v1.0.91 的正式构建与发布。
-- **其余审查项结论**：`js/board.js`、`js/game.js`、`js/rule.js` 属于旧模块化代码，虽未被当前主页面直接加载，但仍由旧 `js/main.js` 组成一套兼容资源，暂不拆删；AI 字符串置换表和 MQTT 房间会话密钥属于需要独立性能/协议迁移测试的长期项，本次不冒险混入功能修复。
+- **其余审查项结论**：原 `css/style.css`、`js/main.js`、`js/board.js`、`js/game.js`、`js/rule.js`、`js/audio.js`、`js/network.js` 及未引用的 MP3 原文件等旧模块化遗留文件已全部安全移除并同步清理 Android 资产包，代码库与打包体积显著精简；AI 字符串置换表和 MQTT 房间会话密钥属于需要独立性能/协议迁移测试的长期项，保持既有高可靠实现。
 
 ### 20. ⚡ 联机模块升级记录（本次工作区变更）
 - **进房稳定性**：MQTT 节点改为固定优先级短超时切换，同一房间的房主和客方保持 Broker 选择一致；网络库延迟加载时会等待组件完成，避免点击过早直接报连接失败。
@@ -253,6 +254,14 @@
 - **本地服务与 Android 启动**：Node 本地静态服务改为流式读取，增加 `HEAD`、ETag/304、Content-Length 和隐藏文件拒绝；Android 内嵌服务在单次启动期间缓存不超过 4 MB 的静态资源，热更新目录仍保持独立读取。
 - **构建/部署脚本**：构建脚本跳过不存在的可选资源；Cloudflare Worker 上传和 Pages 部署增加超时，避免网络异常时无限等待。派生的 Pages Worker、Android 资源、单文件版已重新同步，正式签名 APK 已重新构建。
 - **本地验证结果**：`python tests/optimization_smoke.py`、`node tests/worker_unit.js`、六主题内嵌脚本语法检查、单文件版 Playwright 启动检查、APK v1/v2/v3 签名检查均通过；同时验证了本地服务的 GET/HEAD、ETag 304 和 `.git/config` 拒绝访问。本次只完成代码、派生文件和本地构建/测试，未自动部署 Cloudflare；后续明确要求线上发布时再执行部署脚本。
+
+### 22. 🔐 全面安全审查、发布策略与热更新结论（2026-09-05）
+- **线上更新下载保护已修复**：生产只读检查发现无票据请求曾返回 200；已将 `backend/worker.js` 与 `pages_build/_worker.js` 改为默认强制短时票据（只有明确设置 `UPDATE_TICKET_ENFORCED=0` 才进入兼容调试模式），并完成一次必要的 Worker/Pages 部署。部署后 `/api/update/html` 与 `/api/update/apk` 的无票据请求均返回 HTTP 401，带应用短时票据的正常链路仍可用。
+- **发布策略已拆分**：`publish.js` 默认只负责版本递增、构建、GitHub 提交/Release，不读取 Cloudflare 本机凭据、不部署生产；需要修改 Worker/Pages 代码、绑定或 Secret 时，才使用 `node publish.js --deploy-cloudflare`。本次安全修复属于必须上线的例外，已完成部署。
+- **Android 安全边界**：`file://` 导航仅允许 `/android_asset/index.html`；安装 Provider 仅接受固定 APK URI 且只读打开；保留正式签名、APK 摘要校验、HTTPS 主机限制、禁止调试与明文流量。新增的实体返回键会优先关闭复盘、抽屉和弹窗，再执行双击退出。
+- **本地性能与稳定性**：Android 本地静态服务补齐 ETag/304；登录后端增加账号/密码类型和 6~32 位长度约束；旧模块化孤立资源已按前一节记录清理。单文件版、Android 资源和正式签名 APK 已重新同步构建。
+- **热更新范围**：Android 已安装旧 APK 可以在游戏内下载并校验新的 `gomoku.html`，写入应用私有 `hot_update/index.html` 后重载，网页 UI、JS、AI 和联机逻辑无需重装 APK；Java/Manifest、签名、Provider 等原生改动仍必须安装新的正式签名 APK。浏览器单文件版不走原生沙盒，需重新下载/打开新 HTML。
+- **当前构建验证**：APK 版本仍为 `v1.0.91 (Build 92)`，v1/v2/v3 签名校验通过；SHA-256：`2E84BA454C337A42B271D5654BAC859B5F1AEE3CE5D78884D7691EA828F360E2`。`node tests/worker_unit.js`、本地 Playwright 回归（含联机悔棋/终局重开/返回键）、八份 HTML 内嵌脚本语法检查、Node 服务 ETag/304 与隐藏文件访问检查均通过。
 
 ---
 
@@ -323,22 +332,20 @@
 - **v1.0.89（Build 90）发布结果**：完成六大主题、单文件 HTML 与 Android APK 构建，推送至 GitHub `master`，创建并上传 GitHub Release `v1.0.89` 的 `gomoku.apk`、`gomoku.html`，并成功部署 Cloudflare Worker 与 Pages。
 - **v1.0.89 安全审计与清理结果**：六大主题统一增加动态文本/头像转义、远端快照与 P2P 消息结构校验、消息大小限制和严格房间码校验；Android 更新器固定官方 HTTPS 出口、限制重定向、限制响应大小，并在下载和安装前校验 APK SHA-256，移除 file URI 暴露配置；Worker 禁止游客进入全服匹配、只信任 Cloudflare 来源 IP、增加反馈限流和安全响应头；部署脚本改为配置严格校验、Worker 失败即停止、Pages 失败返回非零状态；发布脚本新增全主题语法门禁、敏感内容扫描和失败即停机制。
 - **v1.0.89 无用产物清理**：删除旧代码快照 `GOMOKU_CODEBASE_FOR_REVIEW.md`、旧审计笔记 `findings.md`/`progress.md`/`task_plan.md`、重复且未被发布流程使用的 `build_apk.ps1`、旧版 `android_src/classes/*.class`，以及被 Git 错误跟踪的 `.wrangler/` 部署缓存；构建产物统一在临时目录重新生成。
-- **本次更新下载保护改造（源码与安全版 APK 已完成，线上强制开关待安全版 APK 安装后开启）**：
+- **本次更新下载保护改造（源码、安全版 APK 与线上强制校验均已完成）**：
   - Worker 为 APK/HTML 生成 90 秒 HMAC 短时票据；票据只放在请求头，不进入 URL、二维码或页面链接，并绑定资源类型与 Release 版本；强制模式下直接打开或复制 `/api/update/apk`、`/api/update/html` 会返回 `401`，不会读取 GitHub 资产。
   - `index.html`、五套主题、单文件版构建链和 Android 原生桥均已改为票据请求；Android 继续执行 HTTPS 主机固定、APK SHA-256 校验、官方签名校验、禁止 WebView 调试、禁止明文流量，并明确禁止 `android:debuggable`。
   - Android 启动安全检查已改为失败即阻止进入游戏：确认检测到 APK 签名异常、调试器或 Frida/Xposed/Substrate 等注入特征时，统一显示“应用运行异常”对话框和错误码并退出；不单独以 Root 状态拦截，减少正常设备误伤。该检查仅能提高篡改成本，不能保证绝对防逆向。
   - 本次安全版 APK 已按以上源码重新构建并推送到 GitHub `master`：版本 `1.0.89 (Build 90)`，正式签名校验通过，`五子棋.apk` SHA-256 为 `819118b528754fe2a3df6c26661dc64d0e5474ab3100bbbcDAFE35A731A9BA6`。
-  - 为避免旧 APK 被线上开关立即锁死，`UPDATE_TICKET_ENFORCED` 未设置时是兼容阶段：新客户端已使用票据，旧客户端仍可暂时访问旧接口。安装本次重新签名的安全版 APK 后，再将该 Pages Secret 设置为 `1` 并重新部署，才算完成线上关闭直链。
+  - 当前生产环境已经完成安全版客户端切换：`UPDATE_TICKET_ENFORCED` 未设置时也默认强制校验，只有明确设置为 `0` 才会进入不安全的调试兼容模式。未支持票据的极旧 APK 若无法自更新，需要手动安装一次安全版 APK。
   - **天梯榜与账号兼容优化（Worker/Pages 已重新部署，客户端源码已同步）**：数据库迁移改为每个 Worker 实例只初始化一次，并新增积分/胜场/昵称索引；榜单增加 15 秒服务端缓存、客户端 30 秒缓存、并发请求合并和紧凑头像返回，避免重复 D1 排序及几十 KB Base64 头像拖慢手机；游客只能用本地昵称，榜单本人识别只使用不可变 UID。要让手机端获得客户端缓存与 UID 识别修复，还需用正式签名密钥重新构建并发布 APK/HTML。
   - **密码策略统一与修改密码**：Worker 与 `admin.js` 统一只使用 Cloudflare WebCrypto 支持的 PBKDF2 100000 次迭代，不再保留旧 SHA-256/旧迭代参数兼容分支；登录后账号卡新增“改密”入口，修改时必须验证当前密码和有效 Token，成功后换 Salt、刷新当前 Token 并立即使旧凭证失效。
-  - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据，便于迁移。配置命令：
+  - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据。配置独立 Secret 后需要显式重新部署 Worker/Pages：
     ```powershell
     npx wrangler pages secret put UPDATE_TICKET_SECRET --project-name gomoku-api
-    npx wrangler pages secret put UPDATE_TICKET_ENFORCED --project-name gomoku-api
-    # 第二条命令输入：1
     node deploy_worker.js
     ```
-  - 上线顺序必须是：先用仓库外签名密钥构建并手动安装新 APK → 确认新 APK 能检查更新 → 设置 `UPDATE_TICKET_ENFORCED=1` → 重新部署。否则旧 APK 没有票据桥接方法，会无法下载下一版。
+  - `UPDATE_TICKET_ENFORCED` 无需再设置为 `1`；只有临时调试时才显式设置为 `0`，调试结束必须删除该覆盖或改回 `1` 并重新部署。若仍有未支持票据的旧 APK，先手动安装本次安全版 APK，再继续使用应用内更新。
   - **逆向边界**：无法绝对阻止专业人员对 APK、WebView 或运行时网络进行分析；本次措施的目标是移除仓库凭据和公开直链、阻断裸 URL 下载、缩短授权窗口并提高重打包/篡改成本。若要做到用户级访问控制，还需登录态/Cloudflare Access/应用商店完整性服务，属于额外产品方案。
 
 ### 6. 📱 Android 原生核心底层加固与关键避坑红线 (重要！)

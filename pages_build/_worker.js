@@ -562,7 +562,8 @@ export default {
     if (url.pathname === "/api/update/apk" || url.pathname === "/api/update/html") {
       const assetType = url.pathname === "/api/update/apk" ? 'apk' : 'html';
       const ticketPayload = await verifyUpdateTicket(assetType);
-      const ticketProtectionEnabled = String(env.UPDATE_TICKET_ENFORCED || '').trim() === '1';
+      // 安全默认：未配置开关时也必须校验短时票据；只有明确写入 0 才允许兼容调试模式。
+      const ticketProtectionEnabled = String(env.UPDATE_TICKET_ENFORCED || '1').trim() !== '0';
       if (ticketProtectionEnabled && !ticketPayload) {
         return json({ code: 401, msg: '更新下载需要应用内短时授权' }, 401);
       }
@@ -869,10 +870,14 @@ async function allocateNextAvailableUid(env) {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
         const { username, password } = await readJsonBody(request);
-        if (!username || !password) return json({ code: 1, msg: '请输入账号与密码' });
+        if (typeof username !== 'string' || typeof password !== 'string' ||
+            !username.trim() || username.trim().length > 32 || password.length < 6 || password.length > 32) {
+          return json({ code: 1, msg: '账号或密码格式不正确' }, 400);
+        }
 
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ? OR nickname = ?)').bind(String(username).trim(), String(username).trim(), String(username).trim()).first();
+        const loginName = username.trim();
+        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ? OR nickname = ?)').bind(loginName, loginName, loginName).first();
         if (!user) {
           return json({ code: 1, msg: '账号或密码不正确' });
         }

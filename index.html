@@ -2504,7 +2504,7 @@
         id: 'swap_color',
         name: '偷天换日',
         sweetName: '偏偏偏心 👑',
-        icon: '🪞',
+        icon: '🎭',
         sweetIcon: '👑',
         desc: '策反对方1颗棋子化为己用',
         sweetDesc: '这颗归我啦！偷换对方一颗棋子~',
@@ -5025,7 +5025,7 @@
           triggerSkillVFX('swap_color', data.r, data.c);
           triggerBoardShake();
           playSkillSound('magic');
-          showSkillBanner('🪞', `对方发动【偷天换日】！`, `您位于 (${data.r+1}, ${data.c+1}) 的棋子被策反！`);
+          showSkillBanner('🎭', `对方发动【偷天换日】！`, `您位于 (${data.r+1}, ${data.c+1}) 的棋子被策反！`);
           draw();
         } else if (data.type === 'skill_swap_positions') {
           const p1 = board[data.r1][data.c1];
@@ -5309,20 +5309,20 @@
           text.textContent = `💥【精准爆破】请点击对方场上任意 1 颗棋子！`;
         }
       } else if (point === 4) {
-        // 🪞 掷出 4（绝地倒戈）：把对方场上任意 1 颗棋子，直接翻成你的颜色
+        // 🎭 掷出 4（绝地倒戈）：把对方场上任意 1 颗棋子，直接翻成你的颜色
         let enemyCount = 0;
         for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
         if (enemyCount === 0) {
-          showSkillBanner('🪞', `🎲 投出点数 4：【绝地倒戈】！`, '对方场上暂无棋子，绝地倒戈落空~');
+          showSkillBanner('🎭', `🎲 投出点数 4：【绝地倒戈】！`, '对方场上暂无棋子，绝地倒戈落空~');
           return;
         }
-        showSkillBanner('🪞', `🎲 投出点数 4：【绝地倒戈】！`, '请在棋盘上点击对方任意 1 颗棋子翻为己用！');
+        showSkillBanner('🎭', `🎲 投出点数 4：【绝地倒戈】！`, '请在棋盘上点击对方任意 1 颗棋子翻为己用！');
         activeSkill = { slotIdx: -1, skill: { id: 'destiny_convert', name: '绝地倒戈' }, step: 1 };
         const bar = document.getElementById('skillPromptBar');
         const text = document.getElementById('skillPromptText');
         if (bar && text) {
           bar.style.display = 'flex';
-          text.textContent = `🪞【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
+          text.textContent = `🎭【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
         }
       } else if (point === 5) {
         // ⚡ 掷出 5（疯狂暴击）：本回合允许你连续下 3 颗子！
@@ -5533,8 +5533,8 @@
         text.textContent = `🌟 第1步：点击己方一颗要平移的棋子`;
         showSkillBanner('🌟', '【移星换斗】使用说明', '第1步选择己方1颗棋子，第2步点击相邻8方向空格即可平移！');
       } else if (card.id === 'swap_color') {
-        text.textContent = `🪞 请在棋盘上点击要策反的对方棋子`;
-        showSkillBanner('🪞', '【偷天换日】使用说明', '点击对方场上任意 1 颗棋子！直接策反翻成你的颜色！');
+        text.textContent = `🎭 请在棋盘上点击要策反的对方棋子`;
+        showSkillBanner('🎭', '【偷天换日】使用说明', '点击对方场上任意 1 颗棋子！直接策反翻成你的颜色！');
       } else if (card.id === 'swap_positions') {
         text.textContent = `💫 第1步：点击己方一颗要互换位置的棋子`;
         showSkillBanner('💫', '【移形换影】使用说明', '第1步选己方1颗棋子，第2步选对方1颗棋子，双方位置瞬间对调！');
@@ -5542,8 +5542,8 @@
         text.textContent = `💥【精准爆破】请点击对方场上任意 1 颗棋子将其抹除！`;
         showSkillBanner('💥', '【精准爆破】使用说明', '点击对方场上任意 1 颗棋子将其直接抹除！');
       } else if (card.id === 'destiny_convert') {
-        text.textContent = `🪞【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
-        showSkillBanner('🪞', '【绝地倒戈】使用说明', '点击对方场上任意 1 颗棋子，直接翻成你的颜色！');
+        text.textContent = `🎭【绝地倒戈】请点击对方任意 1 颗棋子翻为己用！`;
+        showSkillBanner('🎭', '【绝地倒戈】使用说明', '点击对方场上任意 1 颗棋子，直接翻成你的颜色！');
       } else if (card.id === 'destiny_2x2') {
         text.textContent = `👑【天命降临】请点击未占用的 2×2 区域左上角！`;
         showSkillBanner('👑', '【天命降临】使用说明', '点击任意未占用的 2×2 区域左上角，瞬间全填满你的 4 颗棋子！');
@@ -5650,7 +5650,7 @@
         }
       } else if (skill.id === 'swap_color') {
         if (board[row][col] !== enemyColor) {
-          return invalidAction("🪞 偷天换日只能策反对方的棋子！", row, col);
+          return invalidAction("🎭 偷天换日只能策反对方的棋子！", row, col);
         }
         saveUndoSnapshot('skill', { slotIdx, skillId: 'swap_color', player: myColor });
         board[row][col] = myColor;
@@ -5660,7 +5660,7 @@
         triggerSkillVFX('swap_color', row, col);
         triggerBoardShake();
         playSkillSound('magic');
-        showSkillBanner('🪞', `【${skillName}】发动！`, `成功策反对方位于 (${row+1}, ${col+1}) 的棋子！`);
+        showSkillBanner('🎭', `【${skillName}】发动！`, `成功策反对方位于 (${row+1}, ${col+1}) 的棋子！`);
         if (gameMode === 'online' && conn && conn.open) {
           conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
         }
@@ -5720,7 +5720,7 @@
         }
       } else if (skill.id === 'destiny_convert') {
         if (board[row][col] !== enemyColor) {
-          return invalidAction('🪞 请点击对方的一颗棋子！', row, col);
+          return invalidAction('🎭 请点击对方的一颗棋子！', row, col);
         }
         saveUndoSnapshot('skill', { slotIdx: activeSkill.slotIdx, skillId: 'destiny_convert', player: myColor });
         board[row][col] = myColor;
@@ -5730,7 +5730,7 @@
         triggerSkillVFX('swap_color', row, col);
         playSkillSound('magic');
         triggerBoardShake();
-        showSkillBanner('🪞', '【绝地倒戈】发动！', `成功将对方位于 (${row+1}, ${col+1}) 的棋子翻为己用！`);
+        showSkillBanner('🎭', '【绝地倒戈】发动！', `成功将对方位于 (${row+1}, ${col+1}) 的棋子翻为己用！`);
         draw(); updateUI(); persistGameState();
         if (gameMode === 'online' && conn && conn.open) {
           conn.send({ type: 'skill_swap_color', r: row, c: col, p: myColor });
@@ -8129,6 +8129,14 @@
       showGameNotice("已退出复盘模式");
     }
 
+    function closeReplayModal() {
+      const m = document.getElementById("gameReplayModal");
+      if (m) {
+        m.classList.remove("show");
+        m.style.display = "none";
+      }
+    }
+
     // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回)
     async function syncCloudHistory() {
       if (typeof currentUserUid === "undefined" || !currentUserUid) return;
@@ -9998,6 +10006,13 @@
       }
     };
 
+    function closeUndoModal() {
+      if (undoModal) {
+        undoModal.classList.remove('show');
+        undoModal.style.display = 'none';
+      }
+    }
+
     // ==========================================
     // 💬 快捷短语管理系统 (支持自定义、本地记忆与左右拖拽滑动)
     // ==========================================
@@ -10886,6 +10901,64 @@
     } else {
       setTimeout(runNonCriticalStartupTasks, 0);
     }
+    // 📱 Android 原生实体/手势 Back 返回键拦截器
+    // 当任意弹窗、抽屉或确认框打开时，按返回键优雅关闭弹窗，避免误退游戏
+    window.handleAndroidBack = function() {
+      // 1. 若处于主棋盘动态复盘模式，优先平滑退出复盘
+      if (typeof isReplayMode !== 'undefined' && isReplayMode) {
+        if (typeof exitReplayMode === 'function') exitReplayMode();
+        return true;
+      }
+
+      // 2. 自定义二次确认弹窗
+      const openConfirm = document.getElementById('customConfirmModal');
+      if (openConfirm && (openConfirm.classList.contains('show') || openConfirm.style.display === 'flex')) {
+        if (typeof closeCustomConfirm === 'function') closeCustomConfirm(false);
+        else { openConfirm.classList.remove('show'); openConfirm.style.display = 'none'; }
+        return true;
+      }
+
+      // 3. 常驻聊天抽屉
+      const chatBackdrop = document.getElementById('chatBackdrop');
+      if (chatBackdrop && (chatBackdrop.classList.contains('show') || chatBackdrop.style.display === 'flex' || chatBackdrop.style.display === 'block')) {
+        if (typeof closeChatDrawer === 'function') closeChatDrawer();
+        else { chatBackdrop.classList.remove('show'); chatBackdrop.style.display = 'none'; }
+        return true;
+      }
+
+      // 4. 全套模态弹窗列表（安全函数探测，100% 杜绝 ReferenceError）
+      const modalDefs = [
+        { id: 'themeModal', close: () => typeof closeThemeModal === 'function' && closeThemeModal() },
+        { id: 'leaderboardModal', close: () => typeof closeLeaderboardModal === 'function' && closeLeaderboardModal() },
+        { id: 'feedbackModal', close: () => typeof closeFeedbackModal === 'function' && closeFeedbackModal() },
+        { id: 'onlineModal', close: () => typeof closeOnlineModal === 'function' && closeOnlineModal() },
+        { id: 'profileModal', close: () => typeof closeProfileModal === 'function' && closeProfileModal() },
+        { id: 'authModal', close: () => typeof closeAuthModal === 'function' && closeAuthModal() },
+        { id: 'changePasswordModal', close: () => typeof closeChangePasswordModal === 'function' && closeChangePasswordModal() },
+        { id: 'historyModal', close: () => typeof closeHistoryModal === 'function' && closeHistoryModal() },
+        { id: 'gameResultModal', close: () => typeof closeGameResultModal === 'function' && closeGameResultModal() },
+        { id: 'phraseManageModal', close: () => typeof closePhraseManageModal === 'function' && closePhraseManageModal() },
+        { id: 'undoModal', close: () => typeof closeUndoModal === 'function' && closeUndoModal() },
+        { id: 'appUpdateModal', close: () => typeof closeUpdateModal === 'function' && closeUpdateModal() },
+        { id: 'gameReplayModal', close: () => typeof closeReplayModal === 'function' && closeReplayModal() }
+      ];
+
+      for (const m of modalDefs) {
+        const el = document.getElementById(m.id);
+        if (el && (el.classList.contains('show') || el.classList.contains('open') || el.style.display === 'flex' || el.style.display === 'block')) {
+          if (typeof m.close === 'function') {
+            m.close();
+          }
+          // 保底兜底：若 close() 没能完全清理样式，强制关闭
+          if (el.classList.contains('show') || el.classList.contains('open') || el.style.display === 'flex' || el.style.display === 'block') {
+            el.classList.remove('show', 'open');
+            el.style.display = 'none';
+          }
+          return true;
+        }
+      }
+      return false;
+    };
     // 按照用户需求：启动绝不自动弹更新卡片，保持极致秒开直入棋盘
     // checkPostUpdateAnnouncement();
   </script>

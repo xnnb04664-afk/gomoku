@@ -130,6 +130,7 @@ public class LocalWebServer extends Thread {
 
             // 耗尽请求头（必须读完，否则客户端无法接收响应）
             int headerLines = 0;
+            String ifNoneMatch = null;
             while (true) {
                 if (++headerLines > MAX_HEADER_LINES) {
                     sendError(rawOut, 431, "Request Header Fields Too Large");
@@ -143,6 +144,10 @@ public class LocalWebServer extends Thread {
                     return;
                 }
                 if (hdr.isEmpty()) break;
+                int separator = hdr.indexOf(':');
+                if (separator > 0 && "If-None-Match".equalsIgnoreCase(hdr.substring(0, separator).trim())) {
+                    ifNoneMatch = hdr.substring(separator + 1).trim();
+                }
             }
 
             String[] parts = requestLine.split(" ");
@@ -219,10 +224,26 @@ public class LocalWebServer extends Thread {
                     }
                 }
 
+                // 本地资源通常不会变化；ETag 可让 WebView 在回到前台或重载时直接收到 304，
+                // 减少重复传输与首屏等待。弱校验值只用于缓存协商，不承担安全校验职责。
+                String etag = "W/\"" + body.length + "-" + Integer.toHexString(Arrays.hashCode(body)) + "\"";
+                if ("*".equals(ifNoneMatch) || etag.equals(ifNoneMatch)) {
+                    PrintWriter pw = new PrintWriter(new OutputStreamWriter(rawOut, "UTF-8"), false);
+                    pw.print("HTTP/1.1 304 Not Modified\r\n");
+                    pw.print("ETag: " + etag + "\r\n");
+                    pw.print("Cache-Control: no-cache\r\n");
+                    pw.print("X-Content-Type-Options: nosniff\r\n");
+                    pw.print("Connection: close\r\n");
+                    pw.print("\r\n");
+                    pw.flush();
+                    return;
+                }
+
                 PrintWriter pw = new PrintWriter(new OutputStreamWriter(rawOut, "UTF-8"), false);
                 pw.print("HTTP/1.1 200 OK\r\n");
                 pw.print("Content-Type: " + mime + "\r\n");
                 pw.print("Content-Length: " + body.length + "\r\n");
+                pw.print("ETag: " + etag + "\r\n");
                 pw.print("Cache-Control: no-cache\r\n");
                 pw.print("X-Content-Type-Options: nosniff\r\n");
                 pw.print("Referrer-Policy: no-referrer\r\n");

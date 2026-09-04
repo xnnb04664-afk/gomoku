@@ -22,7 +22,7 @@ const PUBLIC_ROOT_FILES = new Set([
   '五子棋大师_单文件版.html',
   'favicon.png'
 ]);
-const PUBLIC_ROOT_DIRS = new Set(['css', 'js', 'img']);
+const PUBLIC_ROOT_DIRS = new Set(['js', 'img']);
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',

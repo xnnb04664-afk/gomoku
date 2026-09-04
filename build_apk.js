@@ -110,11 +110,11 @@ copyRecursiveSync(path.join(SRC_DIR, 'src'), path.join(TEMP_BUILD, 'src'));
 fs.copyFileSync(path.join(SRC_DIR, 'AndroidManifest.xml'), path.join(TEMP_BUILD, 'AndroidManifest.xml'));
 
 // ⚡ 极速离线秒开关键优化：将内联完整的单文件版置入 assets/index.html，彻底解除一切外部网络依赖与 document.write 阻塞
-// 保持主 index.html 与所有 assets (js, css, img) 完整协同
+// 保持主 index.html 与当前仍在使用的 assets (js, img) 完整协同
 fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets', 'index.html'));
 
-// 同步完整的 js, css, img 目录到 assets，保证本地微型服务器绝对不报 404
-['js', 'css', 'img'].forEach(dir => {
+// 同步完整的 js, img 目录到 assets，保证本地微型服务器绝对不报 404
+['js', 'img'].forEach(dir => {
   const srcD = path.join(ROOT_DIR, dir);
   if (fs.existsSync(srcD)) {
     copyRecursiveSync(srcD, path.join(TEMP_BUILD, 'assets', dir));

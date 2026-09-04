@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -17,7 +18,8 @@ def main():
         page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-        page.goto("http://127.0.0.1:3000/index.html", wait_until="domcontentloaded", timeout=30_000)
+        test_url = os.environ.get("GOMOKU_TEST_URL", "http://127.0.0.1:3000/index.html")
+        page.goto(test_url, wait_until="domcontentloaded", timeout=30_000)
         try:
             page.wait_for_load_state("networkidle", timeout=15_000)
         except PlaywrightTimeoutError:
@@ -53,6 +55,21 @@ def main():
                 resizeScheduler: typeof window.scheduleBoardResize === 'function',
                 apiFailover: typeof window.safeApiFetch === 'function'
               };
+            }
+            """
+        )
+        back_handler = page.evaluate(
+            """
+            () => {
+              const modal = document.querySelector('#appUpdateModal');
+              if (!modal || typeof window.handleAndroidBack !== 'function') {
+                return { available: false, handled: false, closed: false };
+              }
+              modal.classList.add('show');
+              modal.style.display = 'flex';
+              const handled = window.handleAndroidBack();
+              const closed = !modal.classList.contains('show') && modal.style.display === 'none';
+              return { available: true, handled, closed };
             }
             """
         )
@@ -172,6 +189,7 @@ def main():
         print(json.dumps({
             "critical": critical,
             "behavior": behavior,
+            "backHandler": {**back_handler, "ok": all(back_handler.values())},
             "endReset": {"ended": end_reset, "reset": reset_state, "ok": end_reset_ok},
             "undoCards": {**undo_cards, "ok": undo_cards_ok},
             "onlineUndo": {**online_undo, "ok": online_undo_ok},

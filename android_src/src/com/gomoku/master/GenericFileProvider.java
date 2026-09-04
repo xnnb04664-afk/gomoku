@@ -22,6 +22,9 @@ public class GenericFileProvider extends ContentProvider {
 
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+        if (uri == null || !"/download/gomoku_latest.apk".equals(uri.getPath()) || !"r".equals(mode)) {
+            throw new FileNotFoundException("拒绝访问非安装包 URI");
+        }
         File destDir = getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (destDir == null) {
             destDir = getContext().getFilesDir();

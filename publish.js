@@ -5,14 +5,27 @@ const { loadSecretIntoEnv } = require('./local_secret_store');
 
 const ROOT_DIR = __dirname;
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log('用法：node publish.js [--deploy-cloudflare]');
+  console.log('默认：构建 APK/单文件版、提交推送并发布 GitHub Release，不部署 Cloudflare 生产环境。');
+  console.log('显式部署：追加 --deploy-cloudflare，或设置 GOMOKU_DEPLOY_CLOUDFLARE=1。');
+  process.exit(0);
+}
+const SHOULD_DEPLOY_CLOUDFLARE = process.argv.includes('--deploy-cloudflare')
+  || String(process.env.GOMOKU_DEPLOY_CLOUDFLARE || '').trim() === '1';
 
 const vm = require('vm');
 
-// 发布令牌优先使用当前环境变量；未设置时自动读取仓库外的本机 DPAPI 凭据。
-loadSecretIntoEnv('CLOUDFLARE_API_TOKEN', 'cloudflare-api-token.dpapi');
+// Cloudflare 生产部署是显式动作；普通发版只构建、提交并发布 GitHub Release，
+// 不读取本机 Cloudflare 凭据，也不触碰线上环境。
+if (SHOULD_DEPLOY_CLOUDFLARE) {
+  // 发布令牌优先使用当前环境变量；未设置时自动读取仓库外的本机 DPAPI 凭据。
+  loadSecretIntoEnv('CLOUDFLARE_API_TOKEN', 'cloudflare-api-token.dpapi');
+}
 
 console.log('======================================================');
 console.log('🚀 五子棋全平台极速一键发布引擎 (One-Click Publisher & GitHub Releases)');
+console.log(`☁️ Cloudflare 生产部署：${SHOULD_DEPLOY_CLOUDFLARE ? '已启用（显式请求）' : '已跳过（默认）'}`);
 console.log('======================================================');
 
 // 0. 发布前严密静态语法与核心完整性安全卡点 (100% 杜绝任何语法错误流出到正式包)
@@ -83,7 +96,7 @@ runPreflightChecks();
 
 // 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量、本机 DPAPI 或云端 Secret 注入。
 function runSecretFileGuard() {
-  if (String(process.env.CLOUDFLARE_API_TOKEN || '').trim().length < 20) {
+  if (SHOULD_DEPLOY_CLOUDFLARE && String(process.env.CLOUDFLARE_API_TOKEN || '').trim().length < 20) {
     throw new Error('发布安全门禁拦截：请先运行 setup_gomoku_secret.ps1 -Type Cloudflare，或在当前 PowerShell 会话设置 CLOUDFLARE_API_TOKEN。令牌不会从项目配置文件读取。');
   }
   const sensitivePath = /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:keystore|jks|p12|pfx|pem))$/i;
@@ -245,6 +258,12 @@ if (fs.existsSync(workerJsPath)) {
   wCode = wCode.replace(/updateLog:\s*["'`][\s\S]*?["'`]\s*,/, `updateLog: ${JSON.stringify(vJson.updateLog)},`);
   fs.writeFileSync(workerJsPath, wCode, 'utf8');
   console.log(`📌 已同步更新 backend/worker.js 版本与精准更新日志为 v${newName}`);
+
+  // Pages Worker 是 backend/worker.js 的派生副本。即使本次不部署生产环境，
+  // 也保持仓库内派生文件与源文件一致，避免下次显式部署时带入旧代码。
+  const pagesBuildDir = path.join(ROOT_DIR, 'pages_build');
+  fs.mkdirSync(pagesBuildDir, { recursive: true });
+  fs.writeFileSync(path.join(pagesBuildDir, '_worker.js'), wCode, 'utf8');
 }
 
 // 3. 打包单文件离线网页版
@@ -308,13 +327,17 @@ try {
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
 }
 
-// 同步部署线上最新 Worker 与 Pages 官方安全接口
-console.log('>>> 正在同步部署 Cloudflare Pages & Worker 官方安全中枢...');
-try {
-  execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
-} catch(e) {
-  console.error('❌ Worker/Pages 部署失败，发布流程未完成：', e.message);
-  process.exit(1);
+// Cloudflare 生产部署必须显式开启，避免每次普通发版都触碰线上环境。
+if (SHOULD_DEPLOY_CLOUDFLARE) {
+  console.log('>>> 正在同步部署 Cloudflare Pages & Worker 官方安全中枢...');
+  try {
+    execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+  } catch(e) {
+    console.error('❌ Worker/Pages 部署失败，发布流程未完成：', e.message);
+    process.exit(1);
+  }
+} else {
+  console.log('>>> 已跳过 Cloudflare 生产部署；如需部署，请使用 node publish.js --deploy-cloudflare');
 }
 
 console.log('======================================================');

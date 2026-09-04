@@ -97,6 +97,14 @@ async function main() {
   assert.equal(JSON.stringify(versionA).includes('unit-test-token'), false, '响应不得泄露 GitHub Token');
   assert.match(versionA.apkTicket, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 
+  const blockedResponse = await worker.fetch(new Request('https://gomoku-api.pages.dev/api/update/apk', {
+    headers: {
+      Origin: 'null',
+      'X-Gomoku-Client': 'gomoku-app-client-v2',
+    },
+  }), env);
+  assert.equal(blockedResponse.status, 401, '未配置开关时也必须默认拦截无票据下载');
+
   const assetResponse = await worker.fetch(new Request('https://gomoku-api.pages.dev/api/update/apk', {
     headers: {
       Origin: 'null',
