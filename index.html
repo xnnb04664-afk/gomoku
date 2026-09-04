@@ -678,12 +678,12 @@
       text-shadow: 0 1px 0 rgba(255,255,255,0.7);
     }
 
-    /* 底部直接平铺按键区 (第4个固定为【🌐 联机】，1秒直接打开开房弹窗) */
+    /* 底部直接平铺按键区 (4列严格等宽对称，支持全屏与小屏自适应) */
     .bottom-controls {
       width: 100%;
       max-width: 500px;
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 4px;
       z-index: 10;
       padding: 1px 2px env(safe-area-inset-bottom, 2px) 2px;
@@ -694,6 +694,7 @@
       -webkit-user-select: none !important;
     }
     .btn-ctrl {
+      min-width: 0;
       padding: 8px 1px;
       border-radius: 12px;
       border: 2.5px solid var(--border-dark);
@@ -725,8 +726,16 @@
       background: linear-gradient(135deg, #a29bfe 0%, #6c5ce7 100%);
       color: #fff;
     }
+    .btn-ctrl.btn-undo {
+      background: linear-gradient(135deg, #ffeaa7 0%, #fed385 100%);
+      color: var(--border-dark);
+    }
     .btn-ctrl.btn-online {
-      background: linear-gradient(135deg, #ff9ff3 0%, #f368e0 100%);
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: #fff;
+    }
+    .btn-ctrl.btn-leave-room {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
       color: #fff;
     }
 
@@ -1375,6 +1384,16 @@
         border-radius: 11px !important;
       }
     }
+    @media screen and (max-width: 380px) {
+      .btn-match-extra {
+        display: none !important;
+      }
+      .btn-ctrl {
+        font-size: 12px !important;
+        padding: 5.5px 0 !important;
+        border-width: 2px !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1427,11 +1446,11 @@
     <!-- 主界面常驻「对局实时聊天框」 -->
     <div class="main-chat-box" id="mainChatBox" onclick="openChatDrawer()">
       <div class="main-chat-header">
-        <span>💬 实时对局聊天框 (点击畅聊)</span>
-        <div style="display:flex; align-items:center; gap:6px;">
-          <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:3px;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
-          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:3px;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格切换</span>
-          <span>📜 展开记录 ➔</span>
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;">💬 实时对局聊天框</span>
+        <div style="display:flex; align-items:center; gap:5px; flex-shrink:0;">
+          <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:2px 7px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
+          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:2px 7px; border-radius:10px; font-size:10.5px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格</span>
+          <span style="white-space:nowrap;">📜 展开 ➔</span>
         </div>
       </div>
       <div class="main-chat-content" id="mainChatContent">
@@ -1523,9 +1542,9 @@
   <div class="bottom-controls">
     <button class="btn-ctrl btn-chat" id="btnOpenChat">💬 聊天</button>
     <button class="btn-ctrl btn-primary" id="btnRestart">🔄 重开</button>
-    <button class="btn-ctrl" id="btnUndo">↩️ 悔棋</button>
-    <button class="btn-ctrl btn-online" id="btnOnline" onclick="openOnlineModal('match')" style="background:linear-gradient(135deg, #f59e0b, #d97706); border-color:#b45309; color:#fff;">⚡ 匹配对战</button>
-    <button class="btn-ctrl btn-leave-room" id="btnLeaveRoom" onclick="confirmLeaveOnlineRoom()" style="display:none; background:linear-gradient(135deg, #ef4444, #dc2626); border-color:#b91c1c; color:#fff;">🚪 退出房间</button>
+    <button class="btn-ctrl btn-undo" id="btnUndo">↩️ 悔棋</button>
+    <button class="btn-ctrl btn-online" id="btnOnline" onclick="openOnlineModal('match')"><span class="btn-text-match">⚡ 匹配<span class="btn-match-extra">对战</span></span></button>
+    <button class="btn-ctrl btn-leave-room" id="btnLeaveRoom" onclick="confirmLeaveOnlineRoom()" style="display:none;"><span class="btn-text-match">🚪 退出<span class="btn-match-extra">房间</span></span></button>
   </div>
 
   <!-- 完整聊天记录抽屉面板 -->
@@ -2491,13 +2510,13 @@
       const topRoomCode = document.getElementById("onlineRoomCodeLabel");
 
       if (gameMode === "online") {
-        if (btnLeave) btnLeave.style.display = "block";
+        if (btnLeave) btnLeave.style.display = "flex";
         if (btnOnline) btnOnline.style.display = "none";
         if (topRoomBar) topRoomBar.style.display = "flex";
         if (topRoomCode) topRoomCode.textContent = currentRoomCode || "对战中";
       } else {
         if (btnLeave) btnLeave.style.display = "none";
-        if (btnOnline) btnOnline.style.display = "block";
+        if (btnOnline) btnOnline.style.display = "flex";
         if (topRoomBar) topRoomBar.style.display = "none";
       }
       let p1ColorTag = ' (●黑子)';
@@ -6896,9 +6915,9 @@
       if (dock) dock.style.display = "none";
 
       const bottomCtrls = document.querySelector(".bottom-controls");
-      if (bottomCtrls) bottomCtrls.style.display = "flex";
+      if (bottomCtrls) bottomCtrls.style.display = "";
       const cardArea = document.querySelector(".card-area-wrapper");
-      if (cardArea) cardArea.style.display = "flex";
+      if (cardArea) cardArea.style.display = "";
 
       // 恢复之前的对局状态
       if (replaySavedState) {
@@ -8797,7 +8816,7 @@
     enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
-    // 🚀 多通道在线更新系统；仓库地址仅在运行时解码
+    // 🚀 Cloudflare Worker 私有仓库更新中转
         // 📜 当前版本官方更新内容说明（用于开机公告、弹窗展示与日志回顾）
     const CURRENT_UPDATE_NOTES = [
       "🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测与 Alpha-Beta 迭代加深搜索",
@@ -8814,27 +8833,7 @@
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
     } catch(e) {}
-    const decodePrivateUpdateValue = (encoded) => {
-      const key = [103, 53, 75, 33, 57, 120, 35, 81];
-      const raw = atob(encoded);
-      let decoded = '';
-      for (let i = 0; i < raw.length; i++) {
-        decoded += String.fromCharCode(raw.charCodeAt(i) ^ key[i % key.length]);
-      }
-      return decoded;
-    };
-    const PRIVATE_UPDATE_BASES = Object.freeze({
-      repo: decodePrivateUpdateValue('H1slQwlMFWdTGCpHUldEPgpaIFQ='),
-      github: decodePrivateUpdateValue('D0E/UUpCDH4AXD9JTBoNMghYZA=='),
-      raw: decodePrivateUpdateValue('D0E/UUpCDH4VVDwPXhFXORJXPlJcCkA+CUEuT01WQD4KGg=='),
-      api: decodePrivateUpdateValue('D0E/UUpCDH4GRSIPXhFXORJXZUJWFQwjAkUkUhY='),
-      jsdelivr: decodePrivateUpdateValue('D0E/UUpCDH4EUSUPUwtHNAtcPVMXFkYlSFIjDg=='),
-      fastly: decodePrivateUpdateValue('D0E/UUpCDH4BVDhVVQENOxRRLk1QDlF/CVA/Dl4QDA=='),
-      proxy: decodePrivateUpdateValue('D0E/UUpCDH4AXWZRSxdbKElWJEwW'),
-      backup: decodePrivateUpdateValue('D0E/UUpCDH4AXTtSFxtAfg==')
-    });
-    const privateUpdateUrl = (channel, suffix = '') => PRIVATE_UPDATE_BASES[channel] + suffix;
-    const GITHUB_REPO = PRIVATE_UPDATE_BASES.repo;
+    const UPDATE_API_URL = 'https://gomoku-api.pages.dev/api/version';
 
     function compareVersions(v1, v2) {
       const p1 = (v1 || '').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
@@ -8895,7 +8894,7 @@
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
-        const cfRes = await fetch("https://gomoku-api.pages.dev/api/version", {
+        const cfRes = await fetch(UPDATE_API_URL, {
           cache: "no-cache",
           signal: controller.signal
         });
@@ -8906,70 +8905,12 @@
             versionData = {
               tag: d.tag,
               notes: d.updateLog || "修复已知问题，优化联机体验与显示",
-              fastUrl: d.apkDownload || privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk'
+              fastUrl: d.apkDownload || '',
+              htmlUrl: d.htmlDownload || ''
             };
           }
         }
       } catch(_) {}
-
-      // 1. 如果云端直连未获取到，并发检测 GitHub 与备用高速镜像源
-      if (!versionData) {
-        const checkEndpoints = [
-          { url: privateUpdateUrl('proxy') + privateUpdateUrl('raw') + GITHUB_REPO + '/version.json?_t=' + Date.now(), isGhApi: false },
-          { url: privateUpdateUrl('jsdelivr') + GITHUB_REPO + '@latest/version.json?_t=' + Date.now(), isGhApi: false },
-          { url: privateUpdateUrl('fastly') + GITHUB_REPO + '@latest/version.json?_t=' + Date.now(), isGhApi: false },
-          { url: privateUpdateUrl('api') + GITHUB_REPO + '/releases/latest', isGhApi: true }
-        ];
-
-        const fetchTasks = checkEndpoints.map(async (ep) => {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3500);
-          try {
-            const res = await fetch(ep.url, {
-              cache: 'no-cache',
-              headers: ep.isGhApi ? { 'Accept': 'application/vnd.github.v3+json' } : {},
-              signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-            if (res.ok) {
-              const data = await res.json();
-              if (ep.isGhApi) {
-                const tag = data.tag_name || '';
-                if (tag) {
-                  let rawUrl = privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk';
-                  if (data.assets && data.assets.length > 0) {
-                    const apk = data.assets.find(a => a.name && a.name.endsWith('.apk'));
-                    if (apk && apk.browser_download_url) rawUrl = apk.browser_download_url;
-                  }
-                  return {
-                    tag: tag,
-                    notes: data.body || '五子棋全新功能与性能调优，推荐更新！',
-                    fastUrl: privateUpdateUrl('proxy') + rawUrl,
-                    backupUrl: privateUpdateUrl('backup') + rawUrl
-                  };
-                }
-              } else if (data && (data.versionName || data.releaseTag)) {
-                return {
-                  tag: data.releaseTag || ('v' + data.versionName),
-                  notes: data.updateLog || '五子棋全新功能与性能调优，推荐更新！',
-                  fastUrl: (data.download && data.download.fastUrl) || privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk',
-                  backupUrl: (data.download && data.download.backupFastUrl) || privateUpdateUrl('backup') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk'
-                };
-              }
-            }
-          } catch(_) {}
-          return null;
-        });
-
-        try {
-          const results = await Promise.all(fetchTasks);
-          const candidates = results.filter(Boolean);
-          if (candidates.length > 0) {
-            candidates.sort((a, b) => compareVersions(b.tag, a.tag));
-            versionData = candidates[0];
-          }
-        } catch(_) {}
-      }
 
       isCheckingAppUpdate = false;
 
@@ -9042,7 +8983,8 @@
         return;
       }
 
-      const fastLink = versionData.fastUrl || privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + '/releases/latest/download/gomoku.apk';
+      const fastLink = versionData.fastUrl || '';
+      const htmlLink = versionData.htmlUrl || '';
 
       if (hasNewVersion) {
         // 发现新版本！
@@ -9073,12 +9015,7 @@
 
               try {
                 // ⚡ 4 路高可用 CDN 镜像并发竞速（彻底消灭单点阻塞，哪个最快就用哪个，1次点击秒成！）
-                const hotUrls = [
-                  privateUpdateUrl('jsdelivr') + GITHUB_REPO + "@master/index.html?_t=" + Date.now(),
-                  privateUpdateUrl('fastly') + GITHUB_REPO + "@master/index.html?_t=" + Date.now(),
-                  privateUpdateUrl('proxy') + privateUpdateUrl('github') + GITHUB_REPO + "/releases/latest/download/gomoku.html?_t=" + Date.now(),
-                  privateUpdateUrl('proxy') + privateUpdateUrl('raw') + GITHUB_REPO + "/master/index.html?_t=" + Date.now()
-                ];
+                const hotUrls = htmlLink ? [htmlLink + (htmlLink.includes('?') ? '&' : '?') + '_t=' + Date.now()] : [];
 
                 const fetchCandidate = (url, timeoutMs = 7000) => {
                   const controller = new AbortController();
@@ -9096,6 +9033,7 @@
                 };
 
                 setVisualProgress(35, "📥 正在极速接收最新代码包 (毫秒级直连)...");
+                if (hotUrls.length === 0) throw new Error("Worker 未提供热更新文件地址");
                 const newHtml = await Promise.any(hotUrls.map(u => fetchCandidate(u)));
 
                 setVisualProgress(80, "💾 正在极速写入本地沙盒存储...");
@@ -9112,7 +9050,7 @@
               } catch(err) {
                 console.warn('[HotUpdate Concurrent Fallback]', err);
                 setVisualProgress(50, "🔄 自动转入 APK 完整通道下载...");
-                if (AndroidNativeApp.downloadAndInstallApk) {
+                if (AndroidNativeApp.downloadAndInstallApk && fastLink) {
                   AndroidNativeApp.downloadAndInstallApk(fastLink);
                 }
               }
@@ -9123,10 +9061,13 @@
               e.preventDefault();
               setVisualProgress(5, "🚀 正在启动全自动极速下载...");
               isAppDownloading = true;
-              if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk) {
+              if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.downloadAndInstallApk && fastLink) {
                 AndroidNativeApp.downloadAndInstallApk(fastLink);
-              } else {
+              } else if (fastLink) {
                 window.location.href = fastLink;
+              } else {
+                isAppDownloading = false;
+                showGameNotice('更新服务暂未提供安装包，请稍后重试');
               }
             };
           }
