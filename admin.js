@@ -206,7 +206,6 @@ async function getSafeUserColumns() {
   const columns = await getUsersTableColumns();
   const extraColumns = [];
   if (columns.has('password_algo')) extraColumns.push('password_algo');
-  if (columns.has('password_iterations')) extraColumns.push('password_iterations');
   return extraColumns.length ? `${BASE_USER_COLUMNS}, ${extraColumns.join(', ')}` : BASE_USER_COLUMNS;
 }
 
@@ -231,8 +230,7 @@ function safeUserView(user) {
     score: Number(user.score) || 0,
     wins: Number(user.wins) || 0,
     total_games: Number(user.total_games) || 0,
-    password_algo: user.password_algo || '旧版兼容（登录后自动升级）',
-    password_iterations: Number.isInteger(Number(user.password_iterations)) ? Number(user.password_iterations) : '旧版待重置',
+    password_algo: user.password_algo || '未设置（需管理员重置）',
     status: lockedUntil > Date.now() ? `锁定至 ${new Date(lockedUntil).toISOString()}` : '正常',
     created_at: user.created_at,
     updated_at: user.updated_at
@@ -289,10 +287,7 @@ async function resetUserPassword(identifier, suppliedPassword, flags) {
 
   const tableColumns = await getUsersTableColumns();
   const needsPasswordAlgoMigration = !tableColumns.has('password_algo');
-  const needsPasswordIterationsMigration = !tableColumns.has('password_iterations');
-  const migrationHint = needsPasswordAlgoMigration || needsPasswordIterationsMigration
-    ? '，并补齐旧数据库缺少的密码策略字段'
-    : '';
+  const migrationHint = needsPasswordAlgoMigration ? '，并补齐旧数据库缺少的密码策略字段' : '';
   if (!(await confirmMutation(`将重置玩家 ${user.uid}（${user.username}）的密码${migrationHint}，并使现有登录凭证失效。`, flags))) return;
 
   const password = suppliedPassword || await promptSecret('请输入新密码（不显示输入内容）：');
@@ -303,22 +298,17 @@ async function resetUserPassword(identifier, suppliedPassword, flags) {
   const salt = generateSecureHex(16);
   const passwordHash = hashPassword(password, salt);
   if (needsPasswordAlgoMigration) {
-    await queryD1("ALTER TABLE users ADD COLUMN password_algo TEXT DEFAULT 'sha256'");
+    await queryD1("ALTER TABLE users ADD COLUMN password_algo TEXT DEFAULT 'pbkdf2'");
     tableColumns.add('password_algo');
-  }
-  if (needsPasswordIterationsMigration) {
-    // 不给历史记录填默认值：这样 Worker 能识别出旧版 120000 次哈希并引导用户找回密码。
-    await queryD1('ALTER TABLE users ADD COLUMN password_iterations INTEGER');
-    tableColumns.add('password_iterations');
   }
   await queryD1(`
     UPDATE users
-    SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', password_iterations = ?,
+    SET password_hash = ?, salt = ?, password_algo = 'pbkdf2',
         token = NULL, token_expires_at = 0,
         failed_login_count = 0, locked_until = 0,
         updated_at = CURRENT_TIMESTAMP
     WHERE uid = ?
-  `, [passwordHash, salt, PBKDF2_ITERATIONS, user.uid]);
+  `, [passwordHash, salt, user.uid]);
 
   console.log(`✅ UID ${user.uid} 的密码已重置，已使用 PBKDF2，并已使旧登录凭证失效。`);
 }

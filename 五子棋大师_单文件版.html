@@ -2599,6 +2599,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           </div>
           <div style="display:flex; gap:5px; flex-shrink:0;">
             <button type="button" class="btn-chat-tool" id="btnAuthAction" onclick="openAuthModal()" style="background:#0284c7; color:#fff; border-color:#0369a1; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔑 登录/注册</button>
+            <button type="button" class="btn-chat-tool" id="btnChangePasswordAction" onclick="openChangePasswordModal()" style="display:none; background:#7c3aed; color:#fff; border-color:#6d28d9; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🔒 改密</button>
             <button type="button" class="btn-chat-tool" id="btnLogoutAction" onclick="confirmLogoutAccount()" style="display:none; background:#ef4444; color:#fff; border-color:#dc2626; padding:3px 8px; font-size:11px; border-radius:6px; font-weight:900; cursor:pointer;">🚪 退出</button>
           </div>
         </div>
@@ -2865,6 +2866,36 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
         <div id="resetErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-top:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- 🔒 已登录账号修改密码弹窗 -->
+  <div class="online-modal-backdrop" id="changePasswordModal" onclick="closeChangePasswordModal()">
+    <div class="auth-modal-card" onclick="event.stopPropagation()">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1.5px solid rgba(0,0,0,0.06); padding-bottom:8px;">
+        <div style="text-align:left;">
+          <div style="font-size:16px; font-weight:900; color:#1e293b;">🔒 修改登录密码</div>
+          <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">验证当前密码后设置新密码</div>
+        </div>
+        <button type="button" onclick="closeChangePasswordModal()" style="background:#f1f5f9; border:none; width:28px; height:28px; border-radius:50%; font-size:14px; cursor:pointer; color:#64748b; font-weight:900; display:flex; align-items:center; justify-content:center; padding:0;">✕</button>
+      </div>
+
+      <div class="auth-input-group">
+        <div class="auth-input-label"><span>🔑</span> 当前密码：</div>
+        <input type="password" id="changeCurrentPassword" placeholder="输入当前登录密码" maxlength="32" autocomplete="current-password" class="auth-input-box" />
+      </div>
+      <div class="auth-input-group">
+        <div class="auth-input-label"><span>🆕</span> 新密码（至少 6 位）：</div>
+        <input type="password" id="changeNewPassword" placeholder="输入新密码 (6~32 位)" maxlength="32" autocomplete="new-password" class="auth-input-box" />
+      </div>
+      <div class="auth-input-group">
+        <div class="auth-input-label"><span>✅</span> 确认新密码：</div>
+        <input type="password" id="changeConfirmPassword" placeholder="再次输入新密码" maxlength="32" autocomplete="new-password" class="auth-input-box" />
+      </div>
+
+      <div id="changePasswordErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
+      <button class="auth-submit-btn" onclick="submitChangePassword()" id="btnChangePasswordSubmit" style="background:linear-gradient(135deg, #7c3aed, #6d28d9); box-shadow:0 3.5px 0 #5b21b6;">🔐 保存新密码</button>
+      <div style="font-size:10px; color:#64748b; font-weight:700; text-align:center; margin-top:8px;">修改成功后会刷新当前登录凭证，旧凭证立即失效。</div>
     </div>
   </div>
 
@@ -6966,6 +6997,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       const uidBadge = document.getElementById('userUidBadge');
       const subText = document.getElementById('accountSubText');
       const btnAuth = document.getElementById('btnAuthAction');
+      const btnChangePassword = document.getElementById('btnChangePasswordAction');
 
       if (uidBadge && currentUserUid) {
         uidBadge.textContent = `UID: ${currentUserUid} 📋`;
@@ -6980,6 +7012,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           btnAuth.textContent = "🔄 切换";
           btnAuth.onclick = () => openAuthModal("login");
         }
+        if (btnChangePassword) {
+          btnChangePassword.style.display = "inline-block";
+        }
         if (btnLogout) {
           btnLogout.style.display = "inline-block";
         }
@@ -6990,6 +7025,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (btnAuth) {
           btnAuth.textContent = "🔑 登录/注册";
           btnAuth.onclick = () => openAuthModal("login");
+        }
+        if (btnChangePassword) {
+          btnChangePassword.style.display = "none";
         }
         if (btnLogout) {
           btnLogout.style.display = "none";
@@ -7056,6 +7094,107 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     function closeAuthModal() {
       const modal = document.getElementById('authModal');
       if (modal) modal.classList.remove('show');
+    }
+
+    function openChangePasswordModal() {
+      if (!hasRegisteredAccountSession()) {
+        showGameNotice('请先登录正式账号，再修改登录密码', true);
+        return;
+      }
+      const modal = document.getElementById('changePasswordModal');
+      const errorEl = document.getElementById('changePasswordErrorMsg');
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+      }
+      ['changeCurrentPassword', 'changeNewPassword', 'changeConfirmPassword'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      if (modal) {
+        modal.classList.add('show');
+        setTimeout(() => document.getElementById('changeCurrentPassword')?.focus(), 0);
+      }
+    }
+
+    function closeChangePasswordModal() {
+      const modal = document.getElementById('changePasswordModal');
+      if (modal) modal.classList.remove('show');
+      ['changeCurrentPassword', 'changeNewPassword', 'changeConfirmPassword'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+    }
+
+    async function submitChangePassword() {
+      const currentPassword = document.getElementById('changeCurrentPassword')?.value || '';
+      const newPassword = document.getElementById('changeNewPassword')?.value || '';
+      const confirmPassword = document.getElementById('changeConfirmPassword')?.value || '';
+      const errorEl = document.getElementById('changePasswordErrorMsg');
+      const btnSubmit = document.getElementById('btnChangePasswordSubmit');
+      const showError = (message) => {
+        if (errorEl) {
+          errorEl.textContent = message;
+          errorEl.style.display = 'block';
+        }
+      };
+
+      if (!hasRegisteredAccountSession()) {
+        showError('登录状态已失效，请重新登录');
+        return;
+      }
+      if (!currentPassword) {
+        showError('请输入当前密码');
+        return;
+      }
+      if (!newPassword || newPassword.length < 6 || newPassword.length > 32) {
+        showError('新密码长度须为 6~32 位');
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        showError('两次输入的新密码不一致');
+        return;
+      }
+      if (currentPassword === newPassword) {
+        showError('新密码不能与当前密码相同');
+        return;
+      }
+
+      if (errorEl) errorEl.style.display = 'none';
+      if (btnSubmit) {
+        btnSubmit.disabled = true;
+        btnSubmit.style.opacity = '0.75';
+        btnSubmit.innerHTML = '<span>⏳ 正在安全修改...</span>';
+      }
+
+      try {
+        const res = await safeApiFetch('/api/auth/change_password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: currentUserUid,
+            token: currentUserToken,
+            currentPassword,
+            newPassword
+          })
+        });
+        const json = await res.json();
+        if (json.code === 0 && json.data) {
+          applyUserData(json.data);
+          closeChangePasswordModal();
+          showGameNotice('🔒 密码修改成功！当前登录凭证已刷新', true);
+        } else {
+          showError(json.msg || '密码修改失败，请稍后重试');
+        }
+      } catch (err) {
+        showError('网络连接失败: ' + (err.message || '请检查手机网络设置'));
+      } finally {
+        if (btnSubmit) {
+          btnSubmit.disabled = false;
+          btnSubmit.style.opacity = '1';
+          btnSubmit.innerHTML = '🔐 保存新密码';
+        }
+      }
     }
 
     function switchAuthTab(tab) {

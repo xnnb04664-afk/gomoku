@@ -310,7 +310,7 @@
   - 本次安全版 APK 已按以上源码重新构建并推送到 GitHub `master`：版本 `1.0.89 (Build 90)`，正式签名校验通过，`五子棋.apk` SHA-256 为 `819118b528754fe2a3df6c26661dc64d0e5474ab3100bbbcDAFE35A731A9BA6`。
   - 为避免旧 APK 被线上开关立即锁死，`UPDATE_TICKET_ENFORCED` 未设置时是兼容阶段：新客户端已使用票据，旧客户端仍可暂时访问旧接口。安装本次重新签名的安全版 APK 后，再将该 Pages Secret 设置为 `1` 并重新部署，才算完成线上关闭直链。
   - **天梯榜与账号兼容优化（Worker/Pages 已重新部署，客户端源码已同步）**：数据库迁移改为每个 Worker 实例只初始化一次，并新增积分/胜场/昵称索引；榜单增加 15 秒服务端缓存、客户端 30 秒缓存、并发请求合并和紧凑头像返回，避免重复 D1 排序及几十 KB Base64 头像拖慢手机；游客只能用本地昵称，榜单本人识别只使用不可变 UID。要让手机端获得客户端缓存与 UID 识别修复，还需用正式签名密钥重新构建并发布 APK/HTML。
-  - **密码登录兼容修复**：Worker 与 `admin.js` 统一使用 Cloudflare WebCrypto 支持的 PBKDF2 100000 次迭代，并在 `users.password_iterations` 记录参数；旧 SHA-256 账号在正确登录后自动升级。旧版 120000 次账号无法在 Workers WebCrypto 中直接重算，登录时会明确提示使用“找回密码”重置一次，而不是误报普通密码错误。
+  - **密码策略统一与修改密码**：Worker 与 `admin.js` 统一只使用 Cloudflare WebCrypto 支持的 PBKDF2 100000 次迭代，不再保留旧 SHA-256/旧迭代参数兼容分支；登录后账号卡新增“改密”入口，修改时必须验证当前密码和有效 Token，成功后换 Salt、刷新当前 Token 并立即使旧凭证失效。
   - 推荐在 Pages 另设独立的 `UPDATE_TICKET_SECRET`（随机值，不进仓库）；未设置时源码会临时回退使用已有 `GITHUB_READ_TOKEN` 生成票据，便于迁移。配置命令：
     ```powershell
     npx wrangler pages secret put UPDATE_TICKET_SECRET --project-name gomoku-api
@@ -483,7 +483,7 @@ node publish.js
   node admin.js sql "SELECT uid, username, score FROM users ORDER BY score DESC;"
   node admin.js sql --write "UPDATE users SET score = 1000 WHERE uid = '661713';"
   ```
-  工具会自动兼容尚未完成 Worker 迁移的旧版 `users` 表；首次通过管理员工具重置密码时，会在确认后补齐 `password_algo` 与 `password_iterations` 字段。
+  工具针对当前 `users` 表提供 PBKDF2 密码重置；重置后会清除旧登录凭证并要求客户端重新登录。
 - **手动触发 Worker 部署**：
   ```powershell
   # 令牌只在当前 PowerShell 会话暂存，完成后立即清除；不要写入 .cloudflare_config.json 或提交 Git
@@ -498,4 +498,4 @@ node publish.js
 ---
 *交接文档最后更新时间：2026年9月4日*  
 *当前工程正式版本：v1.0.89 (Build 90)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化与密码兼容修复已完成；Worker/Pages 已重新部署，客户端源码与单文件版已同步，但仍需重新构建并发布 APK/HTML 才能让手机端获得最新前端修复。确认新客户端登录和检查更新正常后，再开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署。后续发布请先阅读本文件并使用 `node publish.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略与修改密码功能已完成；Worker/Pages 已重新部署，客户端源码与单文件版已同步，但仍需重新构建并发布 APK/HTML 才能让手机端获得最新前端功能。确认新客户端登录、改密和检查更新正常后，再开启 `UPDATE_TICKET_ENFORCED=1` 并重新部署。后续发布请先阅读本文件并使用 `node publish.js`。*

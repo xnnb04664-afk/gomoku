@@ -102,9 +102,8 @@ export default {
       return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    // 新账号使用 PBKDF2；旧账号仍可用旧 SHA-256 登录，并在成功登录时自动升级。
-    // Cloudflare Workers 的 WebCrypto 运行时最多接受 100000 次迭代，不能写成 120000。
-    async function hashPassword(text, salt, iterations = PASSWORD_PBKDF2_ITERATIONS) {
+    // 所有账号统一使用 PBKDF2；Cloudflare Workers 的 WebCrypto 运行时最多接受 100000 次迭代。
+    async function hashPassword(text, salt) {
       const key = await crypto.subtle.importKey(
         'raw',
         new TextEncoder().encode(text),
@@ -113,7 +112,7 @@ export default {
         ['deriveBits']
       );
       const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt: new TextEncoder().encode(`GOMOKU_PASSWORD_${salt}`), iterations, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt: new TextEncoder().encode(`GOMOKU_PASSWORD_${salt}`), iterations: PASSWORD_PBKDF2_ITERATIONS, hash: 'SHA-256' },
         key,
         256
       );
@@ -190,8 +189,7 @@ export default {
             username TEXT UNIQUE,
             password_hash TEXT,
             salt TEXT,
-            password_algo TEXT DEFAULT 'sha256',
-            password_iterations INTEGER DEFAULT 100000,
+            password_algo TEXT DEFAULT 'pbkdf2',
             security_q TEXT,
             security_a_hash TEXT,
             security_salt TEXT,
@@ -213,7 +211,7 @@ export default {
         `).run();
 
         const cols = [
-          'password_hash TEXT', 'salt TEXT', 'password_algo TEXT DEFAULT \'sha256\'', 'password_iterations INTEGER', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
+          'password_hash TEXT', 'salt TEXT', 'password_algo TEXT DEFAULT \'pbkdf2\'', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
           'failed_login_count INTEGER DEFAULT 0', 'locked_until INTEGER DEFAULT 0', 'last_game_at INTEGER DEFAULT 0',
           'security_q TEXT', 'security_a_hash TEXT', 'security_salt TEXT',
           'failed_reset_count INTEGER DEFAULT 0', 'reset_locked_until INTEGER DEFAULT 0'
@@ -595,11 +593,11 @@ async function allocateNextAvailableUid(env) {
           if (guest && !guest.username) {
             await env.DB.prepare(`
               UPDATE users
-              SET username = ?, password_hash = ?, salt = ?, password_algo = 'pbkdf2', password_iterations = ?, token = ?, token_expires_at = ?,
+              SET username = ?, password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
                   security_q = ?, security_a_hash = ?, security_salt = ?,
                   failed_login_count = 0, locked_until = 0, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP
               WHERE uid = ?
-            `).bind(safeUsername, passwordHash, salt, PASSWORD_PBKDF2_ITERATIONS, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
+            `).bind(safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
 
             try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
             const updated = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(uid).first();
@@ -611,9 +609,9 @@ async function allocateNextAvailableUid(env) {
 
         const newUid = await allocateNextAvailableUid(env);
         await env.DB.prepare(`
-          INSERT INTO users (uid, username, password_hash, salt, password_algo, password_iterations, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
-          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
-        `).bind(newUid, safeUsername, passwordHash, salt, PASSWORD_PBKDF2_ITERATIONS, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
+          INSERT INTO users (uid, username, password_hash, salt, password_algo, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
+          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
+        `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
 
         try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
         const created = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(newUid).first();
@@ -764,27 +762,7 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 429, msg: `密码输错过多，账号保护性锁定中！请在 ${remain} 秒后再试` });
         }
 
-        let calcHash;
-        let passwordIterations = PASSWORD_PBKDF2_ITERATIONS;
-        if (user.password_algo === 'pbkdf2') {
-          const storedIterations = Number(user.password_iterations);
-          // 旧版 120000 次哈希无法在 Workers WebCrypto 中重新计算，必须通过找回密码重置。
-          if (!Number.isInteger(storedIterations) || storedIterations < 1 || storedIterations > PASSWORD_PBKDF2_ITERATIONS) {
-            return json({ code: 409, msg: '该账号使用了旧版密码加密参数，请先点击“找回密码”重置一次密码' }, 409);
-          }
-          passwordIterations = storedIterations;
-        }
-        try {
-          calcHash = user.password_algo === 'pbkdf2'
-            ? await hashPassword(password, user.salt, passwordIterations)
-            : await hashWithSalt(password, user.salt);
-        } catch (hashError) {
-          const hashMessage = String(hashError && hashError.message || hashError || '').toLowerCase();
-          if (hashMessage.includes('iteration')) {
-            return json({ code: 409, msg: '该账号使用了旧版密码加密参数，请先点击“找回密码”重置一次密码' }, 409);
-          }
-          throw hashError;
-        }
+        const calcHash = await hashPassword(password, user.salt);
         if (calcHash !== user.password_hash) {
           const newFailCount = (user.failed_login_count || 0) + 1;
           if (newFailCount >= 5) {
@@ -797,23 +775,14 @@ async function allocateNextAvailableUid(env) {
           }
         }
 
-        let loginSalt = user.salt;
-        let loginHash = calcHash;
-        let passwordAlgo = user.password_algo || 'sha256';
-        if (passwordAlgo !== 'pbkdf2') {
-          loginSalt = generateSecureHex(16);
-          loginHash = await hashPassword(password, loginSalt, PASSWORD_PBKDF2_ITERATIONS);
-          passwordAlgo = 'pbkdf2';
-          passwordIterations = PASSWORD_PBKDF2_ITERATIONS;
-        }
         const freshToken = generateSecureHex(24);
         const expiresAt = now + 365 * 24 * 3600 * 1000;
         await env.DB.prepare(`
           UPDATE users
-          SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = ?, password_iterations = ?,
+          SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = 'pbkdf2',
               token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(loginHash, loginSalt, passwordAlgo, passwordIterations, freshToken, expiresAt, user.uid).run();
+        `).bind(calcHash, user.salt, freshToken, expiresAt, user.uid).run();
 
         return json({
           code: 0,
@@ -835,7 +804,93 @@ async function allocateNextAvailableUid(env) {
       }
     }
 
-    // ── 5. 安全找回密码：第一步（根据账号获取密保问题） ─
+    // ── 5. 已登录账号修改密码（当前密码 + 有效 Token） ─────────────
+    if (url.pathname === '/api/auth/change_password' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const uid = typeof body.uid === 'string' ? body.uid.trim() : '';
+        const token = typeof body.token === 'string' ? body.token.trim() : '';
+        const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+        const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+
+        if (!uid || !token || !currentPassword || !newPassword) {
+          return json({ code: 1, msg: '请完整填写当前密码和新密码' });
+        }
+        if (uid.length > 64 || token.length > 256) {
+          return json({ code: 1, msg: '登录凭证格式不正确' });
+        }
+        if (newPassword.length < 6 || newPassword.length > 32) {
+          return json({ code: 1, msg: '新密码长度须至少 6 位（支持 6~32 位）' });
+        }
+        if (currentPassword.length > 32) {
+          return json({ code: 1, msg: '当前密码不正确' });
+        }
+        if (currentPassword === newPassword) {
+          return json({ code: 1, msg: '新密码不能与当前密码相同' });
+        }
+
+        const user = await env.DB.prepare(
+          'SELECT uid, username, nickname, avatar, password_hash, salt, token_expires_at, failed_login_count, locked_until, score, wins, total_games, security_q FROM users WHERE uid = ? AND token = ? AND username IS NOT NULL AND username != ?'
+        ).bind(uid, token, '').first();
+        if (!user) {
+          return json({ code: 401, msg: '登录状态已失效，请重新登录' }, 401);
+        }
+
+        const now = Date.now();
+        if (user.token_expires_at && user.token_expires_at <= now) {
+          return json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401);
+        }
+        if (user.locked_until && user.locked_until > now) {
+          const remain = Math.ceil((user.locked_until - now) / 1000);
+          return json({ code: 429, msg: `密码输错过多，账号保护性锁定中！请在 ${remain} 秒后再试` }, 429);
+        }
+
+        const currentHash = await hashPassword(currentPassword, user.salt);
+        if (currentHash !== user.password_hash) {
+          const newFailCount = (user.failed_login_count || 0) + 1;
+          if (newFailCount >= 5) {
+            const lockTime = now + 5 * 60 * 1000;
+            await env.DB.prepare('UPDATE users SET failed_login_count = ?, locked_until = ? WHERE uid = ?').bind(newFailCount, lockTime, user.uid).run();
+            return json({ code: 429, msg: '当前密码连续错误满 5 次！账号已锁定 5 分钟' }, 429);
+          }
+          await env.DB.prepare('UPDATE users SET failed_login_count = ? WHERE uid = ?').bind(newFailCount, user.uid).run();
+          return json({ code: 1, msg: `当前密码不正确（还可尝试 ${5 - newFailCount} 次）` });
+        }
+
+        const newSalt = generateSecureHex(16);
+        const newPasswordHash = await hashPassword(newPassword, newSalt);
+        const freshToken = generateSecureHex(24);
+        const expiresAt = now + 365 * 24 * 3600 * 1000;
+        await env.DB.prepare(`
+          UPDATE users
+          SET password_hash = ?, salt = ?, password_algo = 'pbkdf2',
+              token = ?, token_expires_at = ?, failed_login_count = 0, locked_until = 0,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE uid = ?
+        `).bind(newPasswordHash, newSalt, freshToken, expiresAt, user.uid).run();
+
+        return json({
+          code: 0,
+          msg: '密码修改成功！已刷新登录凭证',
+          data: {
+            uid: user.uid,
+            username: user.username,
+            nickname: user.nickname,
+            avatar: sanitizeAvatar(user.avatar),
+            score: user.score,
+            wins: user.wins,
+            total_games: user.total_games,
+            security_q: user.security_q,
+            token: freshToken
+          }
+        });
+      } catch (err) {
+        return json({ code: 1, msg: '修改密码异常: ' + err.message }, 500);
+      }
+    }
+
+    // ── 6. 安全找回密码：第一步（根据账号获取密保问题） ─
     if (url.pathname === '/api/auth/get_security_q' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
@@ -906,12 +961,12 @@ async function allocateNextAvailableUid(env) {
 
         await env.DB.prepare(`
           UPDATE users
-          SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', password_iterations = ?, token = ?, token_expires_at = ?,
+          SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
               failed_reset_count = 0, reset_locked_until = 0,
               failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(newPwdHash, newSalt, PASSWORD_PBKDF2_ITERATIONS, newToken, expiresAt, user.uid).run();
+        `).bind(newPwdHash, newSalt, newToken, expiresAt, user.uid).run();
 
         return json({
           code: 0,
