@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
+const { loadSecretIntoEnv } = require('./local_secret_store');
 
 function run(cmd, args, options = {}) {
   console.log(`> [EXEC] ${path.basename(cmd)} ${args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
@@ -70,10 +71,13 @@ function loadSigningConfig() {
   if (!/^[A-Za-z0-9._-]+$/.test(KEY_ALIAS)) {
     throw new Error('GOMOKU_KEY_ALIAS 只能包含字母、数字、点、下划线或连字符。');
   }
+  if (!process.env[KEYSTORE_PASSWORD_ENV]) {
+    loadSecretIntoEnv(KEYSTORE_PASSWORD_ENV, 'keystore-password.dpapi');
+  }
   const storePassword = process.env[KEYSTORE_PASSWORD_ENV] || '';
   const keyPassword = process.env[KEY_PASSWORD_ENV] || storePassword;
   if (!storePassword || !keyPassword) {
-    throw new Error(`缺少签名密码，请在当前 PowerShell 会话设置 ${KEYSTORE_PASSWORD_ENV}（可选 ${KEY_PASSWORD_ENV}）。密码不会写入 Git。`);
+    throw new Error(`缺少签名密码，请先运行 powershell -ExecutionPolicy Bypass -File .\\setup_gomoku_secret.ps1 -Type Signing，或在当前会话设置 ${KEYSTORE_PASSWORD_ENV}（可选 ${KEY_PASSWORD_ENV}）。密码不会写入 Git。`);
   }
   return { storePassword, keyPassword };
 }

@@ -226,6 +226,9 @@
     5. 自动推送到 GitHub (`git push origin master`)；
     6. 自动调用 GitHub CLI 创建 GitHub Release 并上传 `gomoku.apk` 与 `gomoku.html`；
   - 整个流程全自动完成，0 维护负担！
+- **本机凭据自动化（首次设置一次）**：签名密码与 Cloudflare 部署令牌可通过 `setup_gomoku_secret.ps1` 保存为当前 Windows 用户专属的 DPAPI 加密文件，位置为仓库外的 `Documents\GomokuSecrets`；之后 `build_apk.js`、`publish.js`、`deploy_worker.js` 和 `admin.js` 自动读取，不需要把密码交给 AI，也不会出现在 Git、命令行参数或截图中。
+  - 首次设置签名密码：`powershell -ExecutionPolicy Bypass -File .\setup_gomoku_secret.ps1 -Type Signing`；若希望 `node publish.js` 也自动部署，则使用 `-Type Both`，在本机隐藏输入两项凭据。
+  - DPAPI 凭据绑定当前 Windows 用户和电脑；换电脑、换用户或忘记原密码时不能恢复，只能在仍掌握原密码的情况下重新设置。环境变量仍可临时覆盖本机凭据。
 
 ### 19. 🤝 和棋闭环与神抽技能额度修复（本次代码审查）
 - **满盘判定**：15×15 棋盘在最后一手未形成五连时调用 `triggerGameDraw()`，统一结束对局、展示和棋卡片、保存完整棋谱并停止继续落子。
@@ -447,7 +450,7 @@ node publish.js
   }
   ```
 - **安全隔离规范**：
-  - 为防止 Token 意外泄露，`.cloudflare_config.json` 受到 `.gitignore` 的严格保护，**绝不提交至 GitHub**；部署令牌不再写入该文件，只能临时放在当前 PowerShell 会话的 `CLOUDFLARE_API_TOKEN` 环境变量中；
+  - 为防止 Token 意外泄露，`.cloudflare_config.json` 受到 `.gitignore` 的严格保护，**绝不提交至 GitHub**；部署令牌不再写入该文件，只能临时放在当前 PowerShell 会话的 `CLOUDFLARE_API_TOKEN` 环境变量中，或由仓库外的 Windows DPAPI 凭据自动注入；
   - 当前文件 ACL 已收紧为 `XN\ZhuanZ1` 可读写、SYSTEM 与 Administrators 完全控制，已移除 `Authenticated Users` 和普通用户权限；发布脚本、`admin.js`、`deploy_worker.js` 仅从本机读取，不会把令牌写入仓库或客户端。
   - **令牌轮换要求**：此前曾在聊天/本地配置中出现过的 GitHub PAT 与 Cloudflare 部署令牌均按已泄露处理，必须在对应控制台撤销并重新创建；新令牌不要粘贴到聊天、源码、命令行参数或截图中。
 
@@ -502,7 +505,7 @@ node publish.js
   finally { if ($ptr) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }; Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue }
   ```
   `admin.js` 使用同一个 `CLOUDFLARE_API_TOKEN` 环境变量；不要把令牌粘贴到聊天、源码、命令行参数或截图中。
-  执行 `node publish.js`、`node deploy_worker.js` 或 `node admin.js ...` 前均需先设置该环境变量；任务完成后按上面示例自动清除。
+  如果已完成本机凭据首次设置，执行 `node publish.js`、`node deploy_worker.js` 或 `node admin.js ...` 会自动读取 DPAPI 凭据；否则才需要先设置该环境变量。任务完成后，临时环境变量按上面示例自动清除。
 
 ---
 *交接文档最后更新时间：2026年9月4日*  

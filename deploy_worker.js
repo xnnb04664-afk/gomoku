@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { loadSecretIntoEnv } = require('./local_secret_store');
 
 const ROOT_DIR = __dirname;
 const CONFIG_PATH = path.join(ROOT_DIR, '.cloudflare_config.json');
@@ -11,6 +12,9 @@ const PAGES_PROJECT_NAME = 'gomoku-api';
 function fail(message) {
   throw new Error(message);
 }
+
+// 部署令牌优先使用当前环境变量；未设置时自动读取仓库外的本机 DPAPI 凭据。
+loadSecretIntoEnv('CLOUDFLARE_API_TOKEN', 'cloudflare-api-token.dpapi');
 
 if (!fs.existsSync(CONFIG_PATH)) {
   fail('缺少 .cloudflare_config.json；部署凭据必须只保存在本机配置文件中。');
@@ -27,7 +31,7 @@ try {
 }
 
 const { accountId, d1DatabaseId, scriptName } = config || {};
-// 部署令牌只从当前 PowerShell 会话读取，禁止落盘到项目配置文件。
+// 部署令牌只从当前会话或仓库外 DPAPI 凭据读取，禁止落盘到项目配置文件。
 const deployToken = String(process.env.CLOUDFLARE_API_TOKEN || '').trim();
 if (!/^[a-f0-9]{32}$/i.test(String(accountId || ''))) {
   fail('Cloudflare accountId 格式无效，已停止部署。');

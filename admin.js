@@ -2,7 +2,8 @@
  * 🛠️ 五子棋大师 - 开发者专用云端数据管理工具（Cloudflare D1）
  *
  * 只在受信任的开发机上运行。本工具读取项目根目录的
- * .cloudflare_config.json；Cloudflare API Token 只从当前进程环境变量读取，绝不落盘。
+ * .cloudflare_config.json；Cloudflare API Token 只从当前进程环境变量或
+ * 仓库外的 Windows DPAPI 凭据读取，绝不写入项目目录。
  *
  * 常用命令：
  *   node admin.js users [--json]
@@ -22,8 +23,11 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
+const { loadSecretIntoEnv } = require('./local_secret_store');
 
 const CONFIG_FILE = path.join(__dirname, '.cloudflare_config.json');
+// 管理令牌优先使用当前环境变量；未设置时自动读取仓库外的本机 DPAPI 凭据。
+loadSecretIntoEnv('CLOUDFLARE_API_TOKEN', 'cloudflare-api-token.dpapi');
 // 必须与 Cloudflare Worker 保持一致；Workers WebCrypto 不接受超过 100000 的迭代次数。
 const PBKDF2_ITERATIONS = 100000;
 const MAX_NAME_LENGTH = 16;

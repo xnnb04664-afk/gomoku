@@ -1,11 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { loadSecretIntoEnv } = require('./local_secret_store');
 
 const ROOT_DIR = __dirname;
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
 
 const vm = require('vm');
+
+// 发布令牌优先使用当前环境变量；未设置时自动读取仓库外的本机 DPAPI 凭据。
+loadSecretIntoEnv('CLOUDFLARE_API_TOKEN', 'cloudflare-api-token.dpapi');
 
 console.log('======================================================');
 console.log('🚀 五子棋全平台极速一键发布引擎 (One-Click Publisher & GitHub Releases)');
@@ -77,10 +81,10 @@ function runPreflightChecks() {
 
 runPreflightChecks();
 
-// 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量或云端 Secret 注入。
+// 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量、本机 DPAPI 或云端 Secret 注入。
 function runSecretFileGuard() {
   if (String(process.env.CLOUDFLARE_API_TOKEN || '').trim().length < 20) {
-    throw new Error('发布安全门禁拦截：请先在当前 PowerShell 会话设置 CLOUDFLARE_API_TOKEN，令牌不会从配置文件读取。');
+    throw new Error('发布安全门禁拦截：请先运行 setup_gomoku_secret.ps1 -Type Cloudflare，或在当前 PowerShell 会话设置 CLOUDFLARE_API_TOKEN。令牌不会从项目配置文件读取。');
   }
   const sensitivePath = /(^|[\\/])(?:\.env(?:\.[^\\/]+)?|[^\\/]+\.(?:keystore|jks|p12|pfx|pem))$/i;
   const tracked = execSync('git ls-files', { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
