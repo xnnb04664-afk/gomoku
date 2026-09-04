@@ -954,9 +954,10 @@
     }
 
     /* --- 🌐 在线联机大厅弹窗 --- */
-    /* 确保二级弹窗（历史战报、天梯榜、登录认证、悔棋、意见反馈）永远置顶浮于个人主页上层 */
+    /* 普通弹窗统一浮于个人资料层之上；认证/改密层在更高层独立显示。 */
+    #phraseManageModal, #onlineModal, #gameReplayModal,
     #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal, #feedbackModal {
-      z-index: 250 !important;
+      z-index: 300 !important;
     }
 
     .online-modal-backdrop {
@@ -1256,7 +1257,8 @@
     .custom-confirm-backdrop {
       position: fixed; inset: 0; background: rgba(0,0,0,0.68);
       display: flex; align-items: center; justify-content: center;
-      z-index: 999999 !important; opacity: 0; pointer-events: none; transition: opacity 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      /* 100001 是确认层基准；带有内联层级的重连/更新/结算层可继续递增覆盖。 */
+      z-index: 100001; opacity: 0; pointer-events: none; transition: opacity 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
       backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
     }
     .custom-confirm-backdrop.show { opacity: 1 !important; pointer-events: auto !important; }
