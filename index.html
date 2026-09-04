@@ -479,7 +479,7 @@
       line-height: 1.35;
     }
 
-    /* --- 📍 最后一手落子温和微光环指示器 (低调优雅，呼吸微光，绝不突兀或遮挡) --- */
+    /* --- 📍 最后一手落子清晰指示器 (高对比度双层微光环 + 精致小指针，清晰醒目适度) --- */
     .last-move-indicator,
     .last-move-indicator * {
       pointer-events: none !important;
@@ -490,19 +490,77 @@
       z-index: 25;
       transform: translate(-50%, -50%);
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       transition: left 0.15s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.15s cubic-bezier(0.2, 0.9, 0.3, 1);
     }
+    
+    /* 核心高亮环：鲜亮红色 + 2px 高清白边 + 柔光，全主题背景下均极其醒目 */
     .last-move-ring {
+      position: absolute;
       border-radius: 50%;
-      border: 2px solid #ef4444;
-      box-shadow: 0 0 7px rgba(239, 68, 68, 0.55);
-      animation: gentleBreath 1.8s infinite ease-in-out;
+      border: 2.5px solid #ff3b30;
+      box-shadow: 0 0 0 2px #ffffff, 0 0 12px rgba(255, 59, 48, 0.75);
+      animation: lastMoveBreath 1.6s infinite ease-in-out;
     }
-    @keyframes gentleBreath {
-      0%, 100% { transform: scale(0.96); opacity: 0.85; }
-      50% { transform: scale(1.1); opacity: 0.4; }
+    
+    /* 外层水滴微波脉冲：向外自然扩散荡漾，瞬间抓住余光焦点 */
+    .last-move-ping {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 59, 48, 0.85);
+      animation: lastMoveRipple 1.8s infinite cubic-bezier(0.1, 0.7, 0.3, 1);
+    }
+
+    @keyframes lastMoveBreath {
+      0%, 100% { transform: scale(0.97); opacity: 0.95; }
+      50% { transform: scale(1.06); opacity: 0.75; }
+    }
+    @keyframes lastMoveRipple {
+      0% { transform: scale(1); opacity: 0.85; }
+      100% { transform: scale(1.48); opacity: 0; }
+    }
+
+    /* 顶部精致小气泡指针 (小巧玲珑，清晰指出落子，不占空间) */
+    .last-move-pin {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      animation: lastMoveBounce 1.4s infinite alternate ease-in-out;
+      filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35));
+      white-space: nowrap;
+      user-select: none;
+    }
+    .last-move-pin-body {
+      background: linear-gradient(135deg, #ff3b30 0%, #f97316 100%);
+      color: #ffffff;
+      border: 1.5px solid #ffffff;
+      border-radius: 12px;
+      padding: 1.5px 7px;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.3px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.25);
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .last-move-pin-arrow {
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid #f97316;
+      margin-top: -1px;
+    }
+    @keyframes lastMoveBounce {
+      0% { transform: translateX(-50%) translateY(0); }
+      100% { transform: translateX(-50%) translateY(-4px); }
     }
 
     @keyframes boardShake {
@@ -1555,9 +1613,16 @@
   <div class="island-wrapper" id="islandWrapper">
     <canvas id="cvs"></canvas>
 
-    <!-- 📍 最后一手落子温和微光环指示器 (低调雅致，不挡视线) -->
+    <!-- 📍 最后一手落子高亮指示器 (双层微光环 + 精致小指针) -->
     <div id="opponentMoveIndicator" class="last-move-indicator" style="display:none;">
+      <div class="last-move-ping" id="lastMovePing"></div>
       <div class="last-move-ring" id="lastMoveRing"></div>
+      <div class="last-move-pin" id="lastMovePin">
+        <div class="last-move-pin-body">
+          <span id="lastMovePinText">📍 上一步</span>
+        </div>
+        <div class="last-move-pin-arrow"></div>
+      </div>
     </div>
 
     <!-- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 -->
@@ -7697,12 +7762,23 @@
       ind.style.top = `${posY}px`;
       ind.style.display = 'flex';
 
-      // 自适应微光环大小 (比棋子略大一圈，温和贴合)
+      // 自适应微光环大小与提示文字
       const ring = document.getElementById('lastMoveRing');
+      const ping = document.getElementById('lastMovePing');
+      const pinText = document.getElementById('lastMovePinText');
+      if (pinText) {
+        if (gameMode === 'ai') pinText.textContent = '🤖 AI落子';
+        else if (gameMode === 'online') pinText.textContent = '📍 对方落子';
+        else pinText.textContent = '📍 上一步';
+      }
+      const ringSize = Math.max(26, Math.round(radius * 2.25));
       if (ring) {
-        const ringSize = Math.max(26, Math.round(radius * 2.25));
         ring.style.width = `${ringSize}px`;
         ring.style.height = `${ringSize}px`;
+      }
+      if (ping) {
+        ping.style.width = `${ringSize}px`;
+        ping.style.height = `${ringSize}px`;
       }
     }
 
