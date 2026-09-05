@@ -898,7 +898,20 @@ node publish.js
 - **发布结果**：已发布 v1.0.104（Build 105），GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.104`。正式 APK 与单文件版共用原签名，可覆盖安装；旧客户端可通过现有热更新入口检查到该版本。
 - **当前产物 SHA-256**：`index.html` 为 `59210EA7E3D54BB4E75B3DDCFE1C313A632BDD3323E817929BF383C7C552AB92`；`android_src/assets/index.html` 为 `E06E1A89ACEE867322ADC78C5889245E0D7CF00843932CDEBB33FB4EEA14AC0B`；单文件版为 `35EA786FD2E047E70A654F60A0116E44150DAEC9EFDB3AE76D3B7B645B98CF24`；APK 为 `D93101E9BD705C30354CEC7C533E1087B1464886716F43DBCA0197086D227CD5`。
 
+## 二十五、匹配请求幂等、D1 队列性能与 API 首次连接预热（2026-09-05，已发布 v1.0.105）
+
+- **再次定位到的联机边界问题**：匹配结果是 HTTP 请求返回值；弱网下若 `/api/match/join` 或 `/api/match/poll` 的响应丢失，旧服务端会立即删除 `matched` 记录，客户端下一次重试只能得到 `cancelled`，随后 MQTT 房间没有房主或没有客方。旧记录还可能在下一次匹配中被当作当前结果，表现为重复进入上一场房间。
+- **服务端修复 (`backend/worker.js`)**：
+  1. 新增 `match_id`（兼容旧 D1 自动迁移）；客户端每次搜寻生成独立请求 ID，`join/poll/cancel` 全链路携带并校验。
+  2. 同一 `match_id` 的 join/poll 结果保持幂等，不再因一次响应丢失而丢掉房间；新一轮不同 ID 会淘汰同 UID 的旧残留结果，避免“上一场一直返回”。
+  3. `matched` 记录保留短暂重试窗口，超过 120 秒自动回收；等待记录清理改为 Worker 实例内 30 秒限频，且只在需要时写 D1。
+  4. 为 `match_queue(status, updated_at)` 增加索引，降低在线人数增长后的等待队列扫描和心跳写入压力。
+- **客户端速度修复 (`index.html`)**：API 出口探测结果增加 10 分钟新鲜度；页面/Android WebView 启动后后台并行预热 Pages 与 Worker，首次登录和全服匹配不再把测速时间算进用户点击后的等待时间。更新文件仍固定走 Pages 短时票据中转，Worker 仅作为账号/匹配 API 容灾出口。
+- **发布与部署**：已完成 v1.0.105（Build 106）正式签名 APK、单文件版、GitHub 私有仓库和 Release 发布；随后显式部署 `gomoku-backend` 与 `gomoku-api`，生产 `/api/version` 返回 HTTP 200、`v1.0.105`，无票据下载仍返回 HTTP 401。Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.105`。
+- **验证结果**：`python tests/online_match_race_smoke.py`、`python tests/optimization_smoke.py`、`node tests/worker_unit.js`、Worker/部署脚本语法检查通过；跨 Broker、延迟订阅、房主 ready 闸门、双向落子和资料同步均通过。真实公共 MQTT 冒烟测试曾成功通过，但最终复测时四个公共 Broker 同时返回 `connection closed`，页面无 JS/page error；这属于公共中继节点临时不可用，客户端会按固定顺序错峰容灾，若四个节点同时被当前网络阻断仍需更换网络或后续接入自建信令服务。
+- **当前产物 SHA-256**：`index.html` 为 `B44840143A32447DE24B330E7B48154FF20B73745B1C682C4647E4DAEDAF1491`；`android_src/assets/index.html` 为 `F819F4DC102118B6205B32C701357D97CC095024E8BE6A4372D01D6D751C739F`；单文件版为 `2147599800028E0B6D896003622BE7C9B40EE626A2113F9F87497F557BE401E6`；APK 为 `89A6D715A7BB80D14F4DE39124486805C21C72A2D0AC7A90F3B435740D9870C6`。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.104 (Build 105)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重与线上 Worker/Pages 入口恢复均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.104 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程正式版本：v1.0.105 (Build 106)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热和线上 Worker/Pages 入口恢复均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.105 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
