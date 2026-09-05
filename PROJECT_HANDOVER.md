@@ -724,7 +724,7 @@ node publish.js
 - v1.0.98 (Build 99) 已完成单文件版与正式签名 APK 构建并发布：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.98`；本次为图标与客户端资源更新，Cloudflare 生产环境跳过。
 - 当前资源 SHA-256：`favicon.png` 为 `BEF037F960D94CA444BA32034AC48775036FCBB1A4F9A2106A642B0E985AD477`；`android_src/res/drawable/ic_launcher.png` 为 `58F0821D7280F6BA055360F1C9E7858C149E704911698CDC1BEABA4F5DB2BFF7`；APK 为 `8CB48FC38FAAE0EF0790BF7D6AE4DB486B8473A1FEEE9B3036F9D763A4232DA1`。
 
-## 十七、账号登录网络路径优化（2026-09-05，工作区待发布）
+## 十七、账号登录网络路径优化（2026-09-05，已发布 v1.0.99）
 
 - **问题定位**：旧版 `safeApiFetch()` 对所有接口固定附加自定义请求头，登录在 Android WebView 中容易先触发 CORS 预检；当 Pages 出口未及时响应时，又会按 7 秒超时后顺序等待 Workers，最终把 `signal is aborted without reason` 原样显示给用户。
 - **客户端修复**：登录请求改用可解析 JSON 请求体的 `text/plain` 简单请求，登录不再携带旧 Authorization 或无关自定义头；打开账号弹窗时并行探测两个官方 HTTPS 出口，记忆最快节点，并对失败节点冷却 60 秒，减少下次重复等待。
@@ -732,9 +732,11 @@ node publish.js
 - **服务端准备**：`backend/worker.js` 与派生的 `pages_build/_worker.js` 增加 CORS 预检缓存 600 秒；这项后端头部只有在明确执行 `node deploy_worker.js` 后才会影响线上，本轮未自动部署生产环境。
 - **同步范围**：已同步 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html`、`backend/worker.js` 和 `pages_build/_worker.js`。
 - **验证结果**：Pages/Worker 预检均返回 HTTP 200；定向测试确认登录请求仅带 `Content-Type: text/plain;charset=UTF-8`，不带旧 Token/自定义头；超时错误统一为 `API_TIMEOUT` 中文提示；`python tests\optimization_smoke.py`、`node tests\worker_unit.js`、`node tests\auth_refresh_unit.js` 和全部 HTML 内嵌脚本语法检查均通过。
-- **生效边界**：手机截图中的 v1.0.98 仍是旧客户端，必须先发布包含本修复的新客户端或通过现有热更新拉取新 HTML；本次工作区尚未递增版本、推送 GitHub 或重新构建 APK。
+- **发布结果**：已递增为 v1.0.99（Build 100），完成正式签名 APK、单文件版构建，推送 GitHub 私有仓库并创建 Release。Release 地址：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.99；线上 /api/version 已返回 v1.0.99，旧客户端可通过现有热更新入口拉取新 HTML。
+- **当前产物 SHA-256**：index.html / android_src/assets/index.html 为 7A997C4B4C46E5D5977B69E79E994DCC732FC3508376253D99C4BAD33DD7F94C；单文件版为 59BB68101644C390752A64D7A0A0E4101CE608B848664A052805ECA42BF50168；APK 为 681C7D5BE3C9E47A65347E99B49C332FF93548267AA70632DBCF82868040A2D8。
+- **部署边界**：本次客户端登录修复不要求重新部署 Cloudflare；服务端新增的 CORS 预检缓存已保存在源码，后续若要让该响应头上线，再单独执行一次 node deploy_worker.js。
 
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.98 (Build 99)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认和手机端应用图标替换均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.98。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程正式版本：v1.0.99 (Build 100)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换和账号登录网络路径优化均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.99。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
