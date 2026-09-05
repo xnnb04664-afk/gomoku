@@ -1776,7 +1776,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.101</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.102</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2462,7 +2462,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.101';
+    const CURRENT_VERSION_TAG = 'v1.0.102';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -5439,54 +5439,113 @@
           draw();
           showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
         } else if (data.type === 'skill_remove_stone') {
+          const removedP = board[data.r][data.c];
           board[data.r][data.c] = EMPTY;
-          history = history.filter(h => !(h.r === data.r && h.c === data.c));
+          history.push({
+            action: 'remove_stone',
+            type: 'skill_remove_stone',
+            r: data.r,
+            c: data.c,
+            p: removedP !== EMPTY ? removedP : myOnlineColor,
+            by: (myOnlineColor === BLACK ? WHITE : BLACK),
+            desc: '虚空陨石'
+          });
           draw();
+          updateUI();
+          persistGameState();
           alert(`💥 对方发动了【虚空陨石】！抹除了您在 (${data.r+1}, ${data.c+1}) 的棋子！`);
         } else if (data.type === 'skill_shift_stone') {
           board[data.fromR][data.fromC] = EMPTY;
           board[data.toR][data.toC] = data.p;
-          const histItem = history.find(h => h.r === data.fromR && h.c === data.fromC);
-          if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
+          history.push({
+            action: 'shift_stone',
+            type: 'skill_shift_stone',
+            fromR: data.fromR,
+            fromC: data.fromC,
+            toR: data.toR,
+            toC: data.toC,
+            r: data.toR,
+            c: data.toC,
+            p: data.p,
+            desc: '移星换斗'
+          });
           draw();
+          updateUI();
+          persistGameState();
           alert(`🌟 对方发动了【移星换斗】！将其棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
         } else if (data.type === 'skill_swap_color') {
+          const oldColor = board[data.r][data.c];
           board[data.r][data.c] = data.p;
-          const histItem = history.find(h => h.r === data.r && h.c === data.c);
-          if (histItem) histItem.p = data.p;
+          history.push({
+            action: 'swap_color',
+            type: 'skill_swap_color',
+            r: data.r,
+            c: data.c,
+            fromP: oldColor !== EMPTY ? oldColor : (data.p === BLACK ? WHITE : BLACK),
+            p: data.p,
+            desc: '偷天换日'
+          });
           triggerSkillVFX('swap_color', data.r, data.c);
           triggerBoardShake();
           playSkillSound('magic');
           showSkillBanner('🎭', `对方发动【偷天换日】！`, `您位于 (${data.r+1}, ${data.c+1}) 的棋子被策反！`);
           draw();
+          updateUI();
+          persistGameState();
         } else if (data.type === 'skill_swap_positions') {
           const p1 = board[data.r1][data.c1];
           const p2 = board[data.r2][data.c2];
           board[data.r1][data.c1] = p2;
           board[data.r2][data.c2] = p1;
-          const h1 = history.find(h => h.r === data.r1 && h.c === data.c1);
-          const h2 = history.find(h => h.r === data.r2 && h.c === data.c2);
-          if (h1) { h1.r = data.r2; h1.c = data.c2; }
-          if (h2) { h2.r = data.r1; h2.c = data.c1; }
+          history.push({
+            action: 'swap_positions',
+            type: 'skill_swap_positions',
+            r1: data.r1,
+            c1: data.c1,
+            p1: p2,
+            r2: data.r2,
+            c2: data.c2,
+            p2: p1,
+            desc: '移形换影'
+          });
           triggerSkillVFX('swap_positions', data.r2, data.c2, data.r1, data.c1);
           triggerBoardShake();
           playSkillSound('warp');
           showSkillBanner('💫', `对方发动【移形换影】！`, `双方棋子位置发生了对调！`);
           draw();
+          updateUI();
+          persistGameState();
         } else if (data.type === 'skill_mega_bomb') {
+          const prevStones = [];
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (board[r][c] !== EMPTY) {
+                prevStones.push({ r, c, p: board[r][c] });
+              }
+            }
+          }
           for (let r = 0; r < 15; r++) {
             for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
           }
-          history = data.stones;
-          for (const s of history) {
+          for (const s of data.stones) {
             board[s.r][s.c] = s.p;
           }
+          history.push({
+            action: 'mega_bomb',
+            type: 'skill_mega_bomb',
+            stones: data.stones.map(s => ({ ...s })),
+            prevStones: prevStones,
+            r: -1,
+            c: -1,
+            p: (myOnlineColor === BLACK ? WHITE : BLACK),
+            desc: '乾坤大乱'
+          });
           triggerSkillVFX('mega_bomb');
           triggerBoardShake(true);
           playSkillSound('bomb');
           showSkillBanner('💣', `对方发动【乾坤大乱/大炸弹】！`, `天翻地覆！全盘所有棋子已被随机打乱！`);
           winningLine = null;
-          for (const s of history) {
+          for (const s of data.stones) {
             if (checkWin(s.r, s.c, s.p)) {
               triggerGameEnd(s.p, `对方引爆炸弹洗牌后，【${getPlayerNameByColor(s.p)} (${s.p === BLACK ? '黑子' : '白子'})】达成五子连珠！`);
               break;
@@ -5495,16 +5554,30 @@
           if (!isOver && isBoardFull()) {
             triggerGameDraw('对方引爆炸弹后棋盘已无空位，双方本局和棋！');
           }
+          draw();
+          updateUI();
+          persistGameState();
         } else if (data.type === 'destiny_point_1') {
           opponentFreeMove = true;
           turn = myOnlineColor;
           updateUI();
           showSkillBanner('💀', '对方掷出【大凶·空军】！', '对方本回合直接空过！您获得免费补下 1 子！');
         } else if (data.type === 'destiny_point_2') {
+          const shiftColor = (myOnlineColor === BLACK ? WHITE : BLACK);
           board[data.fromR][data.fromC] = EMPTY;
-          board[data.toR][data.toC] = (myOnlineColor === BLACK ? WHITE : BLACK);
-          const histItem = history.find(h => h.r === data.fromR && h.c === data.fromC);
-          if (histItem) { histItem.r = data.toR; histItem.c = data.toC; }
+          board[data.toR][data.toC] = shiftColor;
+          history.push({
+            action: 'shift_stone',
+            type: 'skill_shift_stone',
+            fromR: data.fromR,
+            fromC: data.fromC,
+            toR: data.toR,
+            toC: data.toC,
+            r: data.toR,
+            c: data.toC,
+            p: shiftColor,
+            desc: '偷梁换柱'
+          });
           triggerSkillVFX('shift_stone', data.toR, data.toC, data.fromR, data.fromC);
           playSkillSound('magic');
           showSkillBanner('🙈', '对方触发【偷梁换柱】！', `盲选将其位于 (${data.fromR+1}, ${data.fromC+1}) 的棋子移到了 (${data.toR+1}, ${data.toC+1})！`);
@@ -5514,7 +5587,15 @@
             board[pos.r][pos.c] = EMPTY;
             triggerSkillVFX('remove_stone', pos.r, pos.c);
           });
-          history = history.filter(h => !data.stones.some(d => d.r === h.r && d.c === h.c));
+          history.push({
+            action: 'destiny_wipe_danger',
+            type: 'destiny_wipe_danger',
+            stones: data.stones.map(s => ({ ...s })),
+            r: -1,
+            c: -1,
+            p: (myOnlineColor === BLACK ? WHITE : BLACK),
+            desc: '天命掀桌'
+          });
           triggerBoardShake(true);
           playSkillSound('boom');
           showSkillBanner('👑', '对方发动【天命掀桌】！', `我方 ${data.stones.length} 颗杀机连线已被强行作废抹除！`);
@@ -5711,8 +5792,18 @@
         if (bestTarget) {
           board[sR][sC] = EMPTY;
           board[bestTarget.r][bestTarget.c] = myColor;
-          const histItem = history.find(h => h.r === sR && h.c === sC);
-          if (histItem) { histItem.r = bestTarget.r; histItem.c = bestTarget.c; }
+          history.push({
+            action: 'shift_stone',
+            type: 'skill_shift_stone',
+            fromR: sR,
+            fromC: sC,
+            toR: bestTarget.r,
+            toC: bestTarget.c,
+            r: bestTarget.r,
+            c: bestTarget.c,
+            p: myColor,
+            desc: '偷梁换柱'
+          });
           triggerSkillVFX('shift_stone', bestTarget.r, bestTarget.c, sR, sC);
           playSkillSound('magic');
           showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, `对手盲选了位于 (${sR+1},${sC+1}) 的棋子，平移至 (${bestTarget.r+1},${bestTarget.c+1})！`);
@@ -5773,7 +5864,15 @@
             board[pos.r][pos.c] = EMPTY;
             triggerSkillVFX('remove_stone', pos.r, pos.c);
           });
-          history = history.filter(h => !dangerLine.some(d => d.r === h.r && d.c === h.c));
+          history.push({
+            action: 'destiny_wipe_danger',
+            type: 'destiny_wipe_danger',
+            stones: dangerLine.map(s => ({ ...s })),
+            r: -1,
+            c: -1,
+            p: myColor,
+            desc: '天命掀桌'
+          });
           draw(); updateUI(); persistGameState();
           triggerBoardShake(true);
           playSkillSound('boom');
@@ -5892,14 +5991,22 @@
           }
           updateUI(); persistGameState();
         } else if (card.id === 'mega_bomb') {
-          if (history.length < 2) {
+          const currentStones = [];
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              if (board[r][c] !== EMPTY) {
+                currentStones.push({ r, c, p: board[r][c] });
+              }
+            }
+          }
+          if (currentStones.length < 2) {
             return alert("💣 棋盘上棋子太少，无法引爆大炸弹！至少需要 2 颗棋子~");
           }
           saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'mega_bomb', player: turn });
           markCardUsed(idx);
 
           // 收集全部棋子颜色并打乱全盘坐标
-          const stones = history.map(h => h.p);
+          const stoneColors = currentStones.map(s => s.p);
           const allCoords = [];
           for (let r = 0; r < 15; r++) {
             for (let c = 0; c < 15; c++) {
@@ -5915,12 +6022,23 @@
           for (let r = 0; r < 15; r++) {
             for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
           }
-          history = [];
-          for (let i = 0; i < stones.length; i++) {
+          const newStones = [];
+          for (let i = 0; i < stoneColors.length; i++) {
             const pos = allCoords[i];
-            board[pos.r][pos.c] = stones[i];
-            history.push({ r: pos.r, c: pos.c, p: stones[i] });
+            board[pos.r][pos.c] = stoneColors[i];
+            newStones.push({ r: pos.r, c: pos.c, p: stoneColors[i] });
           }
+          // 🚀 核心修复：历史记录采用追加动作事件记录，绝不可清空或篡改过往落子时序！
+          history.push({
+            action: 'mega_bomb',
+            type: 'skill_mega_bomb',
+            stones: newStones,
+            prevStones: currentStones,
+            r: -1,
+            c: -1,
+            p: turn,
+            desc: '乾坤大乱'
+          });
 
           triggerSkillVFX('mega_bomb');
           triggerBoardShake(true);
@@ -5928,13 +6046,13 @@
           showSkillBanner('💣', `【${cardTitle}】引爆全场！`, '天翻地覆！棋盘上所有棋子被彻底随机打乱洗牌！');
 
           if (gameMode === 'online' && conn && conn.open) {
-            conn.send({ type: 'skill_mega_bomb', stones: history });
+            conn.send({ type: 'skill_mega_bomb', stones: newStones });
           }
 
           // 检查洗牌后是否有玩家连珠获胜
           winningLine = null;
           let bombWinColor = null;
-          for (const stone of history) {
+          for (const stone of newStones) {
             if (checkWin(stone.r, stone.c, stone.p)) {
               bombWinColor = stone.p;
               break;
@@ -6042,7 +6160,15 @@
         }
         saveUndoSnapshot('skill', { slotIdx, skillId: 'remove_stone', player: myColor });
         board[row][col] = EMPTY;
-        history = history.filter(h => !(h.r === row && h.c === col));
+        history.push({
+          action: 'remove_stone',
+          type: 'skill_remove_stone',
+          r: row,
+          c: col,
+          p: enemyColor,
+          by: myColor,
+          desc: '虚空陨石'
+        });
         markCardUsed(slotIdx);
         triggerSkillVFX('remove_stone', row, col);
         triggerBoardShake();
@@ -6075,8 +6201,18 @@
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = EMPTY;
           board[row][col] = myColor;
-          const histItem = history.find(h => h.r === sR && h.c === sC);
-          if (histItem) { histItem.r = row; histItem.c = col; }
+          history.push({
+            action: 'shift_stone',
+            type: 'skill_shift_stone',
+            fromR: sR,
+            fromC: sC,
+            toR: row,
+            toC: col,
+            r: row,
+            c: col,
+            p: myColor,
+            desc: '移星换斗'
+          });
           markCardUsed(slotIdx);
           triggerSkillVFX('shift_stone', row, col, sR, sC);
           playSkillSound('magic');
@@ -6094,8 +6230,15 @@
         }
         saveUndoSnapshot('skill', { slotIdx, skillId: 'swap_color', player: myColor });
         board[row][col] = myColor;
-        const histItem = history.find(h => h.r === row && h.c === col);
-        if (histItem) histItem.p = myColor;
+        history.push({
+          action: 'swap_color',
+          type: 'skill_swap_color',
+          r: row,
+          c: col,
+          fromP: enemyColor,
+          p: myColor,
+          desc: '偷天换日'
+        });
         markCardUsed(slotIdx);
         triggerSkillVFX('swap_color', row, col);
         triggerBoardShake();
@@ -6126,10 +6269,17 @@
           const sR = activeSkill.srcR, sC = activeSkill.srcC;
           board[sR][sC] = enemyColor;
           board[row][col] = myColor;
-          const h1 = history.find(h => h.r === sR && h.c === sC);
-          const h2 = history.find(h => h.r === row && h.c === col);
-          if (h1) { h1.r = row; h1.c = col; }
-          if (h2) { h2.r = sR; h2.c = sC; }
+          history.push({
+            action: 'swap_positions',
+            type: 'skill_swap_positions',
+            r1: sR,
+            c1: sC,
+            p1: enemyColor,
+            r2: row,
+            c2: col,
+            p2: myColor,
+            desc: '移形换影'
+          });
           markCardUsed(slotIdx);
           triggerSkillVFX('swap_positions', row, col, sR, sC);
           triggerBoardShake();
@@ -6148,7 +6298,15 @@
         }
         saveUndoSnapshot('skill', { slotIdx: activeSkill.slotIdx, skillId: 'destiny_remove', player: myColor });
         board[row][col] = EMPTY;
-        history = history.filter(h => !(h.r === row && h.c === col));
+        history.push({
+          action: 'remove_stone',
+          type: 'skill_remove_stone',
+          r: row,
+          c: col,
+          p: enemyColor,
+          by: myColor,
+          desc: '精准爆破'
+        });
         cancelActiveSkill();
         triggerSkillVFX('remove_stone', row, col);
         playSkillSound('boom');
@@ -6164,8 +6322,15 @@
         }
         saveUndoSnapshot('skill', { slotIdx: activeSkill.slotIdx, skillId: 'destiny_convert', player: myColor });
         board[row][col] = myColor;
-        const histItem = history.find(h => h.r === row && h.c === col);
-        if (histItem) histItem.p = myColor;
+        history.push({
+          action: 'swap_color',
+          type: 'skill_swap_color',
+          r: row,
+          c: col,
+          fromP: enemyColor,
+          p: myColor,
+          desc: '绝地倒戈'
+        });
         cancelActiveSkill();
         triggerSkillVFX('swap_color', row, col);
         playSkillSound('magic');
@@ -8692,10 +8857,16 @@
         const item = list[idx];
         if (!item) return;
 
-        // 1. 关掉所有弹窗
+        // 1. 关掉所有弹窗与浮层
+        cancelPendingGameResultModal();
+        if (typeof closeGameResultModal === 'function') closeGameResultModal();
         closeHistoryModal();
         closeProfileModal();
         if (typeof closeReplayModal === 'function') closeReplayModal();
+        const skillBanner = document.getElementById('skillBanner');
+        if (skillBanner) skillBanner.style.display = 'none';
+        const skillPromptBar = document.getElementById('skillPromptBar');
+        if (skillPromptBar) skillPromptBar.style.display = 'none';
 
         // 2. 检查是否有全盘落子谱数据
         replayAllMoves = Array.isArray(item.movesData) ? item.movesData.map(m => ({ ...m })) : [];
@@ -8796,9 +8967,65 @@
           for (const h of history) {
             if (h && h.r >= 0) h.p = (h.p === BLACK ? WHITE : BLACK);
           }
+          history.push({ action: 'identity_swap', r: -1, c: -1, p: m.p || 0 });
+        } else if (m.action === 'mega_bomb' || m.type === 'mega_bomb' || m.type === 'skill_mega_bomb') {
+          // 💣 乾坤大乱/大爆炸：将全盘清空并重现炸弹洗牌后的棋子坐标！
+          for (let r = 0; r < 15; r++) {
+            for (let c = 0; c < 15; c++) {
+              board[r][c] = EMPTY;
+            }
+          }
+          if (Array.isArray(m.stones)) {
+            for (const s of m.stones) {
+              if (s && s.r >= 0 && s.r < 15 && s.c >= 0 && s.c < 15) {
+                board[s.r][s.c] = s.p;
+              }
+            }
+          }
+          history.push({ action: 'mega_bomb', stones: m.stones, r: -1, c: -1, p: m.p || 0 });
+        } else if (m.action === 'remove_stone' || m.type === 'remove_stone' || m.type === 'skill_remove_stone') {
+          // 💥 虚空陨石/精准爆破：抹除指定棋子
+          if (m.r >= 0 && m.r < 15 && m.c >= 0 && m.c < 15) {
+            board[m.r][m.c] = EMPTY;
+          }
+          history.push({ action: 'remove_stone', r: m.r, c: m.c, p: m.p });
+        } else if (m.action === 'destiny_wipe_danger' || m.type === 'destiny_wipe_danger') {
+          // 👑 天命掀桌：抹除指定危急连线棋子
+          if (Array.isArray(m.stones)) {
+            for (const s of m.stones) {
+              if (s && s.r >= 0 && s.r < 15 && s.c >= 0 && s.c < 15) {
+                board[s.r][s.c] = EMPTY;
+              }
+            }
+          }
+          history.push({ action: 'destiny_wipe_danger', stones: m.stones, r: -1, c: -1, p: m.p });
+        } else if (m.action === 'shift_stone' || m.type === 'shift_stone' || m.type === 'skill_shift_stone') {
+          // 🌟 移星换斗/偷梁换柱：将棋子从 (fromR, fromC) 平移至 (toR, toC)
+          if (m.fromR >= 0 && m.fromR < 15 && m.fromC >= 0 && m.fromC < 15) {
+            board[m.fromR][m.fromC] = EMPTY;
+          }
+          if (m.toR >= 0 && m.toR < 15 && m.toC >= 0 && m.toC < 15) {
+            board[m.toR][m.toC] = m.p;
+          }
+          history.push({ action: 'shift_stone', fromR: m.fromR, fromC: m.fromC, toR: m.toR, toC: m.toC, r: m.toR, c: m.toC, p: m.p });
+        } else if (m.action === 'swap_color' || m.type === 'swap_color' || m.type === 'skill_swap_color') {
+          // 🎭 偷天换日/绝地倒戈：策反棋子变色
+          if (m.r >= 0 && m.r < 15 && m.c >= 0 && m.c < 15) {
+            board[m.r][m.c] = m.p;
+          }
+          history.push({ action: 'swap_color', r: m.r, c: m.c, p: m.p });
+        } else if (m.action === 'swap_positions' || m.type === 'swap_positions' || m.type === 'skill_swap_positions') {
+          // 💫 移形换影：双方棋子互换位置
+          if (m.r1 >= 0 && m.r1 < 15 && m.c1 >= 0 && m.c1 < 15 && m.r2 >= 0 && m.r2 < 15 && m.c2 >= 0 && m.c2 < 15) {
+            const p1 = m.p1 !== undefined ? m.p1 : board[m.r1][m.c1];
+            const p2 = m.p2 !== undefined ? m.p2 : board[m.r2][m.c2];
+            board[m.r1][m.c1] = p1;
+            board[m.r2][m.c2] = p2;
+          }
+          history.push({ action: 'swap_positions', r1: m.r1, c1: m.c1, p1: m.p1, r2: m.r2, c2: m.c2, p2: m.p2, r: m.r2, c: m.c2 });
         } else if (m.r >= 0 && m.r < 15 && m.c >= 0 && m.c < 15) {
           board[m.r][m.c] = m.p;
-          history.push({ r: m.r, c: m.c, p: m.p, moveNum: history.length + 1 });
+          history.push({ r: m.r, c: m.c, p: m.p, moveNum: history.filter(h => h && h.r >= 0 && !h.action).length + 1 });
         }
       }
 
@@ -8816,12 +9043,32 @@
           turnLabel.style.color = "#1e293b";
         } else {
           const lastM = replayAllMoves[replayStepIndex - 1];
-          if (lastM && (lastM.action === 'identity_swap' || lastM.type === 'identity_swap' || lastM.type === 'skill_identity_swap')) {
+          if (!lastM) {
+            turnLabel.textContent = "";
+          } else if (lastM.action === 'identity_swap' || lastM.type === 'identity_swap' || lastM.type === 'skill_identity_swap') {
             turnLabel.textContent = `第 ${replayStepIndex} 步: 🔄【身份互换】全盘黑白颠倒！`;
             turnLabel.style.color = "#d97706";
+          } else if (lastM.action === 'mega_bomb' || lastM.type === 'mega_bomb' || lastM.type === 'skill_mega_bomb') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 💣【乾坤大乱】引爆炸弹洗牌打乱全盘！`;
+            turnLabel.style.color = "#dc2626";
+          } else if (lastM.action === 'remove_stone' || lastM.type === 'remove_stone' || lastM.type === 'skill_remove_stone') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 💥【${lastM.desc || '虚空陨石'}】抹除 (${lastM.r+1}, ${lastM.c+1}) 棋子！`;
+            turnLabel.style.color = "#dc2626";
+          } else if (lastM.action === 'destiny_wipe_danger' || lastM.type === 'destiny_wipe_danger') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 👑【天命掀桌】抹除 ${Array.isArray(lastM.stones) ? lastM.stones.length : ''} 颗危险连线棋子！`;
+            turnLabel.style.color = "#d97706";
+          } else if (lastM.action === 'shift_stone' || lastM.type === 'shift_stone' || lastM.type === 'skill_shift_stone') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 🌟【${lastM.desc || '移星换斗'}】平移至 (${lastM.toR+1}, ${lastM.toC+1})！`;
+            turnLabel.style.color = "#2563eb";
+          } else if (lastM.action === 'swap_color' || lastM.type === 'swap_color' || lastM.type === 'skill_swap_color') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 🎭【${lastM.desc || '偷天换日'}】策反 (${lastM.r+1}, ${lastM.c+1}) 棋子！`;
+            turnLabel.style.color = "#7c3aed";
+          } else if (lastM.action === 'swap_positions' || lastM.type === 'swap_positions' || lastM.type === 'skill_swap_positions') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 💫【移形换影】双方对调 (${lastM.r1+1}, ${lastM.c1+1}) 与 (${lastM.r2+1}, ${lastM.c2+1})！`;
+            turnLabel.style.color = "#db2777";
           } else {
             const colorName = lastM ? (lastM.p === 1 ? "黑方落子" : "白方落子") : "";
-            turnLabel.textContent = `第 ${replayStepIndex} 手: ${colorName}`;
+            turnLabel.textContent = `第 ${replayStepIndex} 手: ${colorName} (${lastM.r+1}, ${lastM.c+1})`;
             turnLabel.style.color = lastM && lastM.p === 1 ? "#1e293b" : "#0284c7";
           }
         }
@@ -10282,7 +10529,7 @@
         if (isReplayMode && history && history.length > 0) {
           for (let i = 0; i < history.length; i++) {
             const st = history[i];
-            if (!st || st.r < 0 || st.c < 0) continue;
+            if (!st || st.r < 0 || st.c < 0 || !board[st.r] || board[st.r][st.c] === EMPTY) continue;
             const sx = paddingX + (st.c + 0.5) * gridX;
             const sy = paddingY + (st.r + 0.5) * gridY;
             piecesCtx.font = `bold ${Math.round(radius * 0.95)}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
@@ -10343,6 +10590,42 @@
           ctx.stroke();
 
           ctx.restore();
+        }
+      } else if (isReplayMode && replayStepIndex > 0) {
+        // 🔍 复盘模式：为当前步动作/落子添加清晰聚焦高亮环
+        const lastM = replayAllMoves[replayStepIndex - 1];
+        if (lastM) {
+          const hlPoints = [];
+          let ringColor = '#ef4444';
+          if (lastM.action === 'shift_stone') {
+            if (lastM.toR >= 0 && lastM.toC >= 0) hlPoints.push({ r: lastM.toR, c: lastM.toC });
+            ringColor = '#3b82f6';
+          } else if (lastM.action === 'swap_color') {
+            if (lastM.r >= 0 && lastM.c >= 0) hlPoints.push({ r: lastM.r, c: lastM.c });
+            ringColor = '#a855f7';
+          } else if (lastM.action === 'swap_positions') {
+            if (lastM.r1 >= 0 && lastM.c1 >= 0) hlPoints.push({ r: lastM.r1, c: lastM.c1 });
+            if (lastM.r2 >= 0 && lastM.c2 >= 0) hlPoints.push({ r: lastM.r2, c: lastM.c2 });
+            ringColor = '#ec4899';
+          } else if (lastM.r >= 0 && lastM.c >= 0 && !lastM.action) {
+            hlPoints.push({ r: lastM.r, c: lastM.c });
+            ringColor = '#f59e0b';
+          }
+          for (const pt of hlPoints) {
+            if (board[pt.r] && board[pt.r][pt.c] !== EMPTY) {
+              const lx = paddingX + (pt.c + 0.5) * gridX;
+              const ly = paddingY + (pt.r + 0.5) * gridY;
+              ctx.save();
+              ctx.shadowColor = ringColor;
+              ctx.shadowBlur = 6;
+              ctx.beginPath();
+              ctx.arc(lx, ly, radius * 1.25, 0, Math.PI * 2);
+              ctx.lineWidth = 2.5;
+              ctx.strokeStyle = ringColor;
+              ctx.stroke();
+              ctx.restore();
+            }
+          }
         }
       }
 
@@ -10896,6 +11179,71 @@
           for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
             if (board[r][c] === BLACK) board[r][c] = WHITE;
             else if (board[r][c] === WHITE) board[r][c] = BLACK;
+          }
+          playSkillSound('rewind');
+          draw(); updateUI();
+          persistGameState();
+          undoSuccess = true;
+        } else if (last && (last.action === 'mega_bomb' || last.type === 'skill_mega_bomb')) {
+          history.pop();
+          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
+          if (Array.isArray(last.prevStones)) {
+            for (const s of last.prevStones) board[s.r][s.c] = s.p;
+          }
+          playSkillSound('rewind');
+          draw(); updateUI();
+          persistGameState();
+          undoSuccess = true;
+        } else if (last && (last.action === 'remove_stone' || last.type === 'skill_remove_stone')) {
+          history.pop();
+          if (last.r >= 0 && last.r < 15 && last.c >= 0 && last.c < 15) {
+            board[last.r][last.c] = last.p;
+            triggerUndoVFX(last.r, last.c);
+          }
+          playSkillSound('rewind');
+          draw(); updateUI();
+          persistGameState();
+          undoSuccess = true;
+        } else if (last && (last.action === 'destiny_wipe_danger' || last.type === 'destiny_wipe_danger')) {
+          history.pop();
+          if (Array.isArray(last.stones)) {
+            for (const s of last.stones) {
+              board[s.r][s.c] = s.p !== undefined ? s.p : (last.p === BLACK ? WHITE : BLACK);
+              triggerUndoVFX(s.r, s.c);
+            }
+          }
+          playSkillSound('rewind');
+          draw(); updateUI();
+          persistGameState();
+          undoSuccess = true;
+        } else if (last && (last.action === 'shift_stone' || last.type === 'skill_shift_stone')) {
+          history.pop();
+          if (last.toR >= 0 && last.toR < 15 && last.toC >= 0 && last.toC < 15) {
+            board[last.toR][last.toC] = EMPTY;
+          }
+          if (last.fromR >= 0 && last.fromR < 15 && last.fromC >= 0 && last.fromC < 15) {
+            board[last.fromR][last.fromC] = last.p;
+            triggerUndoVFX(last.fromR, last.fromC);
+          }
+          playSkillSound('rewind');
+          draw(); updateUI();
+          persistGameState();
+          undoSuccess = true;
+        } else if (last && (last.action === 'swap_color' || last.type === 'skill_swap_color')) {
+          history.pop();
+          if (last.r >= 0 && last.r < 15 && last.c >= 0 && last.c < 15) {
+            board[last.r][last.c] = last.fromP !== undefined ? last.fromP : (last.p === BLACK ? WHITE : BLACK);
+            triggerUndoVFX(last.r, last.c);
+          }
+          playSkillSound('rewind');
+          draw(); updateUI();
+          persistGameState();
+          undoSuccess = true;
+        } else if (last && (last.action === 'swap_positions' || last.type === 'skill_swap_positions')) {
+          history.pop();
+          if (last.r1 >= 0 && last.r1 < 15 && last.c1 >= 0 && last.c1 < 15 && last.r2 >= 0 && last.r2 < 15 && last.c2 >= 0 && last.c2 < 15) {
+            board[last.r1][last.c1] = last.p2;
+            board[last.r2][last.c2] = last.p1;
           }
           playSkillSound('rewind');
           draw(); updateUI();
