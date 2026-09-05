@@ -748,7 +748,40 @@ node publish.js
 - **当前产物 SHA-256**：`index.html` / `android_src/assets/index.html` 为 `C35A26DA746FA18EC1EE0A222A8EF4CE56714303E5E6DF20FE1C7AE8FB051AE7`；单文件版为 `A498D9FD3FC4AFEC668B6274B94FC2822B921428E524A364F66ED3CAAD85B303`；APK 为 `072F8B43EBA6D3D6B8D0C2E0364A6CE570EB92727B38A03DB1A32992AF2F60CE`。
 - **部署边界**：本次只修改客户端更新检查与发版脚本，按既定规则跳过 Cloudflare 生产部署；线上版本接口会从私有 Release 自动读取最新发布版本。
 
+## 十九、支持五子连珠终局后悔棋继续对弈 (2026-09-05)
+
+- **背景与用户诉求**：
+  - 用户提出需求：“被五子赢了之后要能悔棋”。
+  - 此前一旦一方达成五连珠（`isOver = true`），代码在 `btnUndo.onclick`、`doUndo()` 以及联机消息处理器中硬编码了 `if (isOver) return;` / `conn.send({ agree: false })`，同时终局结算弹窗拦截了棋盘点击且无悔棋按钮，导致玩家无法在终局后撤销一步继续探索其他路线。
+
+- **`index.html` 核心改造**：
+  1. **结算弹窗新增直接悔棋入口**：
+     - 在 `#gameResultModal` 操作按钮区域新增 `#btnResultUndo`；单机/双人 PVP 模式显示为 `↩️ 悔棋一步继续`，联机模式显示为 `↩️ 申请悔棋继续`。
+  2. **弹窗层级（z-index）体系提升**：
+     - 将 `.undo-modal-backdrop` 的 `z-index` 从 `150` 提升至 `100006`，确保当从层级为 `100004` 的 `#gameResultModal` 点击悔棋时，悔棋确认弹窗能清晰浮于结算弹窗顶层。
+  3. **终局状态与战绩安全回滚**：
+     - 在 `doUndo()` 中捕捉 `wasGameOver = isOver`；悔棋成功时彻底重置 `isOver = false; winningLine = null; gameWinnerColor = 0;`；
+     - 新增 `rollbackLocalResult()`，自动将终局时已写入本地缓存与战绩统计的本局结果回退（胜场/负场计数 -1，从本地对局历史数组中弹出最后一条终局记录）；
+     - 隐藏结算弹窗并重新激活落子监听。
+  4. **人机对战模式智能回退**：
+     - 若玩家被 AI 绝杀（最后一步为 AI 白子），悔棋时循环弹出 AI 绝杀子以及玩家前一步黑子，执子权完全恢复给黑方玩家（`turn = BLACK`），避免玩家一悔棋 AI 又立即在同一点落子绝杀。
+  5. **联机对战双端协商机制兼容**：
+     - 移除联机 `undo_req` 在 `isOver === true` 时的自动拒绝阻断；
+     - 对方发起终局悔棋时，弹窗提示明确展示：“对局已终局，对方申请悔棋一步继续对弈，是否同意？”；双方协商同意后双端同步重置 `isOver = false` 并关闭结算弹窗。
+
+- **5 款独立单页主题全覆盖 (`theme1` ~ `theme5`)**：
+  1. 彻底移除各主题中 `btnUndo.onclick` 与 `doUndo()` 中的 `|| isOver` 拦截；
+  2. 人机模式统一采用智能回退至玩家回合（`turn = BLACK`），PVP/联机模式精准恢复最后执子方；
+  3. 补齐 5 款主题内缺失的 `triggerGameEnd()` 统一终局结算调度器，根除卡牌技能终局时潜在的 `ReferenceError`；
+  4. `theme5_sweet_romance.html` 恋爱专属兑换券弹窗 (`#victoryModal`) 内置 `btnVictoryUndo` 悔棋快捷入口，提升 `#undoModal` 的 `z-index: 200`，悔棋时自动解除结算弹窗。
+
+- **多端资产全量同步与全面回归**：
+  1. `index.html` 与 5 款独立主题全部同步覆盖至 `android_src/assets/`；
+  2. 重新运行 `node bundle_single_file.js` 打包生成最新 `五子棋大师_单文件版.html`；
+  3. 编写并执行 Playwright 端到端测试 `scratch/test_all_undo.py`，全量验证 `index.html`（PVP/AI 模式）、5 款独立主题单页、以及单文件版在五子连珠获胜后的悔棋全链路，**全部顺利 PASS**；
+  4. 运行 `python tests/optimization_smoke.py` 及 `node tests/worker_unit.js`，控制台 0 报错、测试 100% 通过。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.100 (Build 101)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化和更新检测可靠性修复均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.100。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、以及五子连珠终局后悔棋继续对弈全模式适配均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*

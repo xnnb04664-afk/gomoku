@@ -2388,7 +2388,7 @@
             conn.send({ type: 'profile_sync', name: p1Name, avatar: p1Avatar, isReply: true });
           }
         } else if (data.type === 'undo_req') {
-          undoDescText.textContent = "对方发起了悔棋申请，是否同意？";
+          undoDescText.textContent = data.wasOver || isOver ? "对局已终局，对方申请悔棋一步继续对弈，是否同意？" : "对方发起了悔棋申请，是否同意？";
           document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
           document.getElementById('btnUndoRefuse').style.display = "block";
           undoModal.classList.add('show');
@@ -4234,18 +4234,44 @@
       if (gameMode === 'online' && conn && conn.open) conn.send({ type: 'restart' });
     };
 
+    // 🏆 胜负终局统一结算 (兼容全卡牌终局调度)
+    function triggerGameEnd(winnerColor, customWinReason = '') {
+      if (isOver) return;
+      isOver = true;
+      const isPlayerWin = (gameMode === 'ai') ? (winnerColor === BLACK) : (gameMode === 'online' ? (winnerColor === myOnlineColor) : true);
+      if (typeof playSkillSound === 'function') {
+        playSkillSound(isPlayerWin ? 'victory' : 'defeat');
+      }
+      const colorTag = (winnerColor === BLACK ? '黑子' : '白子');
+      const winnerName = winnerColor === BLACK ? p1Name : (gameMode === 'ai' ? '大师AI' : p2Name);
+      const msg = customWinReason || `🎉 恭喜【${winnerName} (${colorTag})】达成五连珠获胜！`;
+      setTimeout(() => alert(msg), 120);
+      updateUI();
+      persistGameState();
+    }
+
     function doUndo() {
-      if (history.length === 0 || isOver) return;
-      if (gameMode === 'ai' && history.length >= 2) {
-        const a = history.pop(); const b = history.pop();
-        board[a.r][a.c] = EMPTY; board[b.r][b.c] = EMPTY;
-        turn = BLACK;
+      if (history.length === 0) return;
+      isOver = false;
+      winningLine = null;
+      if (gameMode === 'ai') {
+        while (history.length > 0) {
+          const m = history.pop();
+          board[m.r][m.c] = EMPTY;
+          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(m.r, m.c);
+          if (m.p === BLACK) {
+            turn = BLACK;
+            break;
+          }
+        }
+        if (typeof playSkillSound === 'function') playSkillSound('rewind');
       } else {
         const last = history.pop();
         board[last.r][last.c] = EMPTY;
+        if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
+        if (typeof playSkillSound === 'function') playSkillSound('rewind');
         turn = last.p;
       }
-      winningLine = null;
       draw(); updateUI();
       persistGameState();
     }
@@ -4254,21 +4280,21 @@
     const undoDescText = document.getElementById('undoDescText');
 
     document.getElementById('btnUndo').onclick = () => {
-      if (history.length === 0 || isOver) return;
+      if (history.length === 0) return;
 
       if (gameMode === 'ai') {
-        undoDescText.textContent = "正在向大师AI申请悔棋一步...";
+        undoDescText.textContent = isOver ? "对局已结束，是否向大师AI申请悔棋并继续对弈？" : "正在向大师AI申请悔棋一步...";
         undoModal.classList.add('show');
-        document.getElementById('btnUndoAgree').textContent = "确认悔棋";
+        document.getElementById('btnUndoAgree').textContent = isOver ? "确认悔棋继续" : "确认悔棋";
         document.getElementById('btnUndoRefuse').style.display = "none";
       } else if (gameMode === 'online') {
         if (conn && conn.open) {
-          conn.send({ type: 'undo_req' });
+          conn.send({ type: 'undo_req', wasOver: isOver });
           alert("📡 已向联机好友发送悔棋申请，等待对方同意...");
         }
       } else {
         const applicant = turn === BLACK ? `${p2Name} (白方)` : `${p1Name} (黑方)`;
-        undoDescText.textContent = `【${applicant}】请求悔棋一步，是否同意？`;
+        undoDescText.textContent = isOver ? `对局已结束，【${applicant}】请求悔棋一步继续对弈，是否同意？` : `【${applicant}】请求悔棋一步，是否同意？`;
         document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
         document.getElementById('btnUndoRefuse').style.display = "block";
         undoModal.classList.add('show');
