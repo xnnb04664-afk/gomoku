@@ -224,13 +224,6 @@ public class MainActivity extends Activity {
             return;
         }
 
-        mWebView = new WebView(this);
-        // 使用浅色首屏底色，避免 WebView 冷启动期间整屏显示深蓝空白。
-        mWebView.setBackgroundColor(Color.parseColor("#eef8ff"));
-        setContentView(mWebView);
-
-        setupWebView();
-
         // 4. 版本升级时自动清理旧热更新缓存，确保以最新安装包为准
         int currentCode = 0;
         try {
@@ -251,12 +244,24 @@ public class MainActivity extends Activity {
         }
         if (!updateDir.exists()) updateDir.mkdirs();
         mLocalServer = new LocalWebServer(getAssets(), updateDir);
-        boolean serverReady = mLocalServer.startAndWait();
+
+        // 先在后台绑定本地端口，再创建 WebView；两段初始化并行，避免冷启动白屏时额外等待 500ms。
+        mLocalServer.startAsync();
+
+        mWebView = new WebView(this);
+        // 使用浅色首屏底色，避免 WebView 冷启动期间整屏显示深蓝空白。
+        mWebView.setBackgroundColor(Color.parseColor("#eef8ff"));
+        setContentView(mWebView);
+
+        setupWebView();
+
+        // WebView 初始化期间通常已经完成端口绑定；仅保留 120ms 极端兜底等待。
+        boolean serverReady = mLocalServer.awaitReady(120);
 
         if (serverReady) {
             mWebView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
         } else {
-            // 极罕见情况：服务器未能在 500ms 内就绪，回退到 file:// 并提示
+            // 极罕见情况：服务器未能及时就绪，回退到 file:// 并提示
             android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
             mWebView.loadUrl("file:///android_asset/index.html");
         }

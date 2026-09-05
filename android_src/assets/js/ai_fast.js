@@ -35,6 +35,8 @@
   const BLACK = 1;
   const WHITE = 2;
   const MAX_TACTICAL_CANDIDATES = 64;
+  const MAX_GLOBAL_STRATEGIC_CANDIDATES = 8;
+  const DEFAULT_THREAT_PLY = 10;
   const MATE_DISTANCE = 32;
   const lineStatsCache = new Map();
   const linesCache = new Map();
@@ -270,6 +272,9 @@
       this.ensureZobrist(size);
       const position = new FastPosition(boardInput, size, this.zobristA, this.zobristB);
       const opponent = aiColor === BLACK ? WHITE : BLACK;
+      const budgetMs = Number(options.budgetMs) > 0 ? Number(options.budgetMs) : 520;
+      const startedAt = now();
+      const deadline = startedAt + budgetMs;
       const forbidden = new Uint8Array(size * size);
       for (const point of Array.isArray(forbiddenPoints) ? forbiddenPoints : []) {
         const r = Number(point && point.r);
@@ -302,7 +307,17 @@
       if (difficulty === 'master' || difficulty === 'hard' || difficulty === 'ultimate') {
         // 3. 在普通搜索前做一次有限威胁空间证明：双杀点、单杀点后再杀，
         // 这些局面不应该交给静态评分猜测。
-        const forcing = this.findForcingMove(position, aiColor, legal, enableFoul, forbidden);
+        const forcing = this.findThreatSpaceMove(
+          position,
+          aiColor,
+          legal,
+          enableFoul,
+          forbidden,
+          {
+            deadline,
+            maxPly: Number(options.threatPly) > 0 ? Number(options.threatPly) : DEFAULT_THREAT_PLY
+          }
+        );
         if (forcing) return this.toMove(forcing.index);
       }
       if (difficulty === 'easy') return this.toMove(this.pickGreedy(position, aiColor, legal, 1.0).index);
@@ -310,16 +325,23 @@
 
       // 4. 大师模式：更宽的候选池 + 迭代加深 + 威胁延伸。
       // 时间预算由页面按设备传入；这里的默认值只用于独立 Node/Worker 调用。
-      const budgetMs = Number(options.budgetMs) > 0 ? Number(options.budgetMs) : 520;
       const maxDepth = Number(options.maxDepth) > 0 ? Number(options.maxDepth) : 7;
-      const rootCandidates = legal.slice(0, rootLimit);
-      const startedAt = now();
+      const rootCandidates = this.getRootCandidates(
+        position,
+        aiColor,
+        opponent,
+        legal,
+        enableFoul,
+        forbidden,
+        rootLimit,
+        candidateLimit
+      );
       const context = {
         aiColor,
         opponent,
         enableFoul,
         forbidden,
-        deadline: startedAt + budgetMs,
+        deadline,
         table: new Map(),
         nodes: 0,
         completedDepth: 0,
@@ -388,6 +410,52 @@
       return Math.max(0, size * 2 - Math.abs(r - center) - Math.abs(c - center));
     }
 
+    static getGlobalStrategicMoves(position, color, opponent, enableFoul = false, forbidden = null, limit = MAX_GLOBAL_STRATEGIC_CANDIDATES) {
+      const center = Math.floor(position.size / 2);
+      const points = [];
+      const seen = new Set();
+      const addPoint = (r, c) => {
+        if (!isValid(position.size, r, c)) return;
+        const index = r * position.size + c;
+        if (seen.has(index) || !position.isEmpty(index) || (forbidden && forbidden[index])) return;
+        if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) return;
+        seen.add(index);
+        points.push({ index, r, c, score: this.positionValue(r, c, position.size) });
+      };
+
+      // 固定的中心环和稀疏全盘锚点，让安静局面不会永远被限制在已有棋子两格内。
+      addPoint(center, center);
+      for (const offset of [2, 3, 5, 7]) {
+        addPoint(center - offset, center);
+        addPoint(center + offset, center);
+        addPoint(center, center - offset);
+        addPoint(center, center + offset);
+        addPoint(center - offset, center - offset);
+        addPoint(center - offset, center + offset);
+        addPoint(center + offset, center - offset);
+        addPoint(center + offset, center + offset);
+      }
+      const step = Math.max(2, Math.floor(position.size / 4));
+      for (let r = 1; r < position.size; r += step) {
+        for (let c = 1; c < position.size; c += step) addPoint(r, c);
+      }
+
+      points.sort((a, b) => b.score - a.score || a.r - b.r || a.c - b.c);
+      return points.slice(0, Math.max(1, Number(limit) || MAX_GLOBAL_STRATEGIC_CANDIDATES)).map(point => {
+        const own = this.analyzeMove(position, point.index, color);
+        const opp = this.analyzeMove(position, point.index, opponent);
+        return {
+          index: point.index,
+          r: point.r,
+          c: point.c,
+          own,
+          opp,
+          tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
+          score: this.moveOrderingScore(own, opp) + point.score
+        };
+      });
+    }
+
     static getCandidateMoves(position, color, enableFoul = false, forbidden = null, limit = 24) {
       if (position.stones === 0) {
         const center = this.centerIndex(position.size);
@@ -396,20 +464,21 @@
       const raw = [];
       const opponent = color === BLACK ? WHITE : BLACK;
       const center = Math.floor(position.size / 2);
+      const nearRadius = position.stones <= 12 ? 3 : 2;
       for (let index = 0; index < position.cellCount; index++) {
         const r = Math.floor(index / position.size);
         const c = index % position.size;
         // 开局若对手落在角落，单纯的“邻近两格”候选会把中心战略完全裁掉；
-        // 前两手同时保留中心 5×5，避免 AI 被迫陪着角落走低价值棋。
-        const openingAnchor = position.stones <= 2 && Math.abs(r - center) <= 2 && Math.abs(c - center) <= 2;
+        // 前四手同时保留中心 7×7，普通局面则扩大到三格邻域。
+        const openingAnchor = position.stones <= 4 && Math.abs(r - center) <= 3 && Math.abs(c - center) <= 3;
         if (!position.isEmpty(index) || (forbidden && forbidden[index]) ||
-          (!openingAnchor && !this.isNearStone(position, index, 2))) continue;
+          (!openingAnchor && !this.isNearStone(position, index, nearRadius))) continue;
         if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) continue;
         const own = this.analyzeMove(position, index, color);
         const opp = this.analyzeMove(position, index, opponent);
         const tactical = own.five || opp.five || own.openFour || opp.openFour ||
-          own.four >= 2 || opp.four >= 2 || own.openThree >= 2 || opp.openThree >= 2 ||
-          own.brokenThree >= 2 || opp.brokenThree >= 2 ||
+          own.four || opp.four || own.openThree || opp.openThree ||
+          own.brokenThree || opp.brokenThree ||
           (own.four && own.openThree) || (opp.four && opp.openThree);
         raw.push({
           index,
@@ -445,7 +514,62 @@
         tacticalCount++;
         if (tacticalCount >= MAX_TACTICAL_CANDIDATES) break;
       }
+
+      const globalLimit = position.stones <= 8
+        ? MAX_GLOBAL_STRATEGIC_CANDIDATES
+        : Math.max(3, Math.floor(MAX_GLOBAL_STRATEGIC_CANDIDATES / 2));
+      for (const move of this.getGlobalStrategicMoves(position, color, opponent, enableFoul, forbidden, globalLimit)) {
+        if (selectedIndexes.has(move.index)) continue;
+        selected.push(move);
+        selectedIndexes.add(move.index);
+      }
       return selected;
+    }
+
+    static getRootCandidates(position, color, opponent, legal, enableFoul = false, forbidden = null, rootLimit = 22, candidateLimit = 64) {
+      const selected = new Map();
+      const add = (index, source = null) => {
+        if (!Number.isInteger(index) || index < 0 || index >= position.cellCount || !position.isEmpty(index)) return;
+        if (forbidden && forbidden[index]) return;
+        if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) return;
+        if (selected.has(index)) return;
+        const r = Math.floor(index / position.size);
+        const c = index % position.size;
+        const own = this.analyzeMove(position, index, color);
+        const opp = this.analyzeMove(position, index, opponent);
+        selected.set(index, {
+          index,
+          r,
+          c,
+          own,
+          opp,
+          tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
+          score: source && Number.isFinite(source.score)
+            ? source.score
+            : this.moveOrderingScore(own, opp) + this.positionValue(r, c, position.size)
+        });
+      };
+
+      for (const move of (legal || []).slice(0, Math.max(1, Number(rootLimit) || 22))) add(move.index, move);
+
+      // 这些着法即使在排序末尾，也必须进入根搜索：多重必防点不能只取第一个，
+      // 明显双杀/冲四也不能因为 rootLimit 太小而被裁掉。
+      const tacticalPool = this.getCandidateMoves(
+        position,
+        color,
+        enableFoul,
+        forbidden,
+        Math.max(Number(candidateLimit) || 64, MAX_TACTICAL_CANDIDATES)
+      );
+      for (const move of tacticalPool) {
+        if (move.tactical) add(move.index, move);
+      }
+      const opponentWins = this.getWinningMoves(position, opponent, enableFoul, position.cellCount, forbidden);
+      for (const move of opponentWins) add(move.index, move);
+
+      const result = Array.from(selected.values());
+      result.sort((a, b) => Number(b.tactical) - Number(a.tactical) || b.score - a.score || a.r - b.r || a.c - b.c);
+      return result.length ? result : (legal && legal[0] ? [legal[0]] : []);
     }
 
     static isForbiddenMove(position, index, color, forbidden) {
@@ -566,59 +690,163 @@
     }
 
     static findDoubleThreat(position, color, candidates, enableFoul, forbidden = null) {
-      return this.findForcingMove(position, color, candidates, enableFoul, forbidden);
+      return this.findThreatSpaceMove(position, color, candidates, enableFoul, forbidden, { maxPly: 4 });
     }
 
     /**
-     * 在普通 Alpha-Beta 之前求解最常见的强制战术：
-     *   A) 一步制造两个立即胜点；
-     *   B) 一步制造一个立即胜点，对手唯一封堵后仍可立即成五。
-     * 这比只比较 openThree/four 分数可靠，尤其能处理断四和交叉杀。
+     * 强制着法候选只保留会制造真实威胁的点；候选池本身仍由
+     * getCandidateMoves 负责扩大和排序，避免威胁搜索变成全盘暴力枚举。
      */
+    static getForcingCandidates(position, color, enableFoul = false, forbidden = null, limit = MAX_TACTICAL_CANDIDATES) {
+      const requested = Math.max(MAX_TACTICAL_CANDIDATES, Number(limit) || MAX_TACTICAL_CANDIDATES);
+      const candidates = this.getCandidateMoves(position, color, enableFoul, forbidden, requested);
+      return candidates
+        .filter(move => move && move.tactical)
+        .sort((a, b) => b.score - a.score || a.r - b.r || a.c - b.c)
+        .slice(0, MAX_TACTICAL_CANDIDATES);
+    }
+
     static findForcingMove(position, color, candidates, enableFoul, forbidden = null) {
-      const opponent = color === BLACK ? WHITE : BLACK;
-      const probe = candidates && candidates.length
-        ? candidates
-        : this.getCandidateMoves(position, color, enableFoul, forbidden, MAX_TACTICAL_CANDIDATES);
-      let bestMove = null;
-      let bestRank = -Infinity;
-      for (const move of probe) {
-        const pattern = move.own || this.analyzeMove(position, move.index, color);
-        if (!(pattern.five || pattern.four || pattern.openThree >= 2 || pattern.brokenThree >= 2 || move.tactical)) continue;
-        if (forbidden && forbidden[move.index]) continue;
-        if (enableFoul && this.isForbiddenMove(position, move.index, color, forbidden)) continue;
-        if (!position.put(move.index, color)) continue;
+      return this.findThreatSpaceMove(position, color, candidates, enableFoul, forbidden, { maxPly: 4 });
+    }
 
-        // 对方若此时已有直接胜点，可以用胜利回应，不能称作强制进攻。
-        const opponentWins = this.getWinningMoves(position, opponent, enableFoul, position.cellCount, forbidden);
-        if (!opponentWins.length) {
-          const ownWins = this.getWinningMoves(position, color, enableFoul, position.cellCount, forbidden);
-          if (ownWins.length >= 2) {
-            const rank = 100000 + ownWins.length * 1000 + (Number(move.score) || 0) * 0.001;
-            if (rank > bestRank) {
-              bestRank = rank;
-              bestMove = move;
-            }
-          }
+    /**
+     * 递归威胁空间搜索：
+     *   - 冲四/断四等着法若制造两个直接胜点，立即判定为双杀；
+     *   - 若只有一个胜点，对手必须走唯一应手，再递归检查下一轮强制着；
+     *   - 对手在应手前已有直接胜点时，该进攻线无效；
+     *   - 超时只返回 unknown，绝不把未证明的猜测当成必胜。
+     */
+    static findThreatSpaceMove(position, color, candidates, enableFoul, forbidden = null, options = {}) {
+      const deadline = Number.isFinite(Number(options.deadline))
+        ? Number(options.deadline)
+        : (Number(options.budgetMs) > 0 ? now() + Number(options.budgetMs) : Infinity);
+      const maxPly = Math.max(1, Number(options.maxPly) || DEFAULT_THREAT_PLY);
+      const rootMap = new Map();
+      const addRoot = (move) => {
+        if (!move || !Number.isInteger(move.index) || rootMap.has(move.index)) return;
+        if (!position.isEmpty(move.index) || (forbidden && forbidden[move.index])) return;
+        if (enableFoul && this.isForbiddenMove(position, move.index, color, forbidden)) return;
+        const own = this.analyzeMove(position, move.index, color);
+        const opponent = color === BLACK ? WHITE : BLACK;
+        const opp = this.analyzeMove(position, move.index, opponent);
+        const normalized = {
+          index: move.index,
+          r: Math.floor(move.index / position.size),
+          c: move.index % position.size,
+          own,
+          opp,
+          tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
+          score: Number.isFinite(move.score) ? move.score : this.moveOrderingScore(own, opp)
+        };
+        if (normalized.tactical) rootMap.set(normalized.index, normalized);
+      };
+      for (const move of candidates || []) addRoot(move);
+      for (const move of this.getForcingCandidates(position, color, enableFoul, forbidden, MAX_TACTICAL_CANDIDATES)) addRoot(move);
 
-          // 只有一个杀点时，对手只能封这一个点；封完后若仍有立即胜点，
-          // 该根着同样是可证明的两回合强制胜势。
-          if (ownWins.length === 1 && position.put(ownWins[0].index, opponent)) {
-            const followUpWins = this.getWinningMoves(position, color, enableFoul, position.cellCount, forbidden);
-            const opponentCounterWins = this.getWinningMoves(position, opponent, enableFoul, position.cellCount, forbidden);
-            position.remove(ownWins[0].index, opponent);
-            if (followUpWins.length && !opponentCounterWins.length) {
-              const rank = 50000 + followUpWins.length * 1000 + (Number(move.score) || 0) * 0.001;
-              if (rank > bestRank) {
-                bestRank = rank;
-                bestMove = move;
+      const context = {
+        deadline,
+        table: new Map(),
+        rootCandidates: Array.from(rootMap.values())
+      };
+      const result = this.searchThreatSpace(position, color, maxPly, enableFoul, forbidden, context, 0);
+      return result.status === 'win' ? result.move : null;
+    }
+
+    static searchThreatSpace(position, attacker, remainingPly, enableFoul, forbidden, context, ply) {
+      if (Number.isFinite(context.deadline) && now() >= context.deadline) return { status: 'unknown', move: null };
+      if (remainingPly <= 0) return { status: 'fail', move: null };
+
+      const key = (
+        position.hashA ^
+        Math.imul(position.hashB, 0x9e3779b1) ^
+        Math.imul(attacker, 0x85ebca6b) ^
+        Math.imul(remainingPly, 0xc2b2ae35)
+      ) >>> 0;
+      const cached = context.table.get(key);
+      if (cached && cached.hashA === position.hashA && cached.hashB === position.hashB &&
+        cached.attacker === attacker && cached.remainingPly === remainingPly) {
+        return { status: cached.status, move: cached.move || null };
+      }
+
+      const immediateWins = this.getWinningMoves(position, attacker, enableFoul, position.cellCount, forbidden);
+      if (immediateWins.length) {
+        return { status: 'win', move: immediateWins[0] };
+      }
+
+      const defender = attacker === BLACK ? WHITE : BLACK;
+      const candidates = ply === 0 && context.rootCandidates && context.rootCandidates.length
+        ? context.rootCandidates
+        : this.getForcingCandidates(position, attacker, enableFoul, forbidden, MAX_TACTICAL_CANDIDATES);
+      let sawUnknown = false;
+      for (const move of candidates) {
+        if (Number.isFinite(context.deadline) && now() >= context.deadline) {
+          sawUnknown = true;
+          break;
+        }
+        if (!position.put(move.index, attacker)) continue;
+
+        let branchStatus = 'fail';
+        if (this.hasFive(position, move.index, attacker)) {
+          branchStatus = 'win';
+        } else {
+          // 对手当前回合能直接获胜时，可以抢先结束这条“进攻线”。
+          const opponentWins = this.getWinningMoves(position, defender, enableFoul, position.cellCount, forbidden);
+          if (!opponentWins.length) {
+            const ownWins = this.getWinningMoves(position, attacker, enableFoul, position.cellCount, forbidden);
+            if (ownWins.length >= 2) {
+              branchStatus = 'win';
+            } else if (ownWins.length === 1) {
+              const blockIndex = ownWins[0].index;
+              const blockForbidden = (forbidden && forbidden[blockIndex]) ||
+                (enableFoul && this.isForbiddenMove(position, blockIndex, defender, forbidden));
+              if (blockForbidden || !position.isEmpty(blockIndex)) {
+                branchStatus = 'win';
+              } else if (remainingPly >= 3 && position.put(blockIndex, defender)) {
+                const child = this.searchThreatSpace(
+                  position,
+                  attacker,
+                  remainingPly - 2,
+                  enableFoul,
+                  forbidden,
+                  context,
+                  ply + 2
+                );
+                position.remove(blockIndex, defender);
+                if (child.status === 'win') branchStatus = 'win';
+                else if (child.status === 'unknown') sawUnknown = true;
               }
             }
           }
         }
-        position.remove(move.index, color);
+        position.remove(move.index, attacker);
+
+        if (branchStatus === 'win') {
+          const result = { status: 'win', move };
+          context.table.set(key, {
+            hashA: position.hashA,
+            hashB: position.hashB,
+            attacker,
+            remainingPly,
+            status: 'win',
+            move
+          });
+          return result;
+        }
       }
-      return bestMove;
+
+      const status = sawUnknown ? 'unknown' : 'fail';
+      if (status === 'fail') {
+        context.table.set(key, {
+          hashA: position.hashA,
+          hashB: position.hashB,
+          attacker,
+          remainingPly,
+          status: 'fail',
+          move: null
+        });
+      }
+      return { status, move: null };
     }
 
     static pickGreedy(position, color, candidates, attackWeight = 1.1) {
@@ -799,6 +1027,9 @@
       if (now() >= context.deadline) return { score: 0, aborted: true };
       if (depth <= 0) return { score: this.evaluateLeaf(position, turnColor, context, ply), aborted: false };
 
+      const alphaStart = alpha;
+      const betaStart = beta;
+
       const key = (
         position.hashA ^
         Math.imul(position.hashB, 0x9e3779b1) ^
@@ -806,7 +1037,12 @@
       ) >>> 0;
       const cached = context.table.get(key);
       if (cached && cached.hashA === position.hashA && cached.hashB === position.hashB && cached.turn === turnColor && cached.depth >= depth) {
-        return { score: cached.score, move: cached.move, aborted: false };
+        if (!cached.bound || cached.bound === 'EXACT') {
+          return { score: cached.score, move: cached.move, aborted: false };
+        }
+        if (cached.bound === 'LOWER') alpha = Math.max(alpha, cached.score);
+        else if (cached.bound === 'UPPER') beta = Math.min(beta, cached.score);
+        if (alpha >= beta) return { score: cached.score, move: cached.move, aborted: false };
       }
 
       const maximizing = turnColor === context.aiColor;
@@ -855,19 +1091,24 @@
           break;
         }
       }
-      if (!cutoff) {
-        const previous = context.table.get(key);
-        if (!previous || previous.depth <= depth) {
-          context.table.set(key, {
-            hashA: position.hashA,
-            hashB: position.hashB,
-            turn: turnColor,
-            depth,
-            score: bestScore,
-            move: bestMove
-          });
-        }
-      } else if (bestMove) {
+      const bound = bestScore <= alphaStart
+        ? 'UPPER'
+        : bestScore >= betaStart
+          ? 'LOWER'
+          : 'EXACT';
+      const previous = context.table.get(key);
+      if (!previous || previous.depth <= depth) {
+        context.table.set(key, {
+          hashA: position.hashA,
+          hashB: position.hashB,
+          turn: turnColor,
+          depth,
+          score: bestScore,
+          move: bestMove,
+          bound
+        });
+      }
+      if (cutoff && bestMove) {
         const killers = context.killers[ply] || [];
         if (killers[0] !== bestMove.index) {
           context.killers[ply] = [bestMove.index, killers[0]].filter(index => Number.isInteger(index)).slice(0, 2);

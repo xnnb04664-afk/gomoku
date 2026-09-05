@@ -21,7 +21,8 @@ importScripts('ai_fast.js');
           budgetMs: Number(request.budgetMs) || 260,
           maxDepth: Number(request.maxDepth) || 5,
           rootLimit: Number(request.rootLimit) || 14,
-          candidateLimit: Number(request.candidateLimit) || 64
+          candidateLimit: Number(request.candidateLimit) || 64,
+          threatPly: Number(request.threatPly) || 10
         }
       );
       scope.postMessage({

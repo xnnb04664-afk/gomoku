@@ -973,6 +973,19 @@ node publish.js
 - **部署边界**：本轮只改客户端 AI、Worker 资源与测试，未修改运行中的 Worker/Pages/D1/票据逻辑，因此按既定规则跳过 Cloudflare 生产部署；Pages 会读取私有仓库最新 Release，已安装用户可通过现有热更新入口获取 v1.0.106。
 - **v1.0.106 产物 SHA-256**：`index.html`：`F0AFB7CC969C2A1974A29173EEEDA50AAAAFD730B7A9C57936CDE44E0F469103`；`android_src/assets/index.html`：`A6512AB5810D264E23EA18F9487A3877648BE477DB5EA0BB6A92CEA26BAAFBEB`；单文件版：`36226CDD2039989A4AEB4D4DE365632186BCBBF996FFCEDC4CE657A82E0ED09D`；APK：`2BF69F37F3934C8C616FCEC45EFBF3A8C3A66845CF6C40AC08644693E8575E0D`。
 
+## 二十八、冷启动与首屏按需资源优化（2026-09-05，本地构建完成）
+
+- **本轮目标**：针对手机端启动时蓝屏等待、首屏加载资源过多和首次进入联机等待偏长的问题，收缩冷启动工作量；本轮只改客户端页面、单文件打包器和 Android 本地启动顺序，未修改 Worker、Pages、D1 或更新票据逻辑。
+- **网页端首屏**：
+  1. MQTT、PeerJS 兼容层、P2P 兼容层、樱桃炸弹音频和动漫头像不再在首屏执行；统一通过 `window.ensureGomokuResource()` 去重、按需加载。
+  2. 进入联机大厅时才加载 MQTT；首次用户交互后加载音频；打开昵称/头像设置时才加载动漫头像；移除启动即执行的 API 出口探测，登录或实际网络功能仍会按需预热。
+  3. AI 外置脚本改为 `defer`，不阻塞 HTML 骨架和棋盘首帧；默认冷启动资源从此前的联机/音频/头像全量加载收缩为 AI 与基础头像。
+- **单文件版**：`bundle_single_file.js` 将 MQTT、音频和动漫头像保留为 `text/plain` 资源节点，由同一按需加载器在真正需要时注入执行；单文件仍可离线使用，冷启动不再编译这些大段脚本。当前文件约 1.33 MiB，SHA-256 为 `BE491B463E1C0AFA13D8A2305BC0E85747425B88E9D1B46C6F23A8B6CD91ABA0`。
+- **Android 启动顺序**：`MainActivity` 在创建 WebView 前先异步启动 `LocalWebServer`，随后与 WebView 初始化并行；取消原先先阻塞等待最多 500 ms 再创建 WebView 的串行路径，WebView 设置完成后仅保留 120 ms 的极端兜底等待，继续使用本地 HTTP 源以兼容 WebSocket/WebRTC。
+- **验证结果**：网页端和单文件版 Playwright 冷启动均通过，初始均未注册 MQTT/音频/动漫头像/PeerJS/P2P 兼容层；进入联机后 MQTT 与音频按需成功加载，打开头像设置后动漫头像成功加载，0 console/page error。`tests/optimization_smoke.py`、`tests/ai_worker_smoke.py`、`tests/online_match_race_smoke.py`、`tests/online_transport_smoke.py`、`node tests/ai_strength_smoke.js`、`node tests/worker_unit.js`、`node tests/auth_refresh_unit.js`、Node 语法检查和 `git diff --check` 全部通过。
+- **本地产物**：已重新生成 `android_src/assets/index.html`、`五子棋大师_单文件版.html` 和正式签名 `五子棋.apk`。根页面 SHA-256 为 `3D7B0E559C7FC1E38606EE4C20CC3544E4CFCE45569A3CEA11D347DA749C8404`；Android 内嵌页面为 `BAE3C794294A515F4C865D7DE716778CC4D6F471B411693279969FD3C6B5C5D1`；APK 为 `3A17094FA178AE0C5D9B2A841C9E218C385081CD70A8DF310EAA14BD36220653`。APK v1/v2/v3 签名验证通过，签名者数量为 1。
+- **发布边界**：本地 APK 仍是 `v1.0.106 (Build 107)`，本轮未创建新 GitHub Release、未部署 Cloudflare，线上 `/api/version` 仍以正式发布的 v1.0.106 为准；因此本轮产物用于本地测试，不能让已安装用户自动识别为新热更新版本。确认真机体验后，如需给用户推送，再递增版本并执行 `node publish.js`，普通客户端发版仍不需要重复部署 Cloudflare。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.106 (Build 107)*

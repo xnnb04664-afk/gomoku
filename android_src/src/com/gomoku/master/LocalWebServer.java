@@ -25,6 +25,7 @@ public class LocalWebServer extends Thread {
     private final Map<String, byte[]> assetCache = new ConcurrentHashMap<>();
     private       ServerSocket  serverSocket;
     private volatile boolean    running  = false;
+    private boolean              startRequested = false;
     private static final int MAX_REQUEST_LINE = 8192;
     private static final int MAX_HEADER_LINES = 64;
     private static final int MAX_CACHED_ASSET_BYTES = 4 * 1024 * 1024;
@@ -61,15 +62,32 @@ public class LocalWebServer extends Thread {
         setName("LocalWebServer");
     }
 
-    /** 启动服务并等待端口就绪（最多 500ms） */
-    public boolean startAndWait() {
+    /** 启动服务线程；调用方可在创建 WebView 的同时让端口后台绑定。 */
+    public synchronized void startAsync() {
+        if (startRequested) return;
+        startRequested = true;
         start();
-        long deadline = System.currentTimeMillis() + 500;
+    }
+
+    /** 等待端口就绪；通常会在 WebView 初始化期间完成，超时仅作为极端兜底。 */
+    public boolean awaitReady(long timeoutMs) {
+        startAsync();
+        if (running) return true;
+        long safeTimeout = Math.max(0L, timeoutMs);
+        long deadline = System.currentTimeMillis() + safeTimeout;
         while (System.currentTimeMillis() < deadline) {
             if (running) return true;
-            try { Thread.sleep(20); } catch (InterruptedException e) { break; }
+            try { Thread.sleep(10); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
         return running;
+    }
+
+    /** 兼容旧调用：保留原有等待接口，但统一走可复用的异步启动实现。 */
+    public boolean startAndWait() {
+        return awaitReady(500);
     }
 
     /** 安全停止服务器 */

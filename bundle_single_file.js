@@ -10,18 +10,7 @@ console.log('>>> [1/3] 读取当前最新 index.html 母本代码...');
 let html = fs.readFileSync(SOURCE_HTML, 'utf8');
 html = injectAiWorkerSource(html, ROOT_DIR);
 
-console.log('>>> [2/3] 读取并内联 PeerJS 与 樱桃炸弹音频 Base64 数据...');
-const peerJsPath = path.join(ROOT_DIR, 'js', 'peerjs.min.js');
-let peerJsContent = '';
-if (fs.existsSync(peerJsPath)) {
-  peerJsContent = fs.readFileSync(peerJsPath, 'utf8');
-}
-
-const p2pNetworkPath = path.join(ROOT_DIR, 'js', 'p2p-network.js');
-let p2pNetworkContent = '';
-if (fs.existsSync(p2pNetworkPath)) {
-  p2pNetworkContent = fs.readFileSync(p2pNetworkPath, 'utf8');
-}
+console.log('>>> [2/3] 准备可按需载入的联机、音频与头像资源...');
 
 const cherryAudioPath = path.join(ROOT_DIR, 'js', 'assets', 'cherry_bomb_audio.js');
 let cherryAudioContent = '';
@@ -41,6 +30,12 @@ if (fs.existsSync(aiEnginePath)) {
   aiEngineContent = fs.readFileSync(aiEnginePath, 'utf8');
 }
 
+const aiFastPath = path.join(ROOT_DIR, 'js', 'ai_fast.js');
+let aiFastContent = '';
+if (fs.existsSync(aiFastPath)) {
+  aiFastContent = fs.readFileSync(aiFastPath, 'utf8');
+}
+
 // 压缩库可能包含 </script> 字符串；内联时必须转义，否则浏览器会提前结束脚本标签。
 const escapeInlineScript = content => content.replace(/<\/script/gi, '<\\/script');
 
@@ -50,61 +45,33 @@ if (fs.existsSync(mqttJsPath)) {
   mqttJsContent = fs.readFileSync(mqttJsPath, 'utf8');
 }
 
-// 替换外部脚本引用为完全内联脚本；非首屏资源延迟到首帧后执行，避免单文件冷启动阻塞首屏。
-const peerRegex = /<!-- 引入 PeerJS 免服务器外网穿透联机库[\s\S]*?<script src="https:\/\/fastly\.jsdelivr\.net\/npm\/mqtt[\s\S]*?<\/script>/i;
-const cherryRegex = /<script src="js\/assets\/cherry_bomb_audio\.js"><\/script>/i;
-const animeRegex = /<script src="js\/assets\/anime_avatars\.js"><\/script>/i;
-
-const deferredInlineScript = (label, content) => `
-  <!-- ${label}（首帧后延迟执行） -->
-  <script>
-    (() => {
-      const runDeferredAsset = () => {
+// 单文件保留资源文本但不让浏览器在首屏把它们当作 JavaScript 执行；
+// gomokuResourceLoader 会在进入联机、首次操作或打开头像设置时按需注入。
+const inlineResourceTag = (name, label, content) => content ? `
+  <!-- ${label}（按需载入） -->
+  <script type="text/plain" id="gomoku-inline-resource-${name}">
 ${escapeInlineScript(content)}
-      };
-      if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => setTimeout(runDeferredAsset, 0));
-      } else {
-        setTimeout(runDeferredAsset, 0);
-      }
-    })();
   </script>
-`;
+` : '';
 
-let inlinedHeadScripts = '';
-// 单文件版会重建 head 区域，原始占位标签会被替换掉，因此必须显式把 Worker 代码加入新的 head。
-inlinedHeadScripts += createInlineAiWorkerTag(ROOT_DIR) + '\n';
-if (peerJsContent) {
-  inlinedHeadScripts += deferredInlineScript('内联 PeerJS 1.5.4 完整生产库', peerJsContent);
-}
-if (p2pNetworkContent) {
-  inlinedHeadScripts += deferredInlineScript('内联 P2P 优先联机兼容层', p2pNetworkContent);
-}
-if (mqttJsContent) {
-  inlinedHeadScripts += deferredInlineScript('内联 MQTT 极速联机引擎（国内直连，秒级穿透）', mqttJsContent);
-}
-if (cherryAudioContent) {
-  inlinedHeadScripts += deferredInlineScript('内联 樱桃炸弹 MP3 原声 Base64 数据', cherryAudioContent);
-}
-if (animeAvatarsContent) {
-  inlinedHeadScripts += deferredInlineScript('内联 专属二次元情侣动漫头像 Base64 数据', animeAvatarsContent);
-}
-if (aiEngineContent) {
-  inlinedHeadScripts += `  <!-- 内联 强力五子棋 AI 引擎（棋型评估 + Alpha-Beta + 置换表） -->\n  <script>\n${escapeInlineScript(aiEngineContent)}\n  </script>\n`;
-}
+const aiEngineTag = aiEngineContent
+  ? `  <!-- 内联强力五子棋 AI 引擎（按需回退） -->\n  <script>\n${escapeInlineScript(aiEngineContent)}\n  </script>\n`
+  : '';
+const aiExternalTag = /\s*<script defer src="js\/ai\.js"><\/script>/i;
+if (aiEngineTag) html = html.replace(aiExternalTag, `\n${aiEngineTag}`);
 
-
-// 执行替换：按 head 边界替换，避免 CDN fallback 中嵌套的 <script> 字符串干扰正则。
-const headStartMarker = '  <!-- 引入 PeerJS 免服务器外网穿透联机库';
 const styleStartMarker = '  <style>';
-const headStart = html.indexOf(headStartMarker);
-const styleStart = html.indexOf(styleStartMarker, headStart);
-if (headStart < 0 || styleStart < 0) {
-  throw new Error('无法定位页面 head 脚本区域');
+const styleStart = html.indexOf(styleStartMarker);
+if (styleStart < 0) {
+  throw new Error('无法定位页面样式区域');
 }
-html = html.slice(0, headStart) + inlinedHeadScripts.trim() + '\n' + html.slice(styleStart);
-html = html.replace(cherryRegex, '');
-html = html.replace(animeRegex, '');
+const inlineOptionalResources = [
+  inlineResourceTag('mqtt', '内联 MQTT 极速联机引擎（进入联机时载入）', mqttJsContent),
+  inlineResourceTag('aiFast', '内联快速五子棋 AI 引擎（Worker 异常时按需回退）', aiFastContent),
+  inlineResourceTag('audio', '内联樱桃炸弹 MP3 原声 Base64 数据（首次操作时载入）', cherryAudioContent),
+  inlineResourceTag('avatars', '内联专属二次元情侣动漫头像 Base64 数据（打开头像设置时载入）', animeAvatarsContent)
+].join('');
+html = html.slice(0, styleStart) + inlineOptionalResources + '\n' + html.slice(styleStart);
 
 // 内联 img/avatar_boy.png 与 img/avatar_girl.png 的 src
 const boyImgPath = path.join(ROOT_DIR, 'img', 'avatar_boy.png');

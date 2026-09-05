@@ -5,34 +5,81 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
   <link rel="icon" href="favicon.png" type="image/png">
-  <!-- 引入 PeerJS 免服务器外网穿透联机库 (优先本地极速离线加载，CDN优雅降级兜底) -->
-  <script defer src="js/peerjs.min.js"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      if (typeof Peer === 'undefined') {
-        const fallback = document.createElement('script');
-        fallback.src = 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
-        document.head.appendChild(fallback);
+  <!-- 首屏只保留页面骨架；联机、音频和大图资源在真正需要时才加载。 -->
+  <script id="gomokuResourceLoader">
+    (() => {
+      const definitions = {
+        mqtt: { local: 'js/mqtt.min.js', fallback: 'https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js' },
+        aiFast: { local: 'js/ai_fast.js' },
+        audio: { local: 'js/assets/cherry_bomb_audio.js' },
+        avatars: { local: 'js/assets/anime_avatars.js' },
+        // 旧版兼容层保留为按需资源；当前主联机链路直接使用页面内的 MQTT/WebRTC 实现。
+        peer: { local: 'js/peerjs.min.js', fallback: 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js' },
+        p2p: { local: 'js/p2p-network.js' }
+      };
+      const promises = Object.create(null);
+
+      function isReady(name) {
+        if (name === 'mqtt') return Boolean(window.mqtt && typeof window.mqtt.connect === 'function');
+        if (name === 'aiFast') return Boolean(window.GomokuFastAI && typeof window.GomokuFastAI.getBestMove === 'function');
+        if (name === 'audio') return typeof window.CHERRY_BOMB_AUDIO_DATA === 'string';
+        if (name === 'avatars') return typeof window.ANIME_AVATAR_BOY === 'string' && typeof window.ANIME_AVATAR_GIRL === 'string';
+        if (name === 'peer') return typeof window.Peer === 'function';
+        if (name === 'p2p') return typeof window.GomokuP2PChannel === 'function';
+        return false;
       }
-    }, { once: true });
-  </script>
-  <script defer src="js/p2p-network.js"></script>
-  <!-- 引入 MQTT.js：用于中国友好型 WebRTC 信令（香港 EMQX 节点，替代被墙的 peerjs.com 信令服务器） -->
-  <script defer src="js/mqtt.min.js"></script>
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      if (typeof mqtt === 'undefined') {
-        const fallback = document.createElement('script');
-        fallback.src = 'https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js';
-        document.head.appendChild(fallback);
+
+      function loadExternalScript(src) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.async = true;
+          script.src = src;
+          script.onload = () => resolve(true);
+          script.onerror = () => reject(new Error('资源加载失败: ' + src));
+          document.head.appendChild(script);
+        });
       }
-    }, { once: true });
+
+      function loadInlineScript(node) {
+        const source = node.textContent || '';
+        node.remove();
+        if (!source.trim()) return Promise.resolve(true);
+        const script = document.createElement('script');
+        script.text = source;
+        document.head.appendChild(script);
+        return Promise.resolve(true);
+      }
+
+      function ensure(name) {
+        if (!definitions[name]) return Promise.reject(new Error('未知延迟资源: ' + name));
+        if (isReady(name)) return Promise.resolve(true);
+        if (promises[name]) return promises[name];
+
+        const definition = definitions[name];
+        const inlineNode = document.getElementById('gomoku-inline-resource-' + name);
+        const loadPromise = inlineNode
+          ? loadInlineScript(inlineNode)
+          : loadExternalScript(definition.local).catch(error => {
+              if (!definition.fallback) throw error;
+              return loadExternalScript(definition.fallback);
+            });
+
+        promises[name] = loadPromise.then(() => {
+          if (!isReady(name)) throw new Error('资源加载后未注册: ' + name);
+          return true;
+        }).catch(error => {
+          delete promises[name];
+          throw error;
+        });
+        return promises[name];
+      }
+
+      window.ensureGomokuResource = ensure;
+    })();
   </script>
-  <script defer src="js/assets/cherry_bomb_audio.js"></script>
-  <script defer src="js/assets/anime_avatars.js"></script>
   <!-- 生产构建会把快速 AI Worker 内嵌到这里；源码开发环境使用 js/ai_worker.js 回退。 -->
   <script id="gomokuAiWorkerSource" type="text/plain"></script>
-  <script src="js/ai.js"></script>
+  <script defer src="js/ai.js"></script>
   <style>
     :root {
       --primary: #ff6b81;
@@ -1776,7 +1823,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.106</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.107</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2462,7 +2509,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.106';
+    const CURRENT_VERSION_TAG = 'v1.0.107';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -2949,14 +2996,27 @@
     // --- 自定义昵称与相册头像弹窗交互 ---
     
     function initAnimeThumbnails() {
-      const b = document.getElementById('animeImgBoy');
-      const g = document.getElementById('animeImgGirl');
-      if (b && window.ANIME_AVATAR_BOY) b.src = window.ANIME_AVATAR_BOY;
-      if (g && window.ANIME_AVATAR_GIRL) g.src = window.ANIME_AVATAR_GIRL;
+      const apply = () => {
+        const b = document.getElementById('animeImgBoy');
+        const g = document.getElementById('animeImgGirl');
+        if (b && window.ANIME_AVATAR_BOY) b.src = window.ANIME_AVATAR_BOY;
+        if (g && window.ANIME_AVATAR_GIRL) g.src = window.ANIME_AVATAR_GIRL;
+      };
+      if (window.ANIME_AVATAR_BOY && window.ANIME_AVATAR_GIRL) {
+        apply();
+        return Promise.resolve(true);
+      }
+      if (typeof window.ensureGomokuResource === 'function') {
+        return window.ensureGomokuResource('avatars').then(() => {
+          apply();
+          return true;
+        }).catch(() => false);
+      }
+      apply();
+      return Promise.resolve(false);
     }
 
     function openProfileModal(player = 1) {
-      initAnimeThumbnails();
       updateAccountUI();
       // 无论我方执黑还是执白，在本地屏幕上：
       // p1 永远是我方（可随时修改），p2 永远是对方（AI或好友）
@@ -3019,6 +3079,8 @@
 
       const modalEl = document.getElementById('profileModal');
       if (modalEl) modalEl.classList.add('show');
+      // 打开个人资料后再加载大体积动漫头像数据，不影响首屏进入棋盘。
+      void initAnimeThumbnails();
     }
 
     // 选 Emoji 头像 → 立即更新预览 + 保存 + 同步
@@ -3723,7 +3785,8 @@
             budgetMs: mobile ? 520 : 900,
             maxDepth: mobile ? 7 : 9,
             rootLimit: mobile ? 20 : 26,
-            candidateLimit: mobile ? 72 : 96
+            candidateLimit: mobile ? 72 : 96,
+            threatPly: mobile ? 6 : 8
           }, [flat.buffer]);
         } catch (error) {
           aiWorkerPending.delete(requestId);
@@ -3731,6 +3794,29 @@
           reject(error);
         }
       });
+    }
+
+    async function getFastAiFallback(boardState, forbiddenPoints = []) {
+      if (!window.GomokuFastAI || typeof window.GomokuFastAI.getBestMove !== 'function') {
+        if (typeof window.ensureGomokuResource === 'function') await window.ensureGomokuResource('aiFast');
+      }
+      if (!window.GomokuFastAI || typeof window.GomokuFastAI.getBestMove !== 'function') return null;
+      const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+      return window.GomokuFastAI.getBestMove(
+        boardState,
+        WHITE,
+        'master',
+        false,
+        Array.isArray(forbiddenPoints) ? forbiddenPoints : [],
+        {
+          size: 15,
+          budgetMs: mobile ? 150 : 240,
+          maxDepth: mobile ? 4 : 5,
+          rootLimit: mobile ? 12 : 16,
+          candidateLimit: mobile ? 56 : 72,
+          threatPly: mobile ? 6 : 8
+        }
+      );
     }
 
     // 🚀 最强大师人机主落子决策函数
@@ -3744,11 +3830,13 @@
       try {
         bestMove = await requestFastAiMove(boardSnapshot, forbiddenPoints);
       } catch (workerError) {
-        console.warn('[AI Worker] 使用兼容主线程 AI 回退:', workerError && workerError.message ? workerError.message : workerError);
+        console.warn('[AI Worker] 使用同引擎低预算回退:', workerError && workerError.message ? workerError.message : workerError);
         try {
-          bestMove = window.GomokuAI && window.GomokuAI.getBestMove
-            ? window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints)
-            : { r: 7, c: 7 };
+          bestMove = await getFastAiFallback(boardSnapshot, forbiddenPoints);
+          if (!bestMove && window.GomokuAI && window.GomokuAI.getBestMove) {
+            bestMove = window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints);
+          }
+          if (!bestMove) bestMove = { r: 7, c: 7 };
         } catch (fallbackError) {
           console.error('[AI fallback] 计算失败:', fallbackError);
           bestMove = { r: 7, c: 7 };
@@ -3832,20 +3920,27 @@
       const existing = getMqttLibrary();
       if (existing) return Promise.resolve(existing);
 
-      return new Promise((resolve, reject) => {
-        const startedAt = Date.now();
-        const timer = setInterval(() => {
-          const loaded = getMqttLibrary();
-          if (loaded) {
-            clearInterval(timer);
-            resolve(loaded);
-            return;
-          }
-          if (Date.now() - startedAt >= timeout) {
-            clearInterval(timer);
-            reject(new Error('联机网络组件加载超时，请刷新页面后重试'));
-          }
-        }, 50);
+      const ensurePromise = typeof window.ensureGomokuResource === 'function'
+        ? window.ensureGomokuResource('mqtt')
+        : Promise.resolve();
+      return ensurePromise.then(() => {
+        const loaded = getMqttLibrary();
+        if (loaded) return loaded;
+        return new Promise((resolve, reject) => {
+          const startedAt = Date.now();
+          const timer = setInterval(() => {
+            const loaded = getMqttLibrary();
+            if (loaded) {
+              clearInterval(timer);
+              resolve(loaded);
+              return;
+            }
+            if (Date.now() - startedAt >= timeout) {
+              clearInterval(timer);
+              reject(new Error('联机网络组件加载超时，请刷新页面后重试'));
+            }
+          }, 50);
+        });
       });
     }
 
@@ -7116,6 +7211,10 @@
       const prevAvatar = document.getElementById('matchMyAvatarPreview');
       if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
       document.getElementById('onlineModal').classList.add('show');
+      // 用户明确进入联机大厅后才加载 MQTT，首屏不再解析 300KB 联机库。
+      if (typeof window.ensureGomokuResource === 'function') {
+        void window.ensureGomokuResource('mqtt').catch(() => {});
+      }
       switchOnlineTab(tab);
     }
     function closeOnlineModal() {
@@ -7177,6 +7276,10 @@
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
     window.addEventListener('pointerdown', () => {
+      // 音频 Base64 仅在用户第一次操作后加载，避免冷启动解析 80KB 数据。
+      if (typeof window.ensureGomokuResource === 'function') {
+        void window.ensureGomokuResource('audio').catch(() => {});
+      }
       if (actx && actx.state === 'suspended') {
         actx.resume().catch(() => {});
       }
@@ -7783,9 +7886,7 @@
       throw networkError;
     }
 
-    // 页面/Android WebView 启动后后台预热最快 API 出口，避免第一次登录或全服匹配才开始测速。
-    // 只发送 OPTIONS 探测，不携带账号 Token，也不阻塞首屏渲染。
-    setTimeout(() => { void warmApiHost(); }, 0);
+    // API 出口测速只在打开登录弹窗或实际使用网络功能时触发，不占用冷启动网络与 CPU。
 
     // ══════════════════════════════════════════════════════════════════
     // 🛡️ 云端账号认证与永久免登持久化管理器 (Permanent Session & Native Sync)
@@ -12669,7 +12770,6 @@
 
     // 首帧优先：头像、账号同步和历史统计不阻塞棋盘首次绘制。
     const runNonCriticalStartupTasks = () => {
-      initAnimeThumbnails();
       updateAccountUI();
       updatePlayerHeaderUI();
       updateHistoryCountUI();
