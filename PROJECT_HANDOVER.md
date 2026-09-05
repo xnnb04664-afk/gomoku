@@ -212,7 +212,7 @@
 - **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本；版本响应不再下发 APK/HTML 完整下载 URL，只下发固定路径和一次性短时票据。文件请求必须使用 `X-Gomoku-Client: gomoku-app-client-v2` 与 `X-Gomoku-Update-Ticket` 请求头，不会直连 GitHub、Raw、jsDelivr 或第三方反代。
 - **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。每次新建或轮换 Pages Secret 后，都要重新部署 Pages Function 才能让当前生产部署绑定新值。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
-  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.91`）与【🚀 检查更新】按钮；
+  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.94`）与【🚀 检查更新】按钮；
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
   - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
@@ -258,6 +258,26 @@
 ### 22. 🔐 全面安全审查、发布策略与热更新结论（2026-09-05）
 - **线上更新下载保护已修复**：生产只读检查发现无票据请求曾返回 200；已将 `backend/worker.js` 与 `pages_build/_worker.js` 改为默认强制短时票据（只有明确设置 `UPDATE_TICKET_ENFORCED=0` 才进入兼容调试模式），并完成一次必要的 Worker/Pages 部署。部署后 `/api/update/html` 与 `/api/update/apk` 的无票据请求均返回 HTTP 401，带应用短时票据的正常链路仍可用。
 - **发布策略已拆分**：`publish.js` 默认只负责版本递增、构建、GitHub 提交/Release，不读取 Cloudflare 本机凭据、不部署生产；需要修改 Worker/Pages 代码、绑定或 Secret 时，才使用 `node publish.js --deploy-cloudflare`。本次安全修复属于必须上线的例外，已完成部署。
+
+## 23. 📱 手机聊天 TXT 导出与联机网络状态（2026-09-05）
+
+### 1. 手机 TXT 导出修复
+- **根因**：旧实现只创建 `blob:` 下载链接并立即释放 URL；Android WebView 不一定触发浏览器下载器，因此手机端点击后可能没有文件。
+- **新实现**：`index.html` 的 `exportChatTxt()` 优先调用 Android `AndroidNativeApp.exportChatText()`；原生侧使用 Android 系统 `ACTION_CREATE_DOCUMENT` 保存对话内容，用户可直接选择“下载”或其他文件夹。
+- **兼容策略**：普通浏览器优先使用 Web Share 分享真实 TXT 文件，最后才回退到延迟释放的 `blob:` 下载；文件名经过原生侧路径字符过滤，内容以 UTF-8 写入。
+- **安全边界**：原生导出只接受非空、最大 512 KB 的聊天文本，不申请存储权限，不允许网页指定任意文件路径。
+
+### 2. 双方网络状态和延迟
+- 联机房间状态条新增“我方 / 对方”两项：显示连接中、重连中、在线、MQTT 中继、P2P 直连、离线或连接超时。
+- 现有 4 秒心跳增加 `pingId`、发送时间和传输方式回显；我方延迟为心跳往返时间，对方延迟显示对方最近一次上报的心跳往返时间，旧客户端没有新字段时仍兼容显示在线。
+- P2P DataChannel 建立、断开、浏览器网络 online/offline 以及自动重连都会即时刷新状态条；网络状态字段只允许固定枚举值，避免把任意文本渲染进页面。
+
+### 3. 验证与发布
+- `python tests\\optimization_smoke.py` 通过：聊天导出桥接参数、UTF-8 文本、TXT 文件名、网络心跳回显、双方状态和延迟均通过，控制台无错误。
+- `node tests\\worker_unit.js`、`node tests\\auth_refresh_unit.js` 通过；发布前六主题/脚本语法、安全门禁、Android Java 编译、D8、zipalign 和正式签名均通过。
+- v1.0.94（Build 95）已推送 `master` 并创建 GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.94`。
+- 本次只改客户端和 Android 容器，没有修改 Worker/D1/Pages 逻辑，因此按规则**跳过 Cloudflare 生产部署**；后续普通客户端发布仍执行 `node publish.js`，只有后端代码或 Secret 绑定变化时才执行一次显式部署。
+- 当前产物 SHA-256：根页面 / `android_src/assets/index.html` 为 `F59B7A33E2B833E8A4446195EE52CD7B1FD695679B1C5F454FE3338C404A28D1`；单文件版为 `E0403794EC1DF81A05FBDD7FF68850F9169476A2EB39FAC91A6DEB7295925895`；APK 为 `DEF11A3E0BB6AC7619A6E2B224B7A9C25F224742FC4BDBF94D04A0ADCFB02BCC`。
 - **Android 安全边界**：`file://` 导航仅允许 `/android_asset/index.html`；安装 Provider 仅接受固定 APK URI 且只读打开；保留正式签名、APK 摘要校验、HTTPS 主机限制、禁止调试与明文流量。新增的实体返回键会优先关闭复盘、抽屉和弹窗，再执行双击退出。
 - **本地性能与稳定性**：Android 本地静态服务补齐 ETag/304；登录后端增加账号/密码类型和 6~32 位长度约束；旧模块化孤立资源已按前一节记录清理。单文件版、Android 资源和正式签名 APK 已重新同步构建。
 - **热更新范围**：Android 已安装旧 APK 可以在游戏内下载并校验新的 `gomoku.html`，写入应用私有 `hot_update/index.html` 后重载，网页 UI、JS、AI 和联机逻辑无需重装 APK；Java/Manifest、签名、Provider 等原生改动仍必须安装新的正式签名 APK。浏览器单文件版不走原生沙盒，需重新下载/打开新 HTML。
@@ -621,5 +641,5 @@ node publish.js
 
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.93 (Build 94)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复，以及本次 Refresh Token 自动续期改造均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已重新构建并发布为 v1.0.93。Cloudflare 已为本次新增认证接口完成一次必要部署，普通客户端发版默认不重复部署；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程正式版本：v1.0.94 (Build 95)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出和双方网络状态/延迟显示均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.94。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
