@@ -45,7 +45,7 @@
 
 ### 1. 棋盘绘制与几何坐标换算
 - **棋盘规格**：15 行 × 15 列标准五子棋盘；
-- **自适应渲染**：Canvas 随容器动态计算宽度、高度、边距与网格大小（`gridX`, `gridY`），并结合 `window.devicePixelRatio` 保持高清抗锯齿；
+- **自适应渲染与 2x SSAA 超采样**：Canvas 随容器动态计算宽度、高度、边距与网格大小（`gridX`, `gridY`）。引入强制超采样底线 `dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3.5)`，即使在 1080P 显示器上也强制开启 2x 超采样抗锯齿；物理像素严格 1:1 映射，结合 CSS `-webkit-optimize-contrast` 确保棋盘线与棋子无模糊拉伸与锯齿；
 - **悬浮绝对定位防挤压**：`.card-area-wrapper` 恒定高度，施法提示条 `.skill-prompt-bar` 采用 `position: absolute; bottom: calc(100% + 4px);` 彻底脱离垂直文档流，卡牌施法选点时棋盘 1 像素都不跳动！
 
 ### 2. 🃏 干扰牌技能卡池系统 (Skill Card Pool)
@@ -200,8 +200,9 @@
   - **Sticky Immersive 全面屏沉浸式**：隐藏状态栏与虚拟导航栏，消除黑边并利用 100% 手机屏幕；
   - **WebView 缓存与线程调度**：`LOAD_DEFAULT` 极速本地缓存预热，渲染线程设为 `RenderPriority.HIGH`；
   - **生命周期节电与内存防泄漏**：`onPause()` 暂停计时器（`pauseTimers`），`onDestroy()` 彻底解除父容器解绑；
-- **前端 Canvas 离屏位图缓存架构 (Offscreen Board Cache)**：
-  - 核心突破：将静态棋盘（草坪、宣纸、木纹、几十条网格线、星位）预先离屏绘制到独立 Canvas 位图；
+- **前端 Canvas 离屏位图缓存架构 (Offscreen Board & Pieces Cache)**：
+  - 核心突破：将静态棋盘（草坪、宣纸、木纹、网格线、星位）与棋子全盘序号预先离屏渲染到独立 Canvas 位图；
+  - **物理像素严密对齐**：离屏 Canvas 宽高严格按 `Math.round(cWidth * dpr)` 分配，开启 `imageSmoothingQuality = 'high'` 与 `scale(dpr, dpr)`，杜绝插值放大模糊；
   - 每次落子仅需 GPU 单次贴图（`drawImage`）+ 棋子绘制，**单帧绘制耗时从数毫秒骤降至 0.016 毫秒**；
   - 稳定支撑 **90Hz / 120Hz 手机超高刷新率**，落子手感极其跟手丝滑，发热量与耗电大幅降低；
 - **触控零延迟 (Zero Touch Latency)**：
@@ -654,7 +655,61 @@ node publish.js
 - 文件包含主提示词、反向提示词、生成参数和“官方晴空 / 联机竞技 / 甜蜜陪伴”三种变体；不把 GitHub 地址、账号信息或任何密钥放入图标。
 - 这是设计资料更新，不改变客户端代码，也不触发 Cloudflare 生产部署。
 
+## 十四、棋子超清重构与全工程视觉舒适度拉网排查修复 (2026-09-05)
+
+### 1. 用户反馈背景
+- 用户明确提出：**“我怎么感觉棋子像素有点低，看着不舒服”**，并在解决后要求 **“解决之后，去检查其他地方有没有这种问题，有就修复”**。
+- 我们对整个工程渲染管线、6 套主题、单文件离线版及离屏 Canvas 进行了全方位拉网排查与系统性重构。
+
+### 2. 根因深度剖析
+1. **1x 离屏位图被强制放大拉伸（核心模糊源头）**：
+   - 主画布 `cvs` 启用了 `scale(dpr, dpr)`（物理像素为 2x~3.5x）；
+   - 但在旧版 `getCachedPiecesBitmap()` 与 `getCachedBoardBitmap()` 极速位图缓存中，离屏 Canvas 宽高被写死成了 CSS 逻辑像素 `cWidth`（如 380×380）；
+   - 在 `draw()` 中通过 `ctx.drawImage` 贴到已放大 2~3 倍的高清主画布时，浏览器底层进行了强制双线性过滤插值拉伸，导致**棋子边缘被虚化发糊、出现明显马赛克毛刺**；
+   - 与最后一手落子直接在高清主画布绘制的锐利红点对比时，模糊感尤为刺眼。
+2. **普通桌面 1080P 显示器缺乏超采样保底**：
+   - 桌面普通屏 `devicePixelRatio = 1.0`，棋子物理半径仅十余像素，圆弧呈现明显台阶锯齿。
+3. **棋子视觉材质生硬与贴纸假感**：
+   - **硬边偏移假阴影**：旧代码使用无羽化的偏移深色实心圆盘（`ctx.arc(x+1.5, y+2.5, r*0.95)`）模拟阴影，视觉上如同棋子底下露出一截错位的脏圆片；
+   - **粗糙纯白轮廓描边**：黑子外围有一圈刺眼的半透明纯白边线（`rgba(255,255,255,0.75)`），使棋子呈现类似剪贴画贴纸的廉价感；
+   - **发灰/脏粉色彩与高光缺失**：白棋底色过渡至脏粉色（`#fed7e2`），且缺乏真实云子与玉石的**镜面瓷釉高光反射（Specular Gloss Glint）**。
+
+### 3. 全套技术修复与视觉升维方案
+1. **全高清超采样离屏渲染架构**：
+   - 强制超采样保底：`dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3.5)`，即使 1080P 桌面显示器也强制开启 **2x 超采样抗锯齿 (SSAA)**，手机旗舰高刷屏自动匹配 2.5x~3.5x 原生高密度；
+   - 离屏画布 `cachedBoardCanvas` 与 `cachedPiecesCanvas` 物理宽高严格分配为 `Math.round(cWidth * dpr)`，应用 `scale(dpr, dpr)` 与 `imageSmoothingQuality = 'high'`，实现物理像素 1:1 精准 Blit 贴图，彻底消除插值拉伸模糊；
+   - 主画布 CSS 补充 `image-rendering: -webkit-optimize-contrast; image-rendering: auto;`。
+2. **大师级 3D 球体玉石材质渲染 (`drawThemedStone`)**：
+   - **柔光环境遮挡**：改用原生柔和高斯阴影（`shadowBlur: r * 0.36~0.42`, `shadowOffsetY: r * 0.18`），棋子自然温润地立体悬浮于棋盘上方；
+   - **黑曜石深邃玉石**：四级球体径向渐变（`#525e6f` -> `#272d37` -> `#11141a` -> `#05070a`）；
+   - **温润羊脂白玉**：告别脏粉色，采用纯净象牙白优雅过渡（`#ffffff` -> `#f8fafc` -> `#e2e8f0` -> `#cbd5e1`）；
+   - **45° 瓷釉镜面弧光**：左上方以 `ctx.ellipse` 绘制椭圆高透镜面高光弧（`rgba(255,255,255, 0.42/0.92)` 渐隐），呈现真实玉石的光洁透亮；
+   - **底部环境微反光与超微边缘**：底部微弧反光营造玉石通透厚重感，`0.85px` 超细石青轮廓线提供清晰微反差，彻底取代粗糙白圈；
+   - **全套 6 大主题同步升级**：晴空草坪（天然云子）、禅意暗黑（3D 黑曜石与羊脂暖玉）、新中式（徽墨与和田白玉）、毛玻璃（冷光星芒宝石）、Clean iOS（精密陶瓷柔光）、草莓海盐（水晶果冻心动质感）。
+3. **自定义头像上传离屏压缩分辨率翻倍**：
+   - 排查发现玩家相册自定义头像上传时，离屏压缩画布写死为 `80x80`，在高分屏头像圈中产生毛刺；
+   - 将全部页面中的 `offCanvas.width` 和 `offCanvas.height` 由 80x80 提升至 `160x160`，设置 `imageSmoothingQuality = 'high'`，导出质量提升至 0.88。
+4. **恋爱主题背景心形光斑 High-DPI 适配**：
+   - `theme5_sweet_romance.html` 中 `heartBokehCanvas` 粒子画布曾按 1x 物理像素分配，高分屏下浮动光斑与爱心模糊；
+   - 补充 `hdpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3)` 动态缩放，粒子绘制以逻辑宽高计算，光斑与爱心达到视网膜级锐利。
+5. **`theme4_clean_ios.html` 未闭合 `<style>` 标签致命缺陷修复**：
+   - 排查发现该文件样式表末尾遗漏了 `</style></head>`，导致整篇 HTML（约 20 万字符）被浏览器当成 CSS 文本解析，DOM 树 `body` 为空，主画布完全无法初始化；
+   - 在 `<body>` 前补齐 `</style></head>`，页面解析与画布加载 100% 恢复正常。
+6. **独立主题缺失辅助函数安全补齐**：
+   - `theme1` ~ `theme5` 在落子与重绘时调用了 `isPointFrozen(r, c)` 与 `isFogActive()`，但在独立单页中未定义该函数；
+   - 补齐默认空安全实现，杜绝可能中断对局的 `ReferenceError`。
+
+### 4. 验证与全端产物同步
+- **Playwright 端到端冒烟测试**：`python tests/optimization_smoke.py` -> **通过 (Code 0)**，`consoleErrors: []`, `pageErrors: []`；
+- **Worker 接口测试**：`node tests/worker_unit.js` -> **通过 (Code 0)**；
+- **单文件版自动化验证**：Playwright 执行开局落子、渲染与截图，**0 报错通过**；
+- **5 款独立单页主题实机截图**：通过自动化脚本逐一开局落子并输出各主题实测截图，全部锐利清晰、无任何控制台异常；
+- **多端资产全量同步**：
+  - `index.html` 与全部主题文件已全量同步到 `android_src/assets/`；
+  - 运行 `node bundle_single_file.js` 重新打包生成最新 `五子棋大师_单文件版.html`。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.95 (Build 96)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底和手机端图标设计提示词均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.95。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、以及棋子超清重构与全工程视觉舒适度拉网排查修复（2x SSAA 超采样、3D 玉石瓷釉材质、头像 160x160 翻倍、Bokeh 粒子视网膜适配、theme4 DOM 闭合修复）均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已就绪。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+
