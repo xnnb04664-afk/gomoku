@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { createInlineAiWorkerTag, injectAiWorkerSource } = require('./build_ai_worker');
 
 const ROOT_DIR = __dirname;
 const SOURCE_HTML = path.join(ROOT_DIR, 'index.html');
@@ -7,6 +8,7 @@ const OUTPUT_FILE = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
 
 console.log('>>> [1/3] 读取当前最新 index.html 母本代码...');
 let html = fs.readFileSync(SOURCE_HTML, 'utf8');
+html = injectAiWorkerSource(html, ROOT_DIR);
 
 console.log('>>> [2/3] 读取并内联 PeerJS 与 樱桃炸弹音频 Base64 数据...');
 const peerJsPath = path.join(ROOT_DIR, 'js', 'peerjs.min.js');
@@ -70,6 +72,8 @@ ${escapeInlineScript(content)}
 `;
 
 let inlinedHeadScripts = '';
+// 单文件版会重建 head 区域，原始占位标签会被替换掉，因此必须显式把 Worker 代码加入新的 head。
+inlinedHeadScripts += createInlineAiWorkerTag(ROOT_DIR) + '\n';
 if (peerJsContent) {
   inlinedHeadScripts += deferredInlineScript('内联 PeerJS 1.5.4 完整生产库', peerJsContent);
 }
@@ -88,6 +92,7 @@ if (animeAvatarsContent) {
 if (aiEngineContent) {
   inlinedHeadScripts += `  <!-- 内联 强力五子棋 AI 引擎（棋型评估 + Alpha-Beta + 置换表） -->\n  <script>\n${escapeInlineScript(aiEngineContent)}\n  </script>\n`;
 }
+
 
 // 执行替换：按 head 边界替换，避免 CDN fallback 中嵌套的 <script> 字符串干扰正则。
 const headStartMarker = '  <!-- 引入 PeerJS 免服务器外网穿透联机库';

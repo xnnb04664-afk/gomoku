@@ -5,7 +5,734 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>五子棋大师 · 单文件全功能旗舰版 🌐🎴💬🌿</title>
   <link rel="icon" href="favicon.png" type="image/png">
-<!-- 内联 PeerJS 1.5.4 完整生产库（首帧后延迟执行） -->
+<script id="gomokuAiWorkerSource" type="text/plain">// 生产构建会把 ai_fast.js 的内容内嵌到 index.html；独立运行时保留该导入作为回退。
+/**
+ * 五子棋移动端快速 AI 内核。
+ *
+ * 这是给 Web Worker/Wasm 适配层使用的扁平棋盘实现：
+ * - Uint8Array 保存 225 个格子，避免搜索过程中复制二维数组；
+ * - 黑子、白子和占用状态分别维护 Uint32Array 位图；
+ * - 置换表使用双 32 位 Zobrist 哈希和数字键，减少字符串分配；
+ * - 评估使用预计算的三进制局部棋型表，避免频繁创建字符串。
+ *
+ * 页面仍保留 js/ai.js 作为兼容回退；该文件只在 Worker 中执行，不改变对局数据格式。
+ */
+(function exposeFastAi(root) {
+  'use strict';
+
+  const SCORE = Object.freeze({
+    WIN: 100000000,
+    OPEN_FOUR: 12000000,
+    FOUR: 1800000,
+    DOUBLE_THREE: 650000,
+    OPEN_THREE: 85000,
+    BROKEN_THREE: 18000,
+    OPEN_TWO: 1800,
+    TWO: 220,
+    ONE: 12
+  });
+  const DIRECTIONS = Object.freeze([
+    [0, 1],
+    [1, 0],
+    [1, 1],
+    [1, -1]
+  ]);
+  const LOCAL_LINE_LENGTH = 11;
+  const LOCAL_LINE_CODE_COUNT = 177147; // 3^11
+  const EMPTY = 0;
+  const BLACK = 1;
+  const WHITE = 2;
+  const lineStatsCache = new Map();
+  const linesCache = new Map();
+
+  const now = () => (typeof performance !== 'undefined' && performance.now)
+    ? performance.now()
+    : Date.now();
+
+  function isValid(size, r, c) {
+    return r >= 0 && r < size && c >= 0 && c < size;
+  }
+
+  function patternMatches(values, pattern) {
+    if (pattern.length > values.length) return false;
+    for (let start = 0; start <= values.length - pattern.length; start++) {
+      let matched = true;
+      for (let i = 0; i < pattern.length; i++) {
+        if (values[start + i] !== pattern[i]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) return true;
+    }
+    return false;
+  }
+
+  function buildLocalLineStats() {
+    const stats = {
+      five: new Uint8Array(LOCAL_LINE_CODE_COUNT),
+      openFour: new Uint8Array(LOCAL_LINE_CODE_COUNT),
+      four: new Uint8Array(LOCAL_LINE_CODE_COUNT),
+      openThree: new Uint8Array(LOCAL_LINE_CODE_COUNT),
+      brokenThree: new Uint8Array(LOCAL_LINE_CODE_COUNT),
+      openTwo: new Uint8Array(LOCAL_LINE_CODE_COUNT)
+    };
+    const values = new Uint8Array(LOCAL_LINE_LENGTH);
+    const fourPatterns = [
+      [0, 1, 1, 1, 1, 2],
+      [2, 1, 1, 1, 1, 0],
+      [1, 0, 1, 1, 1],
+      [1, 1, 0, 1, 1],
+      [1, 1, 1, 0, 1]
+    ];
+    const openThreePatterns = [
+      [0, 1, 1, 1, 0],
+      [0, 1, 0, 1, 1, 0],
+      [0, 1, 1, 0, 1, 0]
+    ];
+    const brokenThreePatterns = [
+      [0, 0, 1, 1, 1, 0, 0],
+      [0, 0, 1, 0, 1, 1, 0],
+      [0, 1, 1, 0, 1, 0, 0],
+      [0, 1, 0, 1, 1, 0, 0]
+    ];
+
+    for (let code = 0; code < LOCAL_LINE_CODE_COUNT; code++) {
+      let value = code;
+      let longestRun = 0;
+      let run = 0;
+      for (let i = LOCAL_LINE_LENGTH - 1; i >= 0; i--) {
+        values[i] = value % 3;
+        value = Math.floor(value / 3);
+      }
+      for (let i = 0; i < values.length; i++) {
+        if (values[i] === 1) {
+          run++;
+          if (run > longestRun) longestRun = run;
+        } else {
+          run = 0;
+        }
+      }
+      stats.five[code] = longestRun >= 5 ? 1 : 0;
+      stats.openFour[code] = patternMatches(values, [0, 1, 1, 1, 1, 0]) ? 1 : 0;
+      let four = 0;
+      for (const pattern of fourPatterns) if (patternMatches(values, pattern)) four++;
+      stats.four[code] = four > 255 ? 255 : four;
+      let openThree = 0;
+      for (const pattern of openThreePatterns) if (patternMatches(values, pattern)) openThree++;
+      stats.openThree[code] = openThree > 255 ? 255 : openThree;
+      let brokenThree = 0;
+      for (const pattern of brokenThreePatterns) if (patternMatches(values, pattern)) brokenThree++;
+      stats.brokenThree[code] = brokenThree > 255 ? 255 : brokenThree;
+      stats.openTwo[code] = patternMatches(values, [0, 1, 1, 0]) ? 1 : 0;
+    }
+    return stats;
+  }
+
+  function getLocalLineStats(size) {
+    if (!lineStatsCache.has(size)) lineStatsCache.set(size, buildLocalLineStats());
+    return lineStatsCache.get(size);
+  }
+
+  function createBoardLines(size) {
+    if (linesCache.has(size)) return linesCache.get(size);
+    const lines = [];
+    const addLine = (cells) => { if (cells.length >= 5) lines.push(cells); };
+
+    for (let r = 0; r < size; r++) {
+      const row = [];
+      for (let c = 0; c < size; c++) row.push(r * size + c);
+      addLine(row);
+    }
+    for (let c = 0; c < size; c++) {
+      const column = [];
+      for (let r = 0; r < size; r++) column.push(r * size + c);
+      addLine(column);
+    }
+    for (let start = 0; start < size; start++) {
+      const downRight = [];
+      for (let r = 0, c = start; r < size && c < size; r++, c++) downRight.push(r * size + c);
+      addLine(downRight);
+    }
+    for (let start = 1; start < size; start++) {
+      const downRight = [];
+      for (let r = start, c = 0; r < size && c < size; r++, c++) downRight.push(r * size + c);
+      addLine(downRight);
+    }
+    for (let start = 0; start < size; start++) {
+      const downLeft = [];
+      for (let r = 0, c = start; r < size && c >= 0; r++, c--) downLeft.push(r * size + c);
+      addLine(downLeft);
+    }
+    for (let start = 1; start < size; start++) {
+      const downLeft = [];
+      for (let r = start, c = size - 1; r < size && c >= 0; r++, c--) downLeft.push(r * size + c);
+      addLine(downLeft);
+    }
+    linesCache.set(size, lines);
+    return lines;
+  }
+
+  function nextRandom(seedState) {
+    let seed = seedState.value >>> 0;
+    seed = Math.imul(seed ^ (seed >>> 16), 0x21f0aaad);
+    seed = Math.imul(seed ^ (seed >>> 15), 0x735a2d97);
+    seedState.value = seed >>> 0;
+    return (seed ^ (seed >>> 15)) >>> 0;
+  }
+
+  class FastPosition {
+    constructor(boardInput, size, zobristA, zobristB) {
+      this.size = size;
+      this.cellCount = size * size;
+      this.board = new Uint8Array(this.cellCount);
+      const wordCount = Math.ceil(this.cellCount / 32);
+      this.occupiedBits = new Uint32Array(wordCount);
+      this.blackBits = new Uint32Array(wordCount);
+      this.whiteBits = new Uint32Array(wordCount);
+      this.zobristA = zobristA;
+      this.zobristB = zobristB;
+      this.hashA = 0;
+      this.hashB = 0;
+      this.stones = 0;
+
+      if (boardInput instanceof Uint8Array || ArrayBuffer.isView(boardInput)) {
+        for (let i = 0; i < this.cellCount; i++) this.putInitial(i, Number(boardInput[i]) || EMPTY);
+      } else if (Array.isArray(boardInput)) {
+        for (let r = 0; r < size; r++) {
+          const row = Array.isArray(boardInput[r]) ? boardInput[r] : [];
+          for (let c = 0; c < size; c++) this.putInitial(r * size + c, Number(row[c]) || EMPTY);
+        }
+      }
+    }
+
+    putInitial(index, color) {
+      if (color !== BLACK && color !== WHITE) return;
+      this.board[index] = color;
+      FastPosition.setBit(this.occupiedBits, index);
+      FastPosition.setBit(color === BLACK ? this.blackBits : this.whiteBits, index);
+      this.hashA = (this.hashA ^ this.zobristA[index * 3 + color]) >>> 0;
+      this.hashB = (this.hashB ^ this.zobristB[index * 3 + color]) >>> 0;
+      this.stones++;
+    }
+
+    static setBit(bits, index) {
+      bits[index >>> 5] |= (1 << (index & 31));
+    }
+
+    static clearBit(bits, index) {
+      bits[index >>> 5] &= ~(1 << (index & 31));
+    }
+
+    static hasBit(bits, index) {
+      return (bits[index >>> 5] & (1 << (index & 31))) !== 0;
+    }
+
+    isEmpty(index) {
+      return !FastPosition.hasBit(this.occupiedBits, index);
+    }
+
+    put(index, color) {
+      if (!this.isEmpty(index) || (color !== BLACK && color !== WHITE)) return false;
+      this.board[index] = color;
+      FastPosition.setBit(this.occupiedBits, index);
+      FastPosition.setBit(color === BLACK ? this.blackBits : this.whiteBits, index);
+      this.hashA = (this.hashA ^ this.zobristA[index * 3 + color]) >>> 0;
+      this.hashB = (this.hashB ^ this.zobristB[index * 3 + color]) >>> 0;
+      this.stones++;
+      return true;
+    }
+
+    remove(index, color) {
+      if (this.board[index] !== color) return false;
+      this.board[index] = EMPTY;
+      FastPosition.clearBit(this.occupiedBits, index);
+      FastPosition.clearBit(color === BLACK ? this.blackBits : this.whiteBits, index);
+      this.hashA = (this.hashA ^ this.zobristA[index * 3 + color]) >>> 0;
+      this.hashB = (this.hashB ^ this.zobristB[index * 3 + color]) >>> 0;
+      this.stones--;
+      return true;
+    }
+  }
+
+  class GomokuFastAI {
+    static ensureZobrist(size) {
+      if (this.zobristSize === size && this.zobristA && this.zobristB) return;
+      const length = size * size * 3;
+      const tableA = new Uint32Array(length);
+      const tableB = new Uint32Array(length);
+      const state = { value: 0x9e3779b9 };
+      for (let i = 0; i < length; i++) {
+        tableA[i] = nextRandom(state);
+        tableB[i] = nextRandom(state);
+      }
+      this.zobristSize = size;
+      this.zobristA = tableA;
+      this.zobristB = tableB;
+    }
+
+    static getBestMove(boardInput, aiColor = WHITE, difficulty = 'master', enableFoul = false, forbiddenPoints = [], options = {}) {
+      const size = Number(options.size) > 4 ? Number(options.size) : 15;
+      this.ensureZobrist(size);
+      const position = new FastPosition(boardInput, size, this.zobristA, this.zobristB);
+      const opponent = aiColor === BLACK ? WHITE : BLACK;
+      const forbidden = new Uint8Array(size * size);
+      for (const point of Array.isArray(forbiddenPoints) ? forbiddenPoints : []) {
+        const r = Number(point && point.r);
+        const c = Number(point && point.c);
+        if (Number.isInteger(r) && Number.isInteger(c) && isValid(size, r, c)) forbidden[r * size + c] = 1;
+      }
+
+      const legal = this.getCandidateMoves(position, aiColor, enableFoul, forbidden, 40);
+      if (!legal.length) return this.findFirstEmpty(position, forbidden);
+      if (position.stones === 0) return this.toMove(this.centerIndex(size));
+
+      for (const move of legal) {
+        if (this.isWinningMove(position, move.index, aiColor)) return this.toMove(move.index);
+      }
+
+      const opponentWins = this.getWinningMoves(position, opponent, enableFoul, 40);
+      if (opponentWins.length) {
+        const winning = new Uint8Array(size * size);
+        for (const move of opponentWins) winning[move.index] = 1;
+        const blocks = legal.filter(move => winning[move.index]);
+        if (blocks.length) return this.toMove(blocks[0].index);
+      }
+
+      if (difficulty === 'master' || difficulty === 'hard') {
+        const forcing = this.findDoubleThreat(position, aiColor, legal, enableFoul);
+        if (forcing) return this.toMove(forcing.index);
+      }
+      if (difficulty === 'easy') return this.toMove(this.pickGreedy(position, aiColor, legal, 1.0).index);
+      if (difficulty === 'medium') return this.toMove(this.pickGreedy(position, aiColor, legal, 1.05).index);
+
+      const budgetMs = Number(options.budgetMs) > 0 ? Number(options.budgetMs) : 260;
+      const maxDepth = Number(options.maxDepth) > 0 ? Number(options.maxDepth) : 5;
+      const rootCandidates = legal.slice(0, Number(options.rootLimit) > 0 ? Number(options.rootLimit) : 14);
+      const context = {
+        aiColor,
+        opponent,
+        enableFoul,
+        deadline: now() + budgetMs,
+        table: new Map(),
+        nodes: 0,
+        completedDepth: 0
+      };
+      let best = rootCandidates[0];
+      for (let depth = 1; depth <= maxDepth; depth++) {
+        const result = this.searchRoot(position, rootCandidates, depth, context);
+        if (result.aborted) break;
+        if (result.move) best = result.move;
+        context.completedDepth = depth;
+        if (result.score >= SCORE.WIN - 1000) break;
+      }
+      return {
+        ...this.toMove(best.index),
+        score: Number.isFinite(best.score) ? best.score : 0,
+        nodes: context.nodes,
+        depth: context.completedDepth,
+        elapsedMs: Math.round(now() - (context.deadline - budgetMs))
+      };
+    }
+
+    static centerIndex(size) {
+      const center = Math.floor(size / 2);
+      return center * size + center;
+    }
+
+    static toMove(index) {
+      return { r: Math.floor(index / this.zobristSize), c: index % this.zobristSize };
+    }
+
+    static findFirstEmpty(position, forbidden) {
+      for (let index = 0; index < position.cellCount; index++) {
+        if (position.isEmpty(index) && !forbidden[index]) return this.toMove(index);
+      }
+      return null;
+    }
+
+    static isNearStone(position, index, radius = 2) {
+      const r = Math.floor(index / position.size);
+      const c = index % position.size;
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          const nr = r + dr;
+          const nc = c + dc;
+          if (isValid(position.size, nr, nc) && !position.isEmpty(nr * position.size + nc)) return true;
+        }
+      }
+      return false;
+    }
+
+    static positionValue(r, c, size) {
+      const center = (size - 1) / 2;
+      return Math.max(0, size * 2 - Math.abs(r - center) - Math.abs(c - center));
+    }
+
+    static getCandidateMoves(position, color, enableFoul = false, forbidden = null, limit = 24) {
+      if (position.stones === 0) {
+        const center = this.centerIndex(position.size);
+        return (!forbidden || !forbidden[center]) ? [{ index: center, score: 0 }] : [];
+      }
+      const raw = [];
+      const opponent = color === BLACK ? WHITE : BLACK;
+      for (let index = 0; index < position.cellCount; index++) {
+        if (!position.isEmpty(index) || (forbidden && forbidden[index]) || !this.isNearStone(position, index, 2)) continue;
+        if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) continue;
+        const own = this.analyzeMove(position, index, color);
+        const opp = this.analyzeMove(position, index, opponent);
+        const r = Math.floor(index / position.size);
+        const c = index % position.size;
+        raw.push({ index, r, c, score: this.moveOrderingScore(own, opp) + this.positionValue(r, c, position.size) });
+      }
+      if (!raw.length) {
+        for (let index = 0; index < position.cellCount; index++) {
+          if (position.isEmpty(index) && (!forbidden || !forbidden[index]) && (!enableFoul || !this.isForbiddenMove(position, index, color, forbidden))) {
+            const r = Math.floor(index / position.size);
+            const c = index % position.size;
+            raw.push({ index, r, c, score: this.positionValue(r, c, position.size) });
+          }
+        }
+      }
+      raw.sort((a, b) => b.score - a.score || a.r - b.r || a.c - b.c);
+      return raw.slice(0, limit);
+    }
+
+    static isForbiddenMove(position, index, color, forbidden) {
+      if (forbidden && forbidden[index]) return true;
+      if (color !== BLACK) return false;
+      if (!position.put(index, color)) return true;
+      const exactFive = this.hasFive(position, index, color) && !this.hasOverline(position, index, color);
+      const overline = this.hasOverline(position, index, color);
+      position.remove(index, color);
+      if (overline) return true;
+      if (exactFive) return false;
+      const pattern = this.analyzeMove(position, index, color);
+      return pattern.four >= 2 || pattern.openThree >= 2;
+    }
+
+    static moveOrderingScore(own, opp) {
+      if (own.five) return SCORE.WIN;
+      if (opp.five) return SCORE.WIN * 0.92;
+      if (own.openFour) return SCORE.OPEN_FOUR;
+      if (opp.openFour) return SCORE.OPEN_FOUR * 0.9;
+      if (own.four >= 2) return SCORE.FOUR * 7;
+      if (opp.four >= 2) return SCORE.FOUR * 6.5;
+      if (own.four && own.openThree) return SCORE.FOUR * 5;
+      if (opp.four && opp.openThree) return SCORE.FOUR * 4.5;
+      if (own.openThree >= 2) return SCORE.DOUBLE_THREE;
+      if (opp.openThree >= 2) return SCORE.DOUBLE_THREE * 0.92;
+      return own.score * 1.18 + opp.score * 1.08;
+    }
+
+    static lineCode(position, index, color, dr, dc) {
+      const r = Math.floor(index / position.size);
+      const c = index % position.size;
+      let code = 0;
+      for (let offset = -5; offset <= 5; offset++) {
+        const nr = r + offset * dr;
+        const nc = c + offset * dc;
+        let value = 2;
+        if (offset === 0) value = 1;
+        else if (isValid(position.size, nr, nc)) {
+          const cell = position.board[nr * position.size + nc];
+          value = cell === EMPTY ? 0 : (cell === color ? 1 : 2);
+        }
+        code = code * 3 + value;
+      }
+      return code;
+    }
+
+    static analyzeMove(position, index, color) {
+      if (index < 0 || index >= position.cellCount || !position.isEmpty(index)) {
+        return { five: 0, openFour: 0, four: 0, openThree: 0, brokenThree: 0, openTwo: 0, score: -Infinity };
+      }
+      const stats = getLocalLineStats(position.size);
+      let five = 0;
+      let openFour = 0;
+      let four = 0;
+      let openThree = 0;
+      let brokenThree = 0;
+      let openTwo = 0;
+      for (const [dr, dc] of DIRECTIONS) {
+        const code = this.lineCode(position, index, color, dr, dc);
+        five += stats.five[code];
+        openFour += stats.openFour[code];
+        four += stats.four[code];
+        openThree += stats.openThree[code];
+        brokenThree += stats.brokenThree[code];
+        openTwo += stats.openTwo[code];
+      }
+      const score = five ? SCORE.WIN :
+        openFour ? SCORE.OPEN_FOUR :
+        four >= 2 ? SCORE.FOUR * 7 :
+        four && openThree ? SCORE.FOUR * 5 :
+        openThree >= 2 ? SCORE.DOUBLE_THREE :
+        four ? SCORE.FOUR :
+        openThree ? SCORE.OPEN_THREE :
+        brokenThree ? SCORE.BROKEN_THREE :
+        openTwo ? SCORE.OPEN_TWO : SCORE.ONE;
+      return { five, openFour, four, openThree, brokenThree, openTwo, score };
+    }
+
+    static countDirection(position, index, dr, dc, color) {
+      let r = Math.floor(index / position.size) + dr;
+      let c = index % position.size + dc;
+      let count = 0;
+      while (isValid(position.size, r, c) && position.board[r * position.size + c] === color) {
+        count++;
+        r += dr;
+        c += dc;
+      }
+      return count;
+    }
+
+    static hasFive(position, index, color) {
+      for (const [dr, dc] of DIRECTIONS) {
+        const count = 1 + this.countDirection(position, index, dr, dc, color) + this.countDirection(position, index, -dr, -dc, color);
+        if (count >= 5) return true;
+      }
+      return false;
+    }
+
+    static hasOverline(position, index, color) {
+      for (const [dr, dc] of DIRECTIONS) {
+        const count = 1 + this.countDirection(position, index, dr, dc, color) + this.countDirection(position, index, -dr, -dc, color);
+        if (count > 5) return true;
+      }
+      return false;
+    }
+
+    static isWinningMove(position, index, color) {
+      if (!position.put(index, color)) return false;
+      const won = this.hasFive(position, index, color);
+      position.remove(index, color);
+      return won;
+    }
+
+    static getWinningMoves(position, color, enableFoul = false, limit = 40) {
+      const candidates = this.getCandidateMoves(position, color, enableFoul, null, limit);
+      return candidates.filter(move => this.isWinningMove(position, move.index, color));
+    }
+
+    static findDoubleThreat(position, color, candidates, enableFoul) {
+      for (const move of candidates.slice(0, 18)) {
+        const pattern = this.analyzeMove(position, move.index, color);
+        if (!(pattern.four || pattern.openThree >= 2)) continue;
+        if (enableFoul && this.isForbiddenMove(position, move.index, color, null)) continue;
+        if (!position.put(move.index, color)) continue;
+        const wins = this.getWinningMoves(position, color, enableFoul, 24);
+        position.remove(move.index, color);
+        if (wins.length >= 2) return move;
+      }
+      return null;
+    }
+
+    static pickGreedy(position, color, candidates, attackWeight = 1.1) {
+      let best = candidates[0];
+      let bestScore = -Infinity;
+      const opponent = color === BLACK ? WHITE : BLACK;
+      for (const move of candidates) {
+        const own = this.analyzeMove(position, move.index, color);
+        const opp = this.analyzeMove(position, move.index, opponent);
+        const score = own.score * attackWeight + opp.score;
+        if (score > bestScore) {
+          bestScore = score;
+          best = move;
+        }
+      }
+      return best;
+    }
+
+    static evaluateBoard(position, aiColor, opponent) {
+      let aiScore = 0;
+      let opponentScore = 0;
+      for (const line of createBoardLines(position.size)) {
+        aiScore += this.evaluateLine(position.board, line, aiColor);
+        opponentScore += this.evaluateLine(position.board, line, opponent);
+      }
+      let positionScore = 0;
+      for (let index = 0; index < position.cellCount; index++) {
+        const cell = position.board[index];
+        if (cell === EMPTY) continue;
+        const r = Math.floor(index / position.size);
+        const c = index % position.size;
+        positionScore += cell === aiColor
+          ? this.positionValue(r, c, position.size)
+          : -this.positionValue(r, c, position.size);
+      }
+      return aiScore - opponentScore * 1.12 + positionScore;
+    }
+
+    static evaluateLine(board, line, color) {
+      let score = 0;
+      for (let i = 0; i < line.length;) {
+        if (board[line[i]] !== color) {
+          i++;
+          continue;
+        }
+        const start = i;
+        while (i < line.length && board[line[i]] === color) i++;
+        const length = i - start;
+        const openLeft = start > 0 && board[line[start - 1]] === EMPTY;
+        const openRight = i < line.length && board[line[i]] === EMPTY;
+        const openEnds = (openLeft ? 1 : 0) + (openRight ? 1 : 0);
+        if (length >= 5) score += SCORE.WIN;
+        else if (length === 4) score += openEnds === 2 ? SCORE.OPEN_FOUR : openEnds ? SCORE.FOUR : 0;
+        else if (length === 3) score += openEnds === 2 ? SCORE.OPEN_THREE : openEnds ? SCORE.BROKEN_THREE : 0;
+        else if (length === 2) score += openEnds === 2 ? SCORE.OPEN_TWO : openEnds ? SCORE.TWO : 0;
+        else if (length === 1 && openEnds === 2) score += SCORE.ONE;
+      }
+      return score;
+    }
+
+    static searchRoot(position, candidates, depth, context) {
+      let bestMove = null;
+      let bestScore = -Infinity;
+      let alpha = -Infinity;
+      for (const move of candidates) {
+        if (now() >= context.deadline) return { aborted: true };
+        position.put(move.index, context.aiColor);
+        let score;
+        if (this.hasFive(position, move.index, context.aiColor)) {
+          score = SCORE.WIN;
+        } else {
+          const child = this.search(position, depth - 1, alpha, Infinity, context.opponent, context, 1);
+          if (child.aborted) {
+            position.remove(move.index, context.aiColor);
+            return child;
+          }
+          score = child.score;
+        }
+        position.remove(move.index, context.aiColor);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = move;
+        }
+        alpha = Math.max(alpha, bestScore);
+      }
+      return { move: bestMove, score: bestScore, aborted: false };
+    }
+
+    static search(position, depth, alpha, beta, turnColor, context, ply) {
+      context.nodes++;
+      if (now() >= context.deadline) return { score: 0, aborted: true };
+      if (depth <= 0) return { score: this.evaluateBoard(position, context.aiColor, context.opponent), aborted: false };
+
+      const key = (
+        position.hashA ^
+        Math.imul(position.hashB, 0x9e3779b1) ^
+        Math.imul(turnColor, 0x85ebca6b) ^
+        Math.imul(depth, 0xc2b2ae35)
+      ) >>> 0;
+      const cached = context.table.get(key);
+      if (cached && cached.hashA === position.hashA && cached.hashB === position.hashB && cached.turn === turnColor && cached.depth >= depth) {
+        return { score: cached.score, move: cached.move, aborted: false };
+      }
+
+      const maximizing = turnColor === context.aiColor;
+      const candidates = this.getCandidateMoves(position, turnColor, context.enableFoul, null, depth >= 3 ? 10 : 14);
+      if (!candidates.length) return { score: 0, aborted: false };
+      let bestScore = maximizing ? -Infinity : Infinity;
+      let bestMove = null;
+      let cutoff = false;
+      for (const move of candidates) {
+        if (now() >= context.deadline) return { score: 0, aborted: true };
+        position.put(move.index, turnColor);
+        let score;
+        if (this.hasFive(position, move.index, turnColor)) {
+          score = maximizing ? SCORE.WIN - ply : -SCORE.WIN + ply;
+        } else {
+          const child = this.search(position, depth - 1, alpha, beta, turnColor === BLACK ? WHITE : BLACK, context, ply + 1);
+          if (child.aborted) {
+            position.remove(move.index, turnColor);
+            return child;
+          }
+          score = child.score;
+        }
+        position.remove(move.index, turnColor);
+        if (maximizing) {
+          if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+          }
+          alpha = Math.max(alpha, bestScore);
+        } else {
+          if (score < bestScore) {
+            bestScore = score;
+            bestMove = move;
+          }
+          beta = Math.min(beta, bestScore);
+        }
+        if (beta <= alpha) {
+          cutoff = true;
+          break;
+        }
+      }
+      if (!cutoff) {
+        context.table.set(key, {
+          hashA: position.hashA,
+          hashB: position.hashB,
+          turn: turnColor,
+          depth,
+          score: bestScore,
+          move: bestMove
+        });
+      }
+      return { score: bestScore, move: bestMove, aborted: false };
+    }
+  }
+
+  if (root) root.GomokuFastAI = GomokuFastAI;
+  if (typeof window !== 'undefined') window.GomokuFastAI = GomokuFastAI;
+  if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuFastAI };
+})(typeof self !== 'undefined' ? self : (typeof globalThis !== 'undefined' ? globalThis : this));
+
+(function startGomokuAiWorker(scope) {
+  'use strict';
+  const now = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+  scope.onmessage = function handleAiRequest(event) {
+    const request = event && event.data ? event.data : {};
+    if (request.type !== 'best_move' || !scope.GomokuFastAI) return;
+    const startedAt = now();
+    try {
+      const result = scope.GomokuFastAI.getBestMove(
+        request.board,
+        Number(request.aiColor) === 1 ? 1 : 2,
+        request.difficulty || 'master',
+        request.enableFoul === true,
+        Array.isArray(request.forbiddenPoints) ? request.forbiddenPoints : [],
+        {
+          size: Number(request.size) || 15,
+          budgetMs: Number(request.budgetMs) || 260,
+          maxDepth: Number(request.maxDepth) || 5,
+          rootLimit: Number(request.rootLimit) || 14
+        }
+      );
+      scope.postMessage({
+        type: 'best_move_result',
+        requestId: request.requestId,
+        ok: true,
+        move: result,
+        elapsedMs: Math.round(now() - startedAt),
+        nodes: Number(result && result.nodes) || 0,
+        depth: Number(result && result.depth) || 0
+      });
+    } catch (error) {
+      scope.postMessage({
+        type: 'best_move_result',
+        requestId: request.requestId,
+        ok: false,
+        error: 'AI Worker 计算失败'
+      });
+    }
+  };
+})(self);
+</script>
+
+  <!-- 内联 PeerJS 1.5.4 完整生产库（首帧后延迟执行） -->
   <script>
     (() => {
       const runDeferredAsset = () => {
@@ -4607,16 +5334,152 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
     }
 
+    // 🚀 移动端 AI Worker 管理器：搜索在后台线程执行，主线程只负责一次性提交局面和接收结果。
+    let aiWorker = null;
+    let aiWorkerBlobUrl = '';
+    let aiWorkerRequestSeq = 0;
+    let aiTurnSeq = 0;
+    let aiWorkerPending = new Map();
+    let aiThinking = false;
+
+    function disposeAiWorker(reason = 'AI Worker 已停止') {
+      for (const pending of aiWorkerPending.values()) {
+        clearTimeout(pending.timeoutId);
+        try { pending.reject(new Error(reason)); } catch (_) {}
+      }
+      aiWorkerPending.clear();
+      if (aiWorker) {
+        try { aiWorker.terminate(); } catch (_) {}
+      }
+      aiWorker = null;
+      if (aiWorkerBlobUrl) {
+        try { URL.revokeObjectURL(aiWorkerBlobUrl); } catch (_) {}
+        aiWorkerBlobUrl = '';
+      }
+    }
+
+    function getAiWorker() {
+      if (aiWorker) return aiWorker;
+      if (typeof Worker !== 'function') return null;
+      try {
+        const sourceNode = document.getElementById('gomokuAiWorkerSource');
+        const inlineSource = sourceNode && sourceNode.textContent ? sourceNode.textContent.trim() : '';
+        if (inlineSource && typeof Blob === 'function' && typeof URL !== 'undefined' && URL.createObjectURL) {
+          aiWorkerBlobUrl = URL.createObjectURL(new Blob([inlineSource], { type: 'text/javascript' }));
+          aiWorker = new Worker(aiWorkerBlobUrl);
+        } else {
+          aiWorker = new Worker('js/ai_worker.js');
+        }
+        aiWorker.onmessage = (event) => {
+          const data = event && event.data ? event.data : {};
+          const pending = aiWorkerPending.get(data.requestId);
+          if (!pending) return;
+          aiWorkerPending.delete(data.requestId);
+          clearTimeout(pending.timeoutId);
+          if (data.ok && data.move && Number.isInteger(data.move.r) && Number.isInteger(data.move.c)) {
+            window.gomokuLastAiStats = {
+              elapsedMs: Number(data.elapsedMs) || 0,
+              nodes: Number(data.nodes) || 0,
+              depth: Number(data.depth) || 0
+            };
+            pending.resolve({ r: data.move.r, c: data.move.c });
+          } else {
+            pending.reject(new Error(data.error || 'AI Worker 计算失败'));
+          }
+        };
+        aiWorker.onerror = (event) => {
+          console.warn('[AI Worker] 后台计算线程异常:', event && event.message ? event.message : 'unknown error');
+          disposeAiWorker('AI Worker 异常退出');
+        };
+        return aiWorker;
+      } catch (error) {
+        console.warn('[AI Worker] 创建失败，将使用兼容回退:', error);
+        disposeAiWorker('AI Worker 创建失败');
+        return null;
+      }
+    }
+
+    function flattenAiBoard(boardState) {
+      const size = 15;
+      const flat = new Uint8Array(size * size);
+      for (let r = 0; r < size; r++) {
+        const row = Array.isArray(boardState[r]) ? boardState[r] : [];
+        for (let c = 0; c < size; c++) flat[r * size + c] = Number(row[c]) || 0;
+      }
+      return flat;
+    }
+
+    function requestFastAiMove(boardState, forbiddenPoints = []) {
+      const worker = getAiWorker();
+      if (!worker) return Promise.reject(new Error('当前环境不支持 AI Worker'));
+      const flat = flattenAiBoard(boardState);
+      const requestId = ++aiWorkerRequestSeq;
+      const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          if (!aiWorkerPending.has(requestId)) return;
+          aiWorkerPending.delete(requestId);
+          disposeAiWorker('AI Worker 计算超时');
+          reject(new Error('AI Worker 计算超时'));
+        }, mobile ? 9000 : 12000);
+        aiWorkerPending.set(requestId, { resolve, reject, timeoutId });
+        try {
+          worker.postMessage({
+            type: 'best_move',
+            requestId,
+            size: 15,
+            board: flat,
+            aiColor: WHITE,
+            difficulty: 'master',
+            enableFoul: false,
+            forbiddenPoints: Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [],
+            budgetMs: mobile ? 260 : 420,
+            maxDepth: mobile ? 5 : 6,
+            rootLimit: mobile ? 14 : 18
+          }, [flat.buffer]);
+        } catch (error) {
+          aiWorkerPending.delete(requestId);
+          clearTimeout(timeoutId);
+          reject(error);
+        }
+      });
+    }
+
     // 🚀 最强大师人机主落子决策函数
-    function smartAiMove(forbiddenPoints = []) {
-      if (isOver) return;
-      const bestMove = window.GomokuAI && window.GomokuAI.getBestMove
-        ? window.GomokuAI.getBestMove(board, WHITE, 'master', false, forbiddenPoints)
-        : { r: 7, c: 7 };
+    async function smartAiMove(forbiddenPoints = []) {
+      if (isOver || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
+      const turnId = ++aiTurnSeq;
+      aiThinking = true;
+      updateUI();
+      const boardSnapshot = board.map(row => row.slice());
+      let bestMove = null;
+      try {
+        bestMove = await requestFastAiMove(boardSnapshot, forbiddenPoints);
+      } catch (workerError) {
+        console.warn('[AI Worker] 使用兼容主线程 AI 回退:', workerError && workerError.message ? workerError.message : workerError);
+        try {
+          bestMove = window.GomokuAI && window.GomokuAI.getBestMove
+            ? window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints)
+            : { r: 7, c: 7 };
+        } catch (fallbackError) {
+          console.error('[AI fallback] 计算失败:', fallbackError);
+          bestMove = { r: 7, c: 7 };
+        }
+      } finally {
+        if (turnId === aiTurnSeq) {
+          aiThinking = false;
+          updateUI();
+        }
+      }
+
+      if (turnId !== aiTurnSeq || isOver || gameMode !== 'ai' || turn !== WHITE) return;
       if (bestMove && board[bestMove.r] && board[bestMove.r][bestMove.c] === EMPTY) {
         makeMove(bestMove.r, bestMove.c, WHITE);
       }
     }
+
+    // 显式挂到 window，便于本地性能基准与兼容壳调用；不暴露任何凭据或内部棋局身份信息。
+    window.requestFastAiMove = requestFastAiMove;
 
     // ==========================================
     // ==========================================
@@ -11552,6 +12415,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     function resetBoardOnly(nextRoundId = null) {
+      aiTurnSeq++;
+      aiThinking = false;
+      activeSkill = null;
+      const skillPromptBar = document.getElementById('skillPromptBar');
+      if (skillPromptBar) skillPromptBar.style.display = 'none';
       cancelPendingGameResultModal();
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
       if (gameMode === 'online' && nextRoundId) {
@@ -11770,6 +12638,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       if (undoSuccess && wasGameOver) {
+        aiTurnSeq++;
+        aiThinking = false;
+        activeSkill = null;
         isOver = false;
         gameWinnerColor = 0;
         gameResultIsDraw = false;
@@ -11778,7 +12649,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           const key = getHistoryStorageKey();
           const list = JSON.parse(localStorage.getItem(key) || "[]");
           if (list.length > 0) {
-            const popped = list.pop();
+            const popped = list.shift();
             localStorage.setItem(key, JSON.stringify(list));
             updateHistoryCountUI();
             if (!hasRegisteredAccountSession() && popped) {
@@ -11797,6 +12668,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         closeGameResultModal();
         const skillBanner = document.getElementById('skillBanner');
         if (skillBanner) skillBanner.classList.remove('show');
+        const skillPromptBar = document.getElementById('skillPromptBar');
+        if (skillPromptBar) skillPromptBar.style.display = 'none';
         draw(); updateUI(); persistGameState();
       }
 

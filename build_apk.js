@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const { loadSecretIntoEnv } = require('./local_secret_store');
+const { injectAiWorkerSource } = require('./build_ai_worker');
 
 function run(cmd, args, options = {}) {
   console.log(`> [EXEC] ${path.basename(cmd)} ${args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
@@ -111,7 +112,12 @@ fs.copyFileSync(path.join(SRC_DIR, 'AndroidManifest.xml'), path.join(TEMP_BUILD,
 
 // ⚡ 极速离线秒开关键优化：将内联完整的单文件版置入 assets/index.html，彻底解除一切外部网络依赖与 document.write 阻塞
 // 保持主 index.html 与当前仍在使用的 assets (js, img) 完整协同
-fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets', 'index.html'));
+const runtimeIndexHtml = injectAiWorkerSource(
+  fs.readFileSync(path.join(ROOT_DIR, 'index.html'), 'utf8'),
+  ROOT_DIR
+);
+fs.writeFileSync(path.join(TEMP_BUILD, 'assets', 'index.html'), runtimeIndexHtml, 'utf8');
+fs.writeFileSync(path.join(SRC_DIR, 'assets', 'index.html'), runtimeIndexHtml, 'utf8');
 
 // 同步完整的 js, img 目录到 assets，保证本地微型服务器绝对不报 404
 ['js', 'img'].forEach(dir => {
@@ -129,7 +135,7 @@ fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(TEMP_BUILD, 'assets
     fs.copyFileSync(p, path.join(SRC_DIR, 'assets', f));
   }
 });
-fs.copyFileSync(path.join(ROOT_DIR, 'index.html'), path.join(SRC_DIR, 'assets', 'index.html'));
+// 不再用未内嵌的母本覆盖 Android assets；上面的 runtimeIndexHtml 才是可热更新的完整页面。
 
 console.log('>>> [3/7] 编译 Android 资源 (aapt2 compile & link)...');
 const resZip = path.join(TEMP_BUILD, 'resources.zip');

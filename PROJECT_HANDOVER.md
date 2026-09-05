@@ -781,7 +781,26 @@ node publish.js
   3. 编写并执行 Playwright 端到端测试 `scratch/test_all_undo.py`，全量验证 `index.html`（PVP/AI 模式）、5 款独立主题单页、以及单文件版在五子连珠获胜后的悔棋全链路，**全部顺利 PASS**；
   4. 运行 `python tests/optimization_smoke.py` 及 `node tests/worker_unit.js`，控制台 0 报错、测试 100% 通过。
 
+## 二十、全工程深层排查与空安全加固 (2026-09-05)
+
+- **深层审查排查出的隐患与修复**：
+  1. **历史战报回滚首尾指针纠正 (`list.shift()`)**：
+     - `recordGameHistory` 将新产生的对局记录通过 `unshift` 写入数组首位；此前 `doUndo()` 中误写为 `list.pop()`，导致终局撤销时误删了最早的远古对局，而未清除刚产生的新记录，进而导致本地战绩回滚错乱。现更正为 `list.shift()`。
+  2. **异步 AI 运算与卡牌施法状态防竞态**：
+     - 在 `doUndo()` 与 `resetBoardOnly()` 中增加 `aiTurnSeq++`、`aiThinking = false`、`activeSkill = null`，并隐藏施法指示条。有效防止用户在人机计算或施法过程中撤销/重开后，异步回调把旧计算棋子放上新棋盘。
+  3. **5 款独立主题单页缺失核心函数补全**：
+     - 排查发现独立单页主题中存在调用但未定义的函数：
+       - `playPopSound()`：使用 Web Audio API 合成治愈系物理水滴音效；
+       - `showGameNotice()`：控制台与降级弹窗安全通知，消除调用报错；
+       - `fetchGlobalLeaderboard()`：空安全占位，解决此前在单页主题中点击个人头像导致档案弹窗无法开启的问题。
+  4. **单页主题 `doUndo()` 越界与身份互换回滚保护**：
+     - 在 `theme1` ~ `theme5` 的 `doUndo()` 中，针对 `identity_swap` 卡牌产生的 `r: -1, c: -1` 记录增加了安全识别：若撤销该卡牌则将全盘黑白子再次对调，并对普通落子增加 `r >= 0 && c >= 0` 判断，根除 `TypeError: Cannot set properties of undefined (setting '-1')`。
+  5. **单文件版内联快速 AI Worker 修复**：
+     - `bundle_single_file.js` 在重构 `<head>` 时，将 `createInlineAiWorkerTag` 重新装配入新 head 中，使离线单文件版同样享受 60fps 不卡顿的 Worker 异步计算；运行 `tests/ai_worker_smoke.py` 全绿通过（单文件版与主版耗时均低于 80ms）。
+  6. **情侣主题 `confetti` 离线安全包裹**：
+     - 在 `theme5_sweet_romance.html` 中将直接调用 `confetti()` 改为 `if (typeof confetti === 'function')`，避免断网离线时 CDN 脚本加载失败引发运行时崩溃。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.100 (Build 101)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、以及五子连珠终局后悔棋继续对弈全模式适配均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、以及全工程深层排查与空安全加固均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*

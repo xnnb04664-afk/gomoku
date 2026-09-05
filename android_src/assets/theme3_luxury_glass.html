@@ -4203,6 +4203,37 @@
       if (gameMode === 'online' && conn && conn.open) conn.send({ type: 'restart' });
     };
 
+    // 🔊 通用音效与通知支持 (防独立单页调用报错)
+    function playPopSound() {
+      if (typeof soundEnabled !== 'undefined' && !soundEnabled) return;
+      if (typeof actx === 'undefined' || !actx) return;
+      try {
+        if (actx.state === 'suspended') actx.resume();
+        const t = actx.currentTime;
+        const osc = actx.createOscillator(); const gain = actx.createGain();
+        osc.type = 'sine'; osc.frequency.setValueAtTime(520, t);
+        osc.frequency.exponentialRampToValueAtTime(1250, t + 0.035);
+        osc.frequency.exponentialRampToValueAtTime(600, t + 0.08);
+        gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+        osc.connect(gain); gain.connect(actx.destination);
+        osc.start(t); osc.stop(t + 0.1);
+      } catch(e) {}
+    }
+
+    function showGameNotice(message, isWarning = false) {
+      if (!message) return;
+      console.log('[Notice]', message);
+      try {
+        if (typeof alert === 'function') {
+          setTimeout(() => alert(message), 30);
+        }
+      } catch(e) {}
+    }
+
+    function fetchGlobalLeaderboard() {
+      // 独立单页主题无需云端天梯榜，空安全占位
+    }
+
     // 🏆 胜负终局统一结算 (兼容全卡牌终局调度)
     function triggerGameEnd(winnerColor, customWinReason = '') {
       if (isOver) return;
@@ -4223,11 +4254,20 @@
       if (history.length === 0) return;
       isOver = false;
       winningLine = null;
+      const vModal = document.getElementById('victoryModal');
+      if (vModal) vModal.classList.remove('show');
       if (gameMode === 'ai') {
         while (history.length > 0) {
           const m = history.pop();
-          board[m.r][m.c] = EMPTY;
-          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(m.r, m.c);
+          if (m.action === 'identity_swap') {
+            for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+              if (board[r][c] === BLACK) board[r][c] = WHITE;
+              else if (board[r][c] === WHITE) board[r][c] = BLACK;
+            }
+          } else if (m.r >= 0 && m.c >= 0) {
+            board[m.r][m.c] = EMPTY;
+            if (typeof triggerUndoVFX === 'function') triggerUndoVFX(m.r, m.c);
+          }
           if (m.p === BLACK) {
             turn = BLACK;
             break;
@@ -4236,10 +4276,17 @@
         if (typeof playSkillSound === 'function') playSkillSound('rewind');
       } else {
         const last = history.pop();
-        board[last.r][last.c] = EMPTY;
-        if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
+        if (last.action === 'identity_swap') {
+          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+            if (board[r][c] === BLACK) board[r][c] = WHITE;
+            else if (board[r][c] === WHITE) board[r][c] = BLACK;
+          }
+        } else if (last.r >= 0 && last.c >= 0) {
+          board[last.r][last.c] = EMPTY;
+          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
+        }
         if (typeof playSkillSound === 'function') playSkillSound('rewind');
-        turn = last.p;
+        turn = last.p ? last.p : (turn === BLACK ? WHITE : BLACK);
       }
       draw(); updateUI();
       persistGameState();

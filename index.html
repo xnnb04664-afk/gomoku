@@ -30,6 +30,8 @@
   </script>
   <script defer src="js/assets/cherry_bomb_audio.js"></script>
   <script defer src="js/assets/anime_avatars.js"></script>
+  <!-- 生产构建会把快速 AI Worker 内嵌到这里；源码开发环境使用 js/ai_worker.js 回退。 -->
+  <script id="gomokuAiWorkerSource" type="text/plain"></script>
   <script src="js/ai.js"></script>
   <style>
     :root {
@@ -3617,16 +3619,152 @@
       }
     }
 
+    // 🚀 移动端 AI Worker 管理器：搜索在后台线程执行，主线程只负责一次性提交局面和接收结果。
+    let aiWorker = null;
+    let aiWorkerBlobUrl = '';
+    let aiWorkerRequestSeq = 0;
+    let aiTurnSeq = 0;
+    let aiWorkerPending = new Map();
+    let aiThinking = false;
+
+    function disposeAiWorker(reason = 'AI Worker 已停止') {
+      for (const pending of aiWorkerPending.values()) {
+        clearTimeout(pending.timeoutId);
+        try { pending.reject(new Error(reason)); } catch (_) {}
+      }
+      aiWorkerPending.clear();
+      if (aiWorker) {
+        try { aiWorker.terminate(); } catch (_) {}
+      }
+      aiWorker = null;
+      if (aiWorkerBlobUrl) {
+        try { URL.revokeObjectURL(aiWorkerBlobUrl); } catch (_) {}
+        aiWorkerBlobUrl = '';
+      }
+    }
+
+    function getAiWorker() {
+      if (aiWorker) return aiWorker;
+      if (typeof Worker !== 'function') return null;
+      try {
+        const sourceNode = document.getElementById('gomokuAiWorkerSource');
+        const inlineSource = sourceNode && sourceNode.textContent ? sourceNode.textContent.trim() : '';
+        if (inlineSource && typeof Blob === 'function' && typeof URL !== 'undefined' && URL.createObjectURL) {
+          aiWorkerBlobUrl = URL.createObjectURL(new Blob([inlineSource], { type: 'text/javascript' }));
+          aiWorker = new Worker(aiWorkerBlobUrl);
+        } else {
+          aiWorker = new Worker('js/ai_worker.js');
+        }
+        aiWorker.onmessage = (event) => {
+          const data = event && event.data ? event.data : {};
+          const pending = aiWorkerPending.get(data.requestId);
+          if (!pending) return;
+          aiWorkerPending.delete(data.requestId);
+          clearTimeout(pending.timeoutId);
+          if (data.ok && data.move && Number.isInteger(data.move.r) && Number.isInteger(data.move.c)) {
+            window.gomokuLastAiStats = {
+              elapsedMs: Number(data.elapsedMs) || 0,
+              nodes: Number(data.nodes) || 0,
+              depth: Number(data.depth) || 0
+            };
+            pending.resolve({ r: data.move.r, c: data.move.c });
+          } else {
+            pending.reject(new Error(data.error || 'AI Worker 计算失败'));
+          }
+        };
+        aiWorker.onerror = (event) => {
+          console.warn('[AI Worker] 后台计算线程异常:', event && event.message ? event.message : 'unknown error');
+          disposeAiWorker('AI Worker 异常退出');
+        };
+        return aiWorker;
+      } catch (error) {
+        console.warn('[AI Worker] 创建失败，将使用兼容回退:', error);
+        disposeAiWorker('AI Worker 创建失败');
+        return null;
+      }
+    }
+
+    function flattenAiBoard(boardState) {
+      const size = 15;
+      const flat = new Uint8Array(size * size);
+      for (let r = 0; r < size; r++) {
+        const row = Array.isArray(boardState[r]) ? boardState[r] : [];
+        for (let c = 0; c < size; c++) flat[r * size + c] = Number(row[c]) || 0;
+      }
+      return flat;
+    }
+
+    function requestFastAiMove(boardState, forbiddenPoints = []) {
+      const worker = getAiWorker();
+      if (!worker) return Promise.reject(new Error('当前环境不支持 AI Worker'));
+      const flat = flattenAiBoard(boardState);
+      const requestId = ++aiWorkerRequestSeq;
+      const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          if (!aiWorkerPending.has(requestId)) return;
+          aiWorkerPending.delete(requestId);
+          disposeAiWorker('AI Worker 计算超时');
+          reject(new Error('AI Worker 计算超时'));
+        }, mobile ? 9000 : 12000);
+        aiWorkerPending.set(requestId, { resolve, reject, timeoutId });
+        try {
+          worker.postMessage({
+            type: 'best_move',
+            requestId,
+            size: 15,
+            board: flat,
+            aiColor: WHITE,
+            difficulty: 'master',
+            enableFoul: false,
+            forbiddenPoints: Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [],
+            budgetMs: mobile ? 260 : 420,
+            maxDepth: mobile ? 5 : 6,
+            rootLimit: mobile ? 14 : 18
+          }, [flat.buffer]);
+        } catch (error) {
+          aiWorkerPending.delete(requestId);
+          clearTimeout(timeoutId);
+          reject(error);
+        }
+      });
+    }
+
     // 🚀 最强大师人机主落子决策函数
-    function smartAiMove(forbiddenPoints = []) {
-      if (isOver) return;
-      const bestMove = window.GomokuAI && window.GomokuAI.getBestMove
-        ? window.GomokuAI.getBestMove(board, WHITE, 'master', false, forbiddenPoints)
-        : { r: 7, c: 7 };
+    async function smartAiMove(forbiddenPoints = []) {
+      if (isOver || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
+      const turnId = ++aiTurnSeq;
+      aiThinking = true;
+      updateUI();
+      const boardSnapshot = board.map(row => row.slice());
+      let bestMove = null;
+      try {
+        bestMove = await requestFastAiMove(boardSnapshot, forbiddenPoints);
+      } catch (workerError) {
+        console.warn('[AI Worker] 使用兼容主线程 AI 回退:', workerError && workerError.message ? workerError.message : workerError);
+        try {
+          bestMove = window.GomokuAI && window.GomokuAI.getBestMove
+            ? window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints)
+            : { r: 7, c: 7 };
+        } catch (fallbackError) {
+          console.error('[AI fallback] 计算失败:', fallbackError);
+          bestMove = { r: 7, c: 7 };
+        }
+      } finally {
+        if (turnId === aiTurnSeq) {
+          aiThinking = false;
+          updateUI();
+        }
+      }
+
+      if (turnId !== aiTurnSeq || isOver || gameMode !== 'ai' || turn !== WHITE) return;
       if (bestMove && board[bestMove.r] && board[bestMove.r][bestMove.c] === EMPTY) {
         makeMove(bestMove.r, bestMove.c, WHITE);
       }
     }
+
+    // 显式挂到 window，便于本地性能基准与兼容壳调用；不暴露任何凭据或内部棋局身份信息。
+    window.requestFastAiMove = requestFastAiMove;
 
     // ==========================================
     // ==========================================
@@ -10562,6 +10700,11 @@
     }
 
     function resetBoardOnly(nextRoundId = null) {
+      aiTurnSeq++;
+      aiThinking = false;
+      activeSkill = null;
+      const skillPromptBar = document.getElementById('skillPromptBar');
+      if (skillPromptBar) skillPromptBar.style.display = 'none';
       cancelPendingGameResultModal();
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
       if (gameMode === 'online' && nextRoundId) {
@@ -10780,6 +10923,9 @@
       }
 
       if (undoSuccess && wasGameOver) {
+        aiTurnSeq++;
+        aiThinking = false;
+        activeSkill = null;
         isOver = false;
         gameWinnerColor = 0;
         gameResultIsDraw = false;
@@ -10788,7 +10934,7 @@
           const key = getHistoryStorageKey();
           const list = JSON.parse(localStorage.getItem(key) || "[]");
           if (list.length > 0) {
-            const popped = list.pop();
+            const popped = list.shift();
             localStorage.setItem(key, JSON.stringify(list));
             updateHistoryCountUI();
             if (!hasRegisteredAccountSession() && popped) {
@@ -10807,6 +10953,8 @@
         closeGameResultModal();
         const skillBanner = document.getElementById('skillBanner');
         if (skillBanner) skillBanner.classList.remove('show');
+        const skillPromptBar = document.getElementById('skillPromptBar');
+        if (skillPromptBar) skillPromptBar.style.display = 'none';
         draw(); updateUI(); persistGameState();
       }
 
