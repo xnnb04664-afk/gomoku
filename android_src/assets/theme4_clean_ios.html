@@ -4407,7 +4407,7 @@
         const last = history.pop();
         undoActionStep(last);
         if (typeof playSkillSound === 'function') playSkillSound('rewind');
-        turn = (last && last.p) ? (last.p === BLACK ? WHITE : BLACK) : (turn === BLACK ? WHITE : BLACK);
+        turn = (last && last.p) ? last.p : (turn === BLACK ? WHITE : BLACK);
       }
       draw(); updateUI();
       persistGameState();

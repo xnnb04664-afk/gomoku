@@ -8465,6 +8465,7 @@
     let isReportingMatch = false;
 
     function openLeaderboardModal() {
+      if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
       const modal = document.getElementById('leaderboardModal');
       if (modal) {
         modal.classList.add('show');
@@ -8884,6 +8885,36 @@
       return (typeof currentUserUid !== "undefined" && currentUserUid) ? `gomoku_history_${currentUserUid}` : "gomoku_game_history_guest";
     }
 
+    // 🏆 终局战报待确认缓存机制 (确认结果后才真正落库保存，悔棋继续对弈则作废不计入战绩)
+    let pendingMatchRecord = null;
+    let pendingRecordCommitted = false;
+
+    function queuePendingMatchRecord(recordData) {
+      pendingMatchRecord = recordData;
+      pendingRecordCommitted = false;
+    }
+
+    function commitPendingMatchRecord() {
+      if (!pendingMatchRecord) return;
+      const rec = pendingMatchRecord;
+      pendingMatchRecord = null;
+      pendingRecordCommitted = true;
+
+      // 1. 上报天梯积分与战绩
+      if (rec.reportLadder && !rec.ladderReported) {
+        rec.ladderReported = true;
+        reportMatchResult(rec.isPlayerWin, rec.isDraw);
+      }
+
+      // 2. 写入对局战报与全走法谱历史记录（本地 + 云端 D1）
+      recordGameHistory(rec);
+    }
+
+    function discardPendingMatchRecord() {
+      pendingMatchRecord = null;
+      pendingRecordCommitted = false;
+    }
+
     function recordGameHistory(item) {
       try {
         const key = getHistoryStorageKey();
@@ -8974,7 +9005,7 @@
             const newScoreEl = document.getElementById('resultNewScore');
             if (newScoreEl) newScoreEl.textContent = (baseScore + 25) + ' 分';
             const statsSub = document.getElementById('resultStatsSub');
-            if (statsSub) statsSub.textContent = '正在同步全服天梯战绩...';
+            if (statsSub) statsSub.textContent = '确认终局后将计入天梯积分 (悔棋继续则作废)';
           }
         } else {
           if (scoreCard) scoreCard.style.display = 'none';
@@ -9009,7 +9040,7 @@
             const newScoreEl = document.getElementById('resultNewScore');
             if (newScoreEl) newScoreEl.textContent = Math.max(0, baseScore - 15) + ' 分';
             const statsSub = document.getElementById('resultStatsSub');
-            if (statsSub) statsSub.textContent = '正在同步全服天梯战绩...';
+            if (statsSub) statsSub.textContent = '确认终局后将计入天梯积分 (悔棋继续则作废)';
           }
         } else {
           if (scoreCard) scoreCard.style.display = 'none';
@@ -9085,6 +9116,8 @@
     }
 
     function closeGameResultModal() {
+      // 仅关闭结果弹窗，不强制提前落库；让玩家可以在棋盘上自由复盘
+      // 若玩家在复盘中选择悔棋，则丢弃待定战报；若玩家选择重开/打开历史/离开，则真正提交落库
       const modal = document.getElementById('gameResultModal');
       if (modal) {
         modal.style.display = 'none';
@@ -9099,12 +9132,15 @@
     }
 
     function undoFromResultModal() {
+      discardPendingMatchRecord();
       closeGameResultModal();
       const btnUndo = document.getElementById('btnUndo');
       if (btnUndo) btnUndo.click();
+      showGameNotice("↩️ 已撤回终局落子继续对弈，本局结果作废不计入战绩！", false);
     }
 
     function restartGameFromResultModal() {
+      commitPendingMatchRecord();
       closeGameResultModal();
       // 联机终局必须经过双方确认，不能让结果弹窗单方面清空本地棋盘。
       if (gameMode === 'online') {
@@ -9120,6 +9156,7 @@
     }
 
     function openLeaderboardFromResultModal() {
+      commitPendingMatchRecord();
       closeGameResultModal();
       openLeaderboardModal();
     }
@@ -9474,6 +9511,7 @@
     }
 
     function openHistoryModal() {
+      if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
       const modal = document.getElementById("historyModal");
       if (!modal) return;
       modal.classList.add("show");
@@ -9603,17 +9641,14 @@
       playPopSound();
       scheduleGameResultModal({ isPvp: gameMode === 'pvp', isWin: false, isDraw: true, winnerName: '' });
 
-      // AI/联机和棋计入总局数但不改变积分；同屏娱乐局不上传天梯。
-      if (gameMode === 'online' || gameMode === 'ai') {
-        reportMatchResult(false, true);
-      }
-
       const movesSnapshot = (history || []).map(step => {
         if (step.action || step.type || step.r === -1) return { ...step };
         return { r: step.r, c: step.c, p: step.p };
       });
       const boardSnapshot = (board || []).map(row => [...row]);
-      recordGameHistory({
+
+      // 存入待确认队列（等玩家点击确认、再战或关闭复盘时才真正落库；若悔棋则作废不计入对局）
+      queuePendingMatchRecord({
         mode: gameMode,
         isWin: false,
         isDraw: true,
@@ -9621,11 +9656,13 @@
         myColor: (gameMode === 'online' ? myOnlineColor : BLACK),
         oppName: (gameMode === 'ai' ? '大师AI' : (p2Name || '棋友')),
         oppAvatar: (gameMode === 'ai' ? '🤖' : (p2Avatar || '👧')),
-        moves: history ? history.filter(h => h && h.r >= 0).length : 0,
+        moves: history ? history.filter(h => h && h.r >= 0 && !h.action).length : 0,
         movesData: movesSnapshot,
         boardData: boardSnapshot,
         time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-        date: new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+        date: new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
+        reportLadder: (gameMode === 'online' || gameMode === 'ai'),
+        isPlayerWin: false
       });
 
       // 和胜负结算一样，把终局状态落入会话存储，避免进程被系统回收后回到最后一步前的旧棋盘。
@@ -9678,18 +9715,14 @@
         scheduleGameResultModal({ isWin: false, winnerName });
       }
 
-      // 仅在 AI 模式与全服联机中上报天梯战绩，双人同屏 pvp 绝不上报天梯
-      if (gameMode === 'online' || gameMode === 'ai') {
-        reportMatchResult(isPlayerWin);
-      }
-
       const movesSnapshot = (history || []).map(step => {
         if (step.action || step.type || step.r === -1) return { ...step };
         return { r: step.r, c: step.c, p: step.p };
       });
       const boardSnapshot = (board || []).map(row => [...row]);
 
-      recordGameHistory({
+      // 存入待确认队列（等玩家点击确认、再战或关闭复盘时才真正落库；若悔棋则作废不计入对局）
+      queuePendingMatchRecord({
         mode: gameMode,
         isWin: (gameMode === 'pvp' ? true : isPlayerWin),
         isDraw: false,
@@ -9697,11 +9730,13 @@
         myColor: (gameMode === "online" ? myOnlineColor : BLACK),
         oppName: (gameMode === "ai" ? "大师AI" : (p2Name || "棋友")),
         oppAvatar: (gameMode === "ai" ? "🤖" : (p2Avatar || "👧")),
-        moves: history ? history.filter(h => h && h.r >= 0).length : 0,
+        moves: history ? history.filter(h => h && h.r >= 0 && !h.action).length : 0,
         movesData: movesSnapshot,
         boardData: boardSnapshot,
         time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-        date: new Date().toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })
+        date: new Date().toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }),
+        reportLadder: (gameMode === 'online' || gameMode === 'ai'),
+        isPlayerWin: isPlayerWin
       });
 
       draw();
@@ -11178,6 +11213,7 @@
     }
 
     function leaveOnlineRoom(sendNotice = true) {
+      if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
       stopReconnectHandshakeLoop();
       detachHostInviteListener();
       if (sendNotice && conn && conn.open) {
@@ -11285,6 +11321,7 @@
     }
 
     function resetBoardOnly(nextRoundId = null) {
+      if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
       aiTurnSeq++;
       aiThinking = false;
       activeSkill = null;
@@ -11573,6 +11610,8 @@
       }
 
       if (undoSuccess && wasGameOver) {
+        const wasCommitted = pendingRecordCommitted;
+        discardPendingMatchRecord();
         aiTurnSeq++;
         aiThinking = false;
         activeSkill = null;
@@ -11580,22 +11619,24 @@
         gameWinnerColor = 0;
         gameResultIsDraw = false;
         winningLine = null;
-        try {
-          const key = getHistoryStorageKey();
-          const list = JSON.parse(localStorage.getItem(key) || "[]");
-          if (list.length > 0) {
-            const popped = list.shift();
-            localStorage.setItem(key, JSON.stringify(list));
-            updateHistoryCountUI();
-            if (!hasRegisteredAccountSession() && popped) {
-              rollbackLocalResult(popped.isWin, popped.isDraw);
+        if (wasCommitted) {
+          try {
+            const key = getHistoryStorageKey();
+            const list = JSON.parse(localStorage.getItem(key) || "[]");
+            if (list.length > 0) {
+              const popped = list.shift();
+              localStorage.setItem(key, JSON.stringify(list));
+              updateHistoryCountUI();
+              if (!hasRegisteredAccountSession() && popped) {
+                rollbackLocalResult(popped.isWin, popped.isDraw);
+              }
             }
+          } catch(e) {}
+          if (activeMatchStartingScore != null) {
+            currentUserScore = activeMatchStartingScore;
+            localStorage.setItem('gomoku_user_score', currentUserScore);
+            updateLadderBadgeUI(currentUserScore);
           }
-        } catch(e) {}
-        if (activeMatchStartingScore != null) {
-          currentUserScore = activeMatchStartingScore;
-          localStorage.setItem('gomoku_user_score', currentUserScore);
-          updateLadderBadgeUI(currentUserScore);
         }
         activeMatchResultScore = null;
         activeMatchStartingScore = null;

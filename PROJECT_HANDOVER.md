@@ -911,7 +911,42 @@ node publish.js
 - **验证结果**：`python tests/online_match_race_smoke.py`、`python tests/optimization_smoke.py`、`node tests/worker_unit.js`、Worker/部署脚本语法检查通过；跨 Broker、延迟订阅、房主 ready 闸门、双向落子和资料同步均通过。真实公共 MQTT 冒烟测试曾成功通过，但最终复测时四个公共 Broker 同时返回 `connection closed`，页面无 JS/page error；这属于公共中继节点临时不可用，客户端会按固定顺序错峰容灾，若四个节点同时被当前网络阻断仍需更换网络或后续接入自建信令服务。
 - **当前产物 SHA-256**：`index.html` 为 `B44840143A32447DE24B330E7B48154FF20B73745B1C682C4647E4DAEDAF1491`；`android_src/assets/index.html` 为 `F819F4DC102118B6205B32C701357D97CC095024E8BE6A4372D01D6D751C739F`；单文件版为 `2147599800028E0B6D896003622BE7C9B40EE626A2113F9F87497F557BE401E6`；APK 为 `89A6D715A7BB80D14F4DE39124486805C21C72A2D0AC7A90F3B435740D9870C6`。
 
+## 二十六、终局待确认事务机制与防提前落库重构（胜后直接悔棋不计入对局与天梯积分）（2026-09-05）
+
+- **背景与痛点定位**：
+  五子棋达成五连珠获胜或满盘和棋终局时，旧代码直接在 `checkWin()` 判定瞬间同步调用 `recordGameHistory()` 与 `reportMatchResult()`，不仅向本地 `localStorage` 写入战报，更立即通过网络请求向 Cloudflare D1 云端上报天梯战绩和积分（+25 分或 -15 分）。
+  当玩家在结算弹窗选择【↩️ 悔棋一步继续】或在棋盘上复盘悔棋时：
+  1. 旧代码虽然在 `doUndo()` 中尝试 `list.shift()` 移除本地战报，但云端 D1 数据库记录无法被客户端简单撤销，天梯积分已在云端生效；
+  2. 若玩家反复达成五连珠再悔棋，就会造成云端积分重复刷分与战报膨胀；
+  3. 更严重的是：如果玩家在已有历史战报的情况下（如已有第 1 局记录），在第 2 局五连珠终局后选择悔棋，旧逻辑若盲目执行 `list.shift()`，会把第 1 局真正的历史战报误删！
+
+- **重构架构设计 —— 终局待确认事务机制 (`pendingMatchRecord`)**：
+  1. **队列挂起与延迟落库**：
+     - 五子连珠/和棋触发时，仅调用 `queuePendingMatchRecord(recordData)` 生成待确认事务对象，并展示终局动效与结算弹窗预览（弹窗提示更新为：“确认终局后将计入天梯积分 (悔棋继续则作废)”），**绝不调用 `recordGameHistory()`，绝不上报天梯接口**。
+  2. **悔棋动作彻底作废（Rollback）**：
+     - 玩家在结算弹窗点击【↩️ 悔棋一步继续】或在关闭弹窗复盘后点击棋盘工具栏【↩️ 悔棋】：
+     - 显式调用 `discardPendingMatchRecord()` 将待定事务直接销毁清空；
+     - `pendingRecordCommitted` 保持为 `false`，`doUndo()` 判定未落库，**绝不调用 `list.shift()`，绝不误伤任何既往对局历史**，棋局平滑回到绝杀前一步；
+     - 整个过程 0 本地存储写入、0 云端请求、0 天梯积分变动，绝不算作一局！
+  3. **明确确认终局真正持久化（Commit）**：
+     - 当玩家做出明确终局决断时，触发 `commitPendingMatchRecord()` 真正落库与上报：
+       - 点击【🔄 再战一局】（`restartGameFromResultModal` / `btnRestart` / `resetBoardOnly`）；
+       - 点击【🏆 查看全服天梯榜】（`openLeaderboardFromResultModal` / `openLeaderboardModal`）；
+       - 点击【📜 历史对局/复盘】（`openHistoryModal`）；
+       - 点击【🚪 退出联机房间】（`leaveOnlineRoom`）；
+       - 切换游戏模式（`setMode`）；
+       - 刷新或离开页面（`window.beforeunload` 兜底）。
+  4. **全套主题与离线版同步**：
+     - 5 款独立单页主题（`theme1` ~ `theme5`）在悔棋时执子权正确归还胜方，让玩家可以换位另寻落子；
+     - `index.html` 采用 `injectAiWorkerSource` 确保 Worker 代码内嵌无缝同步至 `android_src/assets/index.html`；
+     - 全量重新打包 `五子棋大师_单文件版.html`。
+  5. **全流程自动化回归覆盖**：
+     - `scratch/test_preexisting_history_undo.py`：既有历史场景下的终局悔棋与再次获胜确认；
+     - `scratch/test_pending_record_undo.py`：空历史场景下的终局悔棋与结算流程；
+     - `scratch/test_all_undo.py`：主版、5 套主题及单文件版终局悔棋；
+     - `tests/optimization_smoke.py`、`tests/ai_worker_smoke.py`、`tests/worker_unit.js` 均 100% 通过。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.105 (Build 106)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热和线上 Worker/Pages 入口恢复均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.105 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.105 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*

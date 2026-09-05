@@ -34,6 +34,8 @@
   const EMPTY = 0;
   const BLACK = 1;
   const WHITE = 2;
+  const MAX_TACTICAL_CANDIDATES = 64;
+  const MATE_DISTANCE = 32;
   const lineStatsCache = new Map();
   const linesCache = new Map();
 
@@ -275,55 +277,76 @@
         if (Number.isInteger(r) && Number.isInteger(c) && isValid(size, r, c)) forbidden[r * size + c] = 1;
       }
 
-      const legal = this.getCandidateMoves(position, aiColor, enableFoul, forbidden, 40);
+      const rootLimit = Number(options.rootLimit) > 0 ? Number(options.rootLimit) : 22;
+      const candidateLimit = Number(options.candidateLimit) > 0
+        ? Number(options.candidateLimit)
+        : Math.max(64, rootLimit * 3);
+      const legal = this.getCandidateMoves(position, aiColor, enableFoul, forbidden, candidateLimit);
       if (!legal.length) return this.findFirstEmpty(position, forbidden);
       if (position.stones === 0) return this.toMove(this.centerIndex(size));
 
-      for (const move of legal) {
-        if (this.isWinningMove(position, move.index, aiColor)) return this.toMove(move.index);
+      // 1. 直接成五：必须扫描完整的候选池，不能让排序截断漏掉唯一杀点。
+      const ownWins = this.getWinningMoves(position, aiColor, enableFoul, position.cellCount, forbidden);
+      if (ownWins.length) return this.toMove(ownWins[0].index);
+
+      // 2. 对方只有一个立即胜点时强制封堵；若对方有多个胜点，
+      // 不再盲目返回第一个封堵点，而是交给后续搜索选择反击价值最高的着法。
+      const opponentWins = this.getWinningMoves(position, opponent, enableFoul, position.cellCount, forbidden);
+      if (opponentWins.length === 1) {
+        const block = opponentWins[0];
+        if (!forbidden[block.index] && !this.isForbiddenMove(position, block.index, aiColor, forbidden)) {
+          return this.toMove(block.index);
+        }
       }
 
-      const opponentWins = this.getWinningMoves(position, opponent, enableFoul, 40);
-      if (opponentWins.length) {
-        const winning = new Uint8Array(size * size);
-        for (const move of opponentWins) winning[move.index] = 1;
-        const blocks = legal.filter(move => winning[move.index]);
-        if (blocks.length) return this.toMove(blocks[0].index);
-      }
-
-      if (difficulty === 'master' || difficulty === 'hard') {
-        const forcing = this.findDoubleThreat(position, aiColor, legal, enableFoul);
+      if (difficulty === 'master' || difficulty === 'hard' || difficulty === 'ultimate') {
+        // 3. 在普通搜索前做一次有限威胁空间证明：双杀点、单杀点后再杀，
+        // 这些局面不应该交给静态评分猜测。
+        const forcing = this.findForcingMove(position, aiColor, legal, enableFoul, forbidden);
         if (forcing) return this.toMove(forcing.index);
       }
       if (difficulty === 'easy') return this.toMove(this.pickGreedy(position, aiColor, legal, 1.0).index);
       if (difficulty === 'medium') return this.toMove(this.pickGreedy(position, aiColor, legal, 1.05).index);
 
-      const budgetMs = Number(options.budgetMs) > 0 ? Number(options.budgetMs) : 260;
-      const maxDepth = Number(options.maxDepth) > 0 ? Number(options.maxDepth) : 5;
-      const rootCandidates = legal.slice(0, Number(options.rootLimit) > 0 ? Number(options.rootLimit) : 14);
+      // 4. 大师模式：更宽的候选池 + 迭代加深 + 威胁延伸。
+      // 时间预算由页面按设备传入；这里的默认值只用于独立 Node/Worker 调用。
+      const budgetMs = Number(options.budgetMs) > 0 ? Number(options.budgetMs) : 520;
+      const maxDepth = Number(options.maxDepth) > 0 ? Number(options.maxDepth) : 7;
+      const rootCandidates = legal.slice(0, rootLimit);
+      const startedAt = now();
       const context = {
         aiColor,
         opponent,
         enableFoul,
-        deadline: now() + budgetMs,
+        forbidden,
+        deadline: startedAt + budgetMs,
         table: new Map(),
         nodes: 0,
-        completedDepth: 0
+        completedDepth: 0,
+        rootMove: null,
+        killers: [],
+        history: new Map()
       };
       let best = rootCandidates[0];
+      let bestScore = -Infinity;
       for (let depth = 1; depth <= maxDepth; depth++) {
-        const result = this.searchRoot(position, rootCandidates, depth, context);
+        const orderedRoot = this.orderMoves(rootCandidates, context, 0, context.rootMove);
+        const result = this.searchRoot(position, orderedRoot, depth, context);
         if (result.aborted) break;
-        if (result.move) best = result.move;
+        if (result.move) {
+          best = result.move;
+          bestScore = result.score;
+          context.rootMove = result.move.index;
+        }
         context.completedDepth = depth;
         if (result.score >= SCORE.WIN - 1000) break;
       }
       return {
         ...this.toMove(best.index),
-        score: Number.isFinite(best.score) ? best.score : 0,
+        score: Number.isFinite(bestScore) ? bestScore : (Number.isFinite(best.score) ? best.score : 0),
         nodes: context.nodes,
         depth: context.completedDepth,
-        elapsedMs: Math.round(now() - (context.deadline - budgetMs))
+        elapsedMs: Math.round(now() - startedAt)
       };
     }
 
