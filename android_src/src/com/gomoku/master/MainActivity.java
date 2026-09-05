@@ -29,6 +29,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
@@ -185,6 +186,8 @@ public class MainActivity extends Activity {
     private long          mLastBackPressTime = 0;
     private ValueCallback<Uri[]> mFilePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
+    private static final int CHAT_EXPORT_REQUEST_CODE = 1002;
+    private String mPendingChatExportContent;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -580,6 +583,11 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public boolean exportChatText(String content, String fileName) {
+                return launchChatExport(content, fileName);
+            }
+
+            @android.webkit.JavascriptInterface
             public void downloadAndInstallApk(String ignoredUrl) {
                 // 旧版网页桥接保留但不再具备下载权限，防止旧调用绕过票据校验。
                 startApkDownload("");
@@ -722,9 +730,68 @@ public class MainActivity extends Activity {
         });
     }
 
+    private static String safeChatExportFileName(String fileName) {
+        String clean = fileName == null ? "五子棋聊天记录.txt" : fileName;
+        clean = clean.replaceAll("[\\\\/:*?\\\"<>|\\r\\n]", "_").trim();
+        if (clean.isEmpty()) clean = "五子棋聊天记录.txt";
+        if (!clean.toLowerCase(java.util.Locale.US).endsWith(".txt")) clean += ".txt";
+        if (clean.length() > 96) clean = clean.substring(0, 92) + ".txt";
+        return clean;
+    }
+
+    private boolean launchChatExport(String content, String fileName) {
+        if (content == null || content.isEmpty()) return false;
+        try {
+            byte[] contentBytes = content.getBytes("UTF-8");
+            if (contentBytes.length > 512 * 1024) return false;
+            mPendingChatExportContent = content;
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("text/plain");
+            intent.putExtra(Intent.EXTRA_TITLE, safeChatExportFileName(fileName));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            runOnUiThread(() -> {
+                try {
+                    startActivityForResult(intent, CHAT_EXPORT_REQUEST_CODE);
+                } catch (Exception error) {
+                    mPendingChatExportContent = null;
+                    Toast.makeText(this, "无法打开系统保存位置，请稍后重试", Toast.LENGTH_SHORT).show();
+                    android.util.Log.w("MainActivity", "Chat export activity failed", error);
+                }
+            });
+            return true;
+        } catch (Exception error) {
+            mPendingChatExportContent = null;
+            Toast.makeText(this, "无法打开系统保存位置，请稍后重试", Toast.LENGTH_SHORT).show();
+            android.util.Log.w("MainActivity", "Chat export launch failed", error);
+            return false;
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == CHAT_EXPORT_REQUEST_CODE) {
+            String content = mPendingChatExportContent;
+            mPendingChatExportContent = null;
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                if (resultCode != RESULT_CANCELED) {
+                    Toast.makeText(this, "TXT 导出未完成", Toast.LENGTH_SHORT).show();
+                }
+                return;
+            }
+            if (content == null) return;
+            try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+                if (output == null) throw new java.io.IOException("保存位置不可写");
+                output.write(content.getBytes("UTF-8"));
+                output.flush();
+                Toast.makeText(this, "🎉 聊天记录 TXT 已保存", Toast.LENGTH_SHORT).show();
+            } catch (Exception error) {
+                Toast.makeText(this, "TXT 保存失败，请换一个文件夹重试", Toast.LENGTH_LONG).show();
+                android.util.Log.w("MainActivity", "Chat export write failed", error);
+            }
+            return;
+        }
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
             if (mFilePathCallback != null) {
                 Uri[] results = null;
@@ -1001,6 +1068,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mPendingChatExportContent = null;
         if (mFilePathCallback != null) {
             mFilePathCallback.onReceiveValue(null);
             mFilePathCallback = null;

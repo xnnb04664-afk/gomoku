@@ -1401,6 +1401,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       cursor: pointer;
       filter: drop-shadow(0 10px 24px rgba(18, 55, 95, 0.35));
       touch-action: none;
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: auto;
     }
 
     /* --- 🎴 炫酷干扰技能全屏特效横幅 & 玩法提示卡 --- */
@@ -2258,6 +2260,26 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       letter-spacing: 0.2px;
     }
 
+    #onlineNetworkStatusBar {
+      display: flex;
+      width: 100%;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      color: #dbeafe;
+      font-size: 10.5px;
+      font-weight: 900;
+      line-height: 1.2;
+    }
+    #onlineNetworkStatusBar > span {
+      min-width: 0;
+      flex: 1 1 50%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #onlineNetworkStatusBar > span:last-child { text-align: right; }
+
     /* 🎨 手绘果冻风通用确认模态弹窗 (彻底替代丑陋的系统 confirm) */
     .custom-confirm-backdrop {
       position: fixed; inset: 0; background: rgba(0,0,0,0.68);
@@ -2528,12 +2550,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
   </div>
 
     <!-- 🌐 联机对战常驻房间状态条 (含一键退出房间按键) -->
-  <div id="onlineRoomTopBar" style="display:none; position:relative; z-index:20 !important; justify-content:space-between; align-items:center; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border-radius:12px; padding:5px 12px; margin:4px auto; max-width:460px; width:92%; border:1.5px solid #f59e0b; box-shadow:0 3px 10px rgba(0,0,0,0.25);">
-    <div style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:800;">
-      <span style="color:#10b981; font-size:14px; animation:pulse 1.5s infinite;">●</span>
-      <span>联机房间: <span id="onlineRoomCodeLabel" style="color:#f59e0b; font-family:monospace; font-weight:900;">------</span></span>
+  <div id="onlineRoomTopBar" style="display:none; position:relative; z-index:20 !important; flex-direction:column; gap:4px; align-items:stretch; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border-radius:12px; padding:5px 12px; margin:4px auto; max-width:460px; width:92%; border:1.5px solid #f59e0b; box-shadow:0 3px 10px rgba(0,0,0,0.25);">
+    <div style="display:flex; width:100%; justify-content:space-between; align-items:center; gap:8px;">
+      <div style="display:flex; min-width:0; align-items:center; gap:6px; font-size:12px; font-weight:800;">
+        <span style="color:#10b981; font-size:14px; animation:pulse 1.5s infinite;">●</span>
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">联机房间: <span id="onlineRoomCodeLabel" style="color:#f59e0b; font-family:monospace; font-weight:900;">------</span></span>
+      </div>
+      <button onclick="confirmLeaveOnlineRoom()" style="flex:none; background:linear-gradient(135deg, #ef4444, #dc2626); color:#fff; border:none; border-radius:8px; padding:4px 10px; font-size:11px; font-weight:900; cursor:pointer; box-shadow:0 2px 4px rgba(239,68,68,0.4);">🚪 退出房间</button>
     </div>
-    <button onclick="confirmLeaveOnlineRoom()" style="background:linear-gradient(135deg, #ef4444, #dc2626); color:#fff; border:none; border-radius:8px; padding:4px 10px; font-size:11px; font-weight:900; cursor:pointer; box-shadow:0 2px 4px rgba(239,68,68,0.4);">🚪 退出房间</button>
+    <div id="onlineNetworkStatusBar" aria-live="polite">
+      <span id="myNetworkStatusLabel">我方: 🟡 连接中 · --ms</span>
+      <span id="peerNetworkStatusLabel">对方: ⚪ 等待对方 · --ms</span>
+    </div>
   </div>
 
   <!-- 🔍 主棋盘复盘模式顶部状态栏 (跳转到大棋盘后直观显示) -->
@@ -2736,7 +2764,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.93</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.94</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3419,7 +3447,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.93';
+    const CURRENT_VERSION_TAG = 'v1.0.94';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -3738,6 +3766,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
 
+      updateOnlineNetworkUI();
+
       const scoreSuffix = hasRegisteredAccountSession() ? (isNarrow ? ` · ${currentUserScore}` : ` · ${currentUserScore}分`) : '';
       const fullP1Text = p1Name + p1ColorTag + scoreSuffix;
       const p1Label = document.getElementById('p1NameLabel');
@@ -3873,16 +3903,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             return;
           }
           const offCanvas = document.createElement('canvas');
-          offCanvas.width = 80;
-          offCanvas.height = 80;
+          offCanvas.width = 160;
+          offCanvas.height = 160;
           const offCtx = offCanvas.getContext('2d');
+          offCtx.imageSmoothingEnabled = true;
+          offCtx.imageSmoothingQuality = 'high';
 
           const minDim = Math.min(img.width, img.height);
           const sx = (img.width - minDim) / 2;
           const sy = (img.height - minDim) / 2;
 
-          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 80, 80);
-          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.80);
+          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 160, 160);
+          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.88);
 
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
@@ -4174,19 +4206,68 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       document.getElementById('profileModal').classList.remove('show');
     }
 
-    function exportChatTxt() {
-      if (chatHistory.length === 0) return alert("暂无聊天记录可导出哦~");
+    function buildChatExportText() {
       let txt = `===================================\n🌿 五子棋·晴空对决 对局聊天记录\n⏰ 导出时间: ${getNowTime()}\n===================================\n\n`;
       chatHistory.forEach(item => { txt += `[${item.time}] ${item.name}: ${item.text}\n`; });
-      txt += `\n===================================\n`;
-      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `五子棋聊天记录_${Date.now()}.txt`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      alert("🎉 聊天记录已导出为 TXT！");
+      return txt + `\n===================================\n`;
+    }
+
+    async function exportChatTxt() {
+      if (chatHistory.length === 0) {
+        showGameNotice("暂无聊天记录可导出哦~", true);
+        return false;
+      }
+
+      const txt = buildChatExportText();
+      const fileName = `五子棋聊天记录_${Date.now()}.txt`;
+
+      // Android WebView 对 blob: 下载链接没有稳定的 DownloadListener 回调，交给系统保存文档可确保手机真正落盘。
+      if (window.AndroidNativeApp && typeof window.AndroidNativeApp.exportChatText === 'function') {
+        try {
+          if (window.AndroidNativeApp.exportChatText(txt, fileName)) {
+            showGameNotice("📄 已打开系统保存位置，请选择下载文件夹保存 TXT", false);
+            return true;
+          }
+        } catch (error) {
+          console.warn('[chat export native bridge]', error);
+        }
+      }
+
+      // 支持 Web Share 的移动浏览器直接弹出分享面板，分享的是实际 TXT 文件而不是 blob 地址。
+      try {
+        const file = new File([txt], fileName, { type: 'text/plain' });
+        const shareData = { title: '五子棋对局聊天记录', files: [file] };
+        if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
+          await navigator.share(shareData);
+          showGameNotice("🎉 聊天记录已导出，可在分享面板中保存 TXT", false);
+          return true;
+        }
+      } catch (error) {
+        // 用户主动关闭分享面板时不再弹出错误；其他情况继续走浏览器下载兜底。
+        if (error && error.name === 'AbortError') return false;
+        console.warn('[chat export share fallback]', error);
+      }
+
+      // 桌面浏览器及旧版 WebView 的兼容兜底：延迟释放 URL，避免点击后文件还未被读取就失效。
+      try {
+        const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showGameNotice("🎉 聊天记录已导出为 TXT", false);
+        return true;
+      } catch (error) {
+        console.error('[chat export failed]', error);
+        showGameNotice("⚠️ 当前设备无法保存 TXT，请检查文件权限后重试", true);
+        return false;
+      }
     }
 
     function copyChatHistory() {
@@ -4941,11 +5022,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           };
           pc.onconnectionstatechange = () => {
             if (!this.pc || this.pc !== pc) return;
-            if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) this.isP2pReady = false;
+            if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+              this.isP2pReady = false;
+              updateOnlineNetworkUI();
+            }
           };
           pc.oniceconnectionstatechange = () => {
             if (!this.pc || this.pc !== pc) return;
-            if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) this.isP2pReady = false;
+            if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) {
+              this.isP2pReady = false;
+              updateOnlineNetworkUI();
+            }
           };
 
           if (this.role === 'host') {
@@ -5058,13 +5145,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           this.signalRetryTimer = null;
           console.info('🎉 [P2P Dual-Track] WebRTC 点对点直连通道成功建立，后续落子优先走低延迟直连');
           showGameNotice('⚡ 已无感激活 P2P 点对点低延迟直连', false);
+          updateOnlineNetworkUI();
         };
         dc.onmessage = (e) => {
           if (this.dc !== dc || !e || typeof e.data !== 'string') return;
           this._handleIncomingPayload(e.data, false);
         };
         const onClosed = () => {
-          if (this.dc === dc) this.isP2pReady = false;
+          if (this.dc === dc) {
+            this.isP2pReady = false;
+            updateOnlineNetworkUI();
+          }
         };
         dc.onclose = onClosed;
         dc.onerror = onClosed;
@@ -5547,6 +5638,74 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     let onlineHeartbeatTimer = null;
+    const ONLINE_HEARTBEAT_INTERVAL_MS = 4000;
+    const ONLINE_PEER_TIMEOUT_MS = 12000;
+    let onlineNetworkTelemetry = {
+      localLatencyMs: null,
+      remoteLatencyMs: null,
+      remoteLastSeenAt: 0,
+      remoteState: '等待对方'
+    };
+    const pendingOnlinePings = new Map();
+
+    function normalizeOnlineNetworkState(value, fallback = '在线') {
+      const allowed = new Set(['离线', '断开', '连接中', '重连中', 'P2P直连', 'MQTT中继', '在线']);
+      return typeof value === 'string' && allowed.has(value) ? value : fallback;
+    }
+
+    function getLocalOnlineNetworkState() {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return '离线';
+      if (!conn || !conn.open) return isReconnecting ? '重连中' : '断开';
+      if (!conn.ready) return '连接中';
+      if (conn.isP2pReady && conn.dc && conn.dc.readyState === 'open') return 'P2P直连';
+      if (conn.client && conn.client.connected) return 'MQTT中继';
+      return '在线';
+    }
+
+    function formatOnlineLatency(value) {
+      return Number.isFinite(value) && value >= 0 && value <= 120000 ? `${Math.round(value)}ms` : '--ms';
+    }
+
+    function onlineStateIcon(state) {
+      if (state === 'P2P直连' || state === 'MQTT中继' || state === '在线') return '🟢';
+      if (state === '连接中' || state === '重连中') return '🟡';
+      if (state === '离线' || state === '断开' || state === '连接超时') return '🔴';
+      return '⚪';
+    }
+
+    function markOnlinePeerSeen(state, latency) {
+      onlineNetworkTelemetry.remoteLastSeenAt = Date.now();
+      onlineNetworkTelemetry.remoteState = normalizeOnlineNetworkState(state, '在线');
+      if (Number.isFinite(latency) && latency >= 0 && latency <= 120000) {
+        onlineNetworkTelemetry.remoteLatencyMs = Math.round(latency);
+      }
+      updateOnlineNetworkUI();
+    }
+
+    function updateOnlineNetworkUI() {
+      const bar = document.getElementById('onlineNetworkStatusBar');
+      if (!bar) return;
+      if (gameMode !== 'online') {
+        bar.style.display = 'none';
+        return;
+      }
+      bar.style.display = 'flex';
+      const localState = getLocalOnlineNetworkState();
+      const peerFresh = onlineNetworkTelemetry.remoteLastSeenAt > 0 &&
+        Date.now() - onlineNetworkTelemetry.remoteLastSeenAt <= ONLINE_PEER_TIMEOUT_MS;
+      const peerState = peerFresh ? onlineNetworkTelemetry.remoteState :
+        (onlineNetworkTelemetry.remoteLastSeenAt > 0 ? '连接超时' : '等待对方');
+      const localEl = document.getElementById('myNetworkStatusLabel');
+      const peerEl = document.getElementById('peerNetworkStatusLabel');
+      if (localEl) localEl.textContent = `我方: ${onlineStateIcon(localState)} ${localState} · ${formatOnlineLatency(onlineNetworkTelemetry.localLatencyMs)}`;
+      if (peerEl) peerEl.textContent = `对方: ${onlineStateIcon(peerState)} ${peerState} · ${formatOnlineLatency(onlineNetworkTelemetry.remoteLatencyMs)}`;
+    }
+
+    try {
+      window.addEventListener('online', updateOnlineNetworkUI);
+      window.addEventListener('offline', updateOnlineNetworkUI);
+    } catch (_) {}
+
     // 🛡️ 联机技能反作弊拦截审计层：每轮手牌最多使用 3 次，神抽最多重铸 1 次
     const MAX_OPPONENT_SKILLS_PER_HAND = 3;
     let opponentSkillsUsedCount = 0;
@@ -5756,7 +5915,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (conn.__gomokuSetup) return;
       conn.__gomokuSetup = true;
       if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
-      
+      pendingOnlinePings.clear();
+      onlineNetworkTelemetry.localLatencyMs = null;
+      onlineNetworkTelemetry.remoteLatencyMs = null;
+      onlineNetworkTelemetry.remoteLastSeenAt = 0;
+      onlineNetworkTelemetry.remoteState = '等待对方';
+      updateOnlineNetworkUI();
+
       let missedPings = 0;
       onlineHeartbeatTimer = setInterval(() => {
         if (conn && conn.open && gameMode === 'online' && !isOver) {
@@ -5766,9 +5931,27 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             triggerOnlineReconnect("心跳无响应");
             return;
           }
-          try { conn.send({ type: 'ping', step: history.length }); } catch(e) {}
+          const pingId = generateSecureId(10, 'hb_');
+          pendingOnlinePings.set(pingId, Date.now());
+          for (const [id, sentAt] of pendingOnlinePings) {
+            if (Date.now() - sentAt > ONLINE_PEER_TIMEOUT_MS) pendingOnlinePings.delete(id);
+          }
+          try {
+            if (!conn.send({
+              type: 'ping',
+              step: history.length,
+              pingId,
+              sentAt: Date.now(),
+              networkState: getLocalOnlineNetworkState()
+            })) pendingOnlinePings.delete(pingId);
+          } catch(e) {
+            pendingOnlinePings.delete(pingId);
+          }
+          updateOnlineNetworkUI();
+        } else {
+          updateOnlineNetworkUI();
         }
-      }, 4000);
+      }, ONLINE_HEARTBEAT_INTERVAL_MS);
 
       conn.on('close', () => {
         if (gameMode !== 'online' || isOver) return;
@@ -5791,8 +5974,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
         if (data.requestId !== undefined && (typeof data.requestId !== 'string' || data.requestId.length > 80)) return;
         if (data.nextRoundId !== undefined && (typeof data.nextRoundId !== 'string' || data.nextRoundId.length > 80)) return;
+        if (data.pingId !== undefined && (typeof data.pingId !== 'string' || data.pingId.length > 80)) return;
+        if (data.sentAt !== undefined && (!Number.isFinite(data.sentAt) || Math.abs(Date.now() - data.sentAt) > 120000)) return;
+        if (data.networkState !== undefined && (typeof data.networkState !== 'string' || data.networkState.length > 32)) return;
+        if (data.peerState !== undefined && (typeof data.peerState !== 'string' || data.peerState.length > 32)) return;
+        if (data.peerLatencyMs !== undefined && (!Number.isFinite(data.peerLatencyMs) || data.peerLatencyMs < 0 || data.peerLatencyMs > 120000)) return;
         // 新局轮次不一致的报文一律丢弃，防止旧 MQTT/P2P 报文在重开后再次触发旧胜局。
         if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
+        markOnlinePeerSeen(data.networkState || data.peerState || '在线', data.peerLatencyMs);
         if (data.type === "leave_room") {
           showGameNotice(`⚠️ 对手【${normalizeNetworkName(data.name, p2Name)}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
@@ -5812,7 +6001,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           return;
         }
         if (data.type === 'ping') {
-          try { conn.send({ type: 'pong', step: history.length }); } catch(e) {}
+          try {
+            conn.send({
+              type: 'pong',
+              step: history.length,
+              pingId: data.pingId,
+              peerState: getLocalOnlineNetworkState(),
+              peerLatencyMs: onlineNetworkTelemetry.localLatencyMs
+            });
+          } catch(e) {}
           // 🛡️ 心跳对账：若发现双方步数不一致，房主立即下发全量快照，客方主动请求
           if (data.step !== undefined && !isOver && data.step !== history.length) {
             if (myOnlineColor === BLACK) sendFullStateSnapshot();
@@ -5822,6 +6019,12 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
         if (data.type === 'pong') {
           missedPings = 0;
+          if (data.pingId && pendingOnlinePings.has(data.pingId)) {
+            const startedAt = pendingOnlinePings.get(data.pingId);
+            pendingOnlinePings.delete(data.pingId);
+            onlineNetworkTelemetry.localLatencyMs = Math.min(120000, Math.max(0, Date.now() - startedAt));
+          }
+          markOnlinePeerSeen(data.peerState || '在线', data.peerLatencyMs);
           if (data.step !== undefined && !isOver && data.step !== history.length) {
             if (myOnlineColor === BLACK) sendFullStateSnapshot();
             else try { conn.send({ type: 'sync_req' }); } catch(_) {}
@@ -11027,6 +11230,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         clearInterval(onlineHeartbeatTimer);
         onlineHeartbeatTimer = null;
       }
+      pendingOnlinePings.clear();
+      onlineNetworkTelemetry.localLatencyMs = null;
+      onlineNetworkTelemetry.remoteLatencyMs = null;
+      onlineNetworkTelemetry.remoteLastSeenAt = 0;
+      onlineNetworkTelemetry.remoteState = '等待对方';
       currentRoomCode = null;
       onlineRoundId = '';
       pendingOnlineUndoId = '';

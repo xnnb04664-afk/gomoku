@@ -1097,6 +1097,24 @@
     let fogArea = null; // { r, c, expireStep }
     let hasExtraMove = false; // 双星连珠额外落子状态
 
+    function isPointFrozen(r, c) {
+      if (!frozenPoint) return false;
+      if (history.length >= (frozenPoint.expireStep || 0)) {
+        frozenPoint = null;
+        return false;
+      }
+      return frozenPoint.r === r && frozenPoint.c === c;
+    }
+
+    function isFogActive() {
+      if (!fogArea) return false;
+      if (history.length >= (fogArea.expireStep || 0)) {
+        fogArea = null;
+        return false;
+      }
+      return true;
+    }
+
 
     const cvs = document.getElementById('cvs');
     let ctx = cvs.getContext('2d');
@@ -1252,16 +1270,18 @@
         const img = new Image();
         img.onload = () => {
           const offCanvas = document.createElement('canvas');
-          offCanvas.width = 128;
-          offCanvas.height = 128;
+          offCanvas.width = 160;
+          offCanvas.height = 160;
           const offCtx = offCanvas.getContext('2d');
+          offCtx.imageSmoothingEnabled = true;
+          offCtx.imageSmoothingQuality = 'high';
 
           const minDim = Math.min(img.width, img.height);
           const sx = (img.width - minDim) / 2;
           const sy = (img.height - minDim) / 2;
 
-          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 128, 128);
-          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.85);
+          offCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 160, 160);
+          const compressedBase64 = offCanvas.toDataURL('image/jpeg', 0.88);
 
           selectedAvatarData = compressedBase64;
           const prevEl = document.getElementById('bigAvatarPreview');
@@ -3953,23 +3973,51 @@
           if (board[r][c] !== EMPTY) {
             const x = paddingX + (c + 0.5) * gridX;
             const y = paddingY + (r + 0.5) * gridY;
+            const stoneColor = board[r][c];
 
-            // 柔和木质软阴影
-            ctx.beginPath(); ctx.arc(x + 1.5, y + 2.5, radius * 0.95, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(74, 59, 44, 0.35)'; ctx.fill();
+            // 📜 新中式宣纸榧木：真实微柔高斯投影
+            ctx.save();
+            ctx.shadowColor = 'rgba(60, 42, 22, 0.35)';
+            ctx.shadowBlur = radius * 0.36;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = radius * 0.18;
 
-            // 水墨黑 vs 象牙白
-            ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2);
-            if (board[r][c] === BLACK) {
-              const g = ctx.createRadialGradient(x - radius*0.35, y - radius*0.35, 1, x, y, radius);
-              g.addColorStop(0, '#595657'); g.addColorStop(0.4, '#2c292a'); g.addColorStop(1, '#141213');
-              ctx.fillStyle = g; ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            const g = ctx.createRadialGradient(x - radius * 0.32, y - radius * 0.32, radius * 0.08, x, y, radius);
+            if (stoneColor === BLACK) {
+              g.addColorStop(0, '#42362b');
+              g.addColorStop(0.35, '#241b14');
+              g.addColorStop(0.75, '#120d09');
+              g.addColorStop(1, '#050403');
             } else {
-              const g = ctx.createRadialGradient(x - radius*0.35, y - radius*0.35, 1, x, y, radius);
-              g.addColorStop(0, '#ffffff'); g.addColorStop(0.65, '#fcfaf6'); g.addColorStop(1, '#e3d9ca');
-              ctx.fillStyle = g; ctx.fill();
-              ctx.strokeStyle = '#c5b8a5'; ctx.lineWidth = 0.75; ctx.stroke();
+              g.addColorStop(0, '#ffffff');
+              g.addColorStop(0.35, '#faf6ee');
+              g.addColorStop(0.75, '#ede0c8');
+              g.addColorStop(1, '#d5c39e');
             }
+            ctx.fillStyle = g;
+            ctx.fill();
+            ctx.restore();
+
+            // 温润包浆高光
+            ctx.save();
+            ctx.beginPath();
+            ctx.ellipse(x - radius * 0.28, y - radius * 0.28, radius * 0.4, radius * 0.22, -Math.PI / 4, 0, Math.PI * 2);
+            const glint = ctx.createLinearGradient(x - radius * 0.45, y - radius * 0.45, x, y);
+            glint.addColorStop(0, stoneColor === BLACK ? 'rgba(235, 200, 150, 0.38)' : 'rgba(255, 255, 255, 0.9)');
+            glint.addColorStop(0.5, stoneColor === BLACK ? 'rgba(235, 200, 150, 0.08)' : 'rgba(255, 255, 255, 0.25)');
+            glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = glint;
+            ctx.fill();
+            ctx.restore();
+
+            // 描金与牙白边缘
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = stoneColor === BLACK ? 'rgba(217, 175, 110, 0.38)' : 'rgba(180, 150, 100, 0.25)';
+            ctx.lineWidth = 0.9;
+            ctx.stroke();
           }
         }
       }
@@ -4556,7 +4604,7 @@
     enableHorizontalDrag(document.querySelector('.emoji-row'));
   
     // 🚀 Cloudflare Worker 私有仓库更新中转
-    const CURRENT_VERSION_TAG = 'v1.0.93';
+    const CURRENT_VERSION_TAG = 'v1.0.94';
     const UPDATE_PROXY_ORIGIN = 'https://gomoku-api.pages.dev';
     const UPDATE_API_URL = `${UPDATE_PROXY_ORIGIN}/api/version`;
     const UPDATE_PROXY_APK_PATH = '/api/update/apk';
