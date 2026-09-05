@@ -3215,6 +3215,7 @@
     // ==========================================
     // 🟩 15x15 自然影棚温润木纹方格中央落子
     // ==========================================
+    function invalidateBoardCache() {}
     function resizeBoard() {
       const isMobile = window.innerWidth <= 600;
       const screenW = window.innerWidth;
@@ -3225,11 +3226,16 @@
       cWidth = Math.floor(maxSide); 
       cHeight = Math.floor(maxSide);
 
-      dpr = window.devicePixelRatio || 1;
-      cvs.width = cWidth * dpr; cvs.height = cHeight * dpr;
-      cvs.style.width = cWidth + 'px'; cvs.style.height = cHeight + 'px';
+      dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3.5);
+      cvs.width = Math.round(cWidth * dpr);
+      cvs.height = Math.round(cHeight * dpr);
+      cvs.style.width = cWidth + 'px';
+      cvs.style.height = cHeight + 'px';
 
-      ctx.resetTransform(); ctx.scale(dpr, dpr);
+      if (ctx.resetTransform) ctx.resetTransform(); else ctx.setTransform(1,0,0,1,0,0);
+      ctx.scale(dpr, dpr);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       
       paddingX = cWidth * (isMobile ? 0.022 : 0.038); 
       paddingY = cHeight * (isMobile ? 0.022 : 0.038);
