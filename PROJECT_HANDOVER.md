@@ -213,7 +213,7 @@
 - **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本；版本响应不再下发 APK/HTML 完整下载 URL，只下发固定路径和一次性短时票据。文件请求必须使用 `X-Gomoku-Client: gomoku-app-client-v2` 与 `X-Gomoku-Update-Ticket` 请求头，不会直连 GitHub、Raw、jsDelivr 或第三方反代。
 - **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。每次新建或轮换 Pages Secret 后，都要重新部署 Pages Function 才能让当前生产部署绑定新值。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
-  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.97`）与【🚀 检查更新】按钮；
+  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.98`）与【🚀 检查更新】按钮；
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
   - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
@@ -654,7 +654,7 @@ node publish.js
 - 设计元素沿用晴空蓝背景、草坪绿 15×15 棋盘、纯黑白棋子、金色魔法干扰牌和小皇冠，强调圆润的 3D 玩具质感与小尺寸识别度。
 - 文件包含主提示词、反向提示词、生成参数和“官方晴空 / 联机竞技 / 极简高端”三种变体；不把 GitHub 地址、账号信息或任何密钥放入图标。
 - 这是设计资料更新，不改变客户端代码，也不触发 Cloudflare 生产部署。
-- 已按当前 v1.0.97 的实际视觉重新生成提示词：棋子明确限定为纯黑白、无猫爪/爱心/表情/文字图案，并补充 Android 自适应图标安全区、48×48 小尺寸识别度和最后一步红点细节。
+- 已按当前默认纯黑白棋子视觉重新生成提示词：棋子明确限定为纯黑白、无猫爪/爱心/表情/文字图案，并补充 Android 自适应图标安全区、48×48 小尺寸识别度和最后一步红点细节。
 
 ## 十四、棋子超清重构与全工程视觉舒适度拉网排查修复 (2026-09-05)
 
@@ -717,7 +717,14 @@ node publish.js
 - `python tests\\optimization_smoke.py`、Worker/认证单测、脚本语法检查和 APK v1/v2/v3 签名校验均通过；仓库内 `MOBILE_ICON_PROMPT.md` 也已改为纯黑白棋子描述。
 - v1.0.97 Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.97`；当前本地产物 SHA-256：根页面 / `android_src/assets/index.html` 为 `826E8BE73F12E99D2B622C0AD9B82E9D2E7FD979275E4F836444623BA8F4473C`，单文件版为 `E8A4219CCEF2C6499966FEFB215C1E7F0DB0B300539B1D4270EA08235AF1FA69`，APK 为 `6138D618913C2CD85CE13CB01787A2A42C989420264CA6224B19483563658B55`。
 
+## 十六、手机端应用图标替换 (2026-09-05)
+
+- 使用用户提供的晴空浮岛草坪对决主视觉图替换 Android 启动图标与网页 `favicon.png`；图中保留绿色悬浮棋盘、纯黑白棋子、红色最后落子点、金色干扰牌和皇冠。
+- 已按 Android 资源规格生成并替换：`mipmap-mdpi` 48×48、`mipmap-hdpi` 72×72、`mipmap-xhdpi` 96×96、`mipmap-xxhdpi` 144×144、`mipmap-xxxhdpi` 192×192、`drawable` 512×512，以及网页 favicon 192×192。
+- v1.0.98 (Build 99) 已完成单文件版与正式签名 APK 构建并发布：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.98`；本次为图标与客户端资源更新，Cloudflare 生产环境跳过。
+- 当前资源 SHA-256：`favicon.png` 为 `BEF037F960D94CA444BA32034AC48775036FCBB1A4F9A2106A642B0E985AD477`；`android_src/res/drawable/ic_launcher.png` 为 `58F0821D7280F6BA055360F1C9E7858C149E704911698CDC1BEABA4F5DB2BFF7`；APK 为 `8CB48FC38FAAE0EF0790BF7D6AE4DB486B8473A1FEEE9B3036F9D763A4232DA1`。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.97 (Build 98)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、以及默认棋子纯黑白样式确认均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.97。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程正式版本：v1.0.98 (Build 99)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认和手机端应用图标替换均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.98。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
