@@ -875,7 +875,30 @@ node publish.js
 - **最终发布结果**：已递增为 v1.0.103（Build 104），完成包含 AI Worker/bitboard、联机技能账本同步、复盘防污染和 D1 冷启动隔离配套代码的正式签名 APK、单文件版构建、私有仓库推送与 GitHub Release。Release 地址：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.103。
 - **最终产物 SHA-256**：`index.html` 为 `F42C3AE20AA60ABD7D9A4EE710E18E696EE385542A17084D0B5224B1C9915699`；`android_src/assets/index.html` 为 `54E0F74E553128D398557864354471020E3E9A85862EED97A3794C9EC0E7D8F9`；单文件版为 `516806CEAF72B89728B8014CDF5CADA1388BE2F16F44AD0C6FDFB4E2BB5AE45A`；APK 为 `C748E179C79B4C77723C038BC835294C3B0FB0EF705539E27395EB6C35F629BD`。
 
+## 二十四、跨端匹配竞态、MQTT 多节点汇合与线上入口恢复（2026-09-05，已发布 v1.0.104）
+
+- **问题定位**：网页端与 Android WebView 匹配成功后，一端显示“对方断开”、另一端停留在匹配页，主要由三类竞态叠加造成：
+  1. 房主旧逻辑在房间信道真正订阅完成前就发送 `join_accepted`；客户端先把 `hasJoined` 置为真并切换棋局，随后才创建房间连接，导致首批消息或连接状态丢失。
+  2. 两端按各自网络结果顺序选择 MQTT 备用节点，可能分别落在不同公共 Broker；即使匹配服务已经配对，双方也没有共同信令通道。
+  3. 匹配轮询回调、首次 `join` 返回和固定 1 秒等待没有统一生命周期，取消匹配或重复回调后可能再次启动同一房间。
+
+- **客户端联机改造 (`index.html`)**：
+  1. 新增 `MqttClientPool`：固定优先节点先连，备用节点错峰 700ms 探测；所有已连节点都订阅/发布，利用 `_mid` 去重，让不同网络环境自动在共同可达 Broker 汇合，同时避免一次性并发打开 4 条 WebSocket。
+  2. 房主和客户端均以 `readyPromise` 为进入房间的唯一闸门：房间主题订阅成功且连接 ready 后才确认加入、关闭匹配框和发送首批握手；连接失败会清理未完成连接并继续有限重试。
+  3. 增加房间连接请求序号、房间码隔离、重复 `join_request` 去重、过期连接池取消和匹配轮询生命周期保护；移除匹配成功后的固定等待，客户端立即开始订阅。
+  4. API 出口保留 Pages/Worker 双节点健康记忆与失败冷却；生产 Pages 入口恢复后，更新接口仍只走带短时票据的 Pages 中转，不向客户端暴露 GitHub 直链或 Token。
+
+- **线上服务处理**：本轮因涉及 Worker/Pages 运行状态，已执行 `node deploy_worker.js`，Worker `gomoku-backend` 与 Pages 项目 `gomoku-api` 均部署成功。生产 `https://gomoku-api.pages.dev/api/version` 实测 HTTP 200，返回 `v1.0.104`，可签发短时 APK/HTML 票据；直接下载路径在无票据时仍返回 401。今后纯 HTML、AI 或样式发版仍无需重复部署 Cloudflare；修改 Worker、Pages、D1、Secret 或更新票据逻辑时才部署。
+
+- **回归验证**：
+  - `python tests/online_match_race_smoke.py`：模拟网页/手机不同 Broker 可达性、房主延迟订阅、双向落子，验证双方均 `online/open/ready`，通过且无页面/控制台错误；
+  - `python tests/online_transport_smoke.py`：真实公共 MQTT 双页面建房、入房、等待稳定和双向落子，通过；
+  - `python tests/optimization_smoke.py`、`python tests/ai_worker_smoke.py`、`node tests/worker_unit.js`、`node tests/auth_refresh_unit.js`、`node tests/ai_benchmark.js`、内嵌脚本语法检查和 `git diff --check` 均通过。
+
+- **发布结果**：已发布 v1.0.104（Build 105），GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.104`。正式 APK 与单文件版共用原签名，可覆盖安装；旧客户端可通过现有热更新入口检查到该版本。
+- **当前产物 SHA-256**：`index.html` 为 `59210EA7E3D54BB4E75B3DDCFE1C313A632BDD3323E817929BF383C7C552AB92`；`android_src/assets/index.html` 为 `E06E1A89ACEE867322ADC78C5889245E0D7CF00843932CDEBB33FB4EEA14AC0B`；单文件版为 `35EA786FD2E047E70A654F60A0116E44150DAEC9EFDB3AE76D3B7B645B98CF24`；APK 为 `D93101E9BD705C30354CEC7C533E1087B1464886716F43DBCA0197086D227CD5`。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.103 (Build 104)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、以及干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.103 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程正式版本：v1.0.104 (Build 105)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重与线上 Worker/Pages 入口恢复均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.104 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*

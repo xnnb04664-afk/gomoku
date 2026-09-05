@@ -3491,7 +3491,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.104</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.105</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -4177,7 +4177,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.104';
+    const CURRENT_VERSION_TAG = 'v1.0.105';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -8518,6 +8518,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     let matchTimerInterval = null;
     let matchStartTime = 0;
     let currentActiveMatchUid = "";
+    let currentActiveMatchId = "";
     let matchPollInFlight = false;
 
     function getOrCreateMatchUid() {
@@ -8592,6 +8593,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
       currentActiveMatchUid = getOrCreateMatchUid();
       const matchUid = currentActiveMatchUid;
+      currentActiveMatchId = generateSecureId(12, 'match_');
+      const matchId = currentActiveMatchId;
 
       try {
         const res = await safeApiFetch('/api/match/join', {
@@ -8599,6 +8602,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             uid: matchUid,
+            matchId,
             nickname: normalizeNetworkName(p1Name, '棋友'),
             avatar: getNetworkAvatarValue(p1Avatar),
             score: currentUserScore || 1000
@@ -8620,7 +8624,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
                 const pRes = await safeApiFetch('/api/match/poll', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ uid: matchUid })
+                  body: JSON.stringify({ uid: matchUid, matchId })
                 });
                 const pData = await pRes.json();
                 if (pData.code === 0 && pData.status === 'matched' && isMatchmaking) {
@@ -8697,10 +8701,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
     function matchWithAiOpponent() {
       if (!isMatchmaking) return;
+      const queuedUid = currentActiveMatchUid;
+      const queuedMatchId = currentActiveMatchId;
       isMatchmaking = false;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
       matchPollInFlight = false;
+      currentActiveMatchUid = '';
+      currentActiveMatchId = '';
+      if (queuedUid) {
+        void safeApiFetch('/api/match/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: queuedUid, matchId: queuedMatchId })
+        }).catch(() => {});
+      }
 
       let aiName = "弈林少侠";
       let aiAvatar = "👦";
@@ -8760,12 +8775,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (vsCard) vsCard.style.display = 'none';
 
       const cancelUid = currentActiveMatchUid || getOrCreateMatchUid();
+      const cancelMatchId = currentActiveMatchId;
       currentActiveMatchUid = '';
+      currentActiveMatchId = '';
       try {
         await safeApiFetch('/api/match/cancel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: cancelUid })
+          body: JSON.stringify({ uid: cancelUid, matchId: cancelMatchId })
         });
       } catch(e) {}
       showGameNotice('已取消匹配');
@@ -9220,6 +9237,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       "https://gomoku-backend.xnnb04664.workers.dev"
     ];
     const API_HOST_STORAGE_KEY = 'gomoku_api_host_v1';
+    const API_HOST_HINT_AT_STORAGE_KEY = 'gomoku_api_host_hint_at_v1';
+    const API_HOST_HINT_MAX_AGE_MS = 10 * 60 * 1000;
     const API_HOST_FAILURES_STORAGE_KEY = 'gomoku_api_host_failures_v1';
     const API_HOST_FAILURE_COOLDOWN_MS = 60 * 1000;
     const API_HOST_PROBE_TIMEOUT_MS = 2500;
@@ -9232,7 +9251,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     function readStoredApiHost() {
       try {
         const saved = localStorage.getItem(API_HOST_STORAGE_KEY) || '';
-        return isAllowedApiHost(saved) ? saved : '';
+        const savedAt = Number(localStorage.getItem(API_HOST_HINT_AT_STORAGE_KEY) || 0);
+        const isFresh = Number.isFinite(savedAt) && savedAt > 0 && Date.now() - savedAt < API_HOST_HINT_MAX_AGE_MS;
+        return isFresh && isAllowedApiHost(saved) ? saved : '';
       } catch (_) {
         return '';
       }
@@ -9242,6 +9263,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (!isAllowedApiHost(host)) return;
       try {
         localStorage.setItem(API_HOST_STORAGE_KEY, host);
+        localStorage.setItem(API_HOST_HINT_AT_STORAGE_KEY, String(Date.now()));
       } catch (_) {}
     }
 
@@ -9472,6 +9494,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       networkError.cause = lastErr;
       throw networkError;
     }
+
+    // 页面/Android WebView 启动后后台预热最快 API 出口，避免第一次登录或全服匹配才开始测速。
+    // 只发送 OPTIONS 探测，不携带账号 Token，也不阻塞首屏渲染。
+    setTimeout(() => { void warmApiHost(); }, 0);
 
     // ══════════════════════════════════════════════════════════════════
     // 🛡️ 云端账号认证与永久免登持久化管理器 (Permanent Session & Native Sync)

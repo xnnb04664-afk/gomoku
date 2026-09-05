@@ -14,6 +14,7 @@ let dbInitializationPromise = null;
 let cachedLeaderboard = null;
 let lastLeaderboardTime = 0;
 let leaderboardQueryPromise = null;
+let lastMatchQueueCleanupAt = 0;
 let privateReleaseCache = null;
 let privateReleasePromise = null;
 const PASSWORD_PBKDF2_ITERATIONS = 100000;
@@ -321,9 +322,18 @@ export default {
             matched_avatar TEXT,
             matched_score INTEGER,
             room_code TEXT,
+            match_id TEXT,
             updated_at INTEGER
           )
         `).run();
+        // 兼容旧版 D1：仅在列确实缺失时补上本次匹配请求标识，避免每次冷启动都重复尝试 ALTER。
+        try {
+          const queueSchema = await env.DB.prepare('PRAGMA table_info(match_queue)').all();
+          const hasMatchId = Array.isArray(queueSchema?.results) && queueSchema.results.some(column => column?.name === 'match_id');
+          if (!hasMatchId) await env.DB.prepare(`ALTER TABLE match_queue ADD COLUMN match_id TEXT`).run();
+        } catch(e) {}
+        // 匹配查询始终按状态和心跳时间过滤；索引可显著降低用户量增长后的撮合扫描成本。
+        try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_match_queue_status_updated ON match_queue(status, updated_at)`).run(); } catch(e) {}
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS ip_register_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1346,18 +1356,30 @@ async function allocateNextAvailableUid(env) {
         const safeNick = sanitizeText(nickname, 12) || '棋士';
         const safeAvatar = sanitizeAvatar(avatar);
         const safeScore = auth.user ? Math.max(0, Number(auth.user.score) || 1000) : 1000;
+        const matchId = typeof body.matchId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(body.matchId.trim())
+          ? body.matchId.trim()
+          : '';
 
-        // 清理 25 秒以上的超时死连接
-        await env.DB.prepare('DELETE FROM match_queue WHERE updated_at < ? AND status = "waiting"').bind(now - 25000).run();
-
-        // 寻找正在等待的真人对手 (非自己)
-        const opponent = await env.DB.prepare(
-          'SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1'
-        ).bind(matchUid, now - 20000).first();
+        // 清理超时等待记录；匹配成功但客户端没及时消费的旧记录也一并清掉。
+        // 清理动作限频，避免每个 join 都额外产生一次 D1 写入争用；查询本身仍由 updated_at 条件兜底。
+        if (now - lastMatchQueueCleanupAt >= 30000) {
+          lastMatchQueueCleanupAt = now;
+          try {
+            await env.DB.prepare(`
+              DELETE FROM match_queue
+              WHERE (status = "waiting" AND updated_at < ?)
+                 OR (status = "matched" AND updated_at < ?)
+            `).bind(now - 25000, now - 120000).run();
+          } catch (cleanupError) {
+            lastMatchQueueCleanupAt = 0;
+            console.warn('[match] 清理超时队列失败:', cleanupError?.message || cleanupError);
+          }
+        }
 
         const formatMatched = (record) => ({
           code: 0,
           status: 'matched',
+          matchId: String(record.match_id || ''),
           role: record.matched_color === 'black' ? 'host' : 'client',
           color: record.matched_color,
           roomCode: record.room_code,
@@ -1368,6 +1390,19 @@ async function allocateNextAvailableUid(env) {
             score: Number.isFinite(Number(record.matched_score)) ? Number(record.matched_score) : 1000
           }
         });
+        // 同一匹配请求允许幂等重试：若响应在弱网中丢失，客户端再次 join 仍能拿回原房间；
+        // 新的 matchId 则主动淘汰该 UID 的旧残留结果，避免下一局重复返回上一场。
+        const existingBeforeMatch = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
+        if (existingBeforeMatch?.status === 'matched') {
+          const sameRequest = !matchId || existingBeforeMatch.match_id === matchId;
+          if (sameRequest) return json(formatMatched(existingBeforeMatch));
+          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ? AND status = "matched"').bind(matchUid).run();
+        }
+
+        // 寻找正在等待的真人对手 (非自己)
+        const opponent = await env.DB.prepare(
+          'SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1'
+        ).bind(matchUid, now - 20000).first();
 
         let claimedOpponent = false;
         if (opponent) {
@@ -1385,37 +1420,45 @@ async function allocateNextAvailableUid(env) {
           if (claimedOpponent) {
             // 当前玩家若已被另一请求匹配，不覆盖已有对局；否则写入白方记录。
             await env.DB.prepare(`
-              INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
-              VALUES (?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?)
+              INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, match_id, updated_at)
+              VALUES (?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?, ?)
               ON CONFLICT(uid) DO UPDATE SET
                 status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
                 matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
-                matched_score = excluded.matched_score, room_code = excluded.room_code, updated_at = excluded.updated_at
+                matched_score = excluded.matched_score, room_code = excluded.room_code,
+                match_id = excluded.match_id, updated_at = excluded.updated_at
               WHERE match_queue.status != 'matched'
-            `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score, roomCode, now).run();
+            `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score, roomCode, matchId, now).run();
 
             const current = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
-            if (current?.status === 'matched') return json(formatMatched(current));
+            if (current?.status === 'matched' && (!matchId || current.match_id === matchId)) {
+              return json(formatMatched(current));
+            }
           }
         }
 
         // 抢占失败时可能已经被其他请求匹配；先读取现状，绝不把已匹配记录重置为 waiting。
         const existing = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
-        if (existing?.status === 'matched') return json(formatMatched(existing));
+        if (existing?.status === 'matched' && (!matchId || existing.match_id === matchId)) {
+          return json(formatMatched(existing));
+        }
 
         // 暂无可领取的等待对手，将自己放入队列；ON CONFLICT 条件防止覆盖并发产生的 matched 状态。
         await env.DB.prepare(`
-          INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, updated_at)
-          VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, NULL, NULL, NULL, NULL, ?)
+          INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, match_id, updated_at)
+          VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
           ON CONFLICT(uid) DO UPDATE SET
             nickname = excluded.nickname, avatar = excluded.avatar, score = excluded.score,
             status = 'waiting', matched_with = NULL, matched_color = NULL, matched_nickname = NULL,
-            matched_avatar = NULL, matched_score = NULL, room_code = NULL, updated_at = excluded.updated_at
-          WHERE match_queue.status != 'matched'
-        `).bind(matchUid, safeNick, safeAvatar, safeScore, now).run();
+            matched_avatar = NULL, matched_score = NULL, room_code = NULL,
+            match_id = excluded.match_id, updated_at = excluded.updated_at
+            WHERE match_queue.status != 'matched'
+        `).bind(matchUid, safeNick, safeAvatar, safeScore, matchId, now).run();
 
         const finalRecord = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
-        if (finalRecord?.status === 'matched') return json(formatMatched(finalRecord));
+        if (finalRecord?.status === 'matched' && (!matchId || finalRecord.match_id === matchId)) {
+          return json(formatMatched(finalRecord));
+        }
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
         return publicServerError('匹配服务异常', err);
@@ -1428,6 +1471,9 @@ async function allocateNextAvailableUid(env) {
       try {
         const body = await readJsonBody(request);
         const { uid, token } = body;
+        const requestedMatchId = typeof body.matchId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(body.matchId.trim())
+          ? body.matchId.trim()
+          : '';
         if (!uid) return json({ code: 1, msg: '缺少 uid' });
 
         const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
@@ -1441,11 +1487,14 @@ async function allocateNextAvailableUid(env) {
         }
 
         if (record.status === 'matched') {
-          // 清理记录
-          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(matchUid).run();
+          // 轮询结果允许幂等重试；只有相同 matchId 才能消费本次结果，避免网络丢包后变成“对方断开”。
+          if (requestedMatchId && record.match_id !== requestedMatchId) {
+            return json({ code: 0, status: 'cancelled' });
+          }
           return json({
             code: 0,
             status: 'matched',
+            matchId: String(record.match_id || ''),
             role: record.matched_color === 'black' ? 'host' : 'client',
             color: record.matched_color,
             roomCode: record.room_code,
@@ -1459,7 +1508,7 @@ async function allocateNextAvailableUid(env) {
         }
 
         // 保持心跳活跃
-        await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ?').bind(now, matchUid).run();
+        await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ? AND status = "waiting"').bind(now, matchUid).run();
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
         return publicServerError('轮询异常', err);
@@ -1472,10 +1521,17 @@ async function allocateNextAvailableUid(env) {
       try {
         const body = await readJsonBody(request);
         const { uid } = body;
+        const requestedMatchId = typeof body.matchId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(body.matchId.trim())
+          ? body.matchId.trim()
+          : '';
         if (uid) {
           const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
           if (auth.response) return auth.response;
-          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(auth.uid).run();
+          if (requestedMatchId) {
+            await env.DB.prepare('DELETE FROM match_queue WHERE uid = ? AND (match_id = ? OR match_id IS NULL)').bind(auth.uid, requestedMatchId).run();
+          } else {
+            await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(auth.uid).run();
+          }
         }
         return json({ code: 0, msg: '已成功取消匹配' });
       } catch (err) {

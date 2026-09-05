@@ -4,6 +4,7 @@ android_src/classes/
 .DS_Store
 Thumbs.db
 *.log
+__pycache__/
 .cloudflare_config.json
 .wrangler/
 gomoku.html
