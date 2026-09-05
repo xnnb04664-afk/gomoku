@@ -2324,13 +2324,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         margin: 0 !important;
       }
       .player-capsule {
-        padding: 2px 7px 2px 2px !important;
+        padding: 2px 6px 2px 2px !important;
+        max-width: 49% !important;
       }
       .player-capsule.right {
-        padding: 2px 2px 2px 7px !important;
+        padding: 2px 2px 2px 6px !important;
+      }
+      .avatar-wrap, .avatar-circle {
+        width: 30px !important;
+        height: 30px !important;
+      }
+      .avatar-circle {
+        font-size: 16px !important;
       }
       .player-name {
-        font-size: 12px !important;
+        font-size: 11.5px !important;
+        margin: 0 2px !important;
       }
       .signs-row {
         margin-top: 0 !important;
@@ -2727,7 +2736,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.91</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.92</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2881,7 +2890,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
         <div class="auth-input-group">
           <div class="auth-input-label"><span>🔒</span> 登录密码：</div>
-          <input type="password" id="loginPassword" placeholder="输入密码" maxlength="32" class="auth-input-box" />
+          <input type="password" id="loginPassword" placeholder="输入密码" maxlength="32" class="auth-input-box" onkeydown="if(event.key==='Enter') submitLogin()" />
         </div>
 
         <div id="loginErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
@@ -2932,7 +2941,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
         <div class="auth-input-group">
           <div class="auth-input-label"><span>🔑</span> 密保答案（防盗加密存储）：</div>
-          <input type="text" id="regSecurityA" placeholder="填写答案并请牢记" maxlength="25" class="auth-input-box" />
+          <input type="text" id="regSecurityA" placeholder="填写答案并请牢记" maxlength="25" class="auth-input-box" onkeydown="if(event.key==='Enter') submitRegister()" />
         </div>
 
         <div id="regErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
@@ -2945,16 +2954,19 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         <div id="resetStep1">
           <div class="auth-input-group">
             <div class="auth-input-label"><span>👤</span> 需找回密码的账号名称 或 6位UID：</div>
-            <input type="text" id="resetUsername" placeholder="请输入游戏账号名称 或 专属UID" maxlength="32" class="auth-input-box" />
+            <input type="text" id="resetUsername" placeholder="请输入游戏账号名称 或 专属UID" maxlength="32" class="auth-input-box" onkeydown="if(event.key==='Enter') fetchSecurityQuestion()" />
             <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 支持输入账号名或专属 UID 查询绑定的密保问题</div>
           </div>
           <button class="auth-submit-btn" onclick="fetchSecurityQuestion()" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8); box-shadow:0 3.5px 0 #1e40af;">🔍 下一步：查询我的密保 ➔</button>
         </div>
 
         <div id="resetStep2" style="display:none;">
-          <div style="background:#f0f9ff; border:1.5px solid #bae6fd; border-radius:12px; padding:8px 12px; margin-bottom:10px; text-align:left;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
             <div style="font-size:10.5px; color:#0369a1; font-weight:800;">您的专属密保问题：</div>
-            <div id="displaySecurityQ" style="font-size:13px; font-weight:900; color:#0c4a6e; margin-top:3px;">-</div>
+            <span style="font-size:10.5px; color:#0284c7; cursor:pointer; font-weight:800; text-decoration:underline;" onclick="document.getElementById('resetStep2').style.display='none'; document.getElementById('resetStep1').style.display='block';">◀ 换个账号</span>
+          </div>
+          <div style="background:#f0f9ff; border:1.5px solid #bae6fd; border-radius:12px; padding:8px 12px; margin-bottom:10px; text-align:left;">
+            <div id="displaySecurityQ" style="font-size:13px; font-weight:900; color:#0c4a6e; margin-top:1px;">-</div>
           </div>
 
           <div class="auth-input-group">
@@ -2964,7 +2976,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
           <div class="auth-input-group">
             <div class="auth-input-label"><span>🔒</span> 设置新密码（至少 6 位）：</div>
-            <input type="password" id="resetNewPwd" placeholder="输入新密码 (至少 6 位)" maxlength="32" class="auth-input-box" />
+            <input type="password" id="resetNewPwd" placeholder="输入新密码 (至少 6 位)" maxlength="32" class="auth-input-box" onkeydown="if(event.key==='Enter') submitResetPassword()" />
           </div>
 
           <button class="auth-submit-btn" onclick="submitResetPassword()" style="background:linear-gradient(135deg, #10b981, #059669); box-shadow:0 3.5px 0 #047857;">🛡️ 验证密保并重置密码</button>
@@ -2996,7 +3008,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       </div>
       <div class="auth-input-group">
         <div class="auth-input-label"><span>✅</span> 确认新密码：</div>
-        <input type="password" id="changeConfirmPassword" placeholder="再次输入新密码" maxlength="32" autocomplete="new-password" class="auth-input-box" />
+        <input type="password" id="changeConfirmPassword" placeholder="再次输入新密码" maxlength="32" autocomplete="new-password" class="auth-input-box" onkeydown="if(event.key==='Enter') submitChangePassword()" />
       </div>
 
       <div id="changePasswordErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
@@ -3291,6 +3303,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         <button type="button" class="btn-confirm-ok" onclick="restartGameFromResultModal()" style="padding:9px 0; border-radius:10px; font-weight:900; font-size:13px; background:#10b981; border-color:#059669; box-shadow:0 3px 0 #047857; color:#fff; cursor:pointer;">
           🔄 再战一局
         </button>
+        <button type="button" class="btn-confirm-cancel" id="btnResultLeaveOnline" onclick="closeGameResultModal(); confirmLeaveOnlineRoom();" style="display:none; padding:7px 0; border-radius:10px; font-weight:800; font-size:12px; background:#fee2e2; color:#b91c1c; border-color:#fca5a5; cursor:pointer;">
+          🚪 退出联机房间
+        </button>
         <button type="button" class="btn-confirm-cancel" onclick="openLeaderboardFromResultModal()" style="padding:7px 0; border-radius:10px; font-weight:800; font-size:12px; background:#e0f2fe; color:#0369a1; border-color:#bae6fd; cursor:pointer;">
           🏆 查看全服天梯榜
         </button>
@@ -3404,7 +3419,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.91';
+    const CURRENT_VERSION_TAG = 'v1.0.92';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -3694,47 +3709,48 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (btnOnline) btnOnline.style.display = "flex";
         if (topRoomBar) topRoomBar.style.display = "none";
       }
-      let p1ColorTag = ' (●黑子)';
-      let p2ColorTag = ' (○白子)';
+      const isNarrow = typeof window !== 'undefined' && window.innerWidth <= 380;
+      let p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+      let p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
       let p2DisplayName = p2Name;
 
       if (gameMode === 'ai') {
-        p1ColorTag = ' (●黑子)';
-        p2ColorTag = ' (○白子)';
+        p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+        p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
         p2DisplayName = '大师AI';
         document.getElementById('p2AvatarIcon').innerHTML = '🤖';
       } else if (gameMode === 'online') {
         // 联机对战：黑白子明确展示，且绝不显示“房主”，双方直接呈现真实昵称！
         if (myOnlineColor === BLACK) {
-          p1ColorTag = ' (●黑子)';
-          p2ColorTag = ' (○白子)';
+          p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+          p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
         } else {
-          p1ColorTag = ' (○白子)';
-          p2ColorTag = ' (●黑子)';
+          p1ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
+          p2ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
         }
         p2DisplayName = (p2Name && p2Name.trim()) ? p2Name : '好友';
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       } else {
         // 双人同屏 pvp
-        p1ColorTag = ' (●黑子)';
-        p2ColorTag = ' (○白子)';
+        p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
+        p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
         p2DisplayName = p2Name;
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(p2Avatar);
       }
 
-      const scoreSuffix = hasRegisteredAccountSession() ? ` · ${currentUserScore}分` : '';
+      const scoreSuffix = hasRegisteredAccountSession() ? (isNarrow ? ` · ${currentUserScore}` : ` · ${currentUserScore}分`) : '';
       const fullP1Text = p1Name + p1ColorTag + scoreSuffix;
       const p1Label = document.getElementById('p1NameLabel');
       if (p1Label) {
         p1Label.textContent = fullP1Text;
-        p1Label.title = fullP1Text;
+        p1Label.title = p1Name + (myOnlineColor === WHITE ? ' (○白子)' : ' (●黑子)') + (hasRegisteredAccountSession() ? ` · ${currentUserScore}分` : '');
       }
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
       const p2Label = document.getElementById('p2NameLabel');
       if (p2Label) {
         const fullP2Text = p2DisplayName + p2ColorTag;
         p2Label.textContent = fullP2Text;
-        p2Label.title = fullP2Text;
+        p2Label.title = p2DisplayName + (myOnlineColor === WHITE ? ' (●黑子)' : ' (○白子)');
       }
     }
 
@@ -3830,6 +3846,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
     function sendChat(msg) {
       if (!msg || !msg.trim()) return;
+      if (gameMode === 'online' && (!conn || !conn.open)) {
+        showGameNotice("⚠️ 联机连接未就绪或已中断，聊天未能送达对方", true);
+      }
       addMessage(1, msg.trim());
       const input = document.getElementById('chatInput');
       input.value = '';
@@ -4053,30 +4072,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (!nameInput) return showGameNotice('⚠️ 账号昵称不能为空哦！', true);
 
       if (editingPlayer === 1) {
+        const hasRegisteredAccount = hasRegisteredAccountSession();
+        const prevP1Name = p1Name;
+        const prevUsername = currentUsername;
+        const prevP1Avatar = p1Avatar;
+
         p1Name = nameInput;
         p1Avatar = selectedAvatarData;
-        const hasRegisteredAccount = hasRegisteredAccountSession();
-        localStorage.setItem('gomoku_p1Name', p1Name);
-        localStorage.setItem('gomoku_p1Avatar', p1Avatar);
-
-        // 🌟 核心要求：昵称就是账号名，改昵称就是改账号名！
-        if (hasRegisteredAccount) {
-          currentUsername = p1Name;
-          localStorage.setItem('gomoku_user_username', currentUsername);
-          if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
-            try { AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar); } catch(e) {}
-          }
-        }
-
-        // 🌟 立即在本地缓存的天梯榜中将自己的名字与头像替换（零延迟无缝生效）
-        if (hasRegisteredAccount && Array.isArray(cachedLeaderboard)) {
-          cachedLeaderboard.forEach(item => {
-            if (currentUserUid && String(item.uid) === String(currentUserUid)) {
-              item.name = p1Name;
-              item.avatar = p1Avatar;
-            }
-          });
-        }
 
         // 🌟 同步到云端数据库：修改 username 和 nickname
         if (hasRegisteredAccount) {
@@ -4094,34 +4096,69 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             const data = await res.json();
             if (data && data.code === 0) {
               console.log('[saveProfile] 账号名与天梯榜已同步:', p1Name);
+              localStorage.setItem('gomoku_p1Name', p1Name);
+              localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+              currentUsername = p1Name;
+              localStorage.setItem('gomoku_user_username', currentUsername);
+              if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
+                try { AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar); } catch(e) {}
+              }
               if (data.data) {
                 applyUserData(data.data);
               }
+              if (Array.isArray(cachedLeaderboard)) {
+                cachedLeaderboard.forEach(item => {
+                  if (currentUserUid && String(item.uid) === String(currentUserUid)) {
+                    item.name = p1Name;
+                    item.avatar = p1Avatar;
+                  }
+                });
+              }
+              updatePlayerHeaderUI();
               updateAccountUI();
               leaderboardLoadedAt = 0;
               fetchGlobalLeaderboard(false);
-            } else if (data && data.msg) {
-              console.warn('[saveProfile sync warning]', data.msg);
+              showGameNotice('🎉 保存成功！账号与昵称已应用并同步至全服天梯！', false);
+            } else {
+              // 服务器拒绝（如名称已占用）
+              p1Name = prevP1Name;
+              currentUsername = prevUsername;
+              p1Avatar = prevP1Avatar;
+              selectedAvatarData = prevP1Avatar;
+              const inputEl = document.getElementById('inputProfileName');
+              if (inputEl) inputEl.value = prevP1Name;
+              const prevEl = document.getElementById('bigAvatarPreview');
+              if (prevEl) prevEl.innerHTML = renderAvatarElement(prevP1Avatar);
+              updatePlayerHeaderUI();
+              updateAccountUI();
+              showGameNotice('⚠️ 修改未生效: ' + (data && data.msg ? data.msg : '该名称已被占用或校验失败'), true);
+              return;
             }
           } catch(e) {
             console.warn('[saveProfile sync error]', e);
+            // 离线/网络故障兜底：先保留在本地，提醒用户稍后联网同步
+            localStorage.setItem('gomoku_p1Name', p1Name);
+            localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+            updatePlayerHeaderUI();
+            updateAccountUI();
+            showGameNotice('⚠️ 网络离线，修改已暂存本地，联网后将自动同步天梯', true);
           }
+        } else {
+          // 游客模式
+          localStorage.setItem('gomoku_p1Name', p1Name);
+          localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+          updatePlayerHeaderUI();
+          updateAccountUI();
+          showGameNotice('💾 游客昵称已保存在本地。登录正式账号即可同步至全服天梯榜！', false);
         }
       } else {
         p2Name = nameInput;
         p2Avatar = selectedAvatarData;
         localStorage.setItem('gomoku_p2Name', p2Name);
         localStorage.setItem('gomoku_p2Avatar', p2Avatar);
-      }
-
-      updatePlayerHeaderUI();
-      updateAccountUI();
-
-      // 🌟 用户明确要求：在主页保存并应用之后不退出，就保持当前页面！
-      if (!hasRegisteredAccountSession()) {
-        showGameNotice('💾 游客昵称已保存在本地。登录正式账号即可同步至全服天梯榜！', false);
-      } else {
-        showGameNotice('🎉 保存成功！账号与昵称已应用并同步至全服天梯！', false);
+        updatePlayerHeaderUI();
+        updateAccountUI();
+        showGameNotice('💾 对手设置已保存在本地', false);
       }
 
       // 保存时再做一次完整同步（确保对方数据最终一致）
@@ -5489,6 +5526,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       showReconnectOverlay(false);
       detachHostInviteListener();
       if (conn) { try { conn.close(true); } catch(e) {} conn = null; }
+      activeOnlineGuestUid = '';
+      currentRoomCode = null;
+      onlineRoundId = '';
+      pendingOnlineUndoId = '';
+      activeOnlineUndoId = '';
+      pendingOnlineRestartId = '';
+      activeOnlineRestartId = '';
+      if (typeof closeUndoModal === 'function') closeUndoModal();
+      if (typeof closeGameResultModal === 'function') closeGameResultModal();
       
       gameMode = 'ai';
       p2Name = '大师AI';
@@ -5753,6 +5799,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           detachHostInviteListener();
           if (conn) { try { conn.close(true); } catch(_) {} conn = null; }
           if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
+          activeOnlineGuestUid = '';
+          currentRoomCode = null;
+          onlineRoundId = '';
+          pendingOnlineUndoId = '';
+          activeOnlineUndoId = '';
+          pendingOnlineRestartId = '';
+          activeOnlineRestartId = '';
+          if (typeof closeUndoModal === 'function') closeUndoModal();
+          if (typeof closeGameResultModal === 'function') closeGameResultModal();
           setMode("ai", false);
           return;
         }
@@ -6379,11 +6434,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     function handleCardClick(idx) {
       if (isOver) return;
       if (cardUsedStatus[idx]) return;
-      if (gameMode === 'online' && turn !== myOnlineColor) {
-        return alert("⏳ 还没到您的回合，请在自己回合使用干扰牌！");
+      if (gameMode === 'online') {
+        if (turn !== myOnlineColor) {
+          return showGameNotice("⏳ 还没到您的回合，请在自己回合使用干扰牌！", false);
+        }
+        if (!conn || !conn.open) {
+          return showGameNotice("⚠️ 联机连接未就绪或已中断，无法使用干扰牌！", true);
+        }
       }
       if (gameMode === 'ai' && turn !== BLACK) {
-        return alert("⏳ AI 正在思考中，请在自己的回合施展技能！");
+        return showGameNotice("⏳ AI 正在思考中，请在自己的回合施展技能！", false);
       }
 
       if (activeSkill && activeSkill.slotIdx === idx) {
@@ -6592,6 +6652,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
     function handleSkillClick(row, col) {
       if (!activeSkill) return;
+      if (gameMode === 'online' && (!conn || !conn.open)) {
+        return showGameNotice("⚠️ 联机连接未就绪或已中断，无法施放技能！", true);
+      }
       const { slotIdx, skill } = activeSkill;
       const myColor = (gameMode === 'online') ? myOnlineColor : turn;
       const enemyColor = myColor === BLACK ? WHITE : BLACK;
@@ -7033,7 +7096,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             uid: matchUid,
             nickname: normalizeNetworkName(p1Name, '棋友'),
             avatar: getNetworkAvatarValue(p1Avatar),
-            score: 1000
+            score: currentUserScore || 1000
           })
         });
         const data = await res.json();
@@ -7764,6 +7827,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             // 云端验证成功，静默校准天梯积分与头像
             applyUserData(json.data);
             return;
+          } else if (json && (json.code === 1 || json.code === 2)) {
+            console.warn('verify_session token invalid:', json.msg);
+            showGameNotice('⚠️ 登录凭证已过期，请重新登录账号', true);
           }
         } catch (e) {
           console.warn('verify_session offline fallback, keep local session:', e);
@@ -7803,10 +7869,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (data.uid) {
         currentUserUid = String(data.uid);
         localStorage.setItem("gomoku_user_uid", currentUserUid);
+      } else if (data.uid === null) {
+        currentUserUid = "";
+        localStorage.removeItem("gomoku_user_uid");
       }
       if (data.token) {
         currentUserToken = String(data.token);
         localStorage.setItem("gomoku_user_token", currentUserToken);
+      } else if (data.token === null) {
+        currentUserToken = "";
+        localStorage.removeItem("gomoku_user_token");
       }
       if (typeof data.username === "string" && data.username.trim()) {
         currentUsername = data.username.trim();
@@ -8088,6 +8160,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
       });
+      if (tab === 'login') {
+        const uInput = document.getElementById('loginUsername');
+        if (uInput && !uInput.value && currentUsername) {
+          uInput.value = currentUsername;
+        }
+      } else if (tab === 'reset') {
+        const r1 = document.getElementById('resetStep1');
+        const r2 = document.getElementById('resetStep2');
+        if (r1) r1.style.display = 'block';
+        if (r2) r2.style.display = 'none';
+        const rInput = document.getElementById('resetUsername');
+        if (rInput && !rInput.value && currentUsername) {
+          rInput.value = currentUsername;
+        }
+      }
     }
 
     async function submitLogin() {
@@ -8576,15 +8663,17 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             statusText.innerHTML = `游客未登录 · <a href="javascript:void(0)" onclick="closeLeaderboardModal(); openAuthModal('login')" style="color:#0284c7; font-weight:900; text-decoration:underline;">登录账号入榜</a>`;
             statusText.title = "游客身份未登录，点击登录或注册正式账号上榜";
           } else {
-            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> (赢局即可入榜)`;
+            statusText.innerHTML = `当前玩家: <b style="color:#0984e3;">${escapeRankHTML(p1Name)}</b> · 积分: <b style="color:#b45309;">${currentUserScore}</b> (赢局即可入榜)`;
             statusText.title = `当前玩家: ${p1Name}`;
           }
         }
       }
 
-      if (badge && myScore) {
-        badge.textContent = `积分: ${myScore}`;
+      if (myRankNum > 0) {
+        currentUserScore = myScore;
+        localStorage.setItem('gomoku_user_score', currentUserScore);
       }
+      updateLadderBadgeUI(currentUserScore);
     }
 
     // 🏠 本地战绩存储（游客本地计数，登录后同步）
@@ -8616,6 +8705,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (el) el.textContent = `本局战绩 胜${s.wins} 负${s.losses} 平${s.draws}`;
     }
 
+    let activeMatchResultScore = null;
+    let activeMatchStartingScore = null;
+
     async function reportMatchResult(isWin, isDraw = false) {
       isDraw = !!isDraw;
       if (isDraw) isWin = false;
@@ -8640,6 +8732,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       // ☁️ 登录账号：上报天梯榜
+      activeMatchStartingScore = currentUserScore;
+      activeMatchResultScore = null;
       try {
         const res = await safeApiFetch(`/api/report_game`, {
           method: 'POST',
@@ -8653,17 +8747,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         });
         const data = await res.json();
         if (data && data.code === 0 && data.data) {
-          const oldScore = (typeof data.data.oldScore === 'number') ? data.data.oldScore : currentUserScore;
+          const oldScore = (typeof data.data.oldScore === 'number') ? data.data.oldScore : activeMatchStartingScore;
           const newScore = data.data.newScore;
           const delta = typeof data.data.scoreDelta === 'number' ? data.data.scoreDelta : (isWin ? 25 : -15);
           
           currentUserScore = newScore;
           localStorage.setItem('gomoku_user_score', currentUserScore);
           updateLadderBadgeUI(currentUserScore);
+          activeMatchResultScore = { isWin, oldScore, newScore, delta, data: data.data };
           if (isDraw) {
             updateGameResultModalDrawStats(`云端天梯战绩: ${data.data.wins || 0}胜/${data.data.total_games || 0}局 · 本局和棋，积分不变`);
           } else {
-            updateGameResultModalScore({ isWin, oldScore, newScore, delta, data: data.data });
+            updateGameResultModalScore(activeMatchResultScore);
           }
 
           const toastMsg = isDraw
@@ -8716,8 +8811,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         localStorage.setItem(key, JSON.stringify(list));
         updateHistoryCountUI();
 
-        // ☁️ 实时异步备份到 Cloudflare D1 云端数据库（换机/重装永不丢战绩谱）
-        if (typeof currentUserUid !== 'undefined' && currentUserUid) {
+        // ☁️ 实时异步备份到 Cloudflare D1 云端数据库（换机/重装永不丢战绩谱，仅限正式账号）
+        if (hasRegisteredAccountSession()) {
           safeApiFetch('/api/history/record', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -8782,16 +8877,23 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             scoreCard.style.borderColor = '#86efac';
           }
           if (guestCard) guestCard.style.display = 'none';
-          const deltaTag = document.getElementById('resultScoreDeltaTag');
-          if (deltaTag) {
-            deltaTag.textContent = '+25 分';
-            deltaTag.style.color = '#15803d';
-            deltaTag.style.background = '#bbf7d0';
+          if (activeMatchResultScore) {
+            updateGameResultModalScore(activeMatchResultScore);
+          } else {
+            const baseScore = (typeof activeMatchStartingScore === 'number' && activeMatchStartingScore > 0) ? activeMatchStartingScore : currentUserScore;
+            const deltaTag = document.getElementById('resultScoreDeltaTag');
+            if (deltaTag) {
+              deltaTag.textContent = '+25 分';
+              deltaTag.style.color = '#15803d';
+              deltaTag.style.background = '#bbf7d0';
+            }
+            const oldScoreEl = document.getElementById('resultOldScore');
+            if (oldScoreEl) oldScoreEl.textContent = baseScore;
+            const newScoreEl = document.getElementById('resultNewScore');
+            if (newScoreEl) newScoreEl.textContent = (baseScore + 25) + ' 分';
+            const statsSub = document.getElementById('resultStatsSub');
+            if (statsSub) statsSub.textContent = '正在同步全服天梯战绩...';
           }
-          const oldScoreEl = document.getElementById('resultOldScore');
-          if (oldScoreEl) oldScoreEl.textContent = currentUserScore;
-          const newScoreEl = document.getElementById('resultNewScore');
-          if (newScoreEl) newScoreEl.textContent = (currentUserScore + 25) + ' 分';
         } else {
           if (scoreCard) scoreCard.style.display = 'none';
           if (guestCard) guestCard.style.display = 'block';
@@ -8810,21 +8912,31 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             scoreCard.style.borderColor = '#fdba74';
           }
           if (guestCard) guestCard.style.display = 'none';
-          const deltaTag = document.getElementById('resultScoreDeltaTag');
-          if (deltaTag) {
-            deltaTag.textContent = '-15 分';
-            deltaTag.style.color = '#c2410c';
-            deltaTag.style.background = '#fed7aa';
+          if (activeMatchResultScore) {
+            updateGameResultModalScore(activeMatchResultScore);
+          } else {
+            const baseScore = (typeof activeMatchStartingScore === 'number' && activeMatchStartingScore > 0) ? activeMatchStartingScore : currentUserScore;
+            const deltaTag = document.getElementById('resultScoreDeltaTag');
+            if (deltaTag) {
+              deltaTag.textContent = '-15 分';
+              deltaTag.style.color = '#c2410c';
+              deltaTag.style.background = '#fed7aa';
+            }
+            const oldScoreEl = document.getElementById('resultOldScore');
+            if (oldScoreEl) oldScoreEl.textContent = baseScore;
+            const newScoreEl = document.getElementById('resultNewScore');
+            if (newScoreEl) newScoreEl.textContent = Math.max(0, baseScore - 15) + ' 分';
+            const statsSub = document.getElementById('resultStatsSub');
+            if (statsSub) statsSub.textContent = '正在同步全服天梯战绩...';
           }
-          const oldScoreEl = document.getElementById('resultOldScore');
-          if (oldScoreEl) oldScoreEl.textContent = currentUserScore;
-          const newScoreEl = document.getElementById('resultNewScore');
-          if (newScoreEl) newScoreEl.textContent = Math.max(0, currentUserScore - 15) + ' 分';
         } else {
           if (scoreCard) scoreCard.style.display = 'none';
           if (guestCard) guestCard.style.display = 'block';
         }
       }
+
+      const leaveOnlineBtn = document.getElementById('btnResultLeaveOnline');
+      if (leaveOnlineBtn) leaveOnlineBtn.style.display = (gameMode === 'online') ? 'block' : 'none';
 
       modal.style.display = 'flex';
       modal.classList.add('show');
@@ -8887,6 +8999,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         modal.classList.remove('show');
       }
       // 关闭后清理条件卡片，避免下一局打开结算层时短暂残留上一局内容。
+      activeMatchResultScore = null;
       ['resultScoreCard', 'resultGuestCard', 'resultPvpCard', 'resultDrawCard'].forEach(id => {
         const card = document.getElementById(id);
         if (card) card.style.display = 'none';
@@ -9165,9 +9278,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
     }
 
-    // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回)
+    // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回，仅限正式账号)
     async function syncCloudHistory() {
-      if (typeof currentUserUid === "undefined" || !currentUserUid) return;
+      if (!hasRegisteredAccountSession()) return;
       try {
         const res = await safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`);
         const json = await res.json();
@@ -9186,8 +9299,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       modal.classList.add("show");
       renderHistoryUI();
 
-      // ☁️ 每次打开历史弹窗时，从 Cloudflare D1 云端拉取最新全量战报合并
-      if (typeof currentUserUid !== 'undefined' && currentUserUid) {
+      // ☁️ 每次打开历史弹窗时，从 Cloudflare D1 云端拉取最新全量战报合并（仅限正式账号）
+      if (hasRegisteredAccountSession()) {
         safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`)
           .then(res => res.json())
           .then(json => {
@@ -9214,7 +9327,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         updateHistoryCountUI();
 
         // ☁️ 云端数据库同步清空（确保下次打开绝不会从云端复活）
-        if (typeof currentUserUid !== "undefined" && currentUserUid) {
+        if (hasRegisteredAccountSession()) {
           try {
             await safeApiFetch("/api/history/clear", {
               method: "POST",
@@ -9980,15 +10093,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       ctx.fill();
     }
 
-    function drawPaw(x, y, r, pawColor) {
-      ctx.fillStyle = pawColor; ctx.beginPath();
-      ctx.ellipse(x, y + r*0.14, r*0.38, r*0.3, 0, 0, Math.PI*2); ctx.fill();
-      const toes = [
-        { dx: -r*0.32, dy: -r*0.18, rad: r*0.13 }, { dx: -r*0.11, dy: -r*0.35, rad: r*0.14 },
-        { dx: r*0.11, dy: -r*0.35, rad: r*0.14 }, { dx: r*0.32, dy: -r*0.18, rad: r*0.13 }
-      ];
-      for (const toe of toes) { ctx.beginPath(); ctx.arc(x+toe.dx, y+toe.dy, toe.rad, 0, Math.PI*2); ctx.fill(); }
-    }
+
 
     // --- 2. 草莓蜜桃恋爱版棋盘 (奶茶圆盘 + 💖爱心星位) ---
     function drawSweetRomanceBoard() {
@@ -10161,11 +10266,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         }
         ctx.fillStyle = g; ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.2; ctx.stroke();
-
-        // 💖 雕刻小爱心微光
-        ctx.font = `${Math.round(r * 0.75)}px sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('💖', x, y);
         ctx.restore();
       } else if (theme === 'zen_dark') {
         // 🖤 3D黑曜石与羊脂白玉
@@ -10235,7 +10335,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         ctx.lineWidth = 1; ctx.stroke();
         ctx.restore();
       } else {
-        // 🌿 经典晴空浮岛草坪猫爪棋子
+        // 🌿 经典晴空浮岛草坪棋子
         ctx.beginPath(); ctx.arc(x+1.5, y+2.5, r*0.95, 0, Math.PI*2);
         ctx.fillStyle = 'rgba(20, 60, 10, 0.45)'; ctx.fill();
 
@@ -10244,12 +10344,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           const g = ctx.createRadialGradient(x-r*0.35, y-r*0.35, 1, x, y, r);
           g.addColorStop(0, '#4a5568'); g.addColorStop(0.6, '#2d3748'); g.addColorStop(1, '#1a202c');
           ctx.fillStyle = g; ctx.fill();
-          drawPaw(x, y, r, '#ff7675');
         } else {
           const g = ctx.createRadialGradient(x-r*0.35, y-r*0.35, 1, x, y, r);
           g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#fff5f7'); g.addColorStop(1, '#fed7e2');
           ctx.fillStyle = g; ctx.fill();
-          drawPaw(x, y, r, '#e17055');
         }
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
         ctx.lineWidth = Math.max(1.2, cWidth * 0.0035);
@@ -10590,7 +10688,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (isReplayMode) return; // 复盘模式下禁止在主棋盘落子
       if (isOver) return;
       if (gameMode === 'ai' && turn !== BLACK) return;
-      if (gameMode === 'online' && turn !== myOnlineColor) return;
+      if (gameMode === 'online') {
+        if (turn !== myOnlineColor) {
+          showGameNotice("⏳ 轮到对手走棋，请稍候...", false);
+          return;
+        }
+        if (!conn || !conn.open) {
+          showGameNotice("⚠️ 联机连接未就绪或已中断，无法落子！请稍候自动重连...", true);
+          return;
+        }
+      }
 
       const rect = cvs.getBoundingClientRect();
       const clickX = (e.clientX - rect.left) * (cWidth / rect.width);
@@ -10686,6 +10793,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
       activeOnlineGuestUid = '';
+      if (typeof closeUndoModal === 'function') closeUndoModal();
+      if (typeof closeGameResultModal === 'function') closeGameResultModal();
       try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
       cancelQuickMatch();
       hideMatchingFloatingBar();
@@ -10707,8 +10816,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     async function logoutAccount() {
       const oldName = currentUsername;
       currentUsername = "";
+      currentUserUid = "";
+      currentUserToken = "";
+      currentUserScore = 1000;
       localStorage.removeItem("gomoku_user_username");
       localStorage.removeItem("gomoku_user_token");
+      localStorage.removeItem("gomoku_user_uid");
+      localStorage.setItem("gomoku_user_score", "1000");
 
       // 重置本地临时分数和战绩徽标，杜绝跨账号复制数据漏洞
       const badge = document.getElementById("myLadderBadge");
@@ -10736,11 +10850,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         p1Name = guestNick;
         localStorage.setItem('gomoku_p1Name', p1Name);
         currentUserUid = 'guest_' + Math.random().toString(36).substring(2, 9);
+        localStorage.setItem('gomoku_user_uid', currentUserUid);
         currentUserScore = 1000;
         updatePlayerHeaderUI();
         updateAccountUI();
       }
 
+      updatePlayerHeaderUI();
       updateAccountUI();
       updateHistoryCountUI();
       closeAuthModal();
@@ -10775,7 +10891,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (e && e.currentTarget) e.currentTarget.blur();
 
       if (gameMode === 'online') {
-        if (pendingOnlineRestartId) return;
+        if (pendingOnlineRestartId) {
+          showGameNotice("⏳ 重新开局申请已发送，正在等待对方回应中...", false);
+          return;
+        }
         if (!conn || !conn.open) {
           showGameNotice("⚠️ 当前联机已中断，直接重置棋盘", true);
           resetBoardOnly();
@@ -10967,7 +11086,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     const undoDescText = document.getElementById('undoDescText');
 
     document.getElementById('btnUndo').onclick = () => {
-      if ((undoStack.length === 0 && history.length === 0) || (isOver && gameMode === 'online')) return;
+      if (history.length === 0 && undoStack.length === 0) {
+        showGameNotice("棋盘上还没有棋子，无需悔棋~", false);
+        return;
+      }
+      if (isOver && gameMode === 'online') {
+        showGameNotice("本局对战已结束，无法悔棋，请点击重开开启新局~", false);
+        return;
+      }
 
       if (gameMode === 'ai') {
         let hasCardToRestore = false;
@@ -10989,15 +11115,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         document.getElementById('btnUndoAgree').textContent = "确认悔棋";
         document.getElementById('btnUndoRefuse').style.display = "none";
       } else if (gameMode === 'online') {
-        if (conn && conn.open && !pendingOnlineUndoId) {
-          pendingOnlineUndoId = generateSecureId(10, 'undo_');
-          if (!conn.send({ type: 'undo_req', requestId: pendingOnlineUndoId })) {
-            pendingOnlineUndoId = '';
-            showGameNotice("⚠️ 悔棋申请发送失败，请检查联机状态后重试", true);
-            return;
-          }
-          showGameNotice("📡 已向联机好友发送悔棋申请，等待对方同意...", false);
+        if (!conn || !conn.open) {
+          showGameNotice("⚠️ 联机连接未就绪或已断开，无法申请悔棋！", true);
+          return;
         }
+        if (pendingOnlineUndoId) {
+          showGameNotice("⏳ 悔棋申请正在等待对方回应中，请稍候...", false);
+          return;
+        }
+        pendingOnlineUndoId = generateSecureId(10, 'undo_');
+        if (!conn.send({ type: 'undo_req', requestId: pendingOnlineUndoId })) {
+          pendingOnlineUndoId = '';
+          showGameNotice("⚠️ 悔棋申请发送失败，请检查联机状态后重试", true);
+          return;
+        }
+        showGameNotice("📡 已向联机好友发送悔棋申请，等待对方同意...", false);
       } else {
         const applicant = turn === BLACK ? `${p2Name} (白方)` : `${p1Name} (黑方)`;
         undoDescText.textContent = `【${applicant}】请求悔棋一步（含使用的干扰牌），是否同意？`;
