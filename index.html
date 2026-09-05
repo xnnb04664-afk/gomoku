@@ -1774,7 +1774,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.95</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.96</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2457,7 +2457,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.95';
+    const CURRENT_VERSION_TAG = 'v1.0.96';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -9516,6 +9516,28 @@
       }
     }
 
+    // 猫爪肉垫使用 Canvas 原生图形绘制，避免依赖字体/Emoji，在 Android WebView 与离线单文件版中也能稳定显示。
+    function drawPaw(x, y, r, pawColor) {
+      ctx.save();
+      ctx.fillStyle = pawColor;
+      ctx.globalAlpha = 0.96;
+      ctx.beginPath();
+      ctx.ellipse(x, y + r * 0.14, r * 0.38, r * 0.30, 0, 0, Math.PI * 2);
+      ctx.fill();
+      const toes = [
+        { dx: -r * 0.32, dy: -r * 0.18, rad: r * 0.13 },
+        { dx: -r * 0.11, dy: -r * 0.35, rad: r * 0.14 },
+        { dx: r * 0.11, dy: -r * 0.35, rad: r * 0.14 },
+        { dx: r * 0.32, dy: -r * 0.18, rad: r * 0.13 }
+      ];
+      for (const toe of toes) {
+        ctx.beginPath();
+        ctx.arc(x + toe.dx, y + toe.dy, toe.rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     // --- 多材质棋子渲染器 (顶级3D球体光照、真实微柔阴影与瓷釉高光) ---
     function drawThemedStone(x, y, r, stoneColor, theme) {
       if (theme === 'sweet_romance') {
@@ -9770,6 +9792,9 @@
         ctx.fillStyle = g;
         ctx.fill();
         ctx.restore();
+
+        // 🌿 官方默认晴空草坪版保留猫爪肉垫识别元素；其他主题维持各自的纯材质棋子。
+        drawPaw(x, y, r, stoneColor === BLACK ? '#ff7675' : '#e17055');
 
         // 顶级瓷釉高光镜面弧
         ctx.save();
