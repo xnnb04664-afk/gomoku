@@ -2736,7 +2736,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.92</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.93</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3419,7 +3419,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.92';
+    const CURRENT_VERSION_TAG = 'v1.0.93';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -3606,7 +3606,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     const islandWrapper = document.getElementById('islandWrapper');
 
     let cWidth = 380, cHeight = 380, paddingX = 16, paddingY = 16, gridX = 23, gridY = 23, radius = 10;
-    let dpr = window.devicePixelRatio || 1;
+    let dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3.5);
 
     function getNowTime() {
       const d = new Date();
@@ -7338,11 +7338,16 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       cWidth = Math.floor(maxSide); 
       cHeight = Math.floor(maxSide);
 
-      dpr = window.devicePixelRatio || 1;
-      cvs.width = cWidth * dpr; cvs.height = cHeight * dpr;
-      cvs.style.width = cWidth + 'px'; cvs.style.height = cHeight + 'px';
+      dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3.5);
+      cvs.width = Math.round(cWidth * dpr);
+      cvs.height = Math.round(cHeight * dpr);
+      cvs.style.width = cWidth + 'px';
+      cvs.style.height = cHeight + 'px';
 
-      if (ctx.resetTransform) ctx.resetTransform(); else ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr, dpr);
+      if (ctx.resetTransform) ctx.resetTransform(); else ctx.setTransform(1,0,0,1,0,0);
+      ctx.scale(dpr, dpr);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       
       // 手机端将内边距压缩到 2.2%（原 4.5%），棋盘网格扩展铺满 96% 屏幕宽！
       paddingX = cWidth * (isMobile ? 0.022 : 0.038); 
@@ -7767,6 +7772,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     // ══════════════════════════════════════════════════════════════════
     let currentUserUid = localStorage.getItem('gomoku_user_uid') || '';
     let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
+    let currentUserRefreshToken = localStorage.getItem('gomoku_user_refresh_token') || '';
     let currentUserScore = parseInt(localStorage.getItem('gomoku_user_score') || '1000', 10);
 
     function updateLadderBadgeUI(score) {
@@ -7785,7 +7791,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     // 🛡️ 尝试从 Android 原生 SharedPreferences 读取免登双保险备份
-    if ((!currentUsername || !currentUserUid) && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
+    if ((!currentUsername || !currentUserUid || !currentUserToken || !currentUserRefreshToken) && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
       try {
         const nativeJson = AndroidNativeApp.getUserLoginJson();
         if (nativeJson) {
@@ -7794,8 +7800,10 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             currentUsername = nativeUser.username;
             currentUserUid = nativeUser.uid || currentUserUid;
             currentUserToken = nativeUser.token || currentUserToken;
+            currentUserRefreshToken = nativeUser.refreshToken || currentUserRefreshToken;
             localStorage.setItem('gomoku_user_uid', currentUserUid);
             localStorage.setItem('gomoku_user_token', currentUserToken);
+            if (currentUserRefreshToken) localStorage.setItem('gomoku_user_refresh_token', currentUserRefreshToken);
             localStorage.setItem('gomoku_user_username', currentUsername);
             if (nativeUser.nickname) {
               p1Name = nativeUser.nickname;
@@ -7808,6 +7816,31 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           }
         }
       } catch(e) {}
+    }
+
+    async function refreshUserSession() {
+      if (!currentUserUid || !currentUserRefreshToken || String(currentUserUid).startsWith('guest_')) return false;
+      try {
+        const res = await safeApiFetch('/api/auth/refresh_session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: currentUserUid, refreshToken: currentUserRefreshToken }),
+          timeoutMs: 7000
+        });
+        const json = await res.json();
+        if (json && json.code === 0 && json.data) {
+          applyUserData(json.data);
+          return true;
+        }
+        if (json && json.code === 2) {
+          console.warn('refresh_session token invalid:', json.msg);
+        } else {
+          console.warn('refresh_session temporarily unavailable:', json && json.msg);
+        }
+      } catch (e) {
+        console.warn('refresh_session offline fallback, keep local session:', e);
+      }
+      return false;
     }
 
     async function initUserSession() {
@@ -7827,15 +7860,23 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             // 云端验证成功，静默校准天梯积分与头像
             applyUserData(json.data);
             return;
-          } else if (json && (json.code === 1 || json.code === 2)) {
-            console.warn('verify_session token invalid:', json.msg);
-            showGameNotice('⚠️ 登录凭证已过期，请重新登录账号', true);
+          } else if (res.status === 401 || (json && json.code === 2)) {
+            if (await refreshUserSession()) return;
+            showGameNotice('⚠️ 登录状态已失效，请重新登录账号', true);
+          } else if (json && json.code === 1) {
+            // “用户不存在/缺少 uid”是服务端数据问题，不等同于凭证过期，避免误导用户。
+            console.warn('verify_session account sync failed:', json.msg);
           }
         } catch (e) {
           console.warn('verify_session offline fallback, keep local session:', e);
           // 网络慢或离线时：百分之百保留本地登录态，绝对不清空账号！
           return;
         }
+      }
+
+      // 旧网页缓存或原生备份可能只有 Refresh Token，直接走无感换发。
+      if (currentUserUid && currentUserRefreshToken && !currentUserToken) {
+        if (await refreshUserSession()) return;
       }
 
       // 2. 游客模式：完全本地化，不创建数据库记录，不上天梯榜
@@ -7880,6 +7921,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         currentUserToken = "";
         localStorage.removeItem("gomoku_user_token");
       }
+      if (data.refreshToken) {
+        currentUserRefreshToken = String(data.refreshToken);
+        localStorage.setItem("gomoku_user_refresh_token", currentUserRefreshToken);
+      } else if (data.refreshToken === null) {
+        currentUserRefreshToken = "";
+        localStorage.removeItem("gomoku_user_refresh_token");
+      }
       if (typeof data.username === "string" && data.username.trim()) {
         currentUsername = data.username.trim();
         localStorage.setItem("gomoku_user_username", currentUsername);
@@ -7914,6 +7962,9 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         try {
           AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar);
         } catch(e) {}
+      }
+      if (currentUsername && currentUserRefreshToken && typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserRefreshToken) {
+        try { AndroidNativeApp.saveUserRefreshToken(currentUserRefreshToken); } catch(e) {}
       }
 
       // 同步天梯分与段位
@@ -10248,110 +10299,288 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
     }
 
-    // --- 多材质棋子渲染器 ---
+    // --- 多材质棋子渲染器 (顶级3D球体光照、真实微柔阴影与瓷釉高光) ---
     function drawThemedStone(x, y, r, stoneColor, theme) {
       if (theme === 'sweet_romance') {
-        // 🍬 果冻布丁质感 + 心形反光高光
+        // 🍬 浪漫樱粉：果冻水晶质感 + 柔和心动辉光
         ctx.save();
-        ctx.beginPath(); ctx.arc(x, y + 2, r * 0.95, 0, Math.PI*2);
-        ctx.fillStyle = stoneColor === BLACK ? 'rgba(255, 117, 140, 0.35)' : 'rgba(110, 168, 254, 0.3)';
+        ctx.shadowColor = stoneColor === BLACK ? 'rgba(244, 114, 182, 0.42)' : 'rgba(125, 180, 255, 0.38)';
+        ctx.shadowBlur = r * 0.38;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = r * 0.18;
+
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        const g = ctx.createRadialGradient(x - r * 0.32, y - r * 0.32, r * 0.08, x, y, r);
+        if (stoneColor === BLACK) {
+          g.addColorStop(0, '#ffa5ba');
+          g.addColorStop(0.35, '#ff758c');
+          g.addColorStop(0.75, '#e83e68');
+          g.addColorStop(1, '#be185d');
+        } else {
+          g.addColorStop(0, '#ffffff');
+          g.addColorStop(0.35, '#e0f2fe');
+          g.addColorStop(0.75, '#bae6fd');
+          g.addColorStop(1, '#7dd3fc');
+        }
+        ctx.fillStyle = g;
         ctx.fill();
-
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
-        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 2, x, y, r);
-        if (stoneColor === BLACK) {
-          g.addColorStop(0, '#ff9a9e'); g.addColorStop(0.5, '#fecfef'); g.addColorStop(1, '#ff6b8b');
-        } else {
-          g.addColorStop(0, '#ffffff'); g.addColorStop(0.6, '#e0c3fc'); g.addColorStop(1, '#8ec5fc');
-        }
-        ctx.fillStyle = g; ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.2; ctx.stroke();
         ctx.restore();
+
+        // 珍珠果冻高光弧
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(x - r * 0.28, y - r * 0.28, r * 0.42, r * 0.22, -Math.PI / 4, 0, Math.PI * 2);
+        const glint = ctx.createLinearGradient(x - r * 0.45, y - r * 0.45, x, y);
+        glint.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+        glint.addColorStop(0.5, 'rgba(255, 255, 255, 0.25)');
+        glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glint;
+        ctx.fill();
+        ctx.restore();
+
+        // 极细通透光润边缘
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255, 255, 255, 0.45)' : 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 0.9;
+        ctx.stroke();
+
       } else if (theme === 'zen_dark') {
-        // 🖤 3D黑曜石与羊脂白玉
+        // 🖤 幽冥暗境：黑曜石晶石与羊脂暖玉
         ctx.save();
-        ctx.beginPath(); ctx.arc(x + 2, y + 3, r * 0.95, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fill();
+        ctx.shadowColor = stoneColor === BLACK ? 'rgba(0, 0, 0, 0.85)' : 'rgba(0, 0, 0, 0.65)';
+        ctx.shadowBlur = r * 0.42;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = r * 0.22;
 
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
-        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 1, x, y, r);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.08, x, y, r);
         if (stoneColor === BLACK) {
-          g.addColorStop(0, '#3f3f46'); g.addColorStop(0.7, '#18181b'); g.addColorStop(1, '#09090b');
+          g.addColorStop(0, '#52525b');
+          g.addColorStop(0.3, '#27272a');
+          g.addColorStop(0.75, '#18181b');
+          g.addColorStop(1, '#09090b');
         } else {
-          g.addColorStop(0, '#ffffff'); g.addColorStop(0.8, '#f4f4f5'); g.addColorStop(1, '#d4d4d8');
+          g.addColorStop(0, '#ffffff');
+          g.addColorStop(0.4, '#f4f4f5');
+          g.addColorStop(0.8, '#e4e4e7');
+          g.addColorStop(1, '#a1a1aa');
         }
-        ctx.fillStyle = g; ctx.fill();
-        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.9)';
-        ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = g;
+        ctx.fill();
         ctx.restore();
+
+        // 镜面高光弧
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(x - r * 0.28, y - r * 0.28, r * 0.42, r * 0.22, -Math.PI / 4, 0, Math.PI * 2);
+        const glint = ctx.createLinearGradient(x - r * 0.45, y - r * 0.45, x, y);
+        glint.addColorStop(0, stoneColor === BLACK ? 'rgba(255, 255, 255, 0.4)' : 'rgba(255, 255, 255, 0.95)');
+        glint.addColorStop(0.5, stoneColor === BLACK ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.3)');
+        glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glint;
+        ctx.fill();
+        ctx.restore();
+
+        // 边缘轮廓
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.9)';
+        ctx.lineWidth = 0.9;
+        ctx.stroke();
+
       } else if (theme === 'neo_trad') {
-        // 📜 新中式水墨与象牙白玉
+        // 📜 新中式水墨榧木：古法徽墨石与和田白玉
         ctx.save();
-        ctx.beginPath(); ctx.arc(x + 1.5, y + 2.5, r * 0.92, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(74, 59, 44, 0.4)'; ctx.fill();
+        ctx.shadowColor = 'rgba(60, 42, 22, 0.35)';
+        ctx.shadowBlur = r * 0.36;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = r * 0.18;
 
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
-        const g = ctx.createRadialGradient(x - r*0.3, y - r*0.3, 1, x, y, r);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        const g = ctx.createRadialGradient(x - r * 0.32, y - r * 0.32, r * 0.08, x, y, r);
         if (stoneColor === BLACK) {
-          g.addColorStop(0, '#2c221a'); g.addColorStop(0.8, '#14100c'); g.addColorStop(1, '#000');
+          g.addColorStop(0, '#42362b');
+          g.addColorStop(0.35, '#241b14');
+          g.addColorStop(0.75, '#120d09');
+          g.addColorStop(1, '#050403');
         } else {
-          g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#faf6ee'); g.addColorStop(1, '#e8dcbe');
+          g.addColorStop(0, '#ffffff');
+          g.addColorStop(0.35, '#faf6ee');
+          g.addColorStop(0.75, '#ede0c8');
+          g.addColorStop(1, '#d5c39e');
         }
-        ctx.fillStyle = g; ctx.fill();
-        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(220,179,116,0.5)' : 'rgba(255,255,255,0.8)';
-        ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = g;
+        ctx.fill();
         ctx.restore();
+
+        // 温润包浆高光
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(x - r * 0.28, y - r * 0.28, r * 0.4, r * 0.22, -Math.PI / 4, 0, Math.PI * 2);
+        const glint = ctx.createLinearGradient(x - r * 0.45, y - r * 0.45, x, y);
+        glint.addColorStop(0, stoneColor === BLACK ? 'rgba(235, 200, 150, 0.38)' : 'rgba(255, 255, 255, 0.9)');
+        glint.addColorStop(0.5, stoneColor === BLACK ? 'rgba(235, 200, 150, 0.08)' : 'rgba(255, 255, 255, 0.25)');
+        glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glint;
+        ctx.fill();
+        ctx.restore();
+
+        // 描金与牙白边缘
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(217, 175, 110, 0.38)' : 'rgba(180, 150, 100, 0.25)';
+        ctx.lineWidth = 0.9;
+        ctx.stroke();
+
       } else if (theme === 'luxury_glass') {
-        // ✨ 冷光冷紫珠宝质感
+        // ✨ 现代奢华毛玻璃：冷光星芒蓝宝石与幻彩蛋白石
         ctx.save();
-        ctx.beginPath(); ctx.arc(x, y + 3, r * 0.95, 0, Math.PI*2);
-        ctx.fillStyle = stoneColor === BLACK ? 'rgba(0,0,0,0.8)' : 'rgba(99,102,241,0.4)'; ctx.fill();
+        ctx.shadowColor = stoneColor === BLACK ? 'rgba(79, 70, 229, 0.45)' : 'rgba(129, 140, 248, 0.4)';
+        ctx.shadowBlur = r * 0.44;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = r * 0.2;
 
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
-        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 1, x, y, r);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        const g = ctx.createRadialGradient(x - r * 0.32, y - r * 0.32, r * 0.08, x, y, r);
         if (stoneColor === BLACK) {
-          g.addColorStop(0, '#4f46e5'); g.addColorStop(0.4, '#1e1b4b'); g.addColorStop(1, '#090a10');
+          g.addColorStop(0, '#6366f1');
+          g.addColorStop(0.35, '#3730a3');
+          g.addColorStop(0.75, '#1e1b4b');
+          g.addColorStop(1, '#090a14');
         } else {
-          g.addColorStop(0, '#ffffff'); g.addColorStop(0.6, '#e0e7ff'); g.addColorStop(1, '#818cf8');
+          g.addColorStop(0, '#ffffff');
+          g.addColorStop(0.4, '#e0e7ff');
+          g.addColorStop(0.75, '#a5b4fc');
+          g.addColorStop(1, '#6366f1');
         }
-        ctx.fillStyle = g; ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.fillStyle = g;
+        ctx.fill();
         ctx.restore();
+
+        // 水晶折射双高光
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(x - r * 0.28, y - r * 0.28, r * 0.42, r * 0.22, -Math.PI / 4, 0, Math.PI * 2);
+        const glint = ctx.createLinearGradient(x - r * 0.45, y - r * 0.45, x, y);
+        glint.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+        glint.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
+        glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glint;
+        ctx.fill();
+        ctx.restore();
+
+        // 纯净冷光边缘
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(165, 180, 252, 0.45)' : 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
       } else if (theme === 'clean_ios') {
-        // 📱 苹果纯净极简原石
+        // 📱 Clean iOS 极简暖白：苹果深空灰与精密陶瓷白
         ctx.save();
-        ctx.beginPath(); ctx.arc(x, y + 2.5, r * 0.95, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fill();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
+        ctx.shadowBlur = r * 0.34;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = r * 0.18;
 
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
-        const g = ctx.createRadialGradient(x - r*0.35, y - r*0.35, 1, x, y, r);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        const g = ctx.createRadialGradient(x - r * 0.32, y - r * 0.32, r * 0.08, x, y, r);
         if (stoneColor === BLACK) {
-          g.addColorStop(0, '#3a3a3c'); g.addColorStop(0.8, '#1c1c1e'); g.addColorStop(1, '#000000');
+          g.addColorStop(0, '#48484a');
+          g.addColorStop(0.35, '#2c2c2e');
+          g.addColorStop(0.75, '#1c1c1e');
+          g.addColorStop(1, '#0c0c0e');
         } else {
-          g.addColorStop(0, '#ffffff'); g.addColorStop(0.85, '#f2f2f7'); g.addColorStop(1, '#e5e5ea');
+          g.addColorStop(0, '#ffffff');
+          g.addColorStop(0.4, '#f8f8fa');
+          g.addColorStop(0.8, '#e5e5ea');
+          g.addColorStop(1, '#c7c7cc');
         }
-        ctx.fillStyle = g; ctx.fill();
-        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.06)';
-        ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = g;
+        ctx.fill();
         ctx.restore();
-      } else {
-        // 🌿 经典晴空浮岛草坪棋子
-        ctx.beginPath(); ctx.arc(x+1.5, y+2.5, r*0.95, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(20, 60, 10, 0.45)'; ctx.fill();
 
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
+        // 苹果极简微高光
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(x - r * 0.28, y - r * 0.28, r * 0.38, r * 0.2, -Math.PI / 4, 0, Math.PI * 2);
+        const glint = ctx.createLinearGradient(x - r * 0.45, y - r * 0.45, x, y);
+        glint.addColorStop(0, stoneColor === BLACK ? 'rgba(255, 255, 255, 0.32)' : 'rgba(255, 255, 255, 0.9)');
+        glint.addColorStop(0.5, stoneColor === BLACK ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.2)');
+        glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glint;
+        ctx.fill();
+        ctx.restore();
+
+        // 极细边缘
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.1)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+
+      } else {
+        // 🌿 经典晴空浮岛草坪棋子：顶级高球云子质感 (深邃黑玉 / 纯净羊脂白玉)
+        ctx.save();
+        ctx.shadowColor = 'rgba(20, 48, 12, 0.38)';
+        ctx.shadowBlur = r * 0.36;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = r * 0.18;
+
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        const g = ctx.createRadialGradient(x - r * 0.32, y - r * 0.32, r * 0.08, x, y, r);
         if (stoneColor === BLACK) {
-          const g = ctx.createRadialGradient(x-r*0.35, y-r*0.35, 1, x, y, r);
-          g.addColorStop(0, '#4a5568'); g.addColorStop(0.6, '#2d3748'); g.addColorStop(1, '#1a202c');
-          ctx.fillStyle = g; ctx.fill();
+          // 深沉黑玉石，高光自然过渡到纯黑
+          g.addColorStop(0, '#525e6f');
+          g.addColorStop(0.28, '#272d37');
+          g.addColorStop(0.72, '#11141a');
+          g.addColorStop(1, '#05070a');
         } else {
-          const g = ctx.createRadialGradient(x-r*0.35, y-r*0.35, 1, x, y, r);
-          g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, '#fff5f7'); g.addColorStop(1, '#fed7e2');
-          ctx.fillStyle = g; ctx.fill();
+          // 纯正羊脂温润白玉，告别脏粉色
+          g.addColorStop(0, '#ffffff');
+          g.addColorStop(0.35, '#f8fafc');
+          g.addColorStop(0.75, '#e2e8f0');
+          g.addColorStop(1, '#cbd5e1');
         }
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2);
-        ctx.lineWidth = Math.max(1.2, cWidth * 0.0035);
-        ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.stroke();
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.restore();
+
+        // 顶级瓷釉高光镜面弧
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(x - r * 0.28, y - r * 0.28, r * 0.42, r * 0.22, -Math.PI / 4, 0, Math.PI * 2);
+        const glint = ctx.createLinearGradient(x - r * 0.45, y - r * 0.45, x, y);
+        glint.addColorStop(0, stoneColor === BLACK ? 'rgba(255, 255, 255, 0.42)' : 'rgba(255, 255, 255, 0.92)');
+        glint.addColorStop(0.5, stoneColor === BLACK ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.28)');
+        glint.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glint;
+        ctx.fill();
+        ctx.restore();
+
+        // 底部环境微反光 (增加玉石通透厚重感)
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r - 0.5, Math.PI * 0.2, Math.PI * 0.8);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.restore();
+
+        // 极细外轮廓线 (取代原先粗糙的纯白大线圈，提供清晰微反差)
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = stoneColor === BLACK ? 'rgba(255, 255, 255, 0.16)' : 'rgba(15, 23, 42, 0.15)';
+        ctx.lineWidth = 0.85;
+        ctx.stroke();
       }
     }
 
@@ -10369,15 +10598,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     function getCachedBoardBitmap() {
-      if (cachedBoardCanvas && cachedBoardKey === activeThemeKey && cachedBoardW === cWidth && cachedBoardH === cHeight) {
+      const targetW = Math.round(cWidth * dpr);
+      const targetH = Math.round(cHeight * dpr);
+      if (cachedBoardCanvas && cachedBoardKey === activeThemeKey && cachedBoardW === targetW && cachedBoardH === targetH) {
         return cachedBoardCanvas;
       }
       if (!cachedBoardCanvas) {
         cachedBoardCanvas = document.createElement('canvas');
       }
-      cachedBoardCanvas.width = cWidth;
-      cachedBoardCanvas.height = cHeight;
+      cachedBoardCanvas.width = targetW;
+      cachedBoardCanvas.height = targetH;
       const bCtx = cachedBoardCanvas.getContext('2d');
+      bCtx.imageSmoothingEnabled = true;
+      bCtx.imageSmoothingQuality = 'high';
+      if (bCtx.resetTransform) bCtx.resetTransform(); else bCtx.setTransform(1,0,0,1,0,0);
+      bCtx.scale(dpr, dpr);
 
       const origCtx = ctx;
       ctx = bCtx;
@@ -10390,8 +10625,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       ctx = origCtx;
 
       cachedBoardKey = activeThemeKey;
-      cachedBoardW = cWidth;
-      cachedBoardH = cHeight;
+      cachedBoardW = targetW;
+      cachedBoardH = targetH;
       return cachedBoardCanvas;
     }
 
@@ -10429,12 +10664,18 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     }
 
     function getCachedPiecesBitmap() {
-      const key = `${activeThemeKey}|${cWidth}|${cHeight}|${radius}|${isReplayMode ? 1 : 0}|${hashBoardVisual()}|${hashReplayVisual()}`;
+      const targetW = Math.round(cWidth * dpr);
+      const targetH = Math.round(cHeight * dpr);
+      const key = `${activeThemeKey}|${targetW}|${targetH}|${dpr}|${radius}|${isReplayMode ? 1 : 0}|${hashBoardVisual()}|${hashReplayVisual()}`;
       if (cachedPiecesCanvas && cachedPiecesKey === key) return cachedPiecesCanvas;
       if (!cachedPiecesCanvas) cachedPiecesCanvas = document.createElement('canvas');
-      cachedPiecesCanvas.width = cWidth;
-      cachedPiecesCanvas.height = cHeight;
+      cachedPiecesCanvas.width = targetW;
+      cachedPiecesCanvas.height = targetH;
       const piecesCtx = cachedPiecesCanvas.getContext('2d');
+      piecesCtx.imageSmoothingEnabled = true;
+      piecesCtx.imageSmoothingQuality = 'high';
+      if (piecesCtx.resetTransform) piecesCtx.resetTransform(); else piecesCtx.setTransform(1,0,0,1,0,0);
+      piecesCtx.scale(dpr, dpr);
       piecesCtx.clearRect(0, 0, cWidth, cHeight);
 
       const originalCtx = ctx;
@@ -10456,11 +10697,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             if (!st || st.r < 0 || st.c < 0) continue;
             const sx = paddingX + (st.c + 0.5) * gridX;
             const sy = paddingY + (st.r + 0.5) * gridY;
-            piecesCtx.font = `bold ${Math.round(radius * 0.95)}px Arial, sans-serif`;
+            piecesCtx.font = `bold ${Math.round(radius * 0.95)}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
             piecesCtx.textAlign = 'center';
             piecesCtx.textBaseline = 'middle';
             const curColor = (board[st.r] && board[st.r][st.c]) || st.p;
-            piecesCtx.fillStyle = (curColor === 1) ? '#f8fafc' : '#1e293b';
+            piecesCtx.fillStyle = (curColor === 1) ? '#f8fafc' : '#0f172a';
             const displayNum = st.moveNum || (i + 1);
             piecesCtx.fillText(String(displayNum), sx, sy + 1);
           }
@@ -10475,11 +10716,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
     function draw() {
       ctx.clearRect(0, 0, cWidth, cHeight);
 
-      // 1. 硬件加速单次贴图：极速离屏底盘位图 (GPU Blit 零回流零重绘)
-      ctx.drawImage(getCachedBoardBitmap(), 0, 0);
+      // 1. 硬件加速单次贴图：极速离屏底盘位图 (GPU Blit 零回流零重绘，高分屏1:1超采样)
+      ctx.drawImage(getCachedBoardBitmap(), 0, 0, cWidth, cHeight);
 
-      // 2. 棋子与复盘序号使用离屏缓存；动态标记和粒子特效仍在主画布绘制。
-      ctx.drawImage(getCachedPiecesBitmap(), 0, 0);
+      // 2. 棋子与复盘序号使用离屏缓存；动态标记和粒子特效仍在主画布绘制 (零插值模糊)。
+      ctx.drawImage(getCachedPiecesBitmap(), 0, 0, cWidth, cHeight);
 
       // 3. 最后一手落子标记 (采用五子棋行业公认标准：中心经典高反差正红圆点 + 纯白轮廓，全主题全棋色通用)
       if (!isReplayMode) {
@@ -10818,9 +11059,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       currentUsername = "";
       currentUserUid = "";
       currentUserToken = "";
+      currentUserRefreshToken = "";
       currentUserScore = 1000;
       localStorage.removeItem("gomoku_user_username");
       localStorage.removeItem("gomoku_user_token");
+      localStorage.removeItem("gomoku_user_refresh_token");
       localStorage.removeItem("gomoku_user_uid");
       localStorage.setItem("gomoku_user_score", "1000");
 

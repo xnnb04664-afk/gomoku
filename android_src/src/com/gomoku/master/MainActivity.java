@@ -603,6 +603,16 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
 
+            // Refresh Token 单独写入，兼容旧版 WebView 的五参数 saveUserLogin 桥接。
+            @android.webkit.JavascriptInterface
+            public void saveUserRefreshToken(String refreshToken) {
+                try {
+                    getSharedPreferences("app_user_login", MODE_PRIVATE).edit()
+                        .putString("refreshToken", refreshToken != null ? refreshToken : "")
+                        .apply();
+                } catch (Exception ignored) {}
+            }
+
             @android.webkit.JavascriptInterface
             public String getUserLoginJson() {
                 try {
@@ -614,6 +624,7 @@ public class MainActivity extends Activity {
                     obj.put("uid", uid);
                     obj.put("username", username);
                     obj.put("token", sp.getString("token", ""));
+                    obj.put("refreshToken", sp.getString("refreshToken", ""));
                     obj.put("nickname", sp.getString("nickname", ""));
                     obj.put("avatar", sp.getString("avatar", ""));
                     return obj.toString();

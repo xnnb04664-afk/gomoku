@@ -23,6 +23,8 @@ const PRIVATE_RELEASE_CACHE_TTL_MS = 30000;
 const GITHUB_REQUEST_TIMEOUT_MS = 8000;
 const MAX_JSON_BODY_BYTES = 512 * 1024;
 const MAX_UPDATE_ASSET_BYTES = 8 * 1024 * 1024;
+const AUTH_SESSION_TTL_MS = 365 * 24 * 3600 * 1000;
+const REFRESH_TOKEN_BYTES = 32;
 
 // 私有仓库更新中转：GitHub 凭据只通过 Worker Secret 注入，绝不下发到客户端。
 const UPDATE_REPOSITORY = 'xnnb04664-afk/gomoku';
@@ -274,6 +276,8 @@ export default {
             reset_locked_until INTEGER DEFAULT 0,
             token TEXT,
             token_expires_at INTEGER DEFAULT 0,
+            refresh_token_hash TEXT,
+            refresh_token_expires_at INTEGER DEFAULT 0,
             failed_login_count INTEGER DEFAULT 0,
             locked_until INTEGER DEFAULT 0,
             nickname TEXT,
@@ -289,6 +293,7 @@ export default {
 
         const cols = [
           'password_hash TEXT', 'salt TEXT', 'password_algo TEXT DEFAULT \'pbkdf2\'', 'token TEXT', 'token_expires_at INTEGER DEFAULT 0',
+          'refresh_token_hash TEXT', 'refresh_token_expires_at INTEGER DEFAULT 0',
           'failed_login_count INTEGER DEFAULT 0', 'locked_until INTEGER DEFAULT 0', 'last_game_at INTEGER DEFAULT 0',
           'security_q TEXT', 'security_a_hash TEXT', 'security_salt TEXT',
           'failed_reset_count INTEGER DEFAULT 0', 'reset_locked_until INTEGER DEFAULT 0'
@@ -703,6 +708,7 @@ async function allocateNextAvailableUid(env) {
         const salt = generateSecureHex(16);
         const passwordHash = await hashPassword(password, salt);
         const newToken = generateSecureHex(24);
+        const newRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
 
         const safeQ = sanitizeText(securityQuestion, 60) || '你最喜欢的人是谁？';
         const cleanAnswer = (securityAnswer && typeof securityAnswer === 'string') ? securityAnswer.trim().toLowerCase() : '';
@@ -712,33 +718,36 @@ async function allocateNextAvailableUid(env) {
         if (uid && token) {
           const guest = await env.DB.prepare('SELECT uid, username FROM users WHERE uid = ? AND token = ?').bind(String(uid), String(token)).first();
           if (guest && !guest.username) {
+            const guestRefreshTokenHash = await hashWithSalt(newRefreshToken, String(uid));
             await env.DB.prepare(`
               UPDATE users
               SET username = ?, password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
+                  refresh_token_hash = ?, refresh_token_expires_at = ?,
                   security_q = ?, security_a_hash = ?, security_salt = ?,
                   failed_login_count = 0, locked_until = 0, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP
               WHERE uid = ?
-            `).bind(safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
+            `).bind(safeUsername, passwordHash, salt, newToken, expiresAt, guestRefreshTokenHash, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
 
             try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
             const updated = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(uid).first();
             cachedLeaderboard = null;
             lastLeaderboardTime = 0;
-            return json({ code: 0, msg: '账号绑定升级成功！', data: updated });
+            return json({ code: 0, msg: '账号绑定升级成功！', data: { ...updated, token: newToken, refreshToken: newRefreshToken } });
           }
         }
 
         const newUid = await allocateNextAvailableUid(env);
+        const finalRefreshTokenHash = await hashWithSalt(newRefreshToken, newUid);
         await env.DB.prepare(`
-          INSERT INTO users (uid, username, password_hash, salt, password_algo, token, token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
-          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
-        `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
+          INSERT INTO users (uid, username, password_hash, salt, password_algo, token, token_expires_at, refresh_token_hash, refresh_token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
+          VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
+        `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, finalRefreshTokenHash, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
 
         try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
         const created = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(newUid).first();
         cachedLeaderboard = null;
         lastLeaderboardTime = 0;
-        return json({ code: 0, msg: '注册成功并已自动登录！', data: created });
+        return json({ code: 0, msg: '注册成功并已自动登录！', data: { ...created, token: newToken, refreshToken: newRefreshToken } });
       } catch (err) {
         return publicServerError('注册异常', err);
       }
@@ -803,7 +812,7 @@ async function allocateNextAvailableUid(env) {
         if (!uid) return json({ code: 1, msg: "缺少 uid" });
 
         const user = await env.DB.prepare(
-          "SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at, security_q FROM users WHERE uid = ?"
+          "SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at, refresh_token_hash, refresh_token_expires_at, security_q FROM users WHERE uid = ?"
         ).bind(String(uid)).first();
 
         if (!user) {
@@ -811,14 +820,16 @@ async function allocateNextAvailableUid(env) {
         }
 
         const now = Date.now();
-        const oneYear = 365 * 24 * 3600 * 1000;
+        const oneYear = AUTH_SESSION_TTL_MS;
 
         // 如果用户已绑定了正式账号名
         if (user.username) {
           if (token && user.token && token === user.token && (!user.token_expires_at || user.token_expires_at > now)) {
-            let freshToken = user.token || generateSecureHex(24);
+            const freshToken = user.token || generateSecureHex(24);
+            const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+            const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
             const expiresAt = now + oneYear;
-            await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, user.uid).run();
+            await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
 
             return json({
               code: 0,
@@ -832,7 +843,8 @@ async function allocateNextAvailableUid(env) {
                 wins: user.wins,
                 total_games: user.total_games,
                 security_q: user.security_q,
-                token: freshToken
+                token: freshToken,
+                refreshToken: freshRefreshToken
               }
             });
           }
@@ -862,6 +874,59 @@ async function allocateNextAvailableUid(env) {
         }
       } catch (err) {
         return publicServerError('会话验证异常', err);
+      }
+    }
+
+    // ── 3.9 Refresh Token 无感换发（更新/重启后无需再次输入密码） ───
+    if (url.pathname === "/api/auth/refresh_session" && request.method === "POST") {
+      if (!env.DB) return json({ code: 1, msg: "数据库未连接" }, 500);
+      try {
+        const body = await readJsonBody(request);
+        const uid = typeof body.uid === 'string' ? body.uid.trim() : '';
+        const refreshToken = typeof body.refreshToken === 'string' ? body.refreshToken.trim() : '';
+        if (!uid || uid.length > 64 || !/^[0-9a-f]{64}$/i.test(refreshToken)) {
+          return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
+        }
+
+        const user = await env.DB.prepare(
+          "SELECT uid, username, nickname, avatar, score, wins, total_games, security_q, refresh_token_hash, refresh_token_expires_at FROM users WHERE uid = ? AND username IS NOT NULL AND username != ?"
+        ).bind(uid, '').first();
+        const now = Date.now();
+        if (!user || !user.refresh_token_hash || !user.refresh_token_expires_at || Number(user.refresh_token_expires_at) <= now) {
+          return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
+        }
+
+        const calculatedHash = await hashWithSalt(refreshToken, String(user.uid));
+        if (calculatedHash !== user.refresh_token_hash) {
+          return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
+        }
+
+        const freshToken = generateSecureHex(24);
+        const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
+        const expiresAt = now + AUTH_SESSION_TTL_MS;
+        await env.DB.prepare(
+          "UPDATE users SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?"
+        ).bind(freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
+
+        return json({
+          code: 0,
+          msg: "登录状态已自动续期",
+          data: {
+            uid: user.uid,
+            username: user.username,
+            nickname: user.nickname,
+            avatar: sanitizeAvatar(user.avatar),
+            score: user.score,
+            wins: user.wins,
+            total_games: user.total_games,
+            security_q: user.security_q,
+            token: freshToken,
+            refreshToken: freshRefreshToken
+          }
+        });
+      } catch (err) {
+        return publicServerError('会话续期异常', err);
       }
     }
 
@@ -901,13 +966,15 @@ async function allocateNextAvailableUid(env) {
         }
 
         const freshToken = generateSecureHex(24);
-        const expiresAt = now + 365 * 24 * 3600 * 1000;
+        const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
+        const expiresAt = now + AUTH_SESSION_TTL_MS;
         await env.DB.prepare(`
           UPDATE users
           SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = 'pbkdf2',
-              token = ?, token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+              token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(calcHash, user.salt, freshToken, expiresAt, user.uid).run();
+        `).bind(calcHash, user.salt, freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
 
         return json({
           code: 0,
@@ -921,7 +988,8 @@ async function allocateNextAvailableUid(env) {
             wins: user.wins,
             total_games: user.total_games,
             security_q: user.security_q,
-            token: freshToken
+            token: freshToken,
+            refreshToken: freshRefreshToken
           }
         });
       } catch (err) {
@@ -986,14 +1054,16 @@ async function allocateNextAvailableUid(env) {
         const newSalt = generateSecureHex(16);
         const newPasswordHash = await hashPassword(newPassword, newSalt);
         const freshToken = generateSecureHex(24);
-        const expiresAt = now + 365 * 24 * 3600 * 1000;
+        const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
+        const expiresAt = now + AUTH_SESSION_TTL_MS;
         await env.DB.prepare(`
           UPDATE users
           SET password_hash = ?, salt = ?, password_algo = 'pbkdf2',
-              token = ?, token_expires_at = ?, failed_login_count = 0, locked_until = 0,
+              token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(newPasswordHash, newSalt, freshToken, expiresAt, user.uid).run();
+        `).bind(newPasswordHash, newSalt, freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
 
         return json({
           code: 0,
@@ -1007,7 +1077,8 @@ async function allocateNextAvailableUid(env) {
             wins: user.wins,
             total_games: user.total_games,
             security_q: user.security_q,
-            token: freshToken
+            token: freshToken,
+            refreshToken: freshRefreshToken
           }
         });
       } catch (err) {
@@ -1082,16 +1153,19 @@ async function allocateNextAvailableUid(env) {
         const newSalt = generateSecureHex(16);
         const newPwdHash = await hashPassword(newPassword, newSalt);
         const newToken = generateSecureHex(24);
-        const expiresAt = now + 365 * 24 * 3600 * 1000;
+        const newRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const newRefreshTokenHash = await hashWithSalt(newRefreshToken, String(user.uid));
+        const expiresAt = now + AUTH_SESSION_TTL_MS;
 
         await env.DB.prepare(`
           UPDATE users
           SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
+              refresh_token_hash = ?, refresh_token_expires_at = ?,
               failed_reset_count = 0, reset_locked_until = 0,
               failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(newPwdHash, newSalt, newToken, expiresAt, user.uid).run();
+        `).bind(newPwdHash, newSalt, newToken, expiresAt, newRefreshTokenHash, expiresAt, user.uid).run();
 
         return json({
           code: 0,
@@ -1104,7 +1178,8 @@ async function allocateNextAvailableUid(env) {
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
-            token: newToken
+            token: newToken,
+            refreshToken: newRefreshToken
           }
         });
       } catch (err) {
