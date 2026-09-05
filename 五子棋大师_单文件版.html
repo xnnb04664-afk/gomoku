@@ -2764,7 +2764,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.94</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.95</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3447,7 +3447,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.94';
+    const CURRENT_VERSION_TAG = 'v1.0.95';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -5209,10 +5209,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
 
         // P2P 打通后优先走 WebRTC；未打通或临时断开时自动回退 MQTT。
+        // 昵称/头像属于低频但必须最终一致的资料消息：P2P 发送成功后仍镜像一份到 MQTT，
+        // 这样可以覆盖 DataChannel 半开、手机切网等“本端仍显示 open 但对端已收不到”的情况。
+        let sentViaP2p = false;
         if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
           try {
             this.dc.send(jsonStr);
-            return true;
+            sentViaP2p = true;
+            if (data.type !== 'profile_sync') return true;
           } catch(e) {
             this.isP2pReady = false;
           }
@@ -5226,7 +5230,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
             console.warn('[MqttRoom send error]', e);
           }
         }
-        return false;
+        return sentViaP2p;
       }
 
       on(event, fn) {

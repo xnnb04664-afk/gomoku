@@ -229,8 +229,16 @@ def main():
               currentRoomCode = '654321';
               history = [];
               isOver = false;
+              p2Name = '旧昵称';
+              p2Avatar = '👧';
               conn = fakeConn;
               setupConn();
+              fakeConn.emit('data', {
+                type: 'profile_sync',
+                name: '新昵称',
+                avatar: '👦',
+                roundId: 'round_network'
+              });
               fakeConn.emit('data', {
                 type: 'ping',
                 pingId: 'peer_ping',
@@ -248,6 +256,23 @@ def main():
                 step: 0,
                 roundId: 'round_network'
               });
+              const p2pPayloads = [];
+              const mqttPayloads = [];
+              const transportProbe = {
+                open: true,
+                isP2pReady: true,
+                dc: { readyState: 'open', send(payload) { p2pPayloads.push(payload); } },
+                client: {
+                  connected: true,
+                  publish(topic, payload) { mqttPayloads.push({ topic, payload }); }
+                },
+                pubTopic: 'probe/profile'
+              };
+              const mirrored = MqttRoomConnection.prototype.send.call(transportProbe, {
+                type: 'profile_sync', name: '新昵称', avatar: '👦'
+              });
+              const p2pMessage = p2pPayloads.length ? JSON.parse(p2pPayloads[0]) : null;
+              const mqttMessage = mqttPayloads.length ? JSON.parse(mqttPayloads[0].payload) : null;
               updateOnlineNetworkUI();
               if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
               onlineHeartbeatTimer = null;
@@ -255,8 +280,11 @@ def main():
                 pongEchoesPing: Boolean(pong && pong.pingId === 'peer_ping'),
                 pongReportsState: pong && pong.peerState === 'MQTT中继',
                 pongReportsLatency: pong && Object.prototype.hasOwnProperty.call(pong, 'peerLatencyMs'),
+                profileMirrorOk: mirrored && p2pMessage && mqttMessage && p2pMessage._mid === mqttMessage._mid,
                 localLabel: document.querySelector('#myNetworkStatusLabel')?.textContent || '',
                 peerLabel: document.querySelector('#peerNetworkStatusLabel')?.textContent || '',
+                peerName: p2Name,
+                peerNameLabel: document.querySelector('#p2NameLabel')?.textContent || '',
                 localLatencyMs: onlineNetworkTelemetry.localLatencyMs,
                 localLatencyOk: Number.isFinite(onlineNetworkTelemetry.localLatencyMs) && onlineNetworkTelemetry.localLatencyMs >= 20 && onlineNetworkTelemetry.localLatencyMs <= 100,
                 peerLatencyOk: (document.querySelector('#peerNetworkStatusLabel')?.textContent || '').includes('33ms'),
@@ -269,9 +297,12 @@ def main():
             network_status['pongEchoesPing'],
             network_status['pongReportsState'],
             network_status['pongReportsLatency'],
+            network_status['profileMirrorOk'],
             network_status['localLatencyOk'],
             network_status['peerLatencyOk'],
-            network_status['peerTransportOk']
+            network_status['peerTransportOk'],
+            network_status['peerName'] == '新昵称',
+            '新昵称' in network_status['peerNameLabel']
         ])
         screenshot = Path(tempfile.gettempdir()) / "gomoku-optimization-smoke.png"
         page.screenshot(path=str(screenshot), full_page=False)
