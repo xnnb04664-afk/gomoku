@@ -946,7 +946,7 @@ node publish.js
      - `scratch/test_all_undo.py`：主版、5 套主题及单文件版终局悔棋；
      - `tests/optimization_smoke.py`、`tests/ai_worker_smoke.py`、`tests/worker_unit.js` 均 100% 通过。
 
-## 二十七、最强大师 AI v2 搜索与战术强化（2026-09-05，本地构建完成）
+## 二十七、最强大师 AI v2 搜索与战术强化（2026-09-05，已发布 v1.0.106）
 
 - **本轮目标**：再次全面强化人机棋力，同时保持手机端不阻塞棋盘渲染；本轮只修改客户端 AI、Worker、构建资源与测试，**没有修改 Worker/D1/Pages，不需要部署 Cloudflare**。
 - **快速引擎战术层**：
@@ -961,7 +961,7 @@ node publish.js
 - **兼容与同步范围**：
   - `js/ai_fast.js`、`js/ai_worker.js`、`js/ai.js` 已更新；`index.html` 已传入新的 Worker 搜索预算；
   - `android_src/assets/index.html` 已重新内嵌快速引擎，`android_src/assets/js/` 已同步；
-  - `五子棋大师_单文件版.html` 已重新打包，`五子棋.apk` 已使用仓库外原正式签名密钥重新生成，仍保持 v1.0.105 签名兼容；
+  - `五子棋大师_单文件版.html` 已重新打包，`五子棋.apk` 已使用仓库外原正式签名密钥重新生成，保持 v1.0.106 的覆盖安装签名兼容；
   - 新增 `tests/ai_strength_smoke.js`，覆盖直接胜、唯一防守、双威胁、角落开局、禁点和安静局面搜索。
 - **验证结果**：
   - `node tests/ai_strength_smoke.js`：6/6 通过；
@@ -969,10 +969,11 @@ node publish.js
   - `python -B tests/ai_worker_smoke.py`：使用 Android UA，主版与单文件版均可完成安静局面搜索（约 522 ms、深度 4），主线程计时器持续运行且无 console/page error；
   - `python -B tests/optimization_smoke.py`、`node tests/worker_unit.js`、`node tests/auth_refresh_unit.js`、`python -B tests/online_match_race_smoke.py`、`node --check`、`git diff --check` 均通过；
   - 20 手快速 AI 自对弈冒烟通过，未出现越界、覆盖已有棋子或非法落子。
-- **发布边界**：当前正式线上版本仍为 v1.0.105 (Build 106)，本轮是已完成的本地源码/单文件/APK 构建，尚未创建新 GitHub Release，也未部署 Cloudflare。要让已安装用户通过热更新拿到这次 AI，需要下一步按发布流程递增版本、运行 `node publish.js` 并推送新 Release；纯 AI 代码本身不需要 Cloudflare 部署。
-- **本地构建产物 SHA-256**：`index.html`：`572172EFB9C82285A987DE7526E314E69811312C7D05A3BAADD762D33B7B1902`；`android_src/assets/index.html`：`51FEFEAF341C97B964991F5FD22D7291A3B5EE57DB823CB3CB0F9DC736A48`；单文件版：`615241314E52EC2AE49777955EFABAAAE7991C4F4839688683C5DFB2F173A702`；APK：`264F70C7E6EDC4CB8485527718B1D80903D5370168BEB23A4AB00E297ED48853`。
+- **发布结果**：已递增为 v1.0.106（Build 107），完成正式签名 APK、单文件版、私有仓库推送和 GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.106>。线上 `https://gomoku-api.pages.dev/api/version` 实测 HTTP 200、`code=0`、`tag=v1.0.106`，可签发 APK/HTML 短时票据且不返回可复用直链。
+- **部署边界**：本轮只改客户端 AI、Worker 资源与测试，未修改运行中的 Worker/Pages/D1/票据逻辑，因此按既定规则跳过 Cloudflare 生产部署；Pages 会读取私有仓库最新 Release，已安装用户可通过现有热更新入口获取 v1.0.106。
+- **v1.0.106 产物 SHA-256**：`index.html`：`F0AFB7CC969C2A1974A29173EEEDA50AAAAFD730B7A9C57936CDE44E0F469103`；`android_src/assets/index.html`：`A6512AB5810D264E23EA18F9487A3877648BE477DB5EA0BB6A92CEA26BAAFBEB`；单文件版：`36226CDD2039989A4AEB4D4DE365632186BCBBF996FFCEDC4CE657A82E0ED09D`；APK：`2BF69F37F3934C8C616FCEC45EFBF3A8C3A66845CF6C40AC08644693E8575E0D`。
 
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.105 (Build 106)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2（完整杀点/必防、强制威胁证明、断四断三评估、威胁叶延伸、置换表复用、杀手着/历史启发、移动端后台搜索预算）均已完成本地源码与构建资源同步并通过回归测试；线上正式版本仍为 v1.0.105，AI v2 尚未创建新 Release。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程正式版本：v1.0.106 (Build 107)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2（完整杀点/必防、强制威胁证明、断四断三评估、威胁叶延伸、置换表复用、杀手着/历史启发、移动端后台搜索预算）均已完成源码、构建资源同步、正式签名构建和回归测试，并已发布 v1.0.106 GitHub Release；线上更新接口已返回 v1.0.106。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
