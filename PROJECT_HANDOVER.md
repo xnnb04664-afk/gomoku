@@ -736,7 +736,19 @@ node publish.js
 - **当前产物 SHA-256**：index.html / android_src/assets/index.html 为 7A997C4B4C46E5D5977B69E79E994DCC732FC3508376253D99C4BAD33DD7F94C；单文件版为 59BB68101644C390752A64D7A0A0E4101CE608B848664A052805ECA42BF50168；APK 为 681C7D5BE3C9E47A65347E99B49C332FF93548267AA70632DBCF82868040A2D8。
 - **部署边界**：本次客户端登录修复不要求重新部署 Cloudflare；服务端新增的 CORS 预检缓存已保存在源码，后续若要让该响应头上线，再单独执行一次 node deploy_worker.js。
 
+## 十八、更新检测可靠性修复（2026-09-05，已发布 v1.0.100）
+
+- **问题定位**：v1.0.98 的后台更新检查只执行一次，版本清单请求携带 `X-Gomoku-Client` 会触发 Android WebView 的 CORS 预检，并且客户端只有 3 秒超时；Cloudflare/私有 Release 冷启动稍慢时会被静默吞掉，所以用户既看不到更新弹窗，也无法判断是“没有更新”还是“检查失败”。
+- **客户端修复**：版本清单改用不携带专属自定义头的普通 GET，增加时间戳防止中间缓存，采用 8.5 秒首次超时 + 5 秒自动重试；下载 APK/HTML 仍继续使用客户端专属请求头、短时票据和 SHA-256 完整性校验。
+- **交互修复**：自动检查发现新版本时保留提示并把更新卡标记为“有新版本”；手动检查失败显示明确的“暂时无法检查更新”，重试按钮会重新发起检查，不再误报“当前版本运行良好”。当前实际运行版本以 HTML 内的 `CURRENT_VERSION_TAG` 为准，旧的本地版本标记不能再阻止更新。
+- **兼容说明**：已安装的 v1.0.98 代码无法被服务器远程替换；如果旧版仍因网络环境超时漏检，需要先从 v1.0.100 Release 手动安装一次，之后新版更新检查链路会生效。
+- **同步范围**：修复已同步到 `index.html`、`android_src/assets/index.html` 和 `五子棋大师_单文件版.html`；发布日志同步到 `publish.js`、`version.json` 及后端派生版本信息。
+- **验证结果**：发布前静态脚本/安全门禁、`python tests\optimization_smoke.py`、`node tests\worker_unit.js`、`node tests\auth_refresh_unit.js`、APK 签名构建均通过；线上 `/api/version` 返回 `v1.0.100`，并提供短时 APK/HTML 更新票据。
+- **发布结果**：已递增为 v1.0.100（Build 101），完成正式签名 APK、单文件版构建，推送 GitHub 私有仓库并创建 Release。Release 地址：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.100。
+- **当前产物 SHA-256**：`index.html` / `android_src/assets/index.html` 为 `C35A26DA746FA18EC1EE0A222A8EF4CE56714303E5E6DF20FE1C7AE8FB051AE7`；单文件版为 `A498D9FD3FC4AFEC668B6274B94FC2822B921428E524A364F66ED3CAAD85B303`；APK 为 `072F8B43EBA6D3D6B8D0C2E0364A6CE570EB92727B38A03DB1A32992AF2F60CE`。
+- **部署边界**：本次只修改客户端更新检查与发版脚本，按既定规则跳过 Cloudflare 生产部署；线上版本接口会从私有 Release 自动读取最新发布版本。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.99 (Build 100)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换和账号登录网络路径优化均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.99。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程正式版本：v1.0.100 (Build 101)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化和更新检测可靠性修复均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.100。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
