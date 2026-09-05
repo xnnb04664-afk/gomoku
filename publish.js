@@ -162,7 +162,10 @@ function runAllThemeSyntaxChecks() {
   }
   execSync('node --check deploy_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check publish.js', { cwd: ROOT_DIR, stdio: 'pipe' });
-  console.log('✅ 六大主题、发布脚本和部署脚本语法校验通过。');
+  execSync('node --check build_ai_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  execSync('node --check js/ai_fast.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  execSync('node --check js/ai_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  console.log('✅ 六大主题、发布脚本、部署脚本和 AI Worker 语法校验通过。');
 }
 
 try {
@@ -236,6 +239,7 @@ const vJson = {
     `🌐 【账号登录网络加速】登录弹窗提前选择最快官方出口，减少 Android WebView 跨域预检与重复等待；网络超时显示明确中文提示`,
     `📡 【更新检测稳定性】版本清单改用无预检 GET，增加防缓存与自动重试，避免手机端因跨域预检或冷启动超时漏报更新`,
     `🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深与置换表搜索，并按桌面/移动端设置单步时间预算`,
+    `🚀 【移动端 AI 性能】AI 搜索移入 Web Worker，使用扁平 Uint8Array、位图与数字棋型表；思考期间不阻塞棋盘，Worker 异常自动回退旧引擎`,
     `📱 【手机图标焕新】更换为晴空浮岛草坪对决主视觉图标，保留纯黑白棋子、金色干扰牌与皇冠元素`,
     `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
   ].join('\n\n'),
@@ -248,6 +252,7 @@ const vJson = {
     `🌐 【账号登录网络加速】登录弹窗提前选择最快官方出口，减少 Android WebView 跨域预检与重复等待；网络超时显示明确中文提示`,
     `📡 【更新检测稳定性】版本清单改用无预检 GET，增加防缓存与自动重试，避免手机端因跨域预检或冷启动超时漏报更新`,
     `🧠 【最强大师 AI】统一接入棋型评估、必胜/必防、双重威胁检测、Alpha-Beta 迭代加深与置换表搜索，并按桌面/移动端设置单步时间预算`,
+    `🚀 【移动端 AI 性能】AI 搜索移入 Web Worker，使用扁平 Uint8Array、位图与数字棋型表；思考期间不阻塞棋盘，Worker 异常自动回退旧引擎`,
     `📱 【手机图标焕新】更换为晴空浮岛草坪对决主视觉图标，保留纯黑白棋子、金色干扰牌与皇冠元素`,
     `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
   ].join('\n\n'),
