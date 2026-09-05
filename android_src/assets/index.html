@@ -2501,7 +2501,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.103</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.104</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3187,7 +3187,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.103';
+    const CURRENT_VERSION_TAG = 'v1.0.104';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -4495,8 +4495,8 @@
     // ==========================================
     // 🌐 极速秒开房间联机核心引擎 (全网络穿透·中国极速直连)
     // ==========================================
-    // 采用多个 WSS 节点容灾。房间会按固定顺序尝试节点，保证房主和客方
-    // 对同一个房间使用相同的 Broker；连接超时缩短，避免单个受限节点拖慢进房。
+    // 采用多个 WSS 节点分层容灾。房主和客方会逐步监听可用节点，
+    // 让两端即使处在不同运营商/网络环境，也能在共同可达的 Broker 上自动汇合。
     const MQTT_BROKER_URLS = [
       'wss://broker.emqx.io:8084/mqtt',
       'wss://broker.hivemq.com:8884/mqtt',
@@ -4506,8 +4506,11 @@
 
     let mqttClient = null;
     let mqttClientPromise = null;
+    let mqttClientPromiseRoomKey = '';
+    let mqttClientRequestSeq = 0;
 
-    const MQTT_CONNECT_TIMEOUT_MS = 5000;
+    // 不再等待所有节点都完成；最快节点先让页面进入房间，其余节点在后台补齐。
+    const MQTT_CONNECT_TIMEOUT_MS = 2800;
     const MQTT_LIBRARY_WAIT_MS = 8000;
 
     const MAX_ONLINE_PAYLOAD_BYTES = 60 * 1024;
@@ -4569,9 +4572,251 @@
     }
 
     function getMqttBrokerOrder(roomKey = '') {
-      // 同一房间固定使用同一套优先级，且优先命中当前最稳定的 EMQX；
-      // 不按房间随机轮换，避免某些房间一上来就撞到受限节点。
+      // 所有房间保持同一优先级，优先命中通常最快的 EMQX；连接池会把其余节点
+      // 作为错峰备用，避免按房间随机到较慢节点，也避免双方各自命中不同备用节点。
       return MQTT_BROKER_URLS.map((url, index) => ({ url, index }));
+    }
+
+    // 一个房间的信令池：多个 Broker 只用于容灾汇合，普通消息通过 _mid 去重。
+    // 这样网页端和 Android WebView 即使对不同节点的可达性不同，也能在共同节点上完成握手。
+    const MQTT_FALLBACK_STAGGER_MS = 700;
+
+    class MqttClientPool {
+      constructor(m, roomKey, candidates) {
+        this.library = m;
+        this.roomKey = String(roomKey || '');
+        this.candidates = Array.isArray(candidates) ? candidates : [];
+        this.clients = new Map();
+        this.subscriptions = new Map();
+        this.listeners = new Map();
+        this.connected = false;
+        this.closed = false;
+        this.__gomokuLifecycleBound = false;
+        this._readySettled = false;
+        this.readyPromise = new Promise((resolve, reject) => {
+          this._resolveReady = resolve;
+          this._rejectReady = reject;
+        });
+        this._startCandidates();
+      }
+
+      _startCandidates() {
+        if (!this.candidates.length) {
+          this._rejectReady(new Error('没有可用的信令节点'));
+          return;
+        }
+        (async () => {
+          let attempted = 0;
+          for (const candidate of this.candidates) {
+            if (this.closed) return;
+            // 首节点成功后错峰探测备用节点，避免一次性打开 4 条 WebSocket 被公共 Broker 限流；
+            // 首节点失败则立即切换，仍保持快速容灾。
+            if (attempted > 0 && this.clients.size > 0) {
+              await new Promise(resolve => setTimeout(resolve, MQTT_FALLBACK_STAGGER_MS));
+              if (this.closed) return;
+            }
+            attempted++;
+            try {
+              const client = await this._connectCandidate(candidate);
+              this._adoptClient(candidate, client);
+            } catch (err) {
+              console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 不可用`, err || '');
+            }
+          }
+          if (!this._readySettled && this.clients.size === 0) {
+            this._readySettled = true;
+            this._rejectReady(new Error('所有信令节点均连接失败，请检查网络后重试'));
+          }
+        })().catch(err => {
+          if (!this._readySettled && this.clients.size === 0) {
+            this._readySettled = true;
+            this._rejectReady(err || new Error('所有信令节点均连接失败，请检查网络后重试'));
+          }
+        });
+      }
+
+      _connectCandidate(candidate) {
+        return new Promise((resolve, reject) => {
+          let client = null;
+          let timer = null;
+          let settled = false;
+          const cleanup = () => {
+            if (timer) clearTimeout(timer);
+            if (!client) return;
+            try { client.removeListener('connect', onConnect); } catch (_) {}
+            try { client.removeListener('error', onError); } catch (_) {}
+            try { client.removeListener('close', onClose); } catch (_) {}
+          };
+          const fail = (reason) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            try { if (client) client.end(true); } catch (_) {}
+            reject(reason || new Error('连接关闭'));
+          };
+          const onConnect = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(client);
+          };
+          const onError = err => fail(err || new Error('信令节点错误'));
+          const onClose = () => fail(new Error('连接关闭'));
+
+          try {
+            client = this.library.connect(candidate.url, {
+              clientId: generateSecureId(9, 'gk_'),
+              connectTimeout: MQTT_CONNECT_TIMEOUT_MS,
+              keepalive: 25,
+              clean: true,
+              reconnectPeriod: 0
+            });
+            client.once('connect', onConnect);
+            client.once('error', onError);
+            client.once('close', onClose);
+            timer = setTimeout(() => {
+              if (!client.connected) fail(new Error('连接超时'));
+            }, MQTT_CONNECT_TIMEOUT_MS + 500);
+          } catch (err) {
+            fail(err);
+          }
+        });
+      }
+
+      _adoptClient(candidate, client) {
+        if (!client || this.closed) {
+          try { if (client) client.end(true); } catch (_) {}
+          return;
+        }
+        const entry = {
+          candidate,
+          client,
+          message: (topic, payload) => this.emit('message', topic, payload),
+          close: () => this._removeClient(candidate.url, '断开'),
+          offline: () => this._removeClient(candidate.url, '离线'),
+          error: err => console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 运行异常`, err || '')
+        };
+        this.clients.set(candidate.url, entry);
+        client.on('message', entry.message);
+        client.on('close', entry.close);
+        client.on('offline', entry.offline);
+        client.on('error', entry.error);
+        this.connected = true;
+        console.info(`[MQTT] 已连接信令节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length}`);
+        if (!this._readySettled) {
+          this._readySettled = true;
+          this._resolveReady(this);
+        }
+        for (const [topic, options] of this.subscriptions) {
+          try { client.subscribe(topic, options, () => {}); } catch (_) {}
+        }
+      }
+
+      _removeClient(url, eventName = '断开') {
+        const entry = this.clients.get(url);
+        if (!entry) return;
+        this.clients.delete(url);
+        try { entry.client.removeListener('message', entry.message); } catch (_) {}
+        try { entry.client.removeListener('close', entry.close); } catch (_) {}
+        try { entry.client.removeListener('offline', entry.offline); } catch (_) {}
+        try { entry.client.removeListener('error', entry.error); } catch (_) {}
+        if (this.clients.size === 0 && !this.closed) {
+          this.connected = false;
+          console.warn(`[MQTT] 房间信令池已${eventName}，准备自动重连`);
+          this.emit('offline');
+          this.emit('close');
+        }
+      }
+
+      subscribe(topic, options, callback) {
+        const opts = options && typeof options === 'object' ? options : {};
+        const cb = typeof options === 'function' ? options : callback;
+        this.subscriptions.set(String(topic), opts);
+        const entries = [...this.clients.values()];
+        if (!entries.length) {
+          if (typeof cb === 'function') setTimeout(() => cb(new Error('信令连接尚未就绪')), 0);
+          return;
+        }
+        let pending = entries.length;
+        let completed = false;
+        let lastError = null;
+        const finish = err => {
+          if (completed) return;
+          if (!err) {
+            completed = true;
+            if (typeof cb === 'function') cb();
+            return;
+          }
+          lastError = err;
+          pending--;
+          if (pending <= 0) {
+            completed = true;
+            if (typeof cb === 'function') cb(lastError);
+          }
+        };
+        entries.forEach(entry => {
+          try {
+            entry.client.subscribe(topic, opts, err => finish(err || null));
+          } catch (err) {
+            finish(err);
+          }
+        });
+      }
+
+      publish(topic, payload, options) {
+        let sent = false;
+        for (const entry of this.clients.values()) {
+          try {
+            entry.client.publish(topic, payload, options);
+            sent = true;
+          } catch (_) {}
+        }
+        return sent;
+      }
+
+      on(event, fn) {
+        if (typeof fn !== 'function') return this;
+        const list = this.listeners.get(event) || [];
+        list.push({ fn, once: false });
+        this.listeners.set(event, list);
+        return this;
+      }
+
+      once(event, fn) {
+        if (typeof fn !== 'function') return this;
+        const list = this.listeners.get(event) || [];
+        list.push({ fn, once: true });
+        this.listeners.set(event, list);
+        return this;
+      }
+
+      removeListener(event, fn) {
+        const list = this.listeners.get(event) || [];
+        this.listeners.set(event, list.filter(item => item.fn !== fn));
+        return this;
+      }
+
+      emit(event, ...args) {
+        const list = (this.listeners.get(event) || []).slice();
+        for (const item of list) {
+          if (item.once) this.removeListener(event, item.fn);
+          try { item.fn(...args); } catch (err) { console.error(`[MQTT Pool ${event} error]`, err); }
+        }
+      }
+
+      end(force = true) {
+        if (this.closed) return;
+        this.closed = true;
+        this.connected = false;
+        for (const entry of this.clients.values()) {
+          try { entry.client.removeListener('message', entry.message); } catch (_) {}
+          try { entry.client.removeListener('close', entry.close); } catch (_) {}
+          try { entry.client.removeListener('offline', entry.offline); } catch (_) {}
+          try { entry.client.removeListener('error', entry.error); } catch (_) {}
+          try { entry.client.end(force); } catch (_) {}
+        }
+        this.clients.clear();
+      }
     }
 
     function watchMqttClientLifecycle(client) {
@@ -4585,89 +4830,58 @@
       };
       client.on('close', () => invalidate('断开'));
       client.on('offline', () => invalidate('离线'));
-      // MQTT.js 的 error 后通常还会紧接着触发 close；这里只记录，不提前销毁连接。
       client.on('error', (err) => console.warn('[MQTT Client Error]', err));
     }
 
+    function closeMqttClientPool() {
+      const client = mqttClient;
+      mqttClientRequestSeq++;
+      mqttClient = null;
+      mqttClientPromise = null;
+      mqttClientPromiseRoomKey = '';
+      if (client) {
+        try { client.end(true); } catch (_) {}
+      }
+    }
+
     function getOrCreateMqttClient(roomKey = '') {
-      if (mqttClient && mqttClient.connected) {
+      const normalizedRoomKey = String(roomKey || '');
+      if (mqttClient && mqttClient.connected && mqttClient.roomKey === normalizedRoomKey) {
         return Promise.resolve(mqttClient);
       }
-      if (mqttClientPromise) return mqttClientPromise;
+      if (mqttClientPromise) {
+        if (mqttClientPromiseRoomKey === normalizedRoomKey) return mqttClientPromise;
+        const previousPromise = mqttClientPromise;
+        return previousPromise.catch(() => null).then(() => getOrCreateMqttClient(normalizedRoomKey));
+      }
 
-      mqttClient = null;
-      const promise = waitForMqttLibrary().then((m) => new Promise((resolve, reject) => {
-        const candidates = getMqttBrokerOrder(roomKey);
-        let candidateIndex = 0;
+      if (mqttClient && mqttClient.roomKey !== normalizedRoomKey) {
+        closeMqttClientPool();
+      }
 
-        const tryBroker = () => {
-          const candidate = candidates[candidateIndex++];
-          if (!candidate) {
-            reject(new Error('所有信令节点均连接失败，请检查网络后重试'));
-            return;
+      const requestSeq = ++mqttClientRequestSeq;
+      const promise = waitForMqttLibrary().then(m => {
+        const pool = new MqttClientPool(m, normalizedRoomKey, getMqttBrokerOrder(normalizedRoomKey));
+        return pool.readyPromise.then(() => {
+          if (requestSeq !== mqttClientRequestSeq || pool.closed) {
+            pool.end(true);
+            throw new Error('信令连接请求已取消');
           }
-
-          const brokerUrl = candidate.url;
-          const clientId = generateSecureId(9, 'gk_');
-          let settled = false;
-          let timer = null;
-          let client = null;
-
-          const cleanup = () => {
-            if (timer) clearTimeout(timer);
-            if (!client) return;
-            try { client.removeListener('connect', onConnect); } catch (_) {}
-            try { client.removeListener('error', onError); } catch (_) {}
-            try { client.removeListener('close', onClose); } catch (_) {}
-          };
-          const retry = (reason) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            try { if (client) client.end(true); } catch (_) {}
-            console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 不可用，切换备用节点`, reason || '');
-            setTimeout(tryBroker, 60);
-          };
-          const onConnect = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            mqttClient = client;
-            mqttClientPromise = null;
-            watchMqttClientLifecycle(client);
-            console.info(`[MQTT] 已连接信令节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length}`);
-            resolve(client);
-          };
-          const onError = (err) => retry(err);
-          const onClose = () => retry(new Error('连接关闭'));
-
-          try {
-            client = m.connect(brokerUrl, {
-              clientId,
-              connectTimeout: MQTT_CONNECT_TIMEOUT_MS,
-              keepalive: 25,
-              clean: true,
-              reconnectPeriod: 0
-            });
-            client.once('connect', onConnect);
-            client.once('error', onError);
-            client.once('close', onClose);
-            timer = setTimeout(() => {
-              if (!client.connected) retry(new Error('连接超时'));
-            }, MQTT_CONNECT_TIMEOUT_MS + 800);
-          } catch (err) {
-            retry(err);
-          }
-        };
-
-        tryBroker();
-      }));
-
-      mqttClientPromise = promise;
-      promise.catch(() => {
-        if (mqttClientPromise === promise) mqttClientPromise = null;
+          mqttClient = pool;
+          mqttClientPromise = null;
+          mqttClientPromiseRoomKey = '';
+          watchMqttClientLifecycle(pool);
+          return pool;
+        });
       });
-
+      mqttClientPromise = promise;
+      mqttClientPromiseRoomKey = normalizedRoomKey;
+      promise.catch(() => {
+        if (mqttClientPromise === promise) {
+          mqttClientPromise = null;
+          mqttClientPromiseRoomKey = '';
+        }
+      });
       return promise;
     }
 
@@ -5208,24 +5422,30 @@
         const c2hTopic = `gomoku/v3/${roomCode}/c2h`;
         const h2cTopic = `gomoku/v3/${roomCode}/h2c`;
 
-        client.subscribe(c2hTopic, { qos: 0 }, (err) => {
-          if (err) {
-            detachHostInviteListener();
-            if (badgeEl) {
-              badgeEl.innerHTML = '⚠️ 连入失败 <span style="cursor:pointer;color:#3b82f6;text-decoration:underline;" onclick="initHostPeer(null, true)">[重试]</span>';
-              badgeEl.style.color = '#ef4444';
-            }
-            return;
-          }
-          if (badgeEl) {
-            badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
-            badgeEl.style.color = '#10b981';
-          }
-        });
-
         // 房主监听客方加入/重连握手。监听器随房间连接重建，避免房主重连后只剩“空壳”连接。
         let hostHandshakeDone = false;
         let activeGuestUid = activeOnlineGuestUid || null;
+        let hostJoinInFlight = null;
+
+        // 只有房主自己的房间信道和 MqttRoomConnection 都准备好后，才回送 accepted。
+        // 旧逻辑先回 accepted、后建连接，客方会提前进入对局，房主连接失败时就会出现“一边断开、一边没进房”。
+        const sendAcceptedBurst = (targetUid) => {
+          const sendAccept = () => {
+            try {
+              client.publish(h2cTopic, JSON.stringify({
+                type: 'join_accepted',
+                targetUid,
+                name: p1Name,
+                avatar: getNetworkAvatarValue(p1Avatar),
+                roundId: onlineRoundId || undefined
+              }), { qos: 0 });
+            } catch(_) {}
+          };
+          sendAccept();
+          setTimeout(sendAccept, 150);
+          setTimeout(sendAccept, 350);
+        };
+
         const onHostInvite = (topic, payload) => {
           if (topic !== c2hTopic) return;
           try {
@@ -5254,56 +5474,51 @@
             activeGuestUid = reqUid;
             activeOnlineGuestUid = reqUid;
 
-            // 连续回送 join_accepted（0ms, 150ms, 350ms），确保首次进房和弱网重连都能收到应答
-            const sendAccept = () => {
-              try {
-                client.publish(h2cTopic, JSON.stringify({
-                  type: 'join_accepted',
-                  targetUid: activeGuestUid,
-                  name: p1Name,
-                  avatar: getNetworkAvatarValue(p1Avatar),
-                  roundId: onlineRoundId || undefined
-                }), { qos: 0 });
-              } catch(_) {}
-            };
-            sendAccept();
-            setTimeout(sendAccept, 150);
-            setTimeout(sendAccept, 350);
-
-            const liveConnection = !!(conn && conn.open && currentRoomCode === roomCode && !isReconnecting);
+            const liveConnection = !!(conn && conn.open && conn.ready && currentRoomCode === roomCode && !isReconnecting);
             if (liveConnection && hostHandshakeDone) {
+              sendAcceptedBurst(reqUid);
               if (data.type === 'reconnect_handshake') sendFullStateSnapshot();
               return;
             }
 
+            // 客方会每 450ms 重发 join_request；房主正在准备连接时只保留一次建连任务，
+            // 避免重复创建多个 MqttRoomConnection，又把旧连接误判成“对方断开”。
+            if (hostJoinInFlight) return;
+
             hostHandshakeDone = true;
-            if (conn) {
-              try { conn.close(true); } catch(_) {}
-              conn = null;
-            }
-
             const reconnectingNow = isReconnecting;
-            const nextConn = new MqttRoomConnection(client, roomCode, 'host');
-            conn = nextConn;
-            myOnlineColor = BLACK;
-            lastActiveRoomCode = roomCode;
-            p2Name = normalizeNetworkName(data.name, p2Name || '好友');
-            p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (p2Avatar || '👧');
-            updatePlayerHeaderUI();
-            setupConn();
+            hostJoinInFlight = (async () => {
+              if (conn) {
+                try { conn.close(true); } catch(_) {}
+                conn = null;
+              }
 
-            nextConn.readyPromise.then(() => {
-              if (conn !== nextConn || !nextConn.open) return;
+              const nextConn = new MqttRoomConnection(client, roomCode, 'host');
+              conn = nextConn;
+              myOnlineColor = BLACK;
+              lastActiveRoomCode = roomCode;
+              p2Name = normalizeNetworkName(data.name, p2Name || '好友');
+              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (p2Avatar || '👧');
+              updatePlayerHeaderUI();
+              setupConn();
+              await nextConn.readyPromise;
+              if (conn !== nextConn || !nextConn.open || !nextConn.ready) return;
+
+              // ACK 必须排在房主连接 ready 之后，且继续发送短 burst 兼容弱网/切后台。
+              sendAcceptedBurst(reqUid);
               if (reconnectingNow) {
                 onReconnectSuccess();
               } else {
                 showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
                 closeOnlineModal();
-                setMode('online');
+                if (gameMode !== 'online') setMode('online');
+                else updateOnlineNetworkUI();
                 nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
               }
-            }).catch((err) => {
+            })().catch((err) => {
               console.warn('[host room connection]', err);
+            }).finally(() => {
+              hostJoinInFlight = null;
             });
           } catch(e) {
             console.warn('[onHostInvite error]', e);
@@ -5313,8 +5528,22 @@
         client.on('message', onHostInvite);
         hostInviteBinding = { client, handler: onHostInvite, topic: c2hTopic, roomCode };
 
+        // 房间创建函数现在真正等待信道订阅完成，匹配流程不再凭“已开始连接”提前进入房间。
+        await new Promise((resolve, reject) => {
+          try {
+            client.subscribe(c2hTopic, { qos: 0 }, err => err ? reject(err) : resolve());
+          } catch (err) {
+            reject(err);
+          }
+        });
+        if (badgeEl) {
+          badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
+          badgeEl.style.color = '#10b981';
+        }
+
       } catch(err) {
         console.error('[initHostPeer error]', err);
+        detachHostInviteListener();
         if (badgeEl) {
           badgeEl.innerHTML = `⚠️ 极速网络连接受阻 <span style="cursor:pointer;color:#3b82f6;text-decoration:underline;" onclick="initHostPeer(null, true)">[点击重试]</span>`;
           badgeEl.style.color = '#ef4444';
@@ -5497,6 +5726,7 @@
       showReconnectOverlay(false);
       detachHostInviteListener();
       if (conn) { try { conn.close(true); } catch(e) {} conn = null; }
+      closeMqttClientPool();
       activeOnlineGuestUid = '';
       currentRoomCode = null;
       onlineRoundId = '';
@@ -5867,6 +6097,7 @@
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
           detachHostInviteListener();
           if (conn) { try { conn.close(true); } catch(_) {} conn = null; }
+          closeMqttClientPool();
           if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
           activeOnlineGuestUid = '';
           currentRoomCode = null;
@@ -7124,6 +7355,7 @@
         try { conn.close(true); } catch(e) {}
         conn = null;
       }
+      detachHostInviteListener();
 
       try {
         const client = await getOrCreateMqttClient(code);
@@ -7131,6 +7363,8 @@
         const h2cTopic = `gomoku/v3/${code}/h2c`;
 
         let hasJoined = false;
+        let joinCancelled = false;
+        let joiningConnection = null;
         let joinInterval = null;
         let joinTimeout = null;
 
@@ -7152,6 +7386,7 @@
             // 🛡️ 接收到满员拒绝信号：立即停止重试，给用户明确提示
             if (data.type === 'room_full') {
               if (!data.targetUid || data.targetUid === myJoinUid) {
+                joinCancelled = true;
                 clearInterval(joinInterval);
                 clearTimeout(joinTimeout);
                 client.removeListener('message', onClientInvite);
@@ -7168,13 +7403,10 @@
               if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
               if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
               if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
-              hasJoined = true;
-              clearInterval(joinInterval);
-              clearTimeout(joinTimeout);
-              client.removeListener('message', onClientInvite);
-              restoreBtn();
-
+              // accepted 可能会按 burst 重发；在上一条连接真正 ready 前只保留一个建连任务。
+              if (joiningConnection) return;
               const nextConn = new MqttRoomConnection(client, code, 'client');
+              joiningConnection = nextConn;
               conn = nextConn;
               lastActiveRoomCode = code;
               currentRoomCode = code;
@@ -7184,15 +7416,35 @@
               p2Name = normalizeNetworkName(data.name, '房主');
               p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👦';
               updatePlayerHeaderUI();
-              showGameNotice('🎉 已成功连入好友房间！您执白~', false);
-              closeOnlineModal();
-              setMode('online');
+              // 先挂载数据/断线监听，再等待 ready，避免 ready 后到达的首条资料消息丢失。
               setupConn();
-              nextConn.readyPromise.then(() => {
-                if (conn === nextConn && nextConn.open) {
+
+              (async () => {
+                try {
+                  await nextConn.readyPromise;
+                  if (joinCancelled || joiningConnection !== nextConn || conn !== nextConn || !nextConn.open || !nextConn.ready) {
+                    throw new Error('加入请求已过期或房间连接未就绪');
+                  }
+                  hasJoined = true;
+                  clearInterval(joinInterval);
+                  clearTimeout(joinTimeout);
+                  client.removeListener('message', onClientInvite);
+                  restoreBtn();
+                  closeOnlineModal();
+                  if (gameMode !== 'online') setMode('online');
+                  else updateOnlineNetworkUI();
+                  showGameNotice('🎉 已成功连入好友房间！您执白~', false);
                   nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
+                } catch (err) {
+                  console.warn('[guest room connection]', err);
+                  if (conn === nextConn) {
+                    try { nextConn.close(true); } catch (_) {}
+                    conn = null;
+                  }
+                } finally {
+                  if (joiningConnection === nextConn) joiningConnection = null;
                 }
-              }).catch((err) => console.warn('[guest room connection]', err));
+              })();
             }
           } catch(e) {
             console.warn('[onClientInvite error]', e);
@@ -7202,6 +7454,7 @@
         client.on('message', onClientInvite);
         client.subscribe(h2cTopic, { qos: 0 }, (err) => {
           if (err) {
+            joinCancelled = true;
             restoreBtn();
             client.removeListener('message', onClientInvite);
             return showGameNotice('❌ 订阅房间信道失败，请检查网络！', true);
@@ -7221,8 +7474,14 @@
           joinInterval = setInterval(sendReq, 450);
           joinTimeout = setTimeout(() => {
             if (!hasJoined) {
+              joinCancelled = true;
               clearInterval(joinInterval);
               client.removeListener('message', onClientInvite);
+              if (joiningConnection) {
+                try { joiningConnection.close(true); } catch (_) {}
+                if (conn === joiningConnection) conn = null;
+                joiningConnection = null;
+              }
               restoreBtn();
               showGameNotice('❌ 未找到该房间，请确认房间码正确，并让好友先开启房间！', true);
             }
@@ -7291,6 +7550,7 @@
         return;
       }
       isMatchmaking = true;
+      activeMatchRoomKey = '';
       matchStartTime = Date.now();
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
@@ -7373,7 +7633,7 @@
                   body: JSON.stringify({ uid: matchUid })
                 });
                 const pData = await pRes.json();
-                if (pData.code === 0 && pData.status === 'matched') {
+                if (pData.code === 0 && pData.status === 'matched' && isMatchmaking) {
                   clearInterval(matchPollInterval);
                   onMatchFound(pData);
                 }
@@ -7394,7 +7654,14 @@
       }
     }
 
+    let activeMatchRoomKey = '';
+
     function onMatchFound(data) {
+      const roomCode = String(data?.roomCode || '');
+      const matchKey = `${data?.role || ''}:${roomCode}:${data?.opponent?.uid || ''}`;
+      // D1 轮询与首次 join 请求可能在同一时间返回；同一场匹配只允许启动一次房间迁移。
+      if (matchKey && activeMatchRoomKey === matchKey) return;
+      activeMatchRoomKey = matchKey;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
       matchPollInFlight = false;
@@ -7420,22 +7687,21 @@
       try { playCardAudioEffect('draw'); } catch(e) {}
 
       if (data.role === "host") {
-        // 我作为房主（执黑先行）—— 统一采用高可用 MQTT Anycast 通道秒级就绪
-        initHostMqttPeer(data.roomCode, true);
+        // 我作为房主（执黑先行）：先进入“连接中”状态，再等待房间信道 ready。
         myOnlineColor = BLACK;
         p2Name = opp.nickname;
         p2Avatar = opp.avatar;
         updatePlayerHeaderUI();
         setMode("online", true);
-        setTimeout(() => {
+        initHostMqttPeer(roomCode, true).then(() => {
           closeOnlineModal();
-        }, 1200);
+        }).catch(() => {
+          showGameNotice('❌ 房间信道连接失败，请点击重试或更换网络后再匹配', true);
+        });
       } else {
-        // 我作为客户端（执白后行）—— 缓冲 1 秒后自动连入
-        setTimeout(() => {
-          closeOnlineModal();
-          joinOnlineRoom(data.roomCode);
-        }, 1000);
+        // 我作为客户端（执白后行）：匹配结果一到就开始订阅，不再人为等待 1 秒。
+        closeOnlineModal();
+        joinOnlineRoom(roomCode);
       }
     }
 
@@ -11620,6 +11886,7 @@
         try { conn.close(true); } catch(_) {}
         conn = null;
       }
+      closeMqttClientPool();
       if (p2pChannel) {
         try { p2pChannel.close(); } catch(_) {}
         p2pChannel = null;

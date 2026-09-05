@@ -1,0 +1,89 @@
+import json
+import os
+import time
+
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+
+def main():
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    room = str(int(time.time() * 1000) % 900000 + 100000)
+    url = os.environ.get("GOMOKU_TEST_URL", "http://127.0.0.1:3000/index.html")
+    logs = {"host": [], "guest": []}
+    errors = {"host": [], "guest": []}
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=1)
+        host = context.new_page()
+        guest = context.new_page()
+
+        for name, page in (("host", host), ("guest", guest)):
+            page.on("console", lambda message, name=name: logs[name].append({"type": message.type, "text": message.text}))
+            page.on("pageerror", lambda error, name=name: errors[name].append(str(error)))
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15_000)
+            except PlaywrightTimeoutError:
+                pass
+            page.locator("#cvs").wait_for(state="visible", timeout=10_000)
+
+        host.evaluate("code => window.initHostPeer(code, true)", room)
+        guest.evaluate("code => window.joinOnlineRoom(code)", room)
+        guest.wait_for_timeout(18_000)
+
+        def state(page):
+            return page.evaluate(
+                """
+                () => ({
+                  room: currentRoomCode,
+                  mode: gameMode,
+                  round: onlineRoundId,
+                  color: myOnlineColor,
+                  conn: conn ? {
+                    open: conn.open,
+                    ready: conn.ready,
+                    clientConnected: Boolean(conn.client && conn.client.connected),
+                    p2p: Boolean(conn.isP2pReady)
+                  } : null,
+                  hostBinding: Boolean(hostInviteBinding),
+                  roomBadge: document.querySelector('#roomStatusBadge')?.textContent?.trim() || '',
+                  notice: document.querySelector('#gameNoticeToast')?.textContent?.trim() || '',
+                  network: document.querySelector('#onlineNetworkStatusBar')?.textContent?.trim() || ''
+                })
+                """
+            )
+
+        host_state = state(host)
+        guest_state = state(guest)
+        if not all(item["mode"] == "online" and item["conn"] and item["conn"]["open"] and item["conn"]["ready"]
+                   for item in (host_state, guest_state)):
+            raise AssertionError(json.dumps({"host": host_state, "guest": guest_state, "logs": logs, "errors": errors}, ensure_ascii=False))
+
+        host.evaluate("window.makeMove(7, 7, BLACK)")
+        guest.wait_for_timeout(350)
+        guest_move = guest.evaluate("({ piece: board[7][7], steps: history.length, turn })")
+        if guest_move != {"piece": 1, "steps": 1, "turn": 2}:
+            raise AssertionError(f"host move did not reach guest: {guest_move}")
+
+        guest.evaluate("window.makeMove(7, 8, WHITE)")
+        host.wait_for_timeout(350)
+        host_move = host.evaluate("({ piece: board[7][8], steps: history.length, turn })")
+        if host_move != {"piece": 2, "steps": 2, "turn": 1}:
+            raise AssertionError(f"guest move did not reach host: {host_move}")
+
+        print(json.dumps({
+            "pass": True,
+            "room": room,
+            "host": host_state,
+            "guest": guest_state,
+            "bidirectionalMoves": True,
+            "pageErrors": errors,
+        }, ensure_ascii=False, indent=2))
+        browser.close()
+
+
+if __name__ == "__main__":
+    main()
