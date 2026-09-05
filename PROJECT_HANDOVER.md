@@ -800,7 +800,20 @@ node publish.js
   6. **情侣主题 `confetti` 离线安全包裹**：
      - 在 `theme5_sweet_romance.html` 中将直接调用 `confetti()` 改为 `if (typeof confetti === 'function')`，避免断网离线时 CDN 脚本加载失败引发运行时崩溃。
 
+## 二十一、移动端 AI Worker 与 bitboard 性能优化（2026-09-05，已发布 v1.0.101）
+
+- **架构结论**：Android 端仍采用原生 Java WebView + 本地 HTTP 服务加载 HTML；现有热更新沙盒只允许覆盖根目录 `index.html`。因此快速 AI Worker 不能依赖 APK 外置新文件，发布构建会将 Worker 源码和快速引擎内嵌到 `android_src/assets/index.html` 与单文件版，源码开发页保留 `js/ai_worker.js` 外置回退。
+- **性能基准**：新增 `tests/ai_benchmark.js`，在当前 Node v25.2.1 上对同一开局局面连续运行 3 次：旧引擎中位约 25.9 ms，快速引擎热身后中位约 8.1 ms；战术必胜局面快速引擎中位约 0.2 ms。首次 Worker 启动包含棋型表初始化，之后由后台线程计算。
+- **快速引擎**：新增 `js/ai_fast.js`，使用扁平 `Uint8Array` 棋盘、黑白占用位图、数字 Zobrist 置换表、预计算 3^11 局部棋型表、必胜/必防/双威胁优先级和限时 Alpha-Beta 搜索，避免旧引擎在手机主线程中频繁创建二维数组和字符串棋型。
+- **异步与安全回退**：新增 `js/ai_worker.js`；`index.html` 将 225 格棋盘快照传给 Worker，移动端按约 260 ms、桌面端按约 420 ms 预算搜索。Worker 超时、异常或浏览器不支持时自动回退既有 `window.GomokuAI`，并用回合序号防止重开/悔棋后旧结果落到新棋盘；Worker 不接触账号凭据、令牌或联机密钥。
+- **构建同步**：新增 `build_ai_worker.js`；`bundle_single_file.js` 和 `build_apk.js` 均在构建阶段内嵌 Worker，APK 同时保留外置 JS 作为开发/异常回退资源。发布安全门禁现在额外检查 AI 构建脚本、快速引擎和 Worker 语法。
+- **回归结果**：`python tests\ai_worker_smoke.py` 已验证主版与单文件版都能找出必胜点、主线程保持响应且无控制台/页面错误；`python tests\optimization_smoke.py`、`node tests\worker_unit.js`、`node tests\auth_refresh_unit.js`、全主题脚本检查、APK 签名构建和 `git diff --check` 全部通过。
+- **Rust/Wasm 决策**：本机没有 `rustc`、`cargo`、`wasm-pack`、`wasm-bindgen` 或 `wasm-opt`；而 Worker + bitboard 实测已满足本轮移动端响应目标，因此没有把未经工具链和基准验证的 Wasm 模块强行加入正式包。以后若低端机实测仍超过预算，可在不改 UI/联机协议的前提下替换 Worker 内部引擎。
+- **线上验证**：GitHub 私有仓库已创建 `v1.0.101` Release；`https://gomoku-api.pages.dev/api/version` 实测返回 `code=0`、`tag=v1.0.101`，并签发 APK/HTML 短时票据，不返回可复用下载直链。普通客户端发版不需要重复部署 Cloudflare；只有修改 `backend/worker.js`、Pages 配置、D1 或票据逻辑时才执行一次 `node publish.js --deploy-cloudflare` 或对应部署脚本。
+- **发布结果**：版本已递增为 v1.0.101（Build 102），完成正式签名 APK、单文件版构建、私有仓库推送和 GitHub Release。Release 地址：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.101。
+- **当前产物 SHA-256**：`index.html`（开发母本/空 Worker 标记）为 `192C4453ABEAD3B44F70C668AA34690D90D61E1FFFA7B8094D3E01709E1F2EAD`；`android_src/assets/index.html`（APK 内嵌 Worker）为 `06DDC62EDE203B029F60C0B9E3BF6CBF412A5E1645841F7FD46070171638243A`；单文件版为 `A5B3B1C7C15090286A7FCD961CB06B75D8FA7940404A87B18C21944FD1F8A510`；APK 为 `9627315CE749995FA148CE4A90CB210C7CEAAAFF772DE439C554A158F67CB697`。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.100 (Build 101)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、以及全工程深层排查与空安全加固均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程正式版本：v1.0.101 (Build 102)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、以及移动端 Web Worker/bitboard AI 异步性能优化均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.101 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
