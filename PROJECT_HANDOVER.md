@@ -596,7 +596,30 @@ node publish.js
 - 正式签名 APK `五子棋.apk` 已重新构建，SHA-256 为 `279D3535729C91F5620FF1D0B7E1405FC6684CC776BC11C912558357DE86459A`，v1/v2/v3 签名校验通过。
 - 本轮仅为修复线上更新直链保护完成了一次必要的 Cloudflare Worker/Pages 部署；普通客户端构建与发版不重复部署 Cloudflare。
 
+## 十二、本次更新后免重复登录改造 (2026-09-05)
+
+### 1. Refresh Token 自动续期
+- 新增 `/api/auth/refresh_session` 接口：客户端启动时先验证访问凭证，访问凭证失效后使用设备本地 Refresh Token 自动换发新凭证，不再要求用户重新输入密码。
+- 注册、登录、修改密码、找回密码和会话验证都会正确下发续期凭证；每次续期都会轮换访问凭证和 Refresh Token，旧 Refresh Token 立即失效。
+- D1 只保存 `refresh_token_hash` 与 `refresh_token_expires_at`，不保存 Refresh Token 明文；改密、找回密码、退出账号会使旧会话失效。
+- 修复客户端把“用户不存在/账号同步失败”误报为“登录凭证已过期”的问题；网络异常和服务端暂时错误会保留本地登录态。
+
+### 2. Android 双保险同步
+- Android 新增兼容性桥接 `saveUserRefreshToken()`，将 Refresh Token 保存到原生 `SharedPreferences`；读取登录备份时会一并恢复，兼容旧版五参数 `saveUserLogin()`。
+- 单文件版、Android assets 与根目录 `index.html` 已同步；热更新页面不会清理本地账号凭证。
+
+### 3. 部署与验证
+- 为使新认证接口上线，本轮已完成一次必要的 Cloudflare Worker/Pages 部署；普通客户端发版仍默认跳过 Cloudflare。
+- `node tests\\worker_unit.js`、`node tests\\auth_refresh_unit.js` 和 `python tests\\optimization_smoke.py` 全部通过；新增单测覆盖续期凭证哈希存储、访问凭证轮换和旧 Refresh Token 拒绝。
+- 正式签名 APK v1/v2/v3 校验通过，证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- 当前产物 SHA-256：`index.html` / `android_src/assets/index.html` 为 `C68F02C0720D96007670DA307089B3490F1490C2CD56F680798895543DAEDC8E`；单文件版为 `27F631EAA5E35EF23DB5115C85F215A8EAF521FA92C4E60F7384CC5F6686AEC3`；APK 为 `D3AE48EDD33658AE91C47623D117BB3FFAFC0A04206615C20FA48AA9D472ECAD`。
+
+### 4. 后续发布规则
+- 仅修改客户端页面、联机逻辑、Android UI 或 APK：执行 `node publish.js`，默认不部署 Cloudflare。
+- 修改 `backend/worker.js` 的接口、D1 迁移或更新中转逻辑：先执行一次 `node deploy_worker.js` 让后端生效，再执行 `node publish.js` 发布客户端；不需要每次客户端发版都部署。
+- 不要清除 `gomoku_user_refresh_token`、Android 原生登录备份或应用数据，否则只能重新登录；主动退出账号、修改密码和找回密码除外。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.92 (Build 93)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查，以及本次联机终局/重开/悔棋/状态显示修复均已完成；源码、单文件版、Android 资源已在本地完全同步并通过回归测试，正式签名 APK 已重新构建并发布为 v1.0.92。本轮仅为更新直链安全保护完成了一次必要的 Cloudflare 部署，普通 UI/客户端发版不重复部署；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；仅补发线上资源时不要重复运行发布脚本，直接使用 Wrangler 部署命令。*
+*当前工程正式版本：v1.0.93 (Build 94)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复，以及本次 Refresh Token 自动续期改造均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已重新构建并发布为 v1.0.93。Cloudflare 已为本次新增认证接口完成一次必要部署，普通客户端发版默认不重复部署；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
