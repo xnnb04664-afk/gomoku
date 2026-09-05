@@ -41,6 +41,32 @@ def test_page(page, url, expected_inline):
         async (expectedInline) => {
           const sourceNode = document.getElementById('gomokuAiWorkerSource');
           const actualInline = Boolean(sourceNode && sourceNode.textContent && sourceNode.textContent.length > 20000);
+          const originalWorker = window.Worker;
+          const fallbackBoard = Array.from({length: 15}, () => Array(15).fill(0));
+          for (let c = 3; c < 7; c++) fallbackBoard[7][c] = 2;
+          let fallbackMove = null;
+          let fallbackError = '';
+          let fallbackCardsUnchanged = false;
+          let fallbackSkillSnapshotsUnchanged = false;
+          try {
+            const cardsBefore = JSON.stringify(currentDrawnCards);
+            const usedBefore = JSON.stringify(cardUsedStatus);
+            const skillSnapshotsBefore = undoStack.filter(snapshot => snapshot && snapshot.type === 'skill').length;
+            window.Worker = undefined;
+            gameMode = 'ai';
+            turn = 2;
+            isOver = false;
+            aiThinking = false;
+            board = fallbackBoard;
+            history = [];
+            fallbackMove = await window.smartAiMove([]);
+            fallbackCardsUnchanged = cardsBefore === JSON.stringify(currentDrawnCards) && usedBefore === JSON.stringify(cardUsedStatus);
+            fallbackSkillSnapshotsUnchanged = skillSnapshotsBefore === undoStack.filter(snapshot => snapshot && snapshot.type === 'skill').length;
+          } catch (error) {
+            fallbackError = String(error);
+          } finally {
+            window.Worker = originalWorker;
+          }
           const win = Array.from({length: 15}, () => Array(15).fill(0));
           for (let c = 3; c < 7; c++) win[7][c] = 2;
           let ticks = 0;
@@ -58,6 +84,10 @@ def test_page(page, url, expected_inline):
             actualInline,
             inlineOk: actualInline === expectedInline,
             move,
+            fallbackMove: fallbackMove || null,
+            fallbackError,
+            fallbackCardsUnchanged,
+            fallbackSkillSnapshotsUnchanged,
             elapsedMs,
             quietMove,
             quietElapsedMs,
@@ -70,6 +100,18 @@ def test_page(page, url, expected_inline):
     )
     expected_win = result["move"]["r"] == 7 and result["move"]["c"] in (2, 7)
     result["winTacticOk"] = expected_win
+    result["fallbackOk"] = (
+        result["fallbackError"] == ""
+        and result["fallbackCardsUnchanged"]
+        and result["fallbackSkillSnapshotsUnchanged"]
+        and result["fallbackMove"] is None
+    )
+    # smartAiMove 落子成功后通过棋盘/历史体现结果；函数本身不返回棋步。
+    result["fallbackBoardMoveOk"] = page.evaluate(
+        """
+        () => board.some(row => row.some(cell => cell === 2)) && history.some(item => item && item.p === 2)
+        """
+    )
     result["quietSearchOk"] = (
         result["quietMove"] is not None
         and 0 <= result["quietMove"].get("r", -1) < 15
@@ -82,6 +124,8 @@ def test_page(page, url, expected_inline):
     result["ok"] = all([
         result["inlineOk"],
         result["winTacticOk"],
+        result["fallbackOk"],
+        result["fallbackBoardMoveOk"],
         result["quietSearchOk"],
         result["uiStayedResponsive"],
         not console_errors,

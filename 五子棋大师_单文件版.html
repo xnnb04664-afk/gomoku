@@ -4758,7 +4758,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.108</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.109</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -5444,7 +5444,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.108';
+    const CURRENT_VERSION_TAG = 'v1.0.109';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -7614,7 +7614,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           try {
             this.dc.send(jsonStr);
             sentViaP2p = true;
-            if (data.type !== 'profile_sync') return true;
+            // 心跳也镜像到 MQTT：DataChannel 处于半开状态时，不能让测速和断线检测一起失效。
+            // 两条链路使用同一个 _mid，接收端会自动去重；正常情况下仍优先得到 P2P 的低延迟响应。
+            if (data.type !== 'profile_sync' && data.type !== 'ping' && data.type !== 'pong') return true;
           } catch(e) {
             this.isP2pReady = false;
           }
@@ -8107,6 +8109,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         bar.style.display = 'none';
         return;
       }
+      const roomBar = document.getElementById('onlineRoomTopBar');
+      if (roomBar) roomBar.style.display = 'flex';
       bar.style.display = 'flex';
       const localState = getLocalOnlineNetworkState();
       const peerFresh = onlineNetworkTelemetry.remoteLastSeenAt > 0 &&
@@ -8341,11 +8345,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       updateOnlineNetworkUI();
 
       let missedPings = 0;
-      onlineHeartbeatTimer = setInterval(() => {
+      const connection = conn;
+      const sendHeartbeat = (countMiss = true) => {
+        if (conn !== connection) return;
         if (conn && conn.open && gameMode === 'online' && !isOver) {
-          missedPings++;
+          if (countMiss) missedPings++;
           // MQTT close/offline 会立即触发重连；只有半开连接才走心跳兜底，约 12 秒判定失联。
-          if (missedPings >= 3) {
+          if (countMiss && missedPings >= 3) {
             triggerOnlineReconnect("心跳无响应");
             return;
           }
@@ -8369,7 +8375,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         } else {
           updateOnlineNetworkUI();
         }
-      }, ONLINE_HEARTBEAT_INTERVAL_MS);
+      };
+      onlineHeartbeatTimer = setInterval(() => sendHeartbeat(true), ONLINE_HEARTBEAT_INTERVAL_MS);
+      // 不等待第一个 4 秒周期；若此时仍在完成进房闸门，后续周期会再次发起探测。
+      setTimeout(() => sendHeartbeat(false), 0);
 
       conn.on('close', () => {
         if (gameMode !== 'online' || isOver) return;
@@ -9839,6 +9848,61 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     let currentActiveMatchId = "";
     let matchPollInFlight = false;
 
+    function isMatchAuthFailure(response, data) {
+      const status = Number(response && response.status);
+      const code = Number(data && data.code);
+      return status === 401 || status === 403 || code === 401 || code === 403 || code === 2;
+    }
+
+    function getMatchSessionToken() {
+      try {
+        if (typeof currentUserToken !== 'undefined' && currentUserToken) return String(currentUserToken);
+        return localStorage.getItem('gomoku_user_token') || '';
+      } catch (_) {
+        return (typeof currentUserToken !== 'undefined' && currentUserToken) ? String(currentUserToken) : '';
+      }
+    }
+
+    async function ensureMatchAccountSession() {
+      if (!currentUserUid || String(currentUserUid).startsWith('guest_')) return false;
+      if (getMatchSessionToken()) return true;
+      if (currentUserRefreshToken && typeof refreshUserSession === 'function') {
+        await refreshUserSession();
+      }
+      return Boolean(currentUserUid && !String(currentUserUid).startsWith('guest_') && getMatchSessionToken());
+    }
+
+    async function requestMatchApi(endpoint, payload, retryState, timeoutMs = 10000) {
+      const send = async () => {
+        const body = { ...(payload || {}) };
+        // Authorization 头是主路径；body.token 是 Android WebView/旧客户端的兼容兜底。
+        // 两者都只通过 HTTPS 发送，服务端仍会校验 uid 与 Token 的绑定关系。
+        const sessionToken = getMatchSessionToken();
+        if (sessionToken && !body.token) body.token = sessionToken;
+        const response = await safeApiFetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          timeoutMs
+        });
+        let data = null;
+        try { data = await response.json(); } catch (_) {
+          data = { code: response.status, msg: '服务器返回格式异常' };
+        }
+        return { response, data };
+      };
+
+      let result = await send();
+      const state = retryState || {};
+      if (isMatchAuthFailure(result.response, result.data) && !state.authRetried && currentUserRefreshToken) {
+        state.authRetried = true;
+        if (typeof refreshUserSession === 'function' && await refreshUserSession()) {
+          result = await send();
+        }
+      }
+      return result;
+    }
+
     function getOrCreateMatchUid() {
       let uid = (typeof currentUserUid !== "undefined" && currentUserUid) ? currentUserUid : localStorage.getItem("gomoku_user_uid");
       if (!uid) {
@@ -9853,7 +9917,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     async function startQuickMatch() {
       if (isMatchmaking) return;
-      if (!currentUserUid || !currentUserToken) {
+      if (!(await ensureMatchAccountSession())) {
         showGameNotice('⚡ 全服匹配需要先登录正式账号，游客仍可使用房间联机。', true);
         if (typeof openAuthModal === 'function') openAuthModal('login');
         return;
@@ -9913,20 +9977,18 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       const matchUid = currentActiveMatchUid;
       currentActiveMatchId = generateSecureId(12, 'match_');
       const matchId = currentActiveMatchId;
+      const matchRequestState = { authRetried: false };
 
       try {
-        const res = await safeApiFetch('/api/match/join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            uid: matchUid,
-            matchId,
-            nickname: normalizeNetworkName(p1Name, '棋友'),
-            avatar: getNetworkAvatarValue(p1Avatar),
-            score: currentUserScore || 1000
-          })
-        });
-        const data = await res.json();
+        const joinResult = await requestMatchApi('/api/match/join', {
+          uid: matchUid,
+          matchId,
+          nickname: normalizeNetworkName(p1Name, '棋友'),
+          avatar: getNetworkAvatarValue(p1Avatar),
+          score: currentUserScore || 1000
+        }, matchRequestState, 12000);
+        const res = joinResult.response;
+        const data = joinResult.data;
         if (data.code === 0) {
           if (data.status === 'matched') {
             onMatchFound(data);
@@ -9939,15 +10001,24 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
               }
               matchPollInFlight = true;
               try {
-                const pRes = await safeApiFetch('/api/match/poll', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ uid: matchUid, matchId })
-                });
-                const pData = await pRes.json();
+                const pollResult = await requestMatchApi('/api/match/poll', {
+                  uid: matchUid,
+                  matchId
+                }, matchRequestState, 10000);
+                const pRes = pollResult.response;
+                const pData = pollResult.data;
                 if (pData.code === 0 && pData.status === 'matched' && isMatchmaking) {
                   clearInterval(matchPollInterval);
                   onMatchFound(pData);
+                } else if (isMatchAuthFailure(pRes, pData)) {
+                  clearInterval(matchPollInterval);
+                  if (isMatchmaking) {
+                    isMatchmaking = false;
+                    clearInterval(matchTimerInterval);
+                    hideMatchingFloatingBar();
+                    showGameNotice('🔑 登录状态已失效，请重新登录后再匹配', true);
+                    openAuthModal('login');
+                  }
                 }
               } catch(e) {
                 console.warn('[match poll]', e);
@@ -9957,12 +10028,20 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             }, 1200);
           }
         } else {
-          throw new Error(data?.msg || '匹配服务暂时不可用');
+          const error = new Error(data?.msg || '匹配服务暂时不可用');
+          error.response = res;
+          error.data = data;
+          throw error;
         }
       } catch (err) {
         console.warn('Match join error:', err);
         if (isMatchmaking) await cancelQuickMatch();
-        showGameNotice('⚠️ 匹配连接失败，请稍后重试', true);
+        if (isMatchAuthFailure(err.response, err.data)) {
+          showGameNotice('🔑 登录状态已失效，请重新登录后再匹配', true);
+          if (typeof openAuthModal === 'function') openAuthModal('login');
+        } else {
+          showGameNotice(`⚠️ ${err.message || '匹配连接失败，请稍后重试'}`, true);
+        }
       }
     }
 
@@ -10650,9 +10729,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     function getOrderedApiHosts() {
-      const preferred = isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost)
-        ? [activeApiHost]
-        : [];
+      // Pages 是当前正式入口；Worker 备用出口只在 Pages 失败或进入冷却时接管。
+      // 不能仅凭 OPTIONS 谁先返回就把功能未完全配置的备用出口提升为默认，
+      // 否则登录/匹配可能被导向一个“能预检、业务不完整”的节点。
+      const primaryHost = CLOUDFLARE_API_HOSTS[0];
+      const preferredHost = !isApiHostCoolingDown(primaryHost)
+        ? primaryHost
+        : (isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost) ? activeApiHost : '');
+      const preferred = preferredHost ? [preferredHost] : [];
       const healthy = CLOUDFLARE_API_HOSTS.filter(host => !preferred.includes(host) && !isApiHostCoolingDown(host));
       const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host) && !preferred.includes(host));
       return [...preferred, ...healthy, ...cooling];
@@ -10771,7 +10855,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             ...(requestOptions.headers || {})
           };
           try {
-            const sessionToken = localStorage.getItem("gomoku_user_token") || "";
+            const sessionToken = (typeof currentUserToken !== 'undefined' && currentUserToken)
+              || localStorage.getItem("gomoku_user_token") || "";
             const hasAuthorizationHeader = Object.keys(mergedHeaders).some(key => key.toLowerCase() === 'authorization');
             // 登录不携带旧会话，也不加自定义请求头，避免 Android WebView 额外发起 CORS 预检。
             if (!isLoginRequest && sessionToken && !hasAuthorizationHeader) {

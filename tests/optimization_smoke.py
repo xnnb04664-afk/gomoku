@@ -41,7 +41,7 @@ def main():
         )
         behavior = page.evaluate(
             """
-            () => {
+            async () => {
               let chatCapError = '';
               try {
                 for (let i = 0; i < 120; i++) window.addMessage(2, `smoke-${i}`);
@@ -211,7 +211,7 @@ def main():
         online_undo_ok = all(online_undo.values())
         network_status = page.evaluate(
             """
-            () => {
+            async () => {
               const listeners = {};
               const sent = [];
               const fakeConn = {
@@ -233,6 +233,8 @@ def main():
               p2Avatar = '👧';
               conn = fakeConn;
               setupConn();
+              await new Promise(resolve => setTimeout(resolve, 20));
+              const immediatePingSent = sent.some(message => message.type === 'ping');
               fakeConn.emit('data', {
                 type: 'profile_sync',
                 name: '新昵称',
@@ -277,12 +279,15 @@ def main():
               if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
               onlineHeartbeatTimer = null;
               return {
+                immediatePingSent,
                 pongEchoesPing: Boolean(pong && pong.pingId === 'peer_ping'),
                 pongReportsState: pong && pong.peerState === 'MQTT中继',
                 pongReportsLatency: pong && Object.prototype.hasOwnProperty.call(pong, 'peerLatencyMs'),
                 profileMirrorOk: mirrored && p2pMessage && mqttMessage && p2pMessage._mid === mqttMessage._mid,
                 localLabel: document.querySelector('#myNetworkStatusLabel')?.textContent || '',
                 peerLabel: document.querySelector('#peerNetworkStatusLabel')?.textContent || '',
+                statusBarVisible: getComputedStyle(document.querySelector('#onlineNetworkStatusBar')).display !== 'none',
+                roomBarVisible: getComputedStyle(document.querySelector('#onlineRoomTopBar')).display !== 'none',
                 peerName: p2Name,
                 peerNameLabel: document.querySelector('#p2NameLabel')?.textContent || '',
                 localLatencyMs: onlineNetworkTelemetry.localLatencyMs,
@@ -294,6 +299,7 @@ def main():
             """
         )
         network_status_ok = all([
+            network_status['immediatePingSent'],
             network_status['pongEchoesPing'],
             network_status['pongReportsState'],
             network_status['pongReportsLatency'],
@@ -301,6 +307,8 @@ def main():
             network_status['localLatencyOk'],
             network_status['peerLatencyOk'],
             network_status['peerTransportOk'],
+            network_status['statusBarVisible'],
+            network_status['roomBarVisible'],
             network_status['peerName'] == '新昵称',
             '新昵称' in network_status['peerNameLabel']
         ])
