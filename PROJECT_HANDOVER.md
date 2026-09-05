@@ -1006,7 +1006,20 @@ node publish.js
 - **产物 SHA-256**：男头像 JPG：`C72DB7A572F72864373D494CB9D634B089235DDD2DC69C780176A9BD63DF7290`；女头像 JPG：`C629FD6461D1D762918FAE0982A48F0377297C358B0A0E08F07D5E5128A4C780`；头像清单：`80092899C0C274AFA2AC1972AA505FA8B26C18EB6A6CCE4B4C1C526D79439100`；根页面：`6E46686BE699C9CDD2EEF5571CDA88D24F7A6535144E56DF14AB57AE98D528E5`；Android 内嵌页面：`BE67C5A3E9ECFC58900D352C972CEE5555E31A5FA7EA09698B75E9A4420E975B`；单文件版：`6DCE79EA68B2E8984E421D98C8C41C55EE18514B00DAF99D8416449AD2783654`；APK：`1EDFF86B406FDF3BDE6FE885A41A9EAD10F46A70421557F5A9C7029A87F8B19C`。
 - **正式发布**：已发布 `v1.0.108 (Build 109)`，GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.108>。Release 已上传 `gomoku.apk` 和 `gomoku.html`，线上 `/api/version` 实测 `code=0、tag=v1.0.108`，并正常签发 APK/HTML 短时票据；接口不直接返回可复用下载直链。普通客户端发版仍不需要重复部署 Cloudflare，本轮已按规则跳过生产部署。
 
+## 三十一、全服匹配会话续期与 API 出口稳定性修复（2026-09-06，已发布 v1.0.109）
+
+- **问题定位**：全服匹配入口只检查内存中的 Access Token；用户更新应用、长时间挂起或 Token 轮换后，账号界面可能仍显示已登录，但 `/api/match/join`/`poll` 已收到 401/403，前端却统一显示为“匹配连接失败”。同时，API 出口测速只探测 OPTIONS，可能把能响应预检但更新业务未完整配置的 Worker 备用出口选成默认，造成联机请求不稳定。
+- **客户端修复**：
+  1. `ensureMatchAccountSession()` 在开始匹配前恢复正式账号会话；有 Refresh Token 时先无感换发，不放宽游客不能进入全服匹配的安全限制；
+  2. `requestMatchApi()` 为 join/poll 增加一次性凭证续期重试，并同时携带规范 `Authorization` 与旧 Android WebView 兼容的 body token；
+  3. 轮询期间同样处理 401/403，过期时停止轮询并打开登录入口；服务端返回的授权/业务原因不再被隐藏成笼统网络错误；首次入队超时放宽至 12 秒，轮询为 10 秒；
+  4. API 顺序固定以 `https://gomoku-api.pages.dev` 为正式主出口，`gomoku-backend.xnnb04664.workers.dev` 只在主出口失败或冷却时容灾，避免 OPTIONS 竞速误选备用节点。
+- **同步范围**：修复已同步到 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html` 和正式签名 APK；发布脚本日志与本交接文档同步更新。未修改 Worker/D1/Pages/票据逻辑，因此本轮没有部署 Cloudflare 生产环境。
+- **验证结果**：自动续期回归确认“旧 Token → 401 → Refresh Token 换发 → 新 Token 再次入队”成功；`tests/optimization_smoke.py`、`tests/online_match_race_smoke.py`、`tests/online_transport_smoke.py`、`tests/avatar_asset_smoke.py`、`tests/ai_worker_smoke.py`、`node tests/worker_unit.js`、`node tests/auth_refresh_unit.js`、APK v1/v2/v3 签名校验和 `git diff --check` 均通过。线上 `https://gomoku-api.pages.dev/api/version` 已返回 `code=0、tag=v1.0.109`。
+- **发布结果**：已发布 `v1.0.109 (Build 110)`，GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.109>；Release 已上传 `gomoku.apk`（1,587,418 bytes）与 `gomoku.html`（1,170,311 bytes）。
+- **v1.0.109 产物 SHA-256**：根页面 `index.html`：`EF629087455C3916F940D382C6F00F4C5DE22AD2738CF750FFD3A5309C999A30`；Android 内嵌页面：`3B93ACFE8D2E79266937D457E21DD385395DF63F1E3821CEAC9DFD66E5F93D59`；单文件版：`F1EFB07FF2B29D7F035686C8B520737BBB53F629291544D02864A82A08FD02D4`；APK：`AC6B7772C84AFF61EAF02935ED4FF59B6071864FC7DC63B40D84EF315954B206`。
+
 ---
-*交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.108 (Build 109)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.108 GitHub Release；线上更新接口已返回 v1.0.108。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*交接文档最后更新时间：2026年9月6日*
+*当前工程正式版本：v1.0.109 (Build 110)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.109 GitHub Release；线上更新接口已返回 v1.0.109。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
