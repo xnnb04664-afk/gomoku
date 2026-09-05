@@ -2764,7 +2764,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.98</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.99</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3447,7 +3447,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.98';
+    const CURRENT_VERSION_TAG = 'v1.0.99';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -7915,42 +7915,218 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       "https://gomoku-api.pages.dev",
       "https://gomoku-backend.xnnb04664.workers.dev"
     ];
-    let activeApiHost = CLOUDFLARE_API_HOSTS[0];
+    const API_HOST_STORAGE_KEY = 'gomoku_api_host_v1';
+    const API_HOST_FAILURES_STORAGE_KEY = 'gomoku_api_host_failures_v1';
+    const API_HOST_FAILURE_COOLDOWN_MS = 60 * 1000;
+    const API_HOST_PROBE_TIMEOUT_MS = 2500;
+    const API_LOGIN_PATH = '/api/auth/login';
+
+    function isAllowedApiHost(host) {
+      return CLOUDFLARE_API_HOSTS.includes(host);
+    }
+
+    function readStoredApiHost() {
+      try {
+        const saved = localStorage.getItem(API_HOST_STORAGE_KEY) || '';
+        return isAllowedApiHost(saved) ? saved : '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function storeApiHost(host) {
+      if (!isAllowedApiHost(host)) return;
+      try {
+        localStorage.setItem(API_HOST_STORAGE_KEY, host);
+      } catch (_) {}
+    }
+
+    function readApiHostFailures() {
+      const result = {};
+      try {
+        const saved = JSON.parse(localStorage.getItem(API_HOST_FAILURES_STORAGE_KEY) || '{}');
+        const now = Date.now();
+        for (const host of CLOUDFLARE_API_HOSTS) {
+          const failedAt = Number(saved && saved[host]);
+          if (Number.isFinite(failedAt) && failedAt > 0 && now - failedAt < API_HOST_FAILURE_COOLDOWN_MS) {
+            result[host] = failedAt;
+          }
+        }
+      } catch (_) {}
+      return result;
+    }
+
+    const storedApiHost = readStoredApiHost();
+    let apiHostFailures = readApiHostFailures();
+    let activeApiHost = storedApiHost || CLOUDFLARE_API_HOSTS[0];
+    let hasApiHostHint = Boolean(storedApiHost);
+    let apiHostWarmPromise = null;
+    let apiHostWarmAt = 0;
+
+    function persistApiHostFailures() {
+      try {
+        const now = Date.now();
+        const compact = {};
+        for (const host of CLOUDFLARE_API_HOSTS) {
+          const failedAt = Number(apiHostFailures[host]);
+          if (Number.isFinite(failedAt) && failedAt > 0 && now - failedAt < API_HOST_FAILURE_COOLDOWN_MS) {
+            compact[host] = failedAt;
+          }
+        }
+        localStorage.setItem(API_HOST_FAILURES_STORAGE_KEY, JSON.stringify(compact));
+      } catch (_) {}
+    }
+
+    function markApiHostFailure(host) {
+      if (!isAllowedApiHost(host)) return;
+      apiHostFailures[host] = Date.now();
+      persistApiHostFailures();
+    }
+
+    function markApiHostSuccess(host) {
+      if (!isAllowedApiHost(host)) return;
+      delete apiHostFailures[host];
+      activeApiHost = host;
+      hasApiHostHint = true;
+      storeApiHost(host);
+      persistApiHostFailures();
+    }
+
+    function isApiHostCoolingDown(host) {
+      const failedAt = Number(apiHostFailures[host]);
+      return Number.isFinite(failedAt) && failedAt > 0 && Date.now() - failedAt < API_HOST_FAILURE_COOLDOWN_MS;
+    }
+
+    function getOrderedApiHosts() {
+      const preferred = isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost)
+        ? [activeApiHost]
+        : [];
+      const healthy = CLOUDFLARE_API_HOSTS.filter(host => !preferred.includes(host) && !isApiHostCoolingDown(host));
+      const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host) && !preferred.includes(host));
+      return [...preferred, ...healthy, ...cooling];
+    }
+
+    function isApiAbortError(error) {
+      const message = String(error && error.message || '').toLowerCase();
+      return Boolean(error && error.name === 'AbortError') || /abort|timeout|timed out/.test(message);
+    }
+
+    function getApiNetworkErrorMessage(error) {
+      if (error && (error.code === 'API_TIMEOUT' || error.code === 'API_UNAVAILABLE')) {
+        return error.message;
+      }
+      if (isApiAbortError(error)) return '官方服务响应超时，请检查手机网络后重试';
+      return '网络连接失败，请检查手机网络后重试';
+    }
+
+    async function probeApiHost(host, controller) {
+      const timer = setTimeout(() => controller.abort(), API_HOST_PROBE_TIMEOUT_MS);
+      const startedAt = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      try {
+        const res = await fetch(host + API_LOGIN_PATH, {
+          method: 'OPTIONS',
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        try { await res.body?.cancel(); } catch (_) {}
+        const finishedAt = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+        return { host, elapsed: finishedAt - startedAt };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // 登录弹窗打开时并行探测两个官方出口，只选择最快的一个；登录请求本身不会并发发送，避免重复刷新 Token。
+    function warmApiHost(force = false) {
+      const now = Date.now();
+      if (!force && hasApiHostHint) return Promise.resolve(activeApiHost);
+      if (apiHostWarmPromise) return apiHostWarmPromise;
+      if (!force && apiHostWarmAt && now - apiHostWarmAt < 30 * 1000) {
+        return Promise.resolve(activeApiHost);
+      }
+
+      apiHostWarmAt = now;
+      const controllers = new Map();
+      const probePromises = CLOUDFLARE_API_HOSTS.map(host => {
+        const controller = new AbortController();
+        controllers.set(host, controller);
+        return probeApiHost(host, controller);
+      });
+      apiHostWarmPromise = new Promise(resolve => {
+        let remaining = probePromises.length;
+        let winner = null;
+        probePromises.forEach(promise => {
+          promise.then(result => {
+            if (!winner) {
+              winner = result;
+              markApiHostSuccess(result.host);
+              for (const [host, controller] of controllers.entries()) {
+                if (host !== result.host) controller.abort();
+              }
+              resolve(result.host);
+            }
+          }).catch(() => {
+            remaining -= 1;
+            if (remaining === 0) resolve(null);
+          });
+        });
+      }).finally(() => {
+        apiHostWarmPromise = null;
+      });
+      return apiHostWarmPromise;
+    }
 
     async function safeApiFetch(endpoint, options = {}) {
       let lastErr = null;
-      const orderedHosts = [
-        activeApiHost,
-        ...CLOUDFLARE_API_HOSTS.filter(host => host !== activeApiHost)
-      ];
+      const orderedHosts = getOrderedApiHosts();
       const parsedTimeout = Number(options.timeoutMs);
       const timeoutMs = Number.isFinite(parsedTimeout)
         ? Math.max(1500, Math.min(15000, parsedTimeout))
         : 7000;
       const requestOptions = { ...options };
       delete requestOptions.timeoutMs;
+      const endpointText = String(endpoint || '');
+      let fixedEndpointUrl = null;
+      if (/^https?:/i.test(endpointText)) {
+        try {
+          fixedEndpointUrl = new URL(endpointText);
+        } catch (_) {
+          throw new Error('官方 API 地址格式无效');
+        }
+        if (fixedEndpointUrl.protocol !== "https:" ||
+            !isAllowedApiHost(fixedEndpointUrl.origin) ||
+            fixedEndpointUrl.username || fixedEndpointUrl.password) {
+          throw new Error('拒绝访问非官方 API 地址');
+        }
+      }
+      const requestMethod = String(requestOptions.method || 'GET').toUpperCase();
+      const isLoginRequest = requestMethod === 'POST' &&
+        (fixedEndpointUrl ? fixedEndpointUrl.pathname : endpointText.split('?')[0]) === API_LOGIN_PATH;
+      const attemptErrors = [];
+      let lastServerResponse = null;
 
       for (const [hostIndex, host] of orderedHosts.entries()) {
         let timer = null;
         try {
           const controller = new AbortController();
           timer = setTimeout(() => controller.abort(), timeoutMs);
-          const endpointUrl = endpoint.startsWith("http") ? new URL(endpoint) : new URL(endpoint, host);
-          if (endpointUrl.protocol !== "https:" || !CLOUDFLARE_API_HOSTS.includes(endpointUrl.origin) || endpointUrl.username || endpointUrl.password) {
+          const endpointUrl = fixedEndpointUrl || new URL(endpointText, host);
+          if (endpointUrl.protocol !== "https:" || !isAllowedApiHost(endpointUrl.origin) || endpointUrl.username || endpointUrl.password) {
             throw new Error('拒绝访问非官方 API 地址');
           }
-          const url = endpointUrl.href;
           const mergedHeaders = {
-            ...(requestOptions.headers || {}),
-            "X-Gomoku-Client": "gomoku-app-client-auth"
+            ...(requestOptions.headers || {})
           };
           try {
             const sessionToken = localStorage.getItem("gomoku_user_token") || "";
-            if (sessionToken && !mergedHeaders.Authorization) {
-              mergedHeaders.Authorization = `Bearer ${sessionToken}`;
+            const hasAuthorizationHeader = Object.keys(mergedHeaders).some(key => key.toLowerCase() === 'authorization');
+            // 登录不携带旧会话，也不加自定义请求头，避免 Android WebView 额外发起 CORS 预检。
+            if (!isLoginRequest && sessionToken && !hasAuthorizationHeader) {
+              mergedHeaders.Authorization = 'Bearer ' + sessionToken;
             }
           } catch (_) {}
-          const res = await fetch(url, {
+          const res = await fetch(endpointUrl.href, {
             ...requestOptions,
             headers: mergedHeaders,
             signal: controller.signal
@@ -7958,20 +8134,39 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
 
           // 仅对服务端错误尝试备用出口；4xx 是业务响应，应原样交给调用方处理。
           if (res.status >= 500 && hostIndex < orderedHosts.length - 1) {
+            lastServerResponse = res;
+            markApiHostFailure(host);
             try { await res.body?.cancel(); } catch (_) {}
-            lastErr = new Error(`${host} returned HTTP ${res.status}`);
+            lastErr = new Error(host + ' returned HTTP ' + res.status);
             continue;
           }
-          activeApiHost = host;
+          if (res.status >= 500) {
+            lastServerResponse = res;
+            markApiHostFailure(host);
+          } else {
+            markApiHostSuccess(host);
+          }
           return res;
         } catch(err) {
           lastErr = err;
-          console.warn(`Host ${host} failed: ${err.message}, trying fallback...`);
+          attemptErrors.push({ error: err, timedOut: isApiAbortError(err) });
+          markApiHostFailure(host);
+          console.warn('Host ' + host + ' failed: ' + (err && err.message || err) + ', trying fallback...');
         } finally {
           if (timer) clearTimeout(timer);
         }
       }
-      throw lastErr || new Error('网络连接异常，请稍后再试');
+      if (lastServerResponse) return lastServerResponse;
+      if (attemptErrors.length && attemptErrors.every(item => item.timedOut)) {
+        const timeoutError = new Error('官方服务响应超时，请检查手机网络后重试');
+        timeoutError.code = 'API_TIMEOUT';
+        timeoutError.cause = lastErr;
+        throw timeoutError;
+      }
+      const networkError = new Error('无法连接官方服务，请检查手机网络后重试');
+      networkError.code = 'API_UNAVAILABLE';
+      networkError.cause = lastErr;
+      throw networkError;
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -8293,6 +8488,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (modal) {
         modal.classList.add('show');
         switchAuthTab(tab);
+        // 提前探测官方出口，让用户填写账号密码的时间与网络探测并行。
+        void warmApiHost();
       }
     }
 
@@ -8396,7 +8593,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           showError(json.msg || '密码修改失败，请稍后重试');
         }
       } catch (err) {
-        showError('网络连接失败: ' + (err.message || '请检查手机网络设置'));
+        showError(getApiNetworkErrorMessage(err));
       } finally {
         if (btnSubmit) {
           btnSubmit.disabled = false;
@@ -8455,10 +8652,14 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       try {
+        await warmApiHost();
         const res = await safeApiFetch(`/api/auth/login`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p })
+          // 后端按 JSON 内容解析请求体；text/plain 属于 CORS 简单请求，避免手机 WebView 先等待一次预检。
+          headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          body: JSON.stringify({ username: u, password: p }),
+          cache: "no-store",
+          timeoutMs: 6000
         });
         const json = await res.json();
         if (json.code === 0 && json.data) {
@@ -8475,7 +8676,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           errEl.style.display = "block";
         }
       } catch (err) {
-        errEl.textContent = "网络连接失败: " + (err.message || "请检查手机网络设置");
+        errEl.textContent = getApiNetworkErrorMessage(err);
         errEl.style.display = "block";
       } finally {
         if (btnSubmit) {
@@ -8556,7 +8757,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           errEl.style.display = "block";
         }
       } catch (err) {
-        errEl.textContent = "网络连接失败: " + (err.message || "请检查手机网络设置");
+        errEl.textContent = getApiNetworkErrorMessage(err);
         errEl.style.display = "block";
       } finally {
         if (btnReg) {
@@ -8594,7 +8795,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           errEl.style.display = 'block';
         }
       } catch(e) {
-        errEl.textContent = '网络连接失败: ' + (e.message || '请检查手机网络设置');
+        errEl.textContent = getApiNetworkErrorMessage(e);
         errEl.style.display = 'block';
       }
     }
@@ -8633,7 +8834,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           errEl.style.display = 'block';
         }
       } catch(e) {
-        errEl.textContent = '网络连接失败: ' + (e.message || '请检查手机网络设置');
+        errEl.textContent = getApiNetworkErrorMessage(e);
         errEl.style.display = 'block';
       }
     }

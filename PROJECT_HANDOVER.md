@@ -724,6 +724,16 @@ node publish.js
 - v1.0.98 (Build 99) 已完成单文件版与正式签名 APK 构建并发布：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.98`；本次为图标与客户端资源更新，Cloudflare 生产环境跳过。
 - 当前资源 SHA-256：`favicon.png` 为 `BEF037F960D94CA444BA32034AC48775036FCBB1A4F9A2106A642B0E985AD477`；`android_src/res/drawable/ic_launcher.png` 为 `58F0821D7280F6BA055360F1C9E7858C149E704911698CDC1BEABA4F5DB2BFF7`；APK 为 `8CB48FC38FAAE0EF0790BF7D6AE4DB486B8473A1FEEE9B3036F9D763A4232DA1`。
 
+## 十七、账号登录网络路径优化（2026-09-05，工作区待发布）
+
+- **问题定位**：旧版 `safeApiFetch()` 对所有接口固定附加自定义请求头，登录在 Android WebView 中容易先触发 CORS 预检；当 Pages 出口未及时响应时，又会按 7 秒超时后顺序等待 Workers，最终把 `signal is aborted without reason` 原样显示给用户。
+- **客户端修复**：登录请求改用可解析 JSON 请求体的 `text/plain` 简单请求，登录不再携带旧 Authorization 或无关自定义头；打开账号弹窗时并行探测两个官方 HTTPS 出口，记忆最快节点，并对失败节点冷却 60 秒，减少下次重复等待。
+- **错误处理**：所有认证入口将 Abort/超时统一转换为“官方服务响应超时，请检查手机网络后重试”，普通网络失败统一显示可读中文提示，不再泄露底层 abort 文案。
+- **服务端准备**：`backend/worker.js` 与派生的 `pages_build/_worker.js` 增加 CORS 预检缓存 600 秒；这项后端头部只有在明确执行 `node deploy_worker.js` 后才会影响线上，本轮未自动部署生产环境。
+- **同步范围**：已同步 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html`、`backend/worker.js` 和 `pages_build/_worker.js`。
+- **验证结果**：Pages/Worker 预检均返回 HTTP 200；定向测试确认登录请求仅带 `Content-Type: text/plain;charset=UTF-8`，不带旧 Token/自定义头；超时错误统一为 `API_TIMEOUT` 中文提示；`python tests\optimization_smoke.py`、`node tests\worker_unit.js`、`node tests\auth_refresh_unit.js` 和全部 HTML 内嵌脚本语法检查均通过。
+- **生效边界**：手机截图中的 v1.0.98 仍是旧客户端，必须先发布包含本修复的新客户端或通过现有热更新拉取新 HTML；本次工作区尚未递增版本、推送 GitHub 或重新构建 APK。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.98 (Build 99)*

@@ -42,6 +42,7 @@ export default {
       const corsHeaders = {
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket',
+      'Access-Control-Max-Age': '600',
       'Vary': 'Origin',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
