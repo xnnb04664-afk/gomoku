@@ -1774,7 +1774,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.99</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.100</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2457,7 +2457,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.99';
+    const CURRENT_VERSION_TAG = 'v1.0.100';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -11281,6 +11281,9 @@
     const UPDATE_CLIENT_HEADER = 'X-Gomoku-Client';
     const UPDATE_CLIENT_VALUE = 'gomoku-app-client-v2';
     const UPDATE_TICKET_HEADER = 'X-Gomoku-Update-Ticket';
+    // 版本清单只读公开的中转接口，不携带客户端专属请求头，避免 Android WebView 先发 CORS 预检。
+    // 下载 APK/HTML 时仍保留专属请求头和短时票据，不能为了提速而放宽文件保护。
+    const UPDATE_MANIFEST_TIMEOUTS_MS = [8500, 5000];
 
     function isTrustedUpdatePath(value, expectedPath) {
       return String(value || '').trim() === expectedPath;
@@ -11372,6 +11375,55 @@
       return 0;
     }
 
+    function normalizeUpdateManifest(data) {
+      const releaseTag = String(data && data.tag || '').trim();
+      if (!data || Number(data.code) !== 0 || !/^v\d+\.\d+\.\d+$/.test(releaseTag)) {
+        throw new Error('更新清单响应无效');
+      }
+      return {
+        tag: releaseTag,
+        notes: data.updateLog || "修复已知问题，优化联机体验与显示",
+        fastUrl: isTrustedUpdatePath(data.apkPath, UPDATE_PROXY_APK_PATH) ? UPDATE_PROXY_APK_URL : '',
+        htmlUrl: isTrustedUpdatePath(data.htmlPath, UPDATE_PROXY_HTML_PATH) ? UPDATE_PROXY_HTML_URL : '',
+        apkTicket: String(data.apkTicket || '').trim(),
+        htmlTicket: String(data.htmlTicket || '').trim(),
+        htmlSha256: /^[0-9a-f]{64}$/i.test(String(data.htmlSha256 || '')) ? String(data.htmlSha256).toLowerCase() : ''
+      };
+    }
+
+    async function fetchUpdateManifest() {
+      let lastError = null;
+      for (let attempt = 0; attempt < UPDATE_MANIFEST_TIMEOUTS_MS.length; attempt++) {
+        let controller = null;
+        let timeoutId = null;
+        try {
+          // 时间戳避免手机 WebView/中间缓存返回旧清单；GET 不附带 X-Gomoku-Client，因此不会触发预检。
+          const separator = UPDATE_API_URL.includes('?') ? '&' : '?';
+          const manifestUrl = `${UPDATE_API_URL}${separator}_t=${Date.now()}&attempt=${attempt}`;
+          const requestOptions = {
+            method: 'GET',
+            mode: 'cors',
+            credentials: 'omit',
+            cache: 'no-store'
+          };
+          if (typeof AbortController === 'function') {
+            controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), UPDATE_MANIFEST_TIMEOUTS_MS[attempt]);
+            requestOptions.signal = controller.signal;
+          }
+          const response = await fetch(manifestUrl, requestOptions);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return normalizeUpdateManifest(await response.json());
+        } catch (error) {
+          lastError = error;
+          if (attempt + 1 < UPDATE_MANIFEST_TIMEOUTS_MS.length) continue;
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
+      }
+      throw lastError || new Error('更新清单不可用');
+    }
+
     let isCheckingAppUpdate = false;
     let isAppDownloading = false;
 
@@ -11415,37 +11467,18 @@
 
       let versionData = null;
 
-      // 0. 优先访问国内极速直连 Cloudflare 官方 API（零延迟、免跨域鉴权拦截，3秒超时防挂起）
+      // 0. 版本清单走无预检 GET；首次冷启动较慢时自动重试一次，避免旧版常见的静默漏检。
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
-        const cfRes = await fetch(UPDATE_API_URL, {
-          cache: "no-cache",
-          headers: getUpdateHeaders(),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        if (cfRes.ok) {
-          const d = await cfRes.json();
-          const releaseTag = String(d && d.tag || '').trim();
-          if (d && /^v\d+\.\d+\.\d+$/.test(releaseTag)) {
-            versionData = {
-              tag: releaseTag,
-              notes: d.updateLog || "修复已知问题，优化联机体验与显示",
-              fastUrl: isTrustedUpdatePath(d.apkPath, UPDATE_PROXY_APK_PATH) ? UPDATE_PROXY_APK_URL : '',
-              htmlUrl: isTrustedUpdatePath(d.htmlPath, UPDATE_PROXY_HTML_PATH) ? UPDATE_PROXY_HTML_URL : '',
-              apkTicket: String(d.apkTicket || '').trim(),
-              htmlTicket: String(d.htmlTicket || '').trim(),
-              htmlSha256: /^[0-9a-f]{64}$/i.test(String(d.htmlSha256 || '')) ? String(d.htmlSha256).toLowerCase() : ''
-            };
-          }
-        }
-      } catch(_) {}
+        versionData = await fetchUpdateManifest();
+      } catch(error) {
+        console.warn('[UpdateCheck] 无法获取版本清单:', error?.message || error);
+      }
 
       isCheckingAppUpdate = false;
 
       // 检查当前应用版本
-      const effectiveVersion = localStorage.getItem("gomoku_effective_version") || CURRENT_VERSION_TAG;
+      // 当前加载的 HTML 才是实际运行版本；旧版遗留的本地标记不能把新版本误判为已安装。
+      const effectiveVersion = CURRENT_VERSION_TAG;
       const hasNewVersion = versionData ? (compareVersions(versionData.tag, effectiveVersion) > 0) : false;
 
       // 静默后台检查分支：有新版本仅做静默提示
@@ -11455,6 +11488,11 @@
           if (!sessionStorage.getItem(sessKey)) {
             sessionStorage.setItem(sessKey, "1");
             showGameNotice(`🔔 发现新版本 ${versionData.tag}，可随时在个人中心点击更新`, false);
+          }
+          const versionEl = document.getElementById('appVersionDisplay');
+          if (versionEl) {
+            versionEl.textContent = `有新版本 ${versionData.tag}`;
+            versionEl.title = `发现 ${versionData.tag}，点击检查更新`;
           }
         }
         return;
@@ -11486,20 +11524,20 @@
       if (!versionData) {
         // 网络超时/异常兜底展示
         if (modalIcon) modalIcon.textContent = "📶";
-        if (modalTitle) modalTitle.textContent = "当前版本运行良好";
+        if (modalTitle) modalTitle.textContent = "暂时无法检查更新";
         if (tagEl) {
           tagEl.textContent = `${effectiveVersion} (当前运行版本)`;
           tagEl.style.background = "#f1f5f9";
           tagEl.style.color = "#475569";
         }
         if (notesTitle) notesTitle.textContent = "运行状态：";
-        if (notesEl) notesEl.textContent = `云端检查连接稍有延迟，但您当前运行的五子棋 (${effectiveVersion}) 已具备全部对战功能与修复，可正常畅快对弈。\n\n如需手动获取最新安装包，可点击下方按钮。`;
+        if (notesEl) notesEl.textContent = `暂时无法连接官方更新服务，无法确认是否有新版本。\n\n请检查网络后点击下方按钮重试；这不会影响当前版本 (${effectiveVersion}) 的正常对弈。`;
         if (btnFast) {
           btnFast.style.display = "flex";
           btnFast.innerHTML = "<span>🔄 重新尝试获取更新</span>";
           btnFast.onclick = (e) => {
             e.preventDefault();
-            showGameNotice('暂未获取到更新，请稍后重试');
+            checkAppUpdate(true);
           };
         }
         if (btnCancel) {
@@ -11508,7 +11546,7 @@
           btnCancel.style.color = "#64748b";
           btnCancel.style.padding = "8px 0";
         }
-        showGameNotice(`当前已是 ${effectiveVersion}，对弈功能正常！`, false);
+        showGameNotice('暂时无法获取更新，请检查网络后重试', true);
         openUpdateModal();
         return;
       }
