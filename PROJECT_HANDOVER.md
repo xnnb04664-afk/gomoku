@@ -212,7 +212,7 @@
 - **客户端更新出口**：客户端只访问 `https://gomoku-api.pages.dev/api/version` 检测版本；版本响应不再下发 APK/HTML 完整下载 URL，只下发固定路径和一次性短时票据。文件请求必须使用 `X-Gomoku-Client: gomoku-app-client-v2` 与 `X-Gomoku-Update-Ticket` 请求头，不会直连 GitHub、Raw、jsDelivr 或第三方反代。
 - **Cloudflare Pages Function 私有仓库中转**：Pages 项目 `gomoku-api` 中的 `_worker.js` 使用 `GITHUB_READ_TOKEN` Secret 请求私有仓库最新 Release，再将版本信息和 Release 文件流返回给客户端；Token 不进入 APK、网页或 Git，轮换 Token 无需更新客户端。每次新建或轮换 Pages Secret 后，都要重新部署 Pages Function 才能让当前生产部署绑定新值。独立 Worker 脚本名为 `gomoku-backend`，不要误把 Secret 配置到不存在的 `gomoku`。
 - **游戏内免服务器智能检查更新系统**：
-  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.94`）与【🚀 检查更新】按钮；
+  - 在【个人资料】中常驻版本显示当前正式版本（当前为 `v1.0.95`）与【🚀 检查更新】按钮；
   - 游戏启动 3 秒后后台静默检测，检测到新版本时自动弹出更新卡片与更新日志；
   - APK 覆盖安装继续使用项目固定签名，保留本地对局历史与自定义头像；
 - **手机覆盖升级技术底座 (Zero Data Loss)**：
@@ -278,6 +278,14 @@
 - v1.0.94（Build 95）已推送 `master` 并创建 GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.94`。
 - 本次只改客户端和 Android 容器，没有修改 Worker/D1/Pages 逻辑，因此按规则**跳过 Cloudflare 生产部署**；后续普通客户端发布仍执行 `node publish.js`，只有后端代码或 Secret 绑定变化时才执行一次显式部署。
 - 当前产物 SHA-256：根页面 / `android_src/assets/index.html` 为 `F59B7A33E2B833E8A4446195EE52CD7B1FD695679B1C5F454FE3338C404A28D1`；单文件版为 `E0403794EC1DF81A05FBDD7FF68850F9169476A2EB39FAC91A6DEB7295925895`；APK 为 `DEF11A3E0BB6AC7619A6E2B224B7A9C25F224742FC4BDBF94D04A0ADCFB02BCC`。
+
+## 24. 🔁 联机昵称同步兜底修复（2026-09-05）
+
+- **问题根因**：WebRTC DataChannel 建立后，`MqttRoomConnection.send()` 对所有消息立即返回，昵称/头像的 `profile_sync` 只走 P2P；手机切换 Wi-Fi/移动网络或 DataChannel 半开时，本端可能仍显示 `open`，但对方实际收不到资料更新。
+- **修复方式**：`profile_sync` 仍优先走 P2P，同时使用同一个 `_mid` 镜像发布到 MQTT。接收端会自动去重，因此不会重复显示，但即使 P2P 资料包丢失也能由 MQTT 兜底送达；旧客户端仍可接收普通 `profile_sync` 报文。
+- **验证结果**：回归测试模拟“对方改名”为“新昵称”，对方头像和顶部玩家胶囊均即时更新；同时验证 P2P 与 MQTT 两份资料报文 `_mid` 一致且只处理一次，控制台无错误。
+- **发布结果**：v1.0.95（Build 96）已推送 `master` 并创建 GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.95`；本次只改客户端联机逻辑，Cloudflare 生产部署按规则跳过。
+- 当前产物 SHA-256：根页面 / `android_src/assets/index.html` 为 `69859869CD02BE9AA61FBBC5C95764A5142C80BDFF94EC52A06A45FBBB0BBE5A`；单文件版为 `BFE3214E376C0A49B71375F1CF0D2AF33F2C5AB557C4210519FBCFBDC084E3FA`；APK 为 `BC97728B66D1C69657020AC6C0820D1736338541C4B965771F326CE6C8814F1D`。
 - **Android 安全边界**：`file://` 导航仅允许 `/android_asset/index.html`；安装 Provider 仅接受固定 APK URI 且只读打开；保留正式签名、APK 摘要校验、HTTPS 主机限制、禁止调试与明文流量。新增的实体返回键会优先关闭复盘、抽屉和弹窗，再执行双击退出。
 - **本地性能与稳定性**：Android 本地静态服务补齐 ETag/304；登录后端增加账号/密码类型和 6~32 位长度约束；旧模块化孤立资源已按前一节记录清理。单文件版、Android 资源和正式签名 APK 已重新同步构建。
 - **热更新范围**：Android 已安装旧 APK 可以在游戏内下载并校验新的 `gomoku.html`，写入应用私有 `hot_update/index.html` 后重载，网页 UI、JS、AI 和联机逻辑无需重装 APK；Java/Manifest、签名、Provider 等原生改动仍必须安装新的正式签名 APK。浏览器单文件版不走原生沙盒，需重新下载/打开新 HTML。
@@ -641,5 +649,5 @@ node publish.js
 
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.94 (Build 95)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出和双方网络状态/延迟显示均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.94。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
+*当前工程正式版本：v1.0.95 (Build 96)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示和联机昵称同步兜底均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，正式签名 APK 已发布为 v1.0.95。普通客户端发版默认不重复部署 Cloudflare；独立 Worker 的更新备用接口仍待配置 `GITHUB_READ_TOKEN`。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`；只有修改后端 Worker/D1/更新中转逻辑时才执行一次 `node deploy_worker.js`。*
