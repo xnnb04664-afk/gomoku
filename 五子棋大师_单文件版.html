@@ -6732,7 +6732,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (!Array.isArray(data.history) || data.history.length > 512) return false;
       for (const item of data.history) {
         if (!item || typeof item !== 'object') return false;
-        const special = item.r === -1 && item.c === -1 && item.p === 0 &&
+        const special = item.r === -1 && item.c === -1 && (item.p === 0 || item.p === BLACK || item.p === WHITE) &&
           ((typeof item.action === 'string' && item.action.length <= 64) || (typeof item.type === 'string' && item.type.length <= 64));
         const move = isValidCoord(item.r) && isValidCoord(item.c) && (item.p === BLACK || item.p === WHITE);
         if (!special && !move) return false;
@@ -6923,20 +6923,22 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
           // 1. 防倒退校验：如果发来的步数少于本地步数，说明对方因卡顿落后！
           // 本地绝不倒退，而是立即反向将最新步数补发给对方，拉齐对方进度
           if (data.history.length < history.length) {
-            console.warn('[state_snapshot] 对方步数落后于我方，反向补发最新一手拉齐对方');
-            const missingMoves = history.slice(data.history.length);
-            missingMoves.forEach(m => {
-              try { conn.send({ type: 'move', r: m.r, c: m.c, p: m.p, step: history.length }); } catch(_) {}
-            });
+            console.warn('[state_snapshot] 对方步数落后于我方，反向发送全量局势快照拉齐对方');
+            sendFullStateSnapshot();
             return;
           }
 
           // 2. 账本一致性前缀校验：比对双方已共同落子的历史记录（防中途恶意篡改已有棋子）
           let isHistoryConsistent = true;
           for (let i = 0; i < history.length; i++) {
-            if (history[i].r !== data.history[i].r || 
-                history[i].c !== data.history[i].c || 
-                history[i].p !== data.history[i].p) {
+            const myH = history[i];
+            const oppH = data.history[i];
+            if (!myH || !oppH) { isHistoryConsistent = false; break; }
+            const myAct = myH.action || myH.type;
+            const oppAct = oppH.action || oppH.type;
+            if (myAct || oppAct) {
+              if (myAct !== oppAct) { isHistoryConsistent = false; break; }
+            } else if (myH.r !== oppH.r || myH.c !== oppH.c || myH.p !== oppH.p) {
               isHistoryConsistent = false;
               break;
             }
@@ -11030,7 +11032,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       const movesSnapshot = (history || []).map(step => {
-        if (step.action) return { ...step };
+        if (step.action || step.type || step.r === -1) return { ...step };
         return { r: step.r, c: step.c, p: step.p };
       });
       const boardSnapshot = (board || []).map(row => [...row]);
@@ -11105,7 +11107,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       }
 
       const movesSnapshot = (history || []).map(step => {
-        if (step.action) return { ...step };
+        if (step.action || step.type || step.r === -1) return { ...step };
         return { r: step.r, c: step.c, p: step.p };
       });
       const boardSnapshot = (board || []).map(row => [...row]);
@@ -12276,8 +12278,15 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { GomokuAI
       if (!isReplayMode) {
         let last = null;
         for (let i = history.length - 1; i >= 0; i--) {
-          if (history[i] && history[i].r >= 0 && history[i].c >= 0) {
-            last = history[i];
+          const h = history[i];
+          if (!h) continue;
+          if (h.action === 'mega_bomb' || h.type === 'skill_mega_bomb' ||
+              h.action === 'remove_stone' || h.type === 'skill_remove_stone' ||
+              h.action === 'destiny_wipe_danger' || h.type === 'destiny_wipe_danger') {
+            break; // 大爆炸洗牌全盘或棋子抹除后，绝不在空位绘制幽灵落子标记
+          }
+          if (h.r >= 0 && h.c >= 0 && board[h.r] && board[h.r][h.c] !== EMPTY) {
+            last = h;
             break;
           }
         }

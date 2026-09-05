@@ -233,8 +233,13 @@ export default {
       return safe.startsWith('data:image/') ? '👦' : safe;
     }
 
+    // 版本检查与更新下载不依赖 D1。将它们从数据库冷启动/迁移路径隔离，
+    // 避免数据库抖动把“检查更新”一起拖到超时；账号/对局接口仍按原路径初始化 D1。
+    const isUpdateRoute = url.pathname === '/api/version' ||
+      url.pathname === '/api/update/apk' || url.pathname === '/api/update/html';
+
     // ── 数据库自动安全升级迁移 ─────────────────────────────
-    if (env.DB && !isDbInitialized) {
+    if (env.DB && !isDbInitialized && !isUpdateRoute) {
       if (!dbInitializationPromise) {
         dbInitializationPromise = (async () => {
           try {

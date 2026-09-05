@@ -813,7 +813,66 @@ node publish.js
 - **发布结果**：版本已递增为 v1.0.101（Build 102），完成正式签名 APK、单文件版构建、私有仓库推送和 GitHub Release。Release 地址：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.101。
 - **当前产物 SHA-256**：`index.html`（开发母本/空 Worker 标记）为 `192C4453ABEAD3B44F70C668AA34690D90D61E1FFFA7B8094D3E01709E1F2EAD`；`android_src/assets/index.html`（APK 内嵌 Worker）为 `06DDC62EDE203B029F60C0B9E3BF6CBF412A5E1645841F7FD46070171638243A`；单文件版为 `A5B3B1C7C15090286A7FCD961CB06B75D8FA7940404A87B18C21944FD1F8A510`；APK 为 `9627315CE749995FA148CE4A90CB210C7CEAAAFF772DE439C554A158F67CB697`。
 
+## 二十二、热更新版本接口与 D1 冷启动隔离（2026-09-05，线上已部署）
+
+- **问题定位**：`/api/version` 和 `/api/update/*` 原先会先进入 D1 自动建表/迁移初始化；数据库冷启动或短时抖动时，更新检查会跟着长时间无响应，表现为手机端“更新很慢”，这不是 GitHub 令牌 401。
+- **修复内容**：在 `backend/worker.js` 与 `pages_build/_worker.js` 增加更新路由判定，让版本检查、短时票据签发和受保护下载不等待 D1；GitHub 上游请求仍保留 8 秒超时，账号、联机、对局接口继续按原逻辑初始化数据库。
+- **线上验证**：已执行 `node deploy_worker.js`，Worker 与 Pages 均部署成功；`/api/version` 返回 HTTP 200、`code=0`、`tag=v1.0.102`，`apkTicket/htmlTicket` 均存在且不返回下载直链；未携带应用短时票据访问 `/api/update/apk` 返回 HTTP 401，下载保护仍生效。
+- **部署边界**：这次是为修复线上热更新接口实际超时而进行的必要后端部署；今后只有修改 Worker、Pages 配置、D1 或票据逻辑才需要部署，纯 HTML/AI/样式发版仍只需 `node publish.js`，无需重复部署 Cloudflare。
+
+## 二十三、干扰牌与大爆炸对局复盘历史记录防污染、推演引擎深度重构与全端加固 (2026-09-05)
+
+- **背景与根因定位（“大爆炸从一开始就打乱了”）**：
+  1. **大爆炸 (`mega_bomb`) 破坏性清空历史栈**：
+     - 旧代码在触发大爆炸时执行了 `history = []; for (...) history.push(...)`。这彻底抹杀了引爆炸弹之前双方走过的全部真实历史落子步数，强行将洗牌后的所有落子从第 0 步开始覆盖；导致对局结束后查看棋谱时，整局棋从第 1 手起就是被打乱的状态。
+  2. **其他干扰技能的追溯性篡改**：
+     - `remove_stone` 与 `destiny_remove` 曾直接使用 `history = history.filter(...)`，直接将对手之前落子所在的历史步骤物理删除；
+     - `shift_stone` 与 `destiny_point_2` 曾直接修改 `histItem.r/c`，导致棋子在复盘从第 1 步起就出现在平移后的终点坐标；
+     - `swap_color` 与 `destiny_convert` 曾直接修改 `histItem.p`，导致棋子在复盘从第 1 步起就变成了策反后的颜色；
+     - `swap_positions` 曾直接对调两个历史步骤的坐标；
+     - `destiny_wipe_danger` 曾过滤抹除危险连线历史。
+
+- **核心架构改造与全局防污染方案 (Append-Only Action Schema)**：
+  1. **全技能事件纯追加记录机制**：
+     - 禁止任何技能对 `history` 数组执行 `filter`、`splice`、清空或原地坐标/颜色篡改；
+     - 所有技能统一以动作对象纯追加到 `history` 中，记录完整前后盘面与参数快照：
+       - `mega_bomb`: `{ action: 'mega_bomb', type: 'skill_mega_bomb', stones: newStones, prevStones: currentStones, r: -1, c: -1, p: 0, desc: '乾坤大乱' }`
+       - `remove_stone`: `{ action: 'remove_stone', type: 'skill_remove_stone', r, c, p, desc: '虚空陨石' }`
+       - `destiny_wipe_danger`: `{ action: 'destiny_wipe_danger', type: 'destiny_wipe_danger', stones: [...], r: -1, c: -1, p, desc: '天命掀桌' }`
+       - `shift_stone`: `{ action: 'shift_stone', type: 'skill_shift_stone', fromR, fromC, toR, toC, r: toR, c: toC, p, desc: '移星换斗' }`
+       - `swap_color`: `{ action: 'swap_color', type: 'skill_swap_color', r, c, fromP, p, desc: '偷天换日' }`
+       - `swap_positions`: `{ action: 'swap_positions', type: 'skill_swap_positions', r1, c1, p1, r2, c2, p2, r: r2, c: c2, p: p2, desc: '移形换影' }`
+  2. **主棋盘专业推演复盘引擎全量升级 (`applyMainReplayStep`)**：
+     - 复盘步进器从第 0 步开始严格按时间线逐帧推演：在走到技能动作帧之前，双方前序落子完整保留在其原始坐标与颜色；到达技能步时，精准触发对应棋盘演变；拖动进度条向后倒退时，精确重构出技能发生前的盘面；
+     - **丰富动作徽章与状态提示**：Dock 状态栏清晰高亮当前步数及详细动作：`第 X 步: 💣【乾坤大乱】引爆炸弹洗牌打乱全盘！`、`第 X 步: 💥【虚空陨石】抹除 (r, c) 棋子！`、`第 X 步: 👑【天命掀桌】抹除 N 颗危险连线棋子！`、`第 X 步: 🌟【移星换斗】平移至 (r, c)！`、`第 X 步: 🎭【偷天换日】策反 (r, c) 棋子！`、`第 X 步: 💫【移形换影】双方对调位置！`；
+     - **复盘聚焦点高光光环**：在复盘回放中为普通落子（琥珀金）、平移（灵动蓝）、策反（秘术紫）、对调（炫彩粉）绘制专属动态聚焦环；
+     - **离屏缓存序号空位跳过**：`getCachedPiecesBitmap` 增加 `board[st.r][st.c] === EMPTY` 保护，防止在被抹除或移走的空格上渲染残留数字编号；
+     - **复盘入口模态互斥清理**：`openReplayModalByIndex` 自动执行 `cancelPendingGameResultModal()` 与 `closeGameResultModal()` 并隐藏施法指示条，彻底消除结算弹窗遮挡复盘画面的隐患。
+
+- **深层拉网排查发现的类似隐患与全端修复**：
+  1. **快照合法性放行 (`validateIncomingSnapshot`)**：
+     - 旧代码中对 `r: -1, c: -1` 的特殊事件硬编码了 `item.p === 0`；而 `destiny_wipe_danger` 记录了施法者阵营 `p: myColor`（1 或 2），导致含有天命掀桌的合法状态快照被误判为非法而拒绝；已全面修复为 `(item.p === 0 || item.p === BLACK || item.p === WHITE)`，覆盖全端 6 款 HTML。
+  2. **双方状态快照拉齐防崩溃 (`state_snapshot`)**：
+     - 当收到对方落后快照时，旧代码试图将缺失历史逐一作为 `{ type: 'move' }` 补发，若其中含技能动作会导致对端坐标校验失败；现统一触发 `sendFullStateSnapshot()` 发送全局快照；并在前缀校验中增加对 `action/type` 的智能比对，彻底杜绝联机误拒。
+  3. **最后一手高光标记幽灵红点清退**：
+     - 棋盘在常规对战渲染最后落子标记时，若刚刚发动了抹除或洗牌技能，旧代码因 `r >= 0` 会在被抹除的空位或大爆炸前的旧坐标上绘制正红圆点；现增加空位与技能拦截（遇到抹除/大爆炸不绘制最后落子标记，且严格确保 `board[r][c] !== EMPTY`）。
+  4. **5 款独立单页主题悔棋全技能回退 (`theme1` ~ `theme5`)**：
+     - 在独立单页主题中新增 `undoActionStep(last)`，支持大爆炸还原全盘初始棋子、抹除恢复棋子、平移反向平移、变色恢复原色、换位对调还原；
+     - 在 `doUndo()` 中优先撤销顶部刚刚单独发动的技能牌，人机模式与双人 PVP 模式全链路测试 100% 通过。
+
+- **多端资产同步与全量自动化回归**：
+  1. 全部修复已同步至 `index.html`、`theme1` ~ `theme5`、`android_src/assets/` 及单文件版 `五子棋大师_单文件版.html`；
+  2. `python tests/optimization_smoke.py`：0 控制台报错、0 页面异常；
+  3. `python tests/ai_worker_smoke.py`：主版与单文件版 AI 计算耗时均低于 70ms，快速引擎与主线程完全响应；
+  4. `node tests/worker_unit.js`：接口与票据校验 100% 通过；
+  5. 专用端到端测试 `scratch/test_replay_cards.py` 与 `scratch/test_theme_skills_undo.py`：
+     - 验证大爆炸前 4 手棋完全保全；
+     - 验证大爆炸动作追加及后续落子；
+     - 验证单步复盘精准重构爆炸前后各阶段盘面、向后倒推完全恢复；
+     - 验证 5 款独立主题下对 `remove_stone` 与 `mega_bomb` 的完美撤销与棋子恢复；
+     - 验证天命掀桌快照校验全绿通过。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
-*当前工程正式版本：v1.0.101 (Build 102)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、以及移动端 Web Worker/bitboard AI 异步性能优化均已完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.101 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程正式版本：v1.0.102 (Build 103)*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、以及干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构均已全部完成；源码、单文件版、Android 资源已完全同步并通过回归测试，线上版本接口已验证返回 v1.0.102 并正常签发短时更新票据。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*

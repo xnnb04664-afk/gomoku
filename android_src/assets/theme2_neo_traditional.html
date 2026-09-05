@@ -2305,7 +2305,7 @@
       const isValidCoord = (n) => Number.isInteger(n) && n >= 0 && n < 15;
       if (!data || typeof data !== 'object' || !Array.isArray(data.board) || data.board.length !== 15 || data.board.some(row => !Array.isArray(row) || row.length !== 15 || row.some(cell => cell !== EMPTY && cell !== BLACK && cell !== WHITE))) return false;
       if (!Array.isArray(data.history) || data.history.length > 512) return false;
-      for (const item of data.history) { if (!item || typeof item !== 'object') return false; const special = item.r === -1 && item.c === -1 && item.p === 0 && ((typeof item.action === 'string' && item.action.length <= 64) || (typeof item.type === 'string' && item.type.length <= 64)); if (!special && (!isValidCoord(item.r) || !isValidCoord(item.c) || (item.p !== BLACK && item.p !== WHITE))) return false; }
+      for (const item of data.history) { if (!item || typeof item !== 'object') return false; const special = item.r === -1 && item.c === -1 && (item.p === 0 || item.p === BLACK || item.p === WHITE) && ((typeof item.action === 'string' && item.action.length <= 64) || (typeof item.type === 'string' && item.type.length <= 64)); if (!special && (!isValidCoord(item.r) || !isValidCoord(item.c) || (item.p !== BLACK && item.p !== WHITE))) return false; }
       if ((data.turn !== BLACK && data.turn !== WHITE) || typeof data.isOver !== 'boolean') return false;
       if (data.cardUsedStatus !== undefined && (!Array.isArray(data.cardUsedStatus) || data.cardUsedStatus.length !== 3 || data.cardUsedStatus.some(v => typeof v !== 'boolean'))) return false;
       if (data.currentDrawnCards !== undefined && (!Array.isArray(data.currentDrawnCards) || data.currentDrawnCards.length !== 3 || data.currentDrawnCards.some(card => !card || typeof card.id !== 'string' || !SKILL_CARD_POOL.some(local => local.id === card.id)))) return false;
@@ -4181,7 +4181,20 @@
       }
 
       // 最后一手朱砂红印标记
-      const last = [...history].reverse().find(h => h && h.r >= 0 && h.c >= 0);
+            let last = null;
+      for (let i = history.length - 1; i >= 0; i--) {
+        const h = history[i];
+        if (!h) continue;
+        if (h.action === 'mega_bomb' || h.type === 'skill_mega_bomb' ||
+            h.action === 'remove_stone' || h.type === 'skill_remove_stone' ||
+            h.action === 'destiny_wipe_danger' || h.type === 'destiny_wipe_danger') {
+          break; // 大爆炸或棋子抹除后，绝不在空位绘制幽灵落子标记
+        }
+        if (h.r >= 0 && h.c >= 0 && board[h.r] && board[h.r][h.c] !== EMPTY) {
+          last = h;
+          break;
+        }
+      }
       if (last) {
         const heartSize = Math.max(12, Math.round(cWidth * 0.035));
         ctx.font = `${heartSize}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -4424,25 +4437,70 @@
       persistGameState();
     }
 
+        function undoActionStep(last) {
+      if (!last) return;
+      if (last.action === 'identity_swap' || last.type === 'skill_identity_swap') {
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+          if (board[r][c] === BLACK) board[r][c] = WHITE;
+          else if (board[r][c] === WHITE) board[r][c] = BLACK;
+        }
+      } else if (last.action === 'mega_bomb' || last.type === 'skill_mega_bomb') {
+        for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) board[r][c] = EMPTY;
+        if (Array.isArray(last.prevStones)) {
+          for (const s of last.prevStones) board[s.r][s.c] = s.p;
+        }
+      } else if (last.action === 'remove_stone' || last.type === 'skill_remove_stone') {
+        if (last.r >= 0 && last.r < 15 && last.c >= 0 && last.c < 15) {
+          board[last.r][last.c] = last.p;
+          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
+        }
+      } else if (last.action === 'destiny_wipe_danger' || last.type === 'destiny_wipe_danger') {
+        if (Array.isArray(last.stones)) {
+          for (const s of last.stones) {
+            board[s.r][s.c] = s.p !== undefined ? s.p : (last.p === BLACK ? WHITE : BLACK);
+            if (typeof triggerUndoVFX === 'function') triggerUndoVFX(s.r, s.c);
+          }
+        }
+      } else if (last.action === 'shift_stone' || last.type === 'skill_shift_stone') {
+        if (last.toR >= 0 && last.toR < 15 && last.toC >= 0 && last.toC < 15) {
+          board[last.toR][last.toC] = EMPTY;
+        }
+        if (last.fromR >= 0 && last.fromR < 15 && last.fromC >= 0 && last.fromC < 15) {
+          board[last.fromR][last.fromC] = last.p;
+          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.fromR, last.fromC);
+        }
+      } else if (last.action === 'swap_color' || last.type === 'skill_swap_color') {
+        if (last.r >= 0 && last.c >= 0 && last.c < 15) {
+          board[last.r][last.c] = last.fromP !== undefined ? last.fromP : (last.p === BLACK ? WHITE : BLACK);
+          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
+        }
+      } else if (last.action === 'swap_positions' || last.type === 'skill_swap_positions') {
+        if (last.r1 >= 0 && last.r1 < 15 && last.c1 >= 0 && last.c1 < 15 && last.r2 >= 0 && last.r2 < 15 && last.c2 >= 0 && last.c2 < 15) {
+          board[last.r1][last.c1] = last.p2;
+          board[last.r2][last.c2] = last.p1;
+        }
+      } else if (last.r >= 0 && last.c >= 0) {
+        board[last.r][last.c] = EMPTY;
+        if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
+      }
+    }
+
     function doUndo() {
       if (history.length === 0) return;
       isOver = false;
       winningLine = null;
       const vModal = document.getElementById('victoryModal');
       if (vModal) vModal.classList.remove('show');
-      if (gameMode === 'ai') {
+      if (history.length > 0 && history[history.length - 1].action) {
+        // 如果最后一步是刚刚单独发动的技能卡，优先撤销该技能牌与棋盘变更
+        const last = history.pop();
+        undoActionStep(last);
+        if (typeof playSkillSound === 'function') playSkillSound('rewind');
+      } else if (gameMode === 'ai') {
         while (history.length > 0) {
           const m = history.pop();
-          if (m.action === 'identity_swap') {
-            for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
-              if (board[r][c] === BLACK) board[r][c] = WHITE;
-              else if (board[r][c] === WHITE) board[r][c] = BLACK;
-            }
-          } else if (m.r >= 0 && m.c >= 0) {
-            board[m.r][m.c] = EMPTY;
-            if (typeof triggerUndoVFX === 'function') triggerUndoVFX(m.r, m.c);
-          }
-          if (m.p === BLACK) {
+          undoActionStep(m);
+          if (m.p === BLACK && !m.action) {
             turn = BLACK;
             break;
           }
@@ -4450,17 +4508,9 @@
         if (typeof playSkillSound === 'function') playSkillSound('rewind');
       } else {
         const last = history.pop();
-        if (last.action === 'identity_swap') {
-          for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
-            if (board[r][c] === BLACK) board[r][c] = WHITE;
-            else if (board[r][c] === WHITE) board[r][c] = BLACK;
-          }
-        } else if (last.r >= 0 && last.c >= 0) {
-          board[last.r][last.c] = EMPTY;
-          if (typeof triggerUndoVFX === 'function') triggerUndoVFX(last.r, last.c);
-        }
+        undoActionStep(last);
         if (typeof playSkillSound === 'function') playSkillSound('rewind');
-        turn = last.p ? last.p : (turn === BLACK ? WHITE : BLACK);
+        turn = (last && last.p) ? (last.p === BLACK ? WHITE : BLACK) : (turn === BLACK ? WHITE : BLACK);
       }
       draw(); updateUI();
       persistGameState();
