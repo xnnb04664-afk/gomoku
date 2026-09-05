@@ -995,7 +995,18 @@ node publish.js
 - **正式发布**：已发布 `v1.0.107 (Build 108)`，GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.107`。Release 已上传 `gomoku.apk` 和 `gomoku.html`；线上 `https://gomoku-api.pages.dev/api/version` 实测 HTTP 200、`code=0`、`tag=v1.0.107`。本轮仍未部署 Cloudflare 生产环境，因为运行中的 Worker/Pages/D1/票据逻辑没有改动；版本接口会动态读取私有仓库最新 Release，已安装用户可按现有热更新入口获取新版本。
 - **产物 SHA-256**：根页面 `index.html`：`417F758F33C3DD43A6E9A404D67323EB5E857BA43061CDDC4087040F200A0970`；Android 内嵌页面：`BF4F397A6E9D43C1C801F6DABFF3302A07FDF6C96563E92665A18B6DC61F2539`；单文件版：`59DE72A7C40AC4F08A44E4146C106E200FDC33744BA773D1E8ABB5E646A16A78`；APK：`61A89DFC4EE7A0E85FB5F7475FF86032C0CFCB4EF27B4C06D9D3DF9C1BA60A9D`。APK v1/v2/v3 签名校验通过，签名者数量为 1。
 
+## 三十、情侣动漫头像资源轻量化与懒加载（2026-09-05，本地构建完成）
+
+- **本轮目标**：将用户提供的两张 640×640 动漫图片作为男/女头像，替换原先体积较大的 PNG Base64，降低网页、单文件版和 Android 包的资源负担；不改变昵称、账号、联机或头像同步协议。
+- **资源策略**：
+  - 新增 `img/anime_avatar_boy.jpg`（256×256，14,453 bytes）和 `img/anime_avatar_girl.jpg`（256×256，15,471 bytes），Android `assets/img/` 已同步同名文件；
+  - `js/assets/anime_avatars.js` 从约 164 KB 的图片 Base64 缩减为 434 bytes 的路径清单；普通网页和 Android 页面继续由打开头像设置时按需请求 JPG；
+  - 单文件打包器只在 `avatars` 按需资源节点内把 JPG 转成 JPEG data URL，继续保证离线可用；头像卡片的默认预览改成极小内嵌 SVG，单文件版不再携带旧 PNG Base64；榜单检测到 `anime_boy/anime_girl` 时会先等待头像资源就绪再渲染，避免显示成文字或旧占位。
+- **构建与验证**：已成功运行 `node bundle_single_file.js`、`node build_apk.js`；单文件版 1,165,956 bytes，APK 1,587,418 bytes。`tests/avatar_asset_smoke.py`、`tests/optimization_smoke.py`、`tests/ai_worker_smoke.py` 全部通过：主版和单文件版榜单均显示新头像，主版仅请求两张 JPG，单文件版无头像网络请求且两图均正常解码为 256 宽度；无 console/page error。APK v1/v2/v3 签名验证通过，签名者数量为 1。
+- **产物 SHA-256**：男头像 JPG：`C72DB7A572F72864373D494CB9D634B089235DDD2DC69C780176A9BD63DF7290`；女头像 JPG：`C629FD6461D1D762918FAE0982A48F0377297C358B0A0E08F07D5E5128A4C780`；头像清单：`80092899C0C274AFA2AC1972AA505FA8B26C18EB6A6CCE4B4C1C526D79439100`；根页面：`703485BF85207BBB3938C72B03B4A6883769BB77B7D94E01B6D14076A158B645`；Android 内嵌页面：`CF40A5618DD0EB66F69F57DCA47C489A8BF00A967DC0D0FF73AF1E5025D20FA0`；单文件版：`B4DFE6A3300BB07954D3626315657821262C00D50612D2D36A94DB1108874B9B`；APK：`E63B6DE5FD1B91F9E756F34C81902298BF53F007F0B6569A634A07A28E1642E6`。
+- **发布边界**：当前正式版本仍为 v1.0.107（Build 108）；本轮只完成本地源码、单文件版和 APK 构建，未创建新 GitHub Release，也未部署 Cloudflare。确认真机头像显示后，如需让用户通过热更新获取，再递增版本执行 `node publish.js`，普通客户端发版仍不需要重复部署 Cloudflare。
+
 ---
 *交接文档最后更新时间：2026年9月5日*
 *当前工程正式版本：v1.0.107 (Build 108)*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递均已完成源码、构建资源同步、正式签名构建、回归测试，并已发布 v1.0.107 GitHub Release；线上更新接口已返回 v1.0.107。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化与懒加载均已完成源码、构建资源同步、正式签名构建和回归测试；头像本轮仍为本地待发布改动，正式线上版本为 v1.0.107，线上更新接口已返回 v1.0.107。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*

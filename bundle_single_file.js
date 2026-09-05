@@ -24,6 +24,24 @@ if (fs.existsSync(animeAvatarsPath)) {
   animeAvatarsContent = fs.readFileSync(animeAvatarsPath, 'utf8');
 }
 
+// 单文件版必须离线可用，因此只在这里把外部头像路径替换为 data URL；
+// 普通网页和 Android 页面仍保留外部 JPG，打开头像设置时才请求图片。
+function inlineAvatarAssets(content) {
+  let result = String(content || '');
+  const assets = [
+    { source: 'img/anime_avatar_boy.jpg', file: path.join(ROOT_DIR, 'img', 'anime_avatar_boy.jpg') },
+    { source: 'img/anime_avatar_girl.jpg', file: path.join(ROOT_DIR, 'img', 'anime_avatar_girl.jpg') }
+  ];
+  for (const asset of assets) {
+    if (!fs.existsSync(asset.file)) throw new Error(`缺少头像资源：${asset.file}`);
+    const dataUrl = 'data:image/jpeg;base64,' + fs.readFileSync(asset.file).toString('base64');
+    result = result.split(`'${asset.source}'`).join(`'${dataUrl}'`);
+    result = result.split(`"${asset.source}"`).join(`"${dataUrl}"`);
+  }
+  return result;
+}
+const animeAvatarsInlineContent = inlineAvatarAssets(animeAvatarsContent);
+
 const aiEnginePath = path.join(ROOT_DIR, 'js', 'ai.js');
 let aiEngineContent = '';
 if (fs.existsSync(aiEnginePath)) {
@@ -69,7 +87,7 @@ const inlineOptionalResources = [
   inlineResourceTag('mqtt', '内联 MQTT 极速联机引擎（进入联机时载入）', mqttJsContent),
   inlineResourceTag('aiFast', '内联快速五子棋 AI 引擎（Worker 异常时按需回退）', aiFastContent),
   inlineResourceTag('audio', '内联樱桃炸弹 MP3 原声 Base64 数据（首次操作时载入）', cherryAudioContent),
-  inlineResourceTag('avatars', '内联专属二次元情侣动漫头像 Base64 数据（打开头像设置时载入）', animeAvatarsContent)
+  inlineResourceTag('avatars', '内联压缩二次元情侣动漫头像数据（打开头像设置时载入）', animeAvatarsInlineContent)
 ].join('');
 html = html.slice(0, styleStart) + inlineOptionalResources + '\n' + html.slice(styleStart);
 
