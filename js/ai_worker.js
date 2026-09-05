@@ -20,7 +20,8 @@ importScripts('ai_fast.js');
           size: Number(request.size) || 15,
           budgetMs: Number(request.budgetMs) || 260,
           maxDepth: Number(request.maxDepth) || 5,
-          rootLimit: Number(request.rootLimit) || 14
+          rootLimit: Number(request.rootLimit) || 14,
+          candidateLimit: Number(request.candidateLimit) || 64
         }
       );
       scope.postMessage({

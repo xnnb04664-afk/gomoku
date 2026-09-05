@@ -48,12 +48,19 @@ def test_page(page, url, expected_inline):
           const started = performance.now();
           const move = await window.requestFastAiMove(win, []);
           const elapsedMs = Math.round(performance.now() - started);
+          const quiet = Array.from({length: 15}, () => Array(15).fill(0));
+          for (const [r, c, p] of [[7, 7, 1], [7, 8, 2], [8, 8, 1], [6, 7, 2]]) quiet[r][c] = p;
+          const quietStarted = performance.now();
+          const quietMove = await window.requestFastAiMove(quiet, []);
+          const quietElapsedMs = Math.round(performance.now() - quietStarted);
           clearInterval(timer);
           return {
             actualInline,
             inlineOk: actualInline === expectedInline,
             move,
             elapsedMs,
+            quietMove,
+            quietElapsedMs,
             ticks,
             stats: window.gomokuLastAiStats || null
           };
@@ -63,12 +70,19 @@ def test_page(page, url, expected_inline):
     )
     expected_win = result["move"]["r"] == 7 and result["move"]["c"] in (2, 7)
     result["winTacticOk"] = expected_win
+    result["quietSearchOk"] = (
+        result["quietMove"] is not None
+        and 0 <= result["quietMove"].get("r", -1) < 15
+        and 0 <= result["quietMove"].get("c", -1) < 15
+        and (result["stats"] or {}).get("nodes", 0) > 0
+    )
     result["uiStayedResponsive"] = result["ticks"] >= 1
     result["consoleErrors"] = console_errors
     result["pageErrors"] = page_errors
     result["ok"] = all([
         result["inlineOk"],
         result["winTacticOk"],
+        result["quietSearchOk"],
         result["uiStayedResponsive"],
         not console_errors,
         not page_errors,
@@ -81,10 +95,19 @@ def main():
     results = {}
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": 390, "height": 844},
+            device_scale_factor=1,
+            user_agent=(
+                "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+            ),
+        )
         for relative, expected_inline in (("/index.html", False), ("/五子棋大师_单文件版.html", True)):
-            page = browser.new_page(viewport={"width": 390, "height": 844}, device_scale_factor=1)
+            page = context.new_page()
             results[relative] = test_page(page, base_url + relative, expected_inline)
             page.close()
+        context.close()
         browser.close()
     print(json.dumps(results, ensure_ascii=False))
     if not all(item["ok"] for item in results.values()):

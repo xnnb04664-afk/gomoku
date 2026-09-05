@@ -1776,7 +1776,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.105</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.106</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2462,7 +2462,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.105';
+    const CURRENT_VERSION_TAG = 'v1.0.106';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -3718,9 +3718,12 @@
             difficulty: 'master',
             enableFoul: false,
             forbiddenPoints: Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [],
-            budgetMs: mobile ? 260 : 420,
-            maxDepth: mobile ? 5 : 6,
-            rootLimit: mobile ? 14 : 18
+            // 大师 AI 只在 Worker 中增加预算，主线程不会被搜索阻塞；
+            // 立即成五/必防/强制威胁仍会在引擎内部即时返回。
+            budgetMs: mobile ? 520 : 900,
+            maxDepth: mobile ? 7 : 9,
+            rootLimit: mobile ? 20 : 26,
+            candidateLimit: mobile ? 72 : 96
           }, [flat.buffer]);
         } catch (error) {
           aiWorkerPending.delete(requestId);

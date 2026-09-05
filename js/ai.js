@@ -33,27 +33,25 @@ class GomokuAI {
     const size = this.getBoardSize(board);
     const opponent = this.getOpponent(aiColor);
     const forbidden = new Set((forbiddenPoints || []).map(p => `${p.r},${p.c}`));
-    const legal = this.getCandidateMoves(board, aiColor, enableFoul, forbidden, 40);
+    const legal = this.getCandidateMoves(board, aiColor, enableFoul, forbidden, 64);
 
     if (!legal.length) return this.findFirstEmpty(board);
     if (this.countStones(board) === 0) return this.centerMove(size);
 
-    // 1. 直接成五优先级最高。
-    for (const move of legal) {
-      if (this.isWinningMove(board, move.r, move.c, aiColor)) return move;
-    }
+    // 1. 直接成五优先级最高。完整扫描候选池，避免唯一杀点被排序截断。
+    const ownWins = this.getWinningMoves(board, aiColor, enableFoul, size * size, forbidden);
+    if (ownWins.length) return ownWins[0];
 
     // 2. 对手有立即胜点时必须封堵；若有多个胜点，后续搜索会尽量反攻。
-    const opponentWins = this.getWinningMoves(board, opponent, enableFoul, 40);
-    if (opponentWins.length) {
-      const winningKeys = new Set(opponentWins.map(m => `${m.r},${m.c}`));
-      const blocks = legal.filter(m => winningKeys.has(`${m.r},${m.c}`));
-      if (blocks.length) return blocks[0];
+    const opponentWins = this.getWinningMoves(board, opponent, enableFoul, size * size, forbidden);
+    if (opponentWins.length === 1) {
+      const block = opponentWins[0];
+      if (!this.isForbiddenMove(board, block.r, block.c, aiColor, enableFoul, forbidden)) return block;
     }
 
     // 3. 抢先制造双重威胁，通常比单纯的局面评分更强。
     if (difficulty === 'master' || difficulty === 'hard') {
-      const forcing = this.findDoubleThreat(board, aiColor, legal, enableFoul);
+      const forcing = this.findDoubleThreat(board, aiColor, legal, enableFoul, forbidden);
       if (forcing) return forcing;
     }
 
@@ -70,6 +68,7 @@ class GomokuAI {
       aiColor,
       opponent,
       enableFoul,
+      forbidden,
       deadline,
       table: new Map(),
       nodes: 0
@@ -159,13 +158,15 @@ class GomokuAI {
     const empty = this.getEmpty();
     const size = this.getBoardSize(board);
     const stones = this.countStones(board);
+    const center = Math.floor(size / 2);
     if (!stones) return [this.centerMove(size)];
 
     const raw = [];
     for (let r = 0; r < size; r++) {
       for (let c = 0; c < size; c++) {
         if (board[r][c] !== empty || this.isForbiddenMove(board, r, c, color, enableFoul, forbidden)) continue;
-        if (!this.isNearStone(board, r, c, 2)) continue;
+        const openingAnchor = stones <= 2 && Math.abs(r - center) <= 2 && Math.abs(c - center) <= 2;
+        if (!openingAnchor && !this.isNearStone(board, r, c, 2)) continue;
         const own = this.analyzeMove(board, r, c, color);
         const opp = this.analyzeMove(board, r, c, this.getOpponent(color));
         const position = this.positionValue(r, c, size);
@@ -318,21 +319,39 @@ class GomokuAI {
     return won;
   }
 
-  static getWinningMoves(board, color, enableFoul = false, limit = 40) {
-    const candidates = this.getCandidateMoves(board, color, enableFoul, new Set(), limit);
+  static getWinningMoves(board, color, enableFoul = false, limit = 40, forbidden = new Set()) {
+    const candidates = this.getCandidateMoves(board, color, enableFoul, forbidden, limit);
     return candidates.filter(move => this.isWinningMove(board, move.r, move.c, color));
   }
 
-  static findDoubleThreat(board, color, candidates, enableFoul) {
+  static findDoubleThreat(board, color, candidates, enableFoul, forbidden = new Set()) {
     const empty = this.getEmpty();
-    for (const move of candidates.slice(0, 18)) {
+    const opponent = this.getOpponent(color);
+    for (const move of candidates) {
       const pattern = this.analyzeMove(board, move.r, move.c, color);
-      if (!(pattern.four || pattern.openThree >= 2 || pattern.four && pattern.openThree)) continue;
-      if (this.isForbiddenMove(board, move.r, move.c, color, enableFoul, new Set())) continue;
+      if (!(pattern.five || pattern.four || pattern.openThree >= 2 || pattern.brokenThree >= 2)) continue;
+      if (this.isForbiddenMove(board, move.r, move.c, color, enableFoul, forbidden)) continue;
       board[move.r][move.c] = color;
-      const wins = this.getWinningMoves(board, color, enableFoul, 24);
+      const opponentWins = this.getWinningMoves(board, opponent, enableFoul, this.getBoardSize(board) ** 2, forbidden);
+      if (!opponentWins.length) {
+        const wins = this.getWinningMoves(board, color, enableFoul, this.getBoardSize(board) ** 2, forbidden);
+        if (wins.length >= 2) {
+          board[move.r][move.c] = empty;
+          return move;
+        }
+        if (wins.length === 1) {
+          const block = wins[0];
+          board[block.r][block.c] = opponent;
+          const followUp = this.getWinningMoves(board, color, enableFoul, this.getBoardSize(board) ** 2, forbidden);
+          const counter = this.getWinningMoves(board, opponent, enableFoul, this.getBoardSize(board) ** 2, forbidden);
+          board[block.r][block.c] = empty;
+          if (followUp.length && !counter.length) {
+            board[move.r][move.c] = empty;
+            return move;
+          }
+        }
+      }
       board[move.r][move.c] = empty;
-      if (wins.length >= 2) return move;
     }
     return null;
   }
@@ -506,7 +525,7 @@ class GomokuAI {
     if (cached && cached.depth >= depth) return { score: cached.score, aborted: false };
 
     const maximizing = turnColor === context.aiColor;
-    const candidates = this.getCandidateMoves(board, turnColor, context.enableFoul, new Set(), depth >= 3 ? 10 : 14);
+    const candidates = this.getCandidateMoves(board, turnColor, context.enableFoul, context.forbidden, depth >= 3 ? 10 : 14);
     if (!candidates.length) return { score: 0, aborted: false };
     const empty = this.getEmpty();
     const size = this.getBoardSize(board);

@@ -26,6 +26,12 @@ const positions = [
       [7, 5, 2], [6, 5, 1], [7, 6, 2], [5, 5, 1],
       [8, 8, 2], [5, 7, 1], [9, 9, 2]
     ])
+  },
+  {
+    name: 'quiet',
+    board: buildPosition([
+      [7, 7, 1], [7, 8, 2], [8, 8, 1], [6, 7, 2]
+    ])
   }
 ];
 
@@ -54,7 +60,12 @@ for (const position of positions) {
     position.board.map(row => row.slice()), 2, 'master', false, []
   )));
   output.push(measure(`fast-${position.name}`, () => GomokuFastAI.getBestMove(
-    position.board, 2, 'master', false, [], { budgetMs: 260, maxDepth: 5, rootLimit: 14 }
+    position.board, 2, 'master', false, [], {
+      budgetMs: 520,
+      maxDepth: 7,
+      rootLimit: 20,
+      candidateLimit: 72
+    }
   )));
 }
 
