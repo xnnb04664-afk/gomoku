@@ -1081,7 +1081,34 @@ node publish.js
 - **正式发布**：已发布 v1.0.112（Build 113），GitHub Release：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.112；已上传 gomoku.apk 与 gomoku.html，并推送 master。
 - **线上验收**：https://gomoku-api.pages.dev/api/version 返回 code=0、tag=v1.0.112，APK/HTML 短时票据正常签发；本轮未部署 Cloudflare，因为未修改 Worker、D1、Pages、TURN 或票据逻辑。
 
+## 三十八、D1 玩家反馈回归修复（2026-09-06，本地已修复，待正式发布）
+
+- **反馈检查**：通过 `node admin.js feedback --json` 检查最新 50 条记录，当前有 2 条 v1.0.112 的 Bug 反馈：白方/黑方显示混乱导致无法落子；对方使用干扰牌形成五子后未显示终局。
+- **执色修复**：新增统一 `setOnlineColor()`；匹配结果按 `role/color` 先锁定本端颜色，加入房间的客户端在 accepted 报文到达前也固定执白，避免建连延迟期间沿用默认黑子。
+- **技能终局修复**：远端执行策反、移形、抹除、命运位移等会改变棋盘的技能后，统一扫描棋盘并触发胜负/和棋结算；已有大炸弹、身份互换、天命降临的专用结算保持幂等，不会重复弹窗。
+- **同步范围**：已重新生成 `android_src/assets/index.html`、`五子棋大师_单文件版.html` 与本地正式签名 `五子棋.apk`；未修改 Worker、D1、Pages、TURN 或更新票据逻辑，因此本轮不部署 Cloudflare，也未自动创建 GitHub Release。
+- **回归结果**：`tests/optimization_smoke.py`（远端技能成五弹窗）、`tests/online_match_race_smoke.py`（双方执色与标签）、`online_reconnect_smoke.py`、`online_transport_smoke.py`、`p2p_recovery_smoke.py`、`ai_worker_smoke.py`、`avatar_asset_smoke.py`、`turn_worker_unit.js`、`worker_unit.js`、`auth_refresh_unit.js`、`ai_strength_smoke.js`、`ai_selfplay.js` 和 `git diff --check` 均通过，页面无 console/page error。
+- **本地修复产物**：`index.html` 628,174 bytes；Android 内嵌页面 675,861 bytes；单文件版 1,194,657 bytes；APK 1,595,610 bytes。SHA-256：`03E4D9000E8ABB6EFF7D47B40F9B8FE4112FFFCC17D0090627C152F7DC8C37EA`、`D0C46798FE0B0043ADDAC5FA07349412EDB6690A73F5AA77BC23C8063F3EC128`、`F66EE9C67D0AB90C3ABA679D73FD22867EEE538491BA06DA37DC47DB58977A2F`、`5439D3F18F027F6B2D2C958701C1B55C1A07826A6A2B97E25614A0A4D4B7C720`。
+
+## 三十九、P2P 心跳线路隔离与真实延迟校准（2026-09-06，本地已修复，待正式发布）
+
+- **问题定位**：原先 `ping/pong` 在 P2P 打通后仍会立即镜像到 MQTT，迟到的 MQTT 心跳可能污染 P2P 延迟；界面只要看到 DataChannel 打开就显示“P2P直连”，没有区分公网直连与 TURN 中继；延迟还是单次原始样本，手机切网或 WebView 调度抖动时容易显示 600ms 级别尖峰。
+- **传输修复**：心跳现在只走发起时实际选定的链路；P2P 可用时只走 DataChannel，P2P 不可用时才走 MQTT。收到心跳时记录实际入口（P2P/MQTT），响应强制回同一路径，并拒绝把不同路径的迟到响应计入当前样本。P2P/MQTT 切换时清空旧路径的待测请求和延迟样本。
+- **线路识别**：新增 WebRTC `getStats()` 轮询，读取当前 selected candidate pair 的 `candidateType` 与 `currentRoundTripTime`；界面新增“P2P直连 / P2P中继 / P2P检测”状态，避免把 TURN 中继误称为公网直连。WebRTC RTT 会写入状态栏悬停提示，主显示延迟使用最近 5 次应用心跳样本的中位数。
+- **同步范围**：`index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html` 和 `tests/optimization_smoke.py` 已同步；本轮没有修改 Worker、Pages、D1、TURN Secret 或更新票据逻辑，因此不部署 Cloudflare。现有正式线上版本仍为 v1.0.112，尚未创建新 Release，`五子棋.apk` 本轮未重新签名构建。
+- **验证结果**：`tests/optimization_smoke.py`（P2P 心跳不镜像 MQTT、TURN 线路识别）通过；真实 `tests/online_transport_smoke.py` 通过，P2P 双向落子约 17–22ms、心跳约 1ms、可靠聊天只显示一次；`tests/p2p_recovery_smoke.py`、`tests/online_reconnect_smoke.py`、`tests/online_match_race_smoke.py` 均通过；`turn_worker_unit.js`、`worker_unit.js`、`auth_refresh_unit.js`、HTML 脚本语法检查和 `git diff --check` 通过，页面无 console/page error。
+- **当前本地产物**：`index.html` 637,780 bytes，SHA-256 `DAE7763AC6E5E2D77A6C68DC03CE2D074A365811C8EDEC299807FA38F0D14771`；Android 内嵌页面 683,019 bytes，SHA-256 `DF157E5B8E8717120BA0AF61B000CB88165A5630473D83742F493702476EAEBE`；单文件版 1,201,815 bytes，SHA-256 `396819EA68C99C3D1DE6CCF3D215A50849719DE2561BE578AC1D60924E645928`。
+
+## 四十、P2P 高延迟线路自动重选（2026-09-06，本地已修复，待正式发布）
+
+- **线路评分**：WebRTC 统计连续 3 次 RTT 超过 250ms 后，认为当前 ICE 候选线路质量偏低；根据 selected candidate pair 的 `candidateType` 区分直连和 TURN 中继，并把当前 WebRTC RTT 保留在状态提示中。
+- **自动优化**：触发高延迟策略后自动重建一次 P2P/ICE，尝试重新选择直连或更快的 TURN 路径；每个房间最多自动重选 2 次，重选冷却 90 秒。重选期间可靠落子、聊天和技能消息继续由 MQTT 兜底，不会因优化动作丢棋局消息。
+- **保护边界**：RTT 正常时不重连；连续高 RTT 且达到上限后停止自动重试，保留当前可用链路，避免手机弱网反复闪断。该策略只能尝试更好的候选线路，无法消除运营商到 TURN 节点本身的物理高延迟。
+- **同步范围**：已同步 `index.html`、`android_src/assets/index.html`、`五子棋大师_单文件版.html` 与 `tests/optimization_smoke.py`；未修改 Worker、Pages、D1、TURN Secret 或更新票据逻辑，不部署 Cloudflare；未重新签名 APK，也未创建新 Release。
+- **验证结果**：优化冒烟已验证 P2P 心跳不镜像 MQTT、TURN 线路识别和连续高 RTT 只触发一次重选；真实 `online_transport_smoke.py` 通过，P2P 心跳约 1ms、双向落子约 15–19ms；`p2p_recovery_smoke.py`、`online_reconnect_smoke.py`、`online_match_race_smoke.py` 及 Worker/认证单测、HTML 语法检查和 `git diff --check` 通过。
+- **当前本地产物**：`index.html` 639,841 bytes，SHA-256 `13C12086A9A62AAFD9A23FFCC9E2D7A2B81DF515E800689B33B95AEF444CA0A0`；Android 内嵌页面 687,528 bytes，SHA-256 `FBEC1BBCD5494580891E1700CD213EF5C7DFD403799DFAFF50C678BEE03CD562`；单文件版 1,206,324 bytes，SHA-256 `C9F6CE8A1D5ED3364268E4FA5A1098739498D3AE0968D215F0D98E38FC0F256E`。
+
 ---
 *交接文档最后更新时间：2026年9月6日*
-*当前工程正式版本：v1.0.112 (Build 113)；低延迟联机、P2P 自动恢复与断网重连已发布，详见“三十七”*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.112 GitHub Release；线上更新接口已返回 v1.0.112。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 node publish.js。*
+*当前工程正式版本：v1.0.112 (Build 113)；低延迟联机、P2P 自动恢复与断网重连已发布，详见“三十七”；D1 反馈修复、P2P 心跳线路校准与高延迟线路自动重选已在本地完成，尚未发布新版本*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染与高 RTT 线路自动重选均已完成源码、构建资源同步并通过回归；D1 玩家反馈修复与 P2P 优化已完成但待发布，线上更新接口仍返回 v1.0.112。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 node publish.js。*

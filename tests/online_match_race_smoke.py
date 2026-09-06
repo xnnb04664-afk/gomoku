@@ -154,6 +154,20 @@ def main():
         if not all(state["mode"] == "online" and state["conn"] and state["conn"]["open"] and state["conn"]["ready"]
                    for state in (host_state, guest_state)):
             raise AssertionError(json.dumps(output, ensure_ascii=False))
+        color_state = {
+            "host": pages["host"].evaluate(
+                "({ myColor: myOnlineColor, p1: document.querySelector('#p1NameLabel')?.textContent || '', p2: document.querySelector('#p2NameLabel')?.textContent || '' })"
+            ),
+            "guest": pages["guest"].evaluate(
+                "({ myColor: myOnlineColor, p1: document.querySelector('#p1NameLabel')?.textContent || '', p2: document.querySelector('#p2NameLabel')?.textContent || '' })"
+            )
+        }
+        if color_state["host"]["myColor"] != 1 or color_state["guest"]["myColor"] != 2:
+            raise AssertionError(f"online colors were not assigned deterministically: {color_state}")
+        if '黑子' not in color_state['host']['p1'] or '白子' not in color_state['host']['p2']:
+            raise AssertionError(f"host labels are inconsistent: {color_state}")
+        if '白子' not in color_state['guest']['p1'] or '黑子' not in color_state['guest']['p2']:
+            raise AssertionError(f"guest labels are inconsistent: {color_state}")
         accepted_times = host_state.get("acceptedTimes") or []
         if not accepted_times:
             raise AssertionError("host did not send join_accepted after its room connection became ready")
@@ -183,6 +197,7 @@ def main():
             "host": host_state,
             "guest": guest_state,
             "crossBrokerFallback": True,
+            "colorAssignment": color_state,
             "bidirectionalMoves": True,
             "mqttReliableChatExactlyOnce": guest_chat_count == 1,
             "pageErrors": {role: output[role]["pageErrors"] for role in output},

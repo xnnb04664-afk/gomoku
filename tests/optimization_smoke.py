@@ -209,6 +209,56 @@ def main():
             """
         )
         online_undo_ok = all(online_undo.values())
+        remote_skill_result = page.evaluate(
+            """
+            async () => {
+              const listeners = {};
+              const fakeConn = {
+                open: true,
+                ready: true,
+                on(type, handler) { (listeners[type] ||= []).push(handler); },
+                send() { return true; },
+                emit(type, value) { (listeners[type] || []).forEach(handler => handler(value)); },
+                close() {}
+              };
+              gameMode = 'online';
+              myOnlineColor = WHITE;
+              onlineRoundId = 'round_skill_result';
+              currentRoomCode = '777777';
+              p2Name = '对手';
+              board = Array.from({ length: 15 }, () => Array(15).fill(EMPTY));
+              for (let c = 3; c <= 6; c++) board[7][c] = BLACK;
+              board[7][7] = WHITE;
+              history = [];
+              turn = BLACK;
+              isOver = false;
+              gameWinnerColor = 0;
+              gameResultIsDraw = false;
+              winningLine = null;
+              opponentSkillsUsedCount = 0;
+              opponentReforgeUsed = false;
+              conn = fakeConn;
+              setupConn();
+              fakeConn.emit('data', {
+                type: 'skill_swap_color',
+                r: 7,
+                c: 7,
+                p: BLACK,
+                roundId: 'round_skill_result'
+              });
+              await new Promise(resolve => setTimeout(resolve, 420));
+              if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+              onlineHeartbeatTimer = null;
+              return {
+                boardConverted: board[7][7] === BLACK,
+                gameOver: isOver === true,
+                winner: gameWinnerColor === BLACK,
+                resultVisible: document.querySelector('#gameResultModal')?.classList.contains('show') === true
+              };
+            }
+            """
+        )
+        remote_skill_result_ok = all(remote_skill_result.values())
         network_status = page.evaluate(
             """
             async () => {
@@ -260,6 +310,26 @@ def main():
               });
               const p2pPayloads = [];
               const mqttPayloads = [];
+              const heartbeatP2pPayloads = [];
+              const heartbeatMqttPayloads = [];
+              const heartbeatProbe = {
+                open: true,
+                closed: false,
+                roomCode: '654321',
+                isP2pReady: true,
+                dc: { readyState: 'open', send(payload) { heartbeatP2pPayloads.push(payload); } },
+                client: {
+                  connected: true,
+                  publish(topic, payload) { heartbeatMqttPayloads.push({ topic, payload }); }
+                },
+                pubTopic: 'probe/heartbeat',
+                pendingMqttFailoverTimers: new Map(),
+                _publishMqttPayload: MqttRoomConnection.prototype._publishMqttPayload,
+                _transmitMessage: MqttRoomConnection.prototype._transmitMessage
+              };
+              const heartbeatSent = MqttRoomConnection.prototype.send.call(heartbeatProbe, {
+                type: 'ping', pingId: 'p2p_only_ping'
+              });
               const transportProbe = {
                 open: true,
                 closed: false,
@@ -313,6 +383,36 @@ def main():
                 MqttRoomConnection.prototype._acknowledgeReliableMessage.call(reliableProbe, reliableMessage._mid);
               }
               const reliableAckCleared = reliableMessage && !onlineReliableOutbox.has(reliableMessage._mid);
+              const statsProbe = Object.create(MqttRoomConnection.prototype);
+              statsProbe.closed = false;
+              statsProbe.p2pGeneration = 1;
+              statsProbe.p2pStatsInFlight = false;
+              statsProbe.pc = {
+                async getStats() {
+                  return new Map([
+                    ['transport', { type: 'transport', selectedCandidatePairId: 'pair' }],
+                    ['pair', { type: 'candidate-pair', state: 'succeeded', nominated: true,
+                      currentRoundTripTime: 0.12, localCandidateId: 'local', remoteCandidateId: 'remote' }],
+                    ['local', { type: 'local-candidate', candidateType: 'relay' }],
+                    ['remote', { type: 'remote-candidate', candidateType: 'srflx' }]
+                  ]);
+                }
+              };
+              await statsProbe._refreshP2PStats(1);
+              const reoptProbe = Object.create(MqttRoomConnection.prototype);
+              reoptProbe.isP2pReady = true;
+              reoptProbe.p2pRoute = 'relay';
+              reoptProbe.p2pHighRttStreak = 0;
+              reoptProbe.p2pReoptimizationCount = 0;
+              reoptProbe.p2pLastReoptimizationAt = 0;
+              reoptProbe.p2pRecoveryTimer = null;
+              reoptProbe._scheduleP2PRecovery = function(reason) {
+                this.reoptReason = reason;
+                this.p2pRecoveryTimer = true;
+              };
+              reoptProbe._maybeReoptimizeP2P(300);
+              reoptProbe._maybeReoptimizeP2P(301);
+              reoptProbe._maybeReoptimizeP2P(302);
               updateOnlineNetworkUI();
               if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
               onlineHeartbeatTimer = null;
@@ -321,10 +421,14 @@ def main():
                 pongEchoesPing: Boolean(pong && pong.pingId === 'peer_ping'),
                 pongReportsState: pong && pong.peerState === 'MQTT中继',
                 pongReportsLatency: pong && Object.prototype.hasOwnProperty.call(pong, 'peerLatencyMs'),
+                heartbeatP2pOnly: heartbeatSent && heartbeatP2pPayloads.length === 1 && heartbeatMqttPayloads.length === 0,
                 profileMirrorOk: mirrored && p2pMessage && mqttMessage && p2pMessage._mid === mqttMessage._mid,
                 reliableMirrorOk: reliableSent && reliableP2pPayloads.length >= 1 && reliableMqttPayloads.length >= 1,
                 reliableRetryOk,
                 reliableAckCleared,
+                relayRouteDetected: statsProbe.p2pRoute === 'relay' && statsProbe.p2pStatsRttMs === 120,
+                highRttReoptimizeOk: reoptProbe.p2pReoptimizationCount === 1 &&
+                  reoptProbe.reoptReason === 'P2P 高延迟，自动重选线路',
                 localLabel: document.querySelector('#myNetworkStatusLabel')?.textContent || '',
                 peerLabel: document.querySelector('#peerNetworkStatusLabel')?.textContent || '',
                 statusBarVisible: getComputedStyle(document.querySelector('#onlineNetworkStatusBar')).display !== 'none',
@@ -344,10 +448,13 @@ def main():
             network_status['pongEchoesPing'],
             network_status['pongReportsState'],
             network_status['pongReportsLatency'],
+            network_status['heartbeatP2pOnly'],
             network_status['profileMirrorOk'],
             network_status['reliableMirrorOk'],
             network_status['reliableRetryOk'],
             network_status['reliableAckCleared'],
+            network_status['relayRouteDetected'],
+            network_status['highRttReoptimizeOk'],
             network_status['localLatencyOk'],
             network_status['peerLatencyOk'],
             network_status['peerTransportOk'],
@@ -366,6 +473,7 @@ def main():
             "endReset": {"ended": end_reset, "reset": reset_state, "ok": end_reset_ok},
             "undoCards": {**undo_cards, "ok": undo_cards_ok},
             "onlineUndo": {**online_undo, "ok": online_undo_ok},
+            "remoteSkillResult": {**remote_skill_result, "ok": remote_skill_result_ok},
             "networkStatus": {**network_status, "ok": network_status_ok},
             "consoleErrors": errors,
             "pageErrors": page_errors,
