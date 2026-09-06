@@ -1019,6 +1019,28 @@ node publish.js
 - **发布结果**：已发布 `v1.0.109 (Build 110)`，GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.109>；Release 已上传 `gomoku.apk`（1,587,418 bytes）与 `gomoku.html`（1,170,311 bytes）。
 - **v1.0.109 产物 SHA-256**：根页面 `index.html`：`EF629087455C3916F940D382C6F00F4C5DE22AD2738CF750FFD3A5309C999A30`；Android 内嵌页面：`3B93ACFE8D2E79266937D457E21DD385395DF63F1E3821CEAC9DFD66E5F93D59`；单文件版：`F1EFB07FF2B29D7F035686C8B520737BBB53F629291544D02864A82A08FD02D4`；APK：`AC6B7772C84AFF61EAF02935ED4FF59B6071864FC7DC63B40D84EF315954B206`。
 
+## 三十二、Cloudflare Realtime TURN 接入（2026-09-06，代码已部署、凭据待核对）
+
+- **凭据状态**：`gomoku-backend` Worker 与 `gomoku-api` Pages production 均已配置 `TURN_KEY_ID`、`TURN_KEY_API_TOKEN`；长期凭据没有写入源码、网页、单文件版或 APK。
+- **后端接口**：`backend/worker.js` 新增 `GET /api/rtc/ice-servers`，使用 Cloudflare TURN Key 在服务端签发 1 小时短期凭据；响应只返回临时 `iceServers`，不返回长期 API Token；增加每 IP 轻量限频，并过滤 Cloudflare 备用 53 端口以缩短 ICE 收敛时间。
+- **客户端接入**：`index.html`、`android_src/assets/index.html` 与 `五子棋大师_单文件版.html` 在 WebRTC 探针启动前按需请求 TURN 配置；凭据按短期缓存复用，接口失败时自动回退现有 STUN，P2P 失败仍回退 MQTT，不阻断房间对局。
+- **测试**：新增 `tests/turn_worker_unit.js`，验证 Cloudflare 请求参数、短期凭据响应、53 端口过滤、长期密钥不回传和缺少 Secret 时的 503；该测试与 `tests/worker_unit.js`、`tests/optimization_smoke.py`、`tests/online_transport_smoke.py`、`tests/online_match_race_smoke.py`、`tests/ai_worker_smoke.py`、`tests/avatar_asset_smoke.py`、`tests/auth_refresh_unit.js`、`git diff --check` 均通过。
+- **发布边界**：Worker 与 Pages 已部署，线上接口已存在；当前客户端代码已在本地同步但尚未递增版本/发布 Release。待 TURN 凭据验证通过后，再构建/发布新的 HTML 与 APK，用户端才会正式使用 TURN。
+
+## 三十三、TURN 线上验证结果（2026-09-06）
+
+- 已执行 `node deploy_worker.js`，Worker 与 Pages 均部署成功；最新 Pages 预览部署地址为 `https://5539e821.gomoku-api.pages.dev`，正式域名仍为 `https://gomoku-api.pages.dev`。
+- 实测 `GET /api/rtc/ice-servers`：Worker 与 Pages 正式入口均返回 HTTP 502，Worker Tail 记录两条 Cloudflare 上游请求均为 HTTP 404：`generate-ice-servers` 与兼容路径 `generate`。
+- 官方接口路径、请求方法、Bearer 头和 `ttl` 参数均已按 Cloudflare Realtime 文档实现；因此当前最可能的问题不是 Worker 部署，而是 Secret 中的 `TURN_KEY_ID` 不是 TURN Key 创建结果里的 `uid`，或 `TURN_KEY_API_TOKEN` 不是同一次创建返回的 `key`。Cloudflare 文档规定 `uid` 为 32 位标识，`key` 为 64 位 Bearer Token；二者不能互换。
+- 客户端已保留 STUN 回退和 MQTT 最终兜底，不会因 TURN 凭据失败阻断普通联机；但在凭据核对前，不能宣称 Cloudflare TURN 中继已生效。
+- **待办**：在 Cloudflare Realtime/Calls 的 TURN Keys 页面重新确认同一条 TURN Key 的 `uid` 与 `key`，分别更新 Worker 和 Pages 的两个 Secret 后重新部署并验证；凭据验证通过后再发布含 TURN 客户端代码的新版本。
+
+## 三十四、TURN 凭据绑定复核（2026-09-06）
+
+- Pages 正式入口 `https://gomoku-api.pages.dev/api/rtc/ice-servers` 已返回 HTTP 200、`code=0`，响应包含 Cloudflare `turn:`/`turns:` 临时 ICE 配置，说明 Pages production 的两个 TURN Secret 当前有效。
+- 为修复 Worker 备用入口，已使用 Wrangler 正式部署 `gomoku-backend`（版本 ID：`231a44ca-618f-48a3-8ff7-1744a0f40c7a`），确认 D1 绑定正常；随后在最后一次部署后重新绑定两个 Worker Secret。
+- **最终验证**：Worker 与 Pages 正式入口均返回 HTTP 200、`code=0`，并返回 Cloudflare `turn:`/`turns:` 临时 ICE 配置。每次响应的 username/credential 不同属于 1 小时短期凭据正常轮换。TURN 服务端配置已完成；发布含 TURN 客户端代码的新版本仍需单独执行构建/发布流程。
+
 ---
 *交接文档最后更新时间：2026年9月6日*
 *当前工程正式版本：v1.0.109 (Build 110)*

@@ -51,16 +51,30 @@ def main():
                   hostBinding: Boolean(hostInviteBinding),
                   roomBadge: document.querySelector('#roomStatusBadge')?.textContent?.trim() || '',
                   notice: document.querySelector('#gameNoticeToast')?.textContent?.trim() || '',
-                  network: document.querySelector('#onlineNetworkStatusBar')?.textContent?.trim() || ''
+                  network: document.querySelector('#onlineNetworkStatusBar')?.textContent?.trim() || '',
+                  telemetry: {
+                    localLatencyMs: onlineNetworkTelemetry.localLatencyMs,
+                    remoteLatencyMs: onlineNetworkTelemetry.remoteLatencyMs,
+                    remoteLastSeenAt: onlineNetworkTelemetry.remoteLastSeenAt,
+                    pendingPings: pendingOnlinePings.size,
+                    heartbeatActive: Boolean(onlineHeartbeatTimer)
+                  }
                 })
                 """
             )
 
         host_state = state(host)
         guest_state = state(guest)
+        latency_ok = all(
+            isinstance(item["telemetry"]["localLatencyMs"], (int, float)) and
+            isinstance(item["telemetry"]["remoteLatencyMs"], (int, float))
+            for item in (host_state, guest_state)
+        )
         if not all(item["mode"] == "online" and item["conn"] and item["conn"]["open"] and item["conn"]["ready"]
                    for item in (host_state, guest_state)):
             raise AssertionError(json.dumps({"host": host_state, "guest": guest_state, "logs": logs, "errors": errors}, ensure_ascii=False))
+        if not latency_ok:
+            raise AssertionError(json.dumps({"host": host_state, "guest": guest_state}, ensure_ascii=False))
 
         host.evaluate("window.makeMove(7, 7, BLACK)")
         guest.wait_for_timeout(350)
@@ -79,6 +93,7 @@ def main():
             "room": room,
             "host": host_state,
             "guest": guest_state,
+            "latencyVisible": latency_ok,
             "bidirectionalMoves": True,
             "pageErrors": errors,
         }, ensure_ascii=False, indent=2))

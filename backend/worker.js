@@ -35,6 +35,12 @@ const UPDATE_TICKET_TTL_SECONDS = 90;
 const UPDATE_CLIENT_HEADER = 'X-Gomoku-Client';
 const UPDATE_CLIENT_VALUE = 'gomoku-app-client-v2';
 const UPDATE_TICKET_HEADER = 'X-Gomoku-Update-Ticket';
+const TURN_CREDENTIAL_TTL_SECONDS = 3600;
+const TURN_REQUEST_TIMEOUT_MS = 7000;
+const TURN_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const TURN_RATE_LIMIT_MAX_REQUESTS = 30;
+const TURN_API_ORIGIN = 'https://rtc.live.cloudflare.com';
+const turnRateLimitBuckets = new Map();
 
 export default {
     async fetch(request, env) {
@@ -238,9 +244,10 @@ export default {
     // 避免数据库抖动把“检查更新”一起拖到超时；账号/对局接口仍按原路径初始化 D1。
     const isUpdateRoute = url.pathname === '/api/version' ||
       url.pathname === '/api/update/apk' || url.pathname === '/api/update/html';
+    const isRtcIceServersRoute = url.pathname === '/api/rtc/ice-servers';
 
     // ── 数据库自动安全升级迁移 ─────────────────────────────
-    if (env.DB && !isDbInitialized && !isUpdateRoute) {
+    if (env.DB && !isDbInitialized && !isUpdateRoute && !isRtcIceServersRoute) {
       if (!dbInitializationPromise) {
         dbInitializationPromise = (async () => {
           try {
@@ -589,6 +596,109 @@ export default {
         return json({ code: 401, msg: '更新下载需要应用内短时授权' }, 401);
       }
       return streamPrivateReleaseAsset(assetType, ticketPayload);
+    }
+
+    // ── WebRTC TURN 临时凭据 ─────────────────────────────────────────────
+    // 长期 TURN Key 只保存在 Worker/Pages Secret 中；客户端只会拿到短时
+    // username/credential，避免把可长期签发凭据写进网页或 APK。
+    if (isRtcIceServersRoute) {
+      if (request.method !== 'GET') {
+        return json({ code: 405, msg: '仅支持 GET 请求' }, 405);
+      }
+
+      const turnKeyId = String(env.TURN_KEY_ID || '').trim();
+      const turnKeyApiToken = String(env.TURN_KEY_API_TOKEN || '').trim();
+      if (!turnKeyId || !turnKeyApiToken) {
+        return json({ code: 503, msg: 'TURN 服务尚未配置' }, 503);
+      }
+
+      // TURN 出口按 IP 做轻量限频，避免公开客户端被脚本大量签发凭据。
+      // 这是边缘实例级保护，生产环境仍依赖 Cloudflare 账户侧用量监控。
+      const clientIp = String(request.headers.get('CF-Connecting-IP') || 'unknown').slice(0, 64);
+      const now = Date.now();
+      const previousBucket = turnRateLimitBuckets.get(clientIp);
+      const bucket = previousBucket && now - previousBucket.startedAt < TURN_RATE_LIMIT_WINDOW_MS
+        ? previousBucket
+        : { startedAt: now, count: 0 };
+      bucket.count += 1;
+      turnRateLimitBuckets.set(clientIp, bucket);
+      if (bucket.count > TURN_RATE_LIMIT_MAX_REQUESTS) {
+        return json({ code: 429, msg: 'TURN 请求过于频繁，请稍后重试' }, 429);
+      }
+      if (turnRateLimitBuckets.size > 2048) {
+        for (const [key, value] of turnRateLimitBuckets.entries()) {
+          if (now - value.startedAt >= TURN_RATE_LIMIT_WINDOW_MS) turnRateLimitBuckets.delete(key);
+        }
+      }
+
+      const turnEndpointBase = `${TURN_API_ORIGIN}/v1/turn/keys/${encodeURIComponent(turnKeyId)}/credentials`;
+      try {
+        const turnAttempts = [];
+        const requestTurnCredentials = async (path) => {
+          const response = await fetchWithTimeout(`${turnEndpointBase}/${path}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${turnKeyApiToken}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          },
+          body: JSON.stringify({ ttl: TURN_CREDENTIAL_TTL_SECONDS })
+          }, TURN_REQUEST_TIMEOUT_MS);
+          let payload = null;
+          try { payload = await response.json(); } catch (_) {}
+          const errorCodes = Array.isArray(payload?.errors)
+            ? payload.errors.map((item) => item && item.code != null ? String(item.code) : '').filter(Boolean).slice(0, 4)
+            : [];
+          turnAttempts.push({ path, status: response.status, errorCodes });
+          return { response, payload };
+        };
+
+        // Cloudflare 文档当前推荐 generate-ice-servers；兼容仍返回旧路径的
+        // Realtime 账号，避免同一套 TURN Key 因 API 路径版本差异直接失效。
+        let turnAttempt = await requestTurnCredentials('generate-ice-servers');
+        let turnResponse = turnAttempt.response;
+        let turnPayload = turnAttempt.payload;
+        if (turnResponse.status === 404) {
+          turnAttempt = await requestTurnCredentials('generate');
+          turnResponse = turnAttempt.response;
+          turnPayload = turnAttempt.payload;
+        }
+        const iceServers = Array.isArray(turnPayload?.iceServers) ? turnPayload.iceServers : [];
+        if (!turnResponse.ok || !iceServers.length) {
+          console.warn('[TURN] credential generation failed:', JSON.stringify(turnAttempts));
+          return json({ code: 502, msg: 'TURN 临时凭据生成失败' }, 502);
+        }
+
+        // Cloudflare 返回的 53 端口是备用探测地址，浏览器通常会等待超时；
+        // 保留标准 UDP/TCP/TLS 端口，缩短 ICE 收敛时间。
+        const usableIceServers = iceServers.map((server) => {
+          if (!server || typeof server !== 'object') return null;
+          const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+          const filteredUrls = urls.filter((value) => {
+            if (typeof value !== 'string' || !value) return false;
+            return !/:(?:53)(?:[/?]|$)/.test(value);
+          });
+          if (!filteredUrls.length) return null;
+          const normalized = { urls: filteredUrls };
+          if (typeof server.username === 'string' && server.username) normalized.username = server.username;
+          if (typeof server.credential === 'string' && server.credential) normalized.credential = server.credential;
+          return normalized;
+        }).filter(Boolean);
+
+        if (!usableIceServers.length) {
+          return json({ code: 502, msg: 'TURN 返回了不可用的 ICE 配置' }, 502);
+        }
+        return json({
+          code: 0,
+          data: {
+            iceServers: usableIceServers,
+            expiresAt: now + TURN_CREDENTIAL_TTL_SECONDS * 1000
+          }
+        });
+      } catch (error) {
+        console.warn('[TURN] credential request failed:', error?.message || error);
+        return json({ code: 502, msg: 'TURN 服务暂时不可用' }, 502);
+      }
     }
 
     // 🛡️ 终极安全第一网关：全量强制校验客户端专属安全暗号，阻断一切外部未授权访问！

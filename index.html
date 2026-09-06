@@ -1823,7 +1823,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.109</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.110</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2509,7 +2509,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.109';
+    const CURRENT_VERSION_TAG = 'v1.0.110';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -4261,6 +4261,69 @@
     const P2P_SIGNAL_RETRY_MS = 900;
     const P2P_SIGNAL_TIMEOUT_MS = 12000;
     const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
+    const DEFAULT_WEBRTC_ICE_SERVERS = [
+      { urls: 'stun:stun.qq.com:3478' },
+      { urls: 'stun:stun.cloudflare.com:3478' }
+    ];
+    const RTC_ICE_CACHE_MAX_AGE_MS = 45 * 60 * 1000;
+    let cachedRtcIceServers = null;
+    let cachedRtcIceServersExpiresAt = 0;
+    let rtcIceServersPromise = null;
+
+    function normalizeRtcIceServers(value) {
+      if (!Array.isArray(value)) return [];
+      return value.map((server) => {
+        if (!server || typeof server !== 'object' || Array.isArray(server)) return null;
+        const rawUrls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        const urls = rawUrls.filter((url) => {
+          if (typeof url !== 'string' || url.length < 8 || url.length > 512) return false;
+          if (!/^(?:stun|turn|turns):/i.test(url)) return false;
+          return !/:(?:53)(?:[/?]|$)/.test(url);
+        });
+        if (!urls.length) return null;
+        const normalized = { urls };
+        if (typeof server.username === 'string' && server.username.length <= 256) normalized.username = server.username;
+        if (typeof server.credential === 'string' && server.credential.length <= 512) normalized.credential = server.credential;
+        return normalized;
+      }).filter(Boolean);
+    }
+
+    async function getWebRtcIceServers() {
+      const now = Date.now();
+      if (Array.isArray(cachedRtcIceServers) && cachedRtcIceServers.length && now < cachedRtcIceServersExpiresAt) {
+        return cachedRtcIceServers;
+      }
+      if (rtcIceServersPromise) return rtcIceServersPromise;
+
+      rtcIceServersPromise = (async () => {
+        try {
+          const response = await safeApiFetch('/api/rtc/ice-servers', {
+            method: 'GET',
+            cache: 'no-store',
+            timeoutMs: 7000
+          });
+          const payload = await response.json().catch(() => null);
+          const servers = normalizeRtcIceServers(payload?.data?.iceServers || payload?.iceServers);
+          if (!response.ok || payload?.code !== 0 || !servers.length) {
+            throw new Error(payload?.msg || `TURN 配置获取失败 (${response.status})`);
+          }
+          const expiresAt = Number(payload?.data?.expiresAt);
+          cachedRtcIceServers = servers;
+          cachedRtcIceServersExpiresAt = Math.min(
+            Number.isFinite(expiresAt) && expiresAt > now ? expiresAt - 60 * 1000 : now + RTC_ICE_CACHE_MAX_AGE_MS,
+            now + RTC_ICE_CACHE_MAX_AGE_MS
+          );
+          return servers;
+        } catch (error) {
+          // TURN 不可用时继续使用 STUN；MQTT 仍是最终联机兜底，不能因凭据接口失败阻断进房。
+          console.warn('[WebRTC ICE] TURN 凭据获取失败，回退 STUN:', error?.message || error);
+          return DEFAULT_WEBRTC_ICE_SERVERS;
+        } finally {
+          rtcIceServersPromise = null;
+        }
+      })();
+      return rtcIceServersPromise;
+    }
 
     class MqttRoomConnection {
       constructor(client, roomCode, role) {
@@ -4460,18 +4523,17 @@
         this.signalTask = this.signalTask.then(() => this._handleWebRtcSignal(sig)).catch(() => {});
       }
 
-      _startSilentP2PProbe() {
+      async _startSilentP2PProbe() {
         if (this.p2pProbeStarted || this.closed) return;
         this.p2pProbeStarted = true;
         try {
           const RTCPC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
           if (!RTCPC) return;
+          const iceServers = await getWebRtcIceServers();
+          if (this.closed) return;
 
           const pc = new RTCPC({
-            iceServers: [
-              { urls: 'stun:stun.qq.com:3478' },
-              { urls: 'stun:stun.cloudflare.com:3478' }
-            ],
+            iceServers,
             iceCandidatePoolSize: 4
           });
           this.pc = pc;
@@ -5470,7 +5532,9 @@
         if (data.sentAt !== undefined && (!Number.isFinite(data.sentAt) || Math.abs(Date.now() - data.sentAt) > 120000)) return;
         if (data.networkState !== undefined && (typeof data.networkState !== 'string' || data.networkState.length > 32)) return;
         if (data.peerState !== undefined && (typeof data.peerState !== 'string' || data.peerState.length > 32)) return;
-        if (data.peerLatencyMs !== undefined && (!Number.isFinite(data.peerLatencyMs) || data.peerLatencyMs < 0 || data.peerLatencyMs > 120000)) return;
+        // 首个 pong 可能发生在对方尚未完成第一次测速时，null 代表“尚未知晓”，不能因此丢弃整条 pong。
+        if (data.peerLatencyMs !== undefined && data.peerLatencyMs !== null &&
+            (!Number.isFinite(data.peerLatencyMs) || data.peerLatencyMs < 0 || data.peerLatencyMs > 120000)) return;
         // 新局轮次不一致的报文一律丢弃，防止旧 MQTT/P2P 报文在重开后再次触发旧胜局。
         if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
         markOnlinePeerSeen(data.networkState || data.peerState || '在线', data.peerLatencyMs);
