@@ -82,6 +82,14 @@ def main():
         if guest_move != {"piece": 1, "steps": 1, "turn": 2}:
             raise AssertionError(f"host move did not reach guest: {guest_move}")
 
+        host.evaluate("sendChat('可靠传输聊天测试')")
+        guest.wait_for_timeout(700)
+        guest_chat_count = guest.evaluate(
+            "() => chatHistory.filter(item => item.sender === 2 && item.text === '可靠传输聊天测试').length"
+        )
+        if guest_chat_count != 1:
+            raise AssertionError(f"chat was not delivered exactly once: {guest_chat_count}")
+
         guest.evaluate("window.makeMove(7, 8, WHITE)")
         host.wait_for_timeout(350)
         host_move = host.evaluate("({ piece: board[7][8], steps: history.length, turn })")
@@ -95,6 +103,7 @@ def main():
             "guest": guest_state,
             "latencyVisible": latency_ok,
             "bidirectionalMoves": True,
+            "reliableChatExactlyOnce": guest_chat_count == 1,
             "pageErrors": errors,
         }, ensure_ascii=False, indent=2))
         browser.close()

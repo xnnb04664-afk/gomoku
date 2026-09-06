@@ -4758,7 +4758,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.110</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.111</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -5444,7 +5444,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.110';
+    const CURRENT_VERSION_TAG = 'v1.0.111';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -6817,15 +6817,36 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     const MAX_ONLINE_PAYLOAD_BYTES = 60 * 1024;
     const MAX_ONLINE_MESSAGES_PER_SECOND = 80;
     const MAX_ONLINE_SIGNAL_MESSAGES_PER_SECOND = 180;
+    // 会改变对局或玩家可见状态的消息不能“发出去就算完”：P2P 与 MQTT 双发，
+    // 收到端回 ACK；发送端在短时间内自动重发，接收端按 _mid 去重。
+    const RELIABLE_ONLINE_MESSAGE_TYPES = new Set([
+      'move', 'chat', 'sync_req', 'state_snapshot',
+      'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
+      'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone',
+      'skill_shift_stone', 'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
+      'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2'
+    ]);
+    const MIRRORED_ONLINE_MESSAGE_TYPES = new Set([
+      ...RELIABLE_ONLINE_MESSAGE_TYPES,
+      'delivery_ack', 'profile_sync', 'reconnect_handshake', 'leave_room'
+    ]);
+    const ONLINE_RELIABLE_RETRY_INTERVAL_MS = 900;
+    const ONLINE_RELIABLE_MAX_ATTEMPTS = 8;
+    const ONLINE_RELIABLE_MAX_AGE_MS = 10000;
+    const onlineReliableOutbox = new Map();
     const ONLINE_TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
     const ONLINE_MESSAGE_TYPES = new Set([
-      'chat', 'profile_sync', 'ping', 'pong', 'sync_req', 'state_snapshot', 'reconnect_handshake',
+      'chat', 'delivery_ack', 'profile_sync', 'ping', 'pong', 'sync_req', 'state_snapshot', 'reconnect_handshake',
       'move', 'leave_room', 'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
       'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone', 'skill_shift_stone',
       'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
       'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2'
     ]);
     const P2P_SIGNAL_TYPES = new Set(['hello', 'offer', 'answer', 'ice', 'ice_batch']);
+
+    function clearOnlineReliableOutbox() {
+      onlineReliableOutbox.clear();
+    }
 
     function getOnlinePayloadByteLength(value) {
       if (ONLINE_TEXT_ENCODER) return ONLINE_TEXT_ENCODER.encode(value).byteLength;
@@ -6888,6 +6909,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     // 一个房间的信令池：多个 Broker 只用于容灾汇合，普通消息通过 _mid 去重。
     // 这样网页端和 Android WebView 即使对不同节点的可达性不同，也能在共同节点上完成握手。
     const MQTT_FALLBACK_STAGGER_MS = 700;
+    const MQTT_RECONNECT_INITIAL_DELAY_MS = 1500;
+    const MQTT_RECONNECT_MAX_DELAY_MS = 15000;
 
     class MqttClientPool {
       constructor(m, roomKey, candidates) {
@@ -6895,6 +6918,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         this.roomKey = String(roomKey || '');
         this.candidates = Array.isArray(candidates) ? candidates : [];
         this.clients = new Map();
+        this.pendingCandidates = new Set();
+        this.retryTimers = new Map();
+        this.retryAttempts = new Map();
         this.subscriptions = new Map();
         this.listeners = new Map();
         this.connected = false;
@@ -6996,13 +7022,21 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           try { if (client) client.end(true); } catch (_) {}
           return;
         }
+        const retryTimer = this.retryTimers.get(candidate.url);
+        if (retryTimer) clearTimeout(retryTimer);
+        this.retryTimers.delete(candidate.url);
+        this.pendingCandidates.delete(candidate.url);
+        this.retryAttempts.delete(candidate.url);
         const entry = {
           candidate,
           client,
           message: (topic, payload) => this.emit('message', topic, payload),
           close: () => this._removeClient(candidate.url, '断开'),
           offline: () => this._removeClient(candidate.url, '离线'),
-          error: err => console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 运行异常`, err || '')
+          error: err => {
+            console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 运行异常`, err || '');
+            if (!client.connected) this._removeClient(candidate.url, '异常');
+          }
         };
         this.clients.set(candidate.url, entry);
         client.on('message', entry.message);
@@ -7020,6 +7054,34 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         }
       }
 
+      _scheduleCandidateRetry(candidate) {
+        if (!candidate || this.closed || this.clients.has(candidate.url) ||
+            this.pendingCandidates.has(candidate.url) || this.retryTimers.has(candidate.url)) return;
+        const attempt = this.retryAttempts.get(candidate.url) || 0;
+        const delay = Math.min(MQTT_RECONNECT_MAX_DELAY_MS,
+          MQTT_RECONNECT_INITIAL_DELAY_MS * (2 ** Math.min(attempt, 4)));
+        this.retryAttempts.set(candidate.url, attempt + 1);
+        const timer = setTimeout(() => {
+          this.retryTimers.delete(candidate.url);
+          if (this.closed || this.clients.has(candidate.url) || this.pendingCandidates.has(candidate.url)) return;
+          this.pendingCandidates.add(candidate.url);
+          this._connectCandidate(candidate).then(client => {
+            this.pendingCandidates.delete(candidate.url);
+            if (this.closed || this.clients.has(candidate.url)) {
+              try { client.end(true); } catch (_) {}
+              return;
+            }
+            this._adoptClient(candidate, client);
+          }).catch(err => {
+            this.pendingCandidates.delete(candidate.url);
+            if (this.closed || this.clients.size === 0) return;
+            console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 重连失败`, err || '');
+            this._scheduleCandidateRetry(candidate);
+          });
+        }, delay);
+        this.retryTimers.set(candidate.url, timer);
+      }
+
       _removeClient(url, eventName = '断开') {
         const entry = this.clients.get(url);
         if (!entry) return;
@@ -7028,8 +7090,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         try { entry.client.removeListener('close', entry.close); } catch (_) {}
         try { entry.client.removeListener('offline', entry.offline); } catch (_) {}
         try { entry.client.removeListener('error', entry.error); } catch (_) {}
+        if (this.clients.size > 0) this._scheduleCandidateRetry(entry.candidate);
         if (this.clients.size === 0 && !this.closed) {
           this.connected = false;
+          this.closed = true;
+          for (const timer of this.retryTimers.values()) clearTimeout(timer);
+          this.retryTimers.clear();
+          this.pendingCandidates.clear();
           console.warn(`[MQTT] 房间信令池已${eventName}，准备自动重连`);
           this.emit('offline');
           this.emit('close');
@@ -7157,6 +7224,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       if (mqttClient && mqttClient.connected && mqttClient.roomKey === normalizedRoomKey) {
         return Promise.resolve(mqttClient);
       }
+      if (mqttClient && mqttClient.roomKey === normalizedRoomKey && !mqttClient.connected) {
+        closeMqttClientPool();
+      }
       if (mqttClientPromise) {
         if (mqttClientPromiseRoomKey === normalizedRoomKey) return mqttClientPromise;
         const previousPromise = mqttClientPromise;
@@ -7195,6 +7265,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     const P2P_SIGNAL_RETRY_MS = 900;
     const P2P_SIGNAL_TIMEOUT_MS = 12000;
+    const P2P_RECOVERY_INITIAL_DELAY_MS = 1200;
+    const P2P_RECOVERY_MAX_DELAY_MS = 30000;
+    const P2P_DISCONNECTED_GRACE_MS = 2500;
     const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
     const DEFAULT_WEBRTC_ICE_SERVERS = [
       { urls: 'stun:stun.qq.com:3478' },
@@ -7289,6 +7362,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         this.remoteOfferSdp = '';
         this.signalRetryTimer = null;
         this.signalTask = Promise.resolve();
+        this.p2pGeneration = 0;
+        this.p2pRecoveryTimer = null;
+        this.p2pRecoveryAttempts = 0;
+        this.reliableRetryTimer = null;
         this.inboundWindowAt = Date.now();
         this.inboundMessageCount = 0;
         this.inboundSignalCount = 0;
@@ -7315,6 +7392,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
         // 先确认房间信道订阅成功，再启动 WebRTC；避免一次性 offer/ICE 在订阅完成前丢失。
         this.readyPromise = this._prepareConnection();
+        this.readyPromise.then(() => this._adoptPendingReliableMessages()).catch(() => {});
         this.readyPromise.catch(() => {});
       }
 
@@ -7413,6 +7491,18 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
         if (!ONLINE_MESSAGE_TYPES.has(data.type)) return;
         if (data._mid !== undefined && (typeof data._mid !== 'string' || data._mid.length > 80)) return;
+        if (data.type === 'delivery_ack' &&
+            (typeof data.ackId !== 'string' || data.ackId.length === 0 || data.ackId.length > 80)) return;
+        // ACK 也走两条链路，但不再向上层冒泡，避免被当成普通业务报文。
+        if (data.type === 'delivery_ack') {
+          this._acknowledgeReliableMessage(data.ackId);
+          return;
+        }
+        // 先确认“传输层已收到”，再做业务去重。这样 P2P/MQTT 重复到达时，
+        // 即使首个 ACK 丢了，重复报文也能再次触发 ACK，而不会重复落子或重复聊天。
+        if (RELIABLE_ONLINE_MESSAGE_TYPES.has(data.type) && data._mid) {
+          this.send({ type: 'delivery_ack', ackId: data._mid });
+        }
         // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
         if (data._mid) {
           if (this.processedMsgIds.has(data._mid)) return;
@@ -7444,8 +7534,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
         const startedAt = Date.now();
         const tick = () => {
-          if (this.closed || !this.open || this.isP2pReady || Date.now() - startedAt >= P2P_SIGNAL_TIMEOUT_MS) {
+          if (this.closed || !this.open || this.isP2pReady) {
             this.signalRetryTimer = null;
+            return;
+          }
+          if (Date.now() - startedAt >= P2P_SIGNAL_TIMEOUT_MS) {
+            this.signalRetryTimer = null;
+            this._scheduleP2PRecovery('P2P 信令超时');
             return;
           }
           this._republishP2PSignals();
@@ -7455,67 +7550,156 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
 
       _queueWebRtcSignal(sig) {
-        this.signalTask = this.signalTask.then(() => this._handleWebRtcSignal(sig)).catch(() => {});
+        this.signalTask = this.signalTask.then(() => this._handleWebRtcSignal(sig)).catch((err) => {
+          if (this.closed) return;
+          console.warn('[P2P signal]', err?.message || err);
+          this._scheduleP2PRecovery('signal_error');
+        });
       }
 
-      async _startSilentP2PProbe() {
-        if (this.p2pProbeStarted || this.closed) return;
+      _cancelP2PRecovery(resetAttempts = false) {
+        if (this.p2pRecoveryTimer) clearTimeout(this.p2pRecoveryTimer);
+        this.p2pRecoveryTimer = null;
+        if (resetAttempts) this.p2pRecoveryAttempts = 0;
+      }
+
+      _scheduleP2PRecovery(reason = 'P2P 通道异常', delayOverride = null) {
+        if (this.closed || !this.open || !this.ready) return;
+        this.isP2pReady = false;
+        updateOnlineNetworkUI();
+        if (this.p2pRecoveryTimer) return;
+
+        const attempt = this.p2pRecoveryAttempts++;
+        const delay = Number.isFinite(delayOverride)
+          ? Math.max(0, delayOverride)
+          : Math.min(P2P_RECOVERY_MAX_DELAY_MS,
+              P2P_RECOVERY_INITIAL_DELAY_MS * (2 ** Math.min(attempt, 5)));
+        console.warn(`[P2P] ${reason}，${delay}ms 后重建通道（第 ${this.p2pRecoveryAttempts} 次）`);
+        this.p2pRecoveryTimer = setTimeout(() => {
+          this.p2pRecoveryTimer = null;
+          if (this.closed || !this.open || !this.ready) return;
+          this._restartP2PProbe(reason);
+        }, delay);
+      }
+
+      _resetP2PSession() {
+        if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
+        this.signalRetryTimer = null;
+        this.p2pSessionId = this.role === 'host' ? this._createSessionId() : '';
+        this.localOffer = null;
+        this.localAnswer = null;
+        this.localIceCandidates = [];
+        this.remoteIceCandidates = new Set();
+        this.pendingRemoteIceCandidates = [];
+        this.remoteDescriptionSet = false;
+        this.remoteOfferSdp = '';
+      }
+
+      _restartP2PProbe(reason = 'P2P 通道异常') {
+        if (this.closed || !this.open || !this.ready) return;
+        this._disposeP2P();
+        this.p2pProbeStarted = false;
+        this._resetP2PSession();
+        console.info(`[P2P] 开始第 ${this.p2pRecoveryAttempts} 次通道重建：${reason}`);
+        this._startSilentP2PProbe(true);
+      }
+
+      async _startSilentP2PProbe(force = false) {
+        if (this.closed || (this.p2pProbeStarted && !force)) return;
         this.p2pProbeStarted = true;
+        const generation = ++this.p2pGeneration;
+        const isCurrent = () => !this.closed && this.p2pGeneration === generation;
         try {
           const RTCPC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
-          if (!RTCPC) return;
+          if (!RTCPC) {
+            this.p2pProbeStarted = false;
+            return;
+          }
           const iceServers = await getWebRtcIceServers();
-          if (this.closed) return;
+          if (!isCurrent()) return;
 
           const pc = new RTCPC({
             iceServers,
             iceCandidatePoolSize: 4
           });
+          if (!isCurrent()) {
+            try { pc.close(); } catch (_) {}
+            return;
+          }
           this.pc = pc;
 
           pc.onicecandidate = (e) => {
-            if (!e.candidate) return;
+            if (!isCurrent() || !e.candidate) return;
             const candidate = typeof e.candidate.toJSON === 'function' ? e.candidate.toJSON() : e.candidate;
             this.localIceCandidates.push(candidate);
             if (this.localIceCandidates.length > 64) this.localIceCandidates.shift();
             this._publishSignal('ice', { candidate });
           };
           pc.onconnectionstatechange = () => {
-            if (!this.pc || this.pc !== pc) return;
-            if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+            if (!isCurrent() || this.pc !== pc) return;
+            if (pc.connectionState === 'connected' && this.dc && this.dc.readyState === 'open') {
+              this._cancelP2PRecovery(true);
+              this.isP2pReady = true;
+              updateOnlineNetworkUI();
+            } else if (pc.connectionState === 'disconnected' &&
+                       (this.remoteDescriptionSet || this.isP2pReady)) {
+              this._scheduleP2PRecovery('PeerConnection 暂时断开', P2P_DISCONNECTED_GRACE_MS);
+            } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
               this.isP2pReady = false;
               updateOnlineNetworkUI();
+              this._scheduleP2PRecovery(`PeerConnection ${pc.connectionState}`);
             }
           };
           pc.oniceconnectionstatechange = () => {
-            if (!this.pc || this.pc !== pc) return;
-            if (['disconnected', 'failed', 'closed'].includes(pc.iceConnectionState)) {
+            if (!isCurrent() || this.pc !== pc) return;
+            if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') &&
+                this.dc && this.dc.readyState === 'open') {
+              this._cancelP2PRecovery(true);
+              this.isP2pReady = true;
+              updateOnlineNetworkUI();
+            } else if (pc.iceConnectionState === 'disconnected' &&
+                       (this.remoteDescriptionSet || this.isP2pReady)) {
+              this._scheduleP2PRecovery('ICE 暂时断开', P2P_DISCONNECTED_GRACE_MS);
+            } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
               this.isP2pReady = false;
               updateOnlineNetworkUI();
+              this._scheduleP2PRecovery(`ICE ${pc.iceConnectionState}`);
             }
           };
 
           if (this.role === 'host') {
             const dc = pc.createDataChannel('gomoku_dc', { ordered: true });
-            this._bindDataChannel(dc);
+            this._bindDataChannel(dc, generation);
             pc.createOffer().then(async (offer) => {
+              if (!isCurrent() || this.pc !== pc) return;
               await pc.setLocalDescription(offer);
-              if (!pc.localDescription) return;
+              if (!isCurrent() || this.pc !== pc || !pc.localDescription) return;
               this.localOffer = { type: 'offer', sdp: pc.localDescription.sdp || offer.sdp };
               this._startSignalRetry();
-            }).catch((err) => console.warn('[P2P offer]', err));
+            }).catch((err) => {
+              if (!isCurrent()) return;
+              console.warn('[P2P offer]', err);
+              this._scheduleP2PRecovery('offer 创建失败');
+            });
           } else {
-            pc.ondatachannel = (e) => this._bindDataChannel(e.channel);
+            pc.ondatachannel = (e) => {
+              if (isCurrent()) this._bindDataChannel(e.channel, generation);
+            };
             // 客方主动 hello，解决房主 offer 早于客方订阅而丢失的问题。
             this._startSignalRetry();
           }
         } catch(err) {
+          if (!isCurrent()) return;
+          this.p2pProbeStarted = false;
           console.warn('[P2P silent probe init]', err);
+          this._scheduleP2PRecovery('P2P 通道初始化失败');
         }
       }
 
       async _addRemoteIceCandidate(candidate) {
-        if (!this.pc || !candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return;
+        const pc = this.pc;
+        const generation = this.p2pGeneration;
+        if (!pc || !candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return;
         let candidateKey = '';
         try { candidateKey = JSON.stringify(candidate); } catch (_) { return; }
         if (!candidateKey || candidateKey.length > 4096 || this.remoteIceCandidates.has(candidateKey) ||
@@ -7526,11 +7710,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           this.pendingRemoteIceCandidates.push(candidate);
           return;
         }
-        try { await this.pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (_) {}
+        if (this.pc !== pc || this.p2pGeneration !== generation || this.closed) return;
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (_) {}
       }
 
       async _handleWebRtcSignal(sig) {
-        if (!sig || !this.open || !this.pc || sig.sender === this.role) return;
+        const pc = this.pc;
+        const generation = this.p2pGeneration;
+        if (!sig || !this.open || !pc || sig.sender === this.role) return;
         if (typeof sig.type !== 'string' || sig.type.length > 16) return;
 
         // hello 不需要 sessionId；它的作用是请求房主重新发送当前 session 的 offer/ICE。
@@ -7541,6 +7728,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         if (!sig.sessionId || typeof sig.sessionId !== 'string' || sig.sessionId.length > 80) return;
 
         if (this.role === 'client') {
+          // 房主重建 PeerConnection 后会换 sessionId。若仍沿用旧 session，
+          // 客方会把新 offer 当成过期信令，导致两边都停在 MQTT 中继。
+          if (sig.type === 'offer' && typeof sig.sdp === 'string' &&
+              this.p2pSessionId && this.p2pSessionId !== sig.sessionId &&
+              this.remoteOfferSdp && this.remoteOfferSdp !== sig.sdp) {
+            this._scheduleP2PRecovery('收到新的 P2P 会话', 0);
+            return;
+          }
           if (!this.p2pSessionId) this.p2pSessionId = sig.sessionId;
           if (this.p2pSessionId !== sig.sessionId) return;
         } else if (this.p2pSessionId !== sig.sessionId) {
@@ -7552,20 +7747,25 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             this._republishP2PSignals();
             return;
           }
-          await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sig.sdp }));
+          if (this.pc !== pc || this.p2pGeneration !== generation) return;
+          await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: sig.sdp }));
+          if (this.pc !== pc || this.p2pGeneration !== generation) return;
           this.remoteDescriptionSet = true;
           this.remoteOfferSdp = sig.sdp;
           await this._flushRemoteIceCandidates();
-          const answer = await this.pc.createAnswer();
-          await this.pc.setLocalDescription(answer);
-          this.localAnswer = { type: 'answer', sdp: this.pc.localDescription?.sdp || answer.sdp };
+          if (this.pc !== pc || this.p2pGeneration !== generation) return;
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          if (this.pc !== pc || this.p2pGeneration !== generation) return;
+          this.localAnswer = { type: 'answer', sdp: pc.localDescription?.sdp || answer.sdp };
           this._republishP2PSignals();
           return;
         }
 
         if (sig.type === 'answer' && this.role === 'host' && typeof sig.sdp === 'string' && sig.sdp.length <= 128 * 1024) {
-          if (this.pc.signalingState === 'have-local-offer' && !this.remoteDescriptionSet) {
-            await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sig.sdp }));
+          if (pc.signalingState === 'have-local-offer' && !this.remoteDescriptionSet) {
+            await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sig.sdp }));
+            if (this.pc !== pc || this.p2pGeneration !== generation) return;
             this.remoteDescriptionSet = true;
             await this._flushRemoteIceCandidates();
           }
@@ -7585,22 +7785,28 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       }
 
       async _flushRemoteIceCandidates() {
-        if (!this.pc || !this.remoteDescriptionSet) return;
+        const pc = this.pc;
+        const generation = this.p2pGeneration;
+        if (!pc || !this.remoteDescriptionSet) return;
         const pending = this.pendingRemoteIceCandidates.splice(0);
         for (const candidate of pending) {
-          try { await this.pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(_) {}
+          if (this.pc !== pc || this.p2pGeneration !== generation || this.closed) return;
+          try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(_) {}
         }
       }
 
-      _bindDataChannel(dc) {
+      _bindDataChannel(dc, generation = this.p2pGeneration) {
         if (!dc) return;
         if (this.dc && this.dc !== dc) {
-          try { this.dc.close(); } catch(_) {}
+          const previous = this.dc;
+          this.dc = null;
+          try { previous.close(); } catch(_) {}
         }
         this.dc = dc;
         dc.onopen = () => {
-          if (this.dc !== dc || this.closed) return;
+          if (this.dc !== dc || this.p2pGeneration !== generation || this.closed) return;
           this.isP2pReady = true;
+          this._cancelP2PRecovery(true);
           if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
           this.signalRetryTimer = null;
           console.info('🎉 [P2P Dual-Track] WebRTC 点对点直连通道成功建立，后续落子优先走低延迟直连');
@@ -7608,35 +7814,41 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           updateOnlineNetworkUI();
         };
         dc.onmessage = (e) => {
-          if (this.dc !== dc || !e || typeof e.data !== 'string') return;
+          if (this.dc !== dc || this.p2pGeneration !== generation || !e || typeof e.data !== 'string') return;
           this._handleIncomingPayload(e.data, false);
         };
-        const onClosed = () => {
-          if (this.dc === dc) {
+        const onClosed = (eventName = 'DataChannel 关闭') => {
+          if (this.dc === dc && this.p2pGeneration === generation) {
             this.isP2pReady = false;
             updateOnlineNetworkUI();
+            this._scheduleP2PRecovery(eventName);
           }
         };
-        dc.onclose = onClosed;
-        dc.onerror = onClosed;
+        dc.onclose = () => onClosed('DataChannel 关闭');
+        dc.onerror = () => onClosed('DataChannel 错误');
       }
 
       _disposeP2P() {
         if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
         this.signalRetryTimer = null;
+        this.p2pGeneration++;
         this.isP2pReady = false;
-        if (this.dc) {
-          try { this.dc.close(); } catch(_) {}
-          this.dc = null;
+        const dc = this.dc;
+        this.dc = null;
+        if (dc) {
+          try { dc.close(); } catch(_) {}
         }
-        if (this.pc) {
-          try { this.pc.close(); } catch(_) {}
-          this.pc = null;
+        const pc = this.pc;
+        this.pc = null;
+        if (pc) {
+          try { pc.close(); } catch(_) {}
         }
       }
 
       _markTransportClosed(reason) {
         if (this.closed) return;
+        this._releaseReliableOutboxOwner();
+        this._cancelP2PRecovery();
         this.closed = true;
         this.open = false;
         this.ready = false;
@@ -7654,6 +7866,115 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         try { this.client.removeListener('error', this.mqttErrorHandler); } catch(_) {}
       }
 
+      _transmitMessage(message) {
+        let jsonStr;
+        try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
+        if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
+
+        // P2P 打通后优先走 WebRTC；可靠消息仍同时镜像 MQTT，覆盖 DataChannel 半开、
+        // 手机切网或某一条公共 Broker 链路短暂丢包的情况。
+        let sentViaP2p = false;
+        let sentViaMqtt = false;
+        if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
+          try {
+            this.dc.send(jsonStr);
+            sentViaP2p = true;
+          } catch(e) {
+            this.isP2pReady = false;
+            this._scheduleP2PRecovery('DataChannel 发送失败');
+          }
+        } else if (this.isP2pReady) {
+          // 某些 WebView 会先把 readyState 置为 closing/closed，却不及时派发
+          // close 事件；发送路径本身也必须能启动恢复，而不是永久停在半开状态。
+          this.isP2pReady = false;
+          this._scheduleP2PRecovery('DataChannel 状态失效');
+        }
+
+        const shouldMirror = MIRRORED_ONLINE_MESSAGE_TYPES.has(message.type) ||
+          !sentViaP2p || message.type === 'profile_sync' ||
+          message.type === 'ping' || message.type === 'pong';
+        if (shouldMirror && this.client && this.client.connected) {
+          try {
+            this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
+            sentViaMqtt = true;
+          } catch(e) {
+            console.warn('[MqttRoom send error]', e);
+          }
+        }
+        return sentViaP2p || sentViaMqtt;
+      }
+
+      _scheduleReliableRetry() {
+        if (this.reliableRetryTimer || this.closed) return;
+        const tick = () => {
+          this.reliableRetryTimer = null;
+          if (this.closed) return;
+          const now = Date.now();
+          let shouldContinue = false;
+          for (const [mid, entry] of onlineReliableOutbox) {
+            if (entry.owner !== this) continue;
+            if (now - entry.firstSentAt >= ONLINE_RELIABLE_MAX_AGE_MS ||
+                entry.attempts >= ONLINE_RELIABLE_MAX_ATTEMPTS) {
+              onlineReliableOutbox.delete(mid);
+              this.emit('delivery_timeout', entry.message);
+              continue;
+            }
+            shouldContinue = true;
+            if (now - entry.lastSentAt >= ONLINE_RELIABLE_RETRY_INTERVAL_MS) {
+              entry.attempts++;
+              entry.lastSentAt = now;
+              this._transmitMessage(entry.message);
+            }
+          }
+          if (shouldContinue) {
+            this.reliableRetryTimer = setTimeout(tick, ONLINE_RELIABLE_RETRY_INTERVAL_MS);
+          }
+        };
+        this.reliableRetryTimer = setTimeout(tick, ONLINE_RELIABLE_RETRY_INTERVAL_MS);
+      }
+
+      _adoptPendingReliableMessages() {
+        if (this.closed || !this.open) return;
+        const now = Date.now();
+        let adopted = false;
+        for (const [mid, entry] of onlineReliableOutbox) {
+          if (entry.roomCode !== this.roomCode ||
+              (entry.message.roundId && onlineRoundId && entry.message.roundId !== onlineRoundId)) {
+            onlineReliableOutbox.delete(mid);
+            continue;
+          }
+          if (now - entry.firstSentAt >= ONLINE_RELIABLE_MAX_AGE_MS) {
+            onlineReliableOutbox.delete(mid);
+            continue;
+          }
+          if (entry.owner && entry.owner !== this && !entry.owner.closed) continue;
+          entry.owner = this;
+          entry.attempts = Math.min(ONLINE_RELIABLE_MAX_ATTEMPTS, entry.attempts + 1);
+          entry.lastSentAt = now;
+          this._transmitMessage(entry.message);
+          adopted = true;
+        }
+        if (adopted) this._scheduleReliableRetry();
+      }
+
+      _acknowledgeReliableMessage(ackId) {
+        const entry = onlineReliableOutbox.get(ackId);
+        if (!entry) return;
+        onlineReliableOutbox.delete(ackId);
+        if (entry.owner === this && ![...onlineReliableOutbox.values()].some(item => item.owner === this)) {
+          if (this.reliableRetryTimer) clearTimeout(this.reliableRetryTimer);
+          this.reliableRetryTimer = null;
+        }
+      }
+
+      _releaseReliableOutboxOwner() {
+        if (this.reliableRetryTimer) clearTimeout(this.reliableRetryTimer);
+        this.reliableRetryTimer = null;
+        for (const entry of onlineReliableOutbox.values()) {
+          if (entry.owner === this) entry.owner = null;
+        }
+      }
+
       send(data) {
         if (!this.open || !data || typeof data !== 'object') return false;
         if (!ONLINE_MESSAGE_TYPES.has(data.type)) return false;
@@ -7668,31 +7989,26 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
         if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
 
-        // P2P 打通后优先走 WebRTC；未打通或临时断开时自动回退 MQTT。
-        // 昵称/头像属于低频但必须最终一致的资料消息：P2P 发送成功后仍镜像一份到 MQTT，
-        // 这样可以覆盖 DataChannel 半开、手机切网等“本端仍显示 open 但对端已收不到”的情况。
-        let sentViaP2p = false;
-        if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
-          try {
-            this.dc.send(jsonStr);
-            sentViaP2p = true;
-            // 心跳也镜像到 MQTT：DataChannel 处于半开状态时，不能让测速和断线检测一起失效。
-            // 两条链路使用同一个 _mid，接收端会自动去重；正常情况下仍优先得到 P2P 的低延迟响应。
-            if (data.type !== 'profile_sync' && data.type !== 'ping' && data.type !== 'pong') return true;
-          } catch(e) {
-            this.isP2pReady = false;
-          }
+        const isReliable = RELIABLE_ONLINE_MESSAGE_TYPES.has(message.type);
+        let outboxEntry = null;
+        if (isReliable) {
+          outboxEntry = {
+            message,
+            owner: this,
+            roomCode: this.roomCode,
+            attempts: 1,
+            firstSentAt: Date.now(),
+            lastSentAt: Date.now()
+          };
+          onlineReliableOutbox.set(message._mid, outboxEntry);
         }
-
-        if (this.client && this.client.connected) {
-          try {
-            this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
-            return true;
-          } catch(e) {
-            console.warn('[MqttRoom send error]', e);
-          }
+        const sent = this._transmitMessage(message);
+        // 即使当前瞬间两条链路都不可用，也保留短暂 outbox，给 MQTT 重连或
+        // P2P 恢复留下接管机会；超过时限后再通知上层对账/重试。
+        if (isReliable && onlineReliableOutbox.get(message._mid) === outboxEntry) {
+          this._scheduleReliableRetry();
         }
-        return sentViaP2p;
+        return sent;
       }
 
       on(event, fn) {
@@ -7715,6 +8031,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
       close(silent = false) {
         if (this.closed) return;
+        this._releaseReliableOutboxOwner();
+        this._cancelP2PRecovery();
         this.closed = true;
         this.open = false;
         this.ready = false;
@@ -7755,9 +8073,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
 
     async function initHostMqttPeer(targetCode = null, forceNew = false) {
       const isDifferentRoom = targetCode && String(targetCode) !== String(currentRoomCode);
-      if (isDifferentRoom) activeOnlineGuestUid = '';
+      if (isDifferentRoom) {
+        clearOnlineReliableOutbox();
+        activeOnlineGuestUid = '';
+      }
       // forceNew 只表示重建传输连接，不能在断线重连时更换棋局轮次。
       if (isDifferentRoom || !onlineRoundId) {
+        clearOnlineReliableOutbox();
         onlineRoundId = generateSecureId(12, 'round_');
       }
       if (isDifferentRoom) resetChatHistoryForRoom();
@@ -8101,6 +8423,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       closeMqttClientPool();
       activeOnlineGuestUid = '';
       currentRoomCode = null;
+      clearOnlineReliableOutbox();
       onlineRoundId = '';
       pendingOnlineUndoId = '';
       activeOnlineUndoId = '';
@@ -8455,6 +8778,16 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         triggerOnlineReconnect("网络异常");
       });
 
+      conn.on('delivery_timeout', (message) => {
+        if (conn !== connection || gameMode !== 'online') return;
+        if (message && message.type === 'move') {
+          showGameNotice("⚠️ 落子暂未收到对方确认，正在自动对账棋局…", true);
+          requestOnlineResync();
+        } else if (message && message.type === 'chat') {
+          showGameNotice("⚠️ 这条聊天暂未确认送达，请稍后重试", true);
+        }
+      });
+
       conn.on('data', (data) => {
         if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return;
         if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
@@ -8463,6 +8796,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
         if (data.requestId !== undefined && (typeof data.requestId !== 'string' || data.requestId.length > 80)) return;
         if (data.nextRoundId !== undefined && (typeof data.nextRoundId !== 'string' || data.nextRoundId.length > 80)) return;
+        if (data.ackId !== undefined && (typeof data.ackId !== 'string' || data.ackId.length > 80)) return;
         if (data.pingId !== undefined && (typeof data.pingId !== 'string' || data.pingId.length > 80)) return;
         if (data.sentAt !== undefined && (!Number.isFinite(data.sentAt) || Math.abs(Date.now() - data.sentAt) > 120000)) return;
         if (data.networkState !== undefined && (typeof data.networkState !== 'string' || data.networkState.length > 32)) return;
@@ -8482,6 +8816,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
           activeOnlineGuestUid = '';
           currentRoomCode = null;
+          clearOnlineReliableOutbox();
           onlineRoundId = '';
           pendingOnlineUndoId = '';
           activeOnlineUndoId = '';
@@ -9727,6 +10062,10 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     async function joinMqttRoom(code, btn) {
       if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
+      if (currentRoomCode && String(currentRoomCode) !== String(code)) {
+        clearOnlineReliableOutbox();
+      }
+
       if (btn) {
         btn.disabled = true;
         btn.textContent = '⏳ 正在连接好友房间...';
@@ -9792,7 +10131,11 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
               lastActiveRoomCode = code;
               currentRoomCode = code;
               myOnlineColor = WHITE;
-              onlineRoundId = typeof data.roundId === 'string' ? data.roundId : '';
+              const acceptedRoundId = typeof data.roundId === 'string' ? data.roundId : '';
+              if (onlineRoundId && acceptedRoundId && onlineRoundId !== acceptedRoundId) {
+                clearOnlineReliableOutbox();
+              }
+              onlineRoundId = acceptedRoundId;
               resetChatHistoryForRoom();
               p2Name = normalizeNetworkName(data.name, '房主');
               p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👦';
@@ -14450,6 +14793,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       onlineNetworkTelemetry.remoteLastSeenAt = 0;
       onlineNetworkTelemetry.remoteState = '等待对方';
       currentRoomCode = null;
+      clearOnlineReliableOutbox();
       onlineRoundId = '';
       pendingOnlineUndoId = '';
       activeOnlineUndoId = '';
@@ -14538,6 +14882,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       cancelPendingGameResultModal();
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
       if (gameMode === 'online' && nextRoundId) {
+        clearOnlineReliableOutbox();
         onlineRoundId = nextRoundId;
       }
       opponentSkillsUsedCount = 0;

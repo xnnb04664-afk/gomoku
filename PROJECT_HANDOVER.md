@@ -1049,7 +1049,26 @@ node publish.js
 - 产物 SHA-256：APK E257BE576EF3079D7DD41806BC2148665679BD287855DE38F6EA35C4080818E8；HTML 0D42E823641880F137317D1F95F1013E787972C22F3160631189BA7E15BF3F0B。本地构建产物与线上版本接口摘要一致。
 - 部署边界：本次为客户端发版，按规则未再次部署 Cloudflare；TURN 服务端已在本轮前完成显式部署和凭据绑定。后续只改 HTML、AI 或资源时继续使用 node publish.js，只有改 Worker、D1、Pages、Secret 或票据逻辑时才显式部署 Cloudflare。
 
+## 三十六、P2P/MQTT 可靠业务消息层（2026-09-06，本地构建完成，未发布）
+
+- **本轮目标**：解决联机时偶发“落子一边有、一边没有”、P2P 半开后聊天丢失，以及 P2P 与 MQTT 镜像造成重复显示的问题；本轮只改客户端传输层、测试与派生构建资源，没有修改 Worker、Pages、D1、TURN 或更新票据逻辑。
+- **可靠传输协议**：
+  1. 落子、聊天、悔棋、重开、棋局快照、同步请求和技能/命运状态消息自动生成唯一 _mid，P2P 直连和 MQTT 中继同时发送；delivery_ack 同样双通道发送。
+  2. 接收端先回 ACK，再按 _mid 去重，因此同一条报文从两条链路到达不会重复落子或重复聊天；如果首个 ACK 丢失，重复报文会再次确认但不会重复执行。
+  3. 发送端最多每 900 ms 重发一次，最多 8 次、总计约 10 秒；重连时同一房间/轮次会接管仍未确认的消息，换房、离开或重开时清除旧消息。
+  4. 落子业务仍执行棋子颜色、空位、步数、回合校验；确认超时会触发全量棋局对账，而不是盲目强行落子。聊天确认超时会提示用户重试。
+- **P2P 恢复**：DataChannel 的 close/error、PeerConnection/ICE 的 failed/closed 和信令超时都会触发 1.2 秒起、最高 30 秒的指数退避重建；每次重建使用新的 sessionId/generation，隔离旧 SDP/ICE，恢复期间业务消息自动走 MQTT，不拆除整局连接。公共 MQTT 连接池对仍在线的单节点按 1.5 秒起退避重连，避免单个公共 Broker 抖动扩大为整局断线。
+- **同步范围**：index.html、android_src/assets/index.html、五子棋大师_单文件版.html 和正式签名五子棋.apk 已同步；测试中的传输探针覆盖资料消息镜像，P2P 故障测试覆盖半开 DataChannel、MQTT 过渡和自动恢复。
+- **验证结果**：
+  - python -B tests/online_transport_smoke.py：真实公共 MQTT 双页面建房、P2P 建立、双向落子、可靠聊天只显示一次、双方网络状态/延迟和页面错误检查通过；
+  - python -B tests/p2p_recovery_smoke.py：真实双页面主动关闭 DataChannel，验证两端切换 MQTT、故障期间落子可达、P2P 自动恢复、恢复后落子可达且无浏览器错误；
+  - python -B tests/online_match_race_smoke.py：模拟首 Broker 失败、跨 Broker 汇合、ready 闸门、双向落子和 MQTT-only 可靠聊天只显示一次通过；
+  - python -B tests/optimization_smoke.py、python -B tests/ai_worker_smoke.py、python -B tests/avatar_asset_smoke.py、node tests/turn_worker_unit.js、node tests/worker_unit.js、node tests/auth_refresh_unit.js、node tests/ai_strength_smoke.js、git diff --check 和全主题内嵌脚本语法检查均通过；页面无 console/page error。
+- **本地产物**：根页面 622,503 bytes，Android 内嵌页面 670,190 bytes，单文件版 1,188,986 bytes，APK 1,591,514 bytes；APK 仍使用仓库外正式签名密钥，保持覆盖安装签名兼容。
+- **产物 SHA-256**：index.html：62123E0AEDE76A329C57578C7DC318BB7B5868E30482B4C06893D98F978A2B83；android_src/assets/index.html：C04DC49FBA444EFB89783FB3F25C9B35D228FB64CB18EEA9AC7117C8C5029083；单文件版：881BBB5DD64ABA438FB1C47FEBB6449B93E36FC1A781A04D6C2F898C2A434A36；APK：86D2EAF15C66FB67E91755EE320B198DBF43F990ECD6F5CBBCC6BC032A3131E9。
+- **发布边界**：本轮没有部署 Cloudflare，也没有创建 GitHub Release；本地产物版本号仍为 v1.0.110 (Build 111)，线上热更新不会因为这次本地构建自动变化。确认真机联机体验后，如需推送给用户，再递增版本执行 node publish.js，普通客户端发版仍不需要重复部署 Cloudflare。
+
 ---
 *交接文档最后更新时间：2026年9月6日*
-*当前工程正式版本：v1.0.110 (Build 111)*
+*当前工程正式版本：v1.0.110 (Build 111)；本地未发布可靠传输与 P2P 自动恢复改动已记录于“三十六”*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.109 GitHub Release；线上更新接口已返回 v1.0.109。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*

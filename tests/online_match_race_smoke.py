@@ -164,6 +164,14 @@ def main():
         if guest_move != {"piece": 1, "steps": 1, "turn": 2}:
             raise AssertionError(f"host move did not reach guest: {guest_move}")
 
+        pages["host"].evaluate("sendChat('MQTT可靠聊天测试')")
+        pages["guest"].wait_for_timeout(300)
+        guest_chat_count = pages["guest"].evaluate(
+            "() => chatHistory.filter(item => item.sender === 2 && item.text === 'MQTT可靠聊天测试').length"
+        )
+        if guest_chat_count != 1:
+            raise AssertionError(f"MQTT chat was not delivered exactly once: {guest_chat_count}")
+
         pages["guest"].evaluate("window.makeMove(7, 8, WHITE)")
         pages["host"].wait_for_timeout(250)
         host_move = pages["host"].evaluate("({ piece: board[7][8], steps: history.length, turn })")
@@ -176,6 +184,7 @@ def main():
             "guest": guest_state,
             "crossBrokerFallback": True,
             "bidirectionalMoves": True,
+            "mqttReliableChatExactlyOnce": guest_chat_count == 1,
             "pageErrors": {role: output[role]["pageErrors"] for role in output},
             "consoleErrors": {role: output[role]["consoleErrors"] for role in output},
         }, ensure_ascii=False, indent=2))

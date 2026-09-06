@@ -268,13 +268,43 @@ def main():
                   connected: true,
                   publish(topic, payload) { mqttPayloads.push({ topic, payload }); }
                 },
-                pubTopic: 'probe/profile'
+                pubTopic: 'probe/profile',
+                _transmitMessage: MqttRoomConnection.prototype._transmitMessage,
+                _scheduleReliableRetry() {}
               };
               const mirrored = MqttRoomConnection.prototype.send.call(transportProbe, {
                 type: 'profile_sync', name: '新昵称', avatar: '👦'
               });
               const p2pMessage = p2pPayloads.length ? JSON.parse(p2pPayloads[0]) : null;
               const mqttMessage = mqttPayloads.length ? JSON.parse(mqttPayloads[0].payload) : null;
+              const reliableP2pPayloads = [];
+              const reliableMqttPayloads = [];
+              const reliableProbe = {
+                open: true,
+                closed: false,
+                roomCode: '654321',
+                reliableRetryTimer: null,
+                isP2pReady: true,
+                dc: { readyState: 'open', send(payload) { reliableP2pPayloads.push(payload); } },
+                client: {
+                  connected: true,
+                  publish(topic, payload) { reliableMqttPayloads.push({ topic, payload }); }
+                },
+                pubTopic: 'probe/reliable',
+                emit() {},
+                _transmitMessage: MqttRoomConnection.prototype._transmitMessage,
+                _scheduleReliableRetry: MqttRoomConnection.prototype._scheduleReliableRetry
+              };
+              const reliableSent = MqttRoomConnection.prototype.send.call(reliableProbe, {
+                type: 'chat', text: '可靠 ACK 测试'
+              });
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const reliableMessage = reliableP2pPayloads.length ? JSON.parse(reliableP2pPayloads[0]) : null;
+              const reliableRetryOk = reliableP2pPayloads.length >= 2 && reliableMqttPayloads.length >= 2;
+              if (reliableMessage && reliableMessage._mid) {
+                MqttRoomConnection.prototype._acknowledgeReliableMessage.call(reliableProbe, reliableMessage._mid);
+              }
+              const reliableAckCleared = reliableMessage && !onlineReliableOutbox.has(reliableMessage._mid);
               updateOnlineNetworkUI();
               if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
               onlineHeartbeatTimer = null;
@@ -284,6 +314,9 @@ def main():
                 pongReportsState: pong && pong.peerState === 'MQTT中继',
                 pongReportsLatency: pong && Object.prototype.hasOwnProperty.call(pong, 'peerLatencyMs'),
                 profileMirrorOk: mirrored && p2pMessage && mqttMessage && p2pMessage._mid === mqttMessage._mid,
+                reliableMirrorOk: reliableSent && reliableP2pPayloads.length >= 1 && reliableMqttPayloads.length >= 1,
+                reliableRetryOk,
+                reliableAckCleared,
                 localLabel: document.querySelector('#myNetworkStatusLabel')?.textContent || '',
                 peerLabel: document.querySelector('#peerNetworkStatusLabel')?.textContent || '',
                 statusBarVisible: getComputedStyle(document.querySelector('#onlineNetworkStatusBar')).display !== 'none',
@@ -304,6 +337,9 @@ def main():
             network_status['pongReportsState'],
             network_status['pongReportsLatency'],
             network_status['profileMirrorOk'],
+            network_status['reliableMirrorOk'],
+            network_status['reliableRetryOk'],
+            network_status['reliableAckCleared'],
             network_status['localLatencyOk'],
             network_status['peerLatencyOk'],
             network_status['peerTransportOk'],
