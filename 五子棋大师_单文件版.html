@@ -4758,7 +4758,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.111</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.112</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -5444,7 +5444,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.111';
+    const CURRENT_VERSION_TAG = 'v1.0.112';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -6830,9 +6830,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       ...RELIABLE_ONLINE_MESSAGE_TYPES,
       'delivery_ack', 'profile_sync', 'reconnect_handshake', 'leave_room'
     ]);
+    const ONLINE_IMMEDIATE_MIRROR_TYPES = new Set([
+      'delivery_ack', 'profile_sync', 'reconnect_handshake', 'leave_room', 'ping', 'pong'
+    ]);
     const ONLINE_RELIABLE_RETRY_INTERVAL_MS = 900;
     const ONLINE_RELIABLE_MAX_ATTEMPTS = 8;
     const ONLINE_RELIABLE_MAX_AGE_MS = 10000;
+    // P2P 正常时先走直连；只有未收到 ACK 才延迟镜像到 MQTT，降低公共 Broker 抖动对落子/聊天的影响。
+    const ONLINE_P2P_MQTT_FAILOVER_DELAY_MS = 300;
     const onlineReliableOutbox = new Map();
     const ONLINE_TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
     const ONLINE_MESSAGE_TYPES = new Set([
@@ -7333,6 +7338,17 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       return rtcIceServersPromise;
     }
 
+    function getWebRtcIceServersForProbe() {
+      const now = Date.now();
+      if (Array.isArray(cachedRtcIceServers) && cachedRtcIceServers.length && now < cachedRtcIceServersExpiresAt) {
+        return cachedRtcIceServers;
+      }
+      // TURN 凭据获取属于增强路径，不能阻塞首个 P2P 探测；先用公共 STUN 建链，后台并行刷新 TURN。
+      // 如果当前网络必须走 TURN，首轮 ICE 失败后会进入既有指数退避恢复，并使用已缓存的 TURN 配置。
+      void getWebRtcIceServers().catch(() => {});
+      return DEFAULT_WEBRTC_ICE_SERVERS;
+    }
+
     class MqttRoomConnection {
       constructor(client, roomCode, role) {
         this.client = client;
@@ -7366,6 +7382,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         this.p2pRecoveryTimer = null;
         this.p2pRecoveryAttempts = 0;
         this.reliableRetryTimer = null;
+        this.pendingMqttFailoverTimers = new Map();
         this.inboundWindowAt = Date.now();
         this.inboundMessageCount = 0;
         this.inboundSignalCount = 0;
@@ -7615,8 +7632,20 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             this.p2pProbeStarted = false;
             return;
           }
-          const iceServers = await getWebRtcIceServers();
+          const iceServers = getWebRtcIceServersForProbe();
           if (!isCurrent()) return;
+          const usingFallbackIce = iceServers === DEFAULT_WEBRTC_ICE_SERVERS;
+          if (usingFallbackIce) {
+            // TURN 配置到达后给首轮 STUN 一个短暂机会；若仍未直连，立即用缓存 TURN 重建，
+            // 避免在必须中继的网络环境里等待浏览器把整轮 ICE 超时耗尽。
+            getWebRtcIceServers().then((resolvedServers) => {
+              if (!isCurrent() || this.isP2pReady || resolvedServers === DEFAULT_WEBRTC_ICE_SERVERS) return;
+              setTimeout(() => {
+                if (!isCurrent() || this.isP2pReady) return;
+                this._scheduleP2PRecovery('TURN 凭据已就绪', 0);
+              }, 1200);
+            }).catch(() => {});
+          }
 
           const pc = new RTCPC({
             iceServers,
@@ -7845,6 +7874,37 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         }
       }
 
+      _publishMqttPayload(jsonStr) {
+        if (!this.client || !this.client.connected) return false;
+        try {
+          this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
+          return true;
+        } catch (e) {
+          console.warn('[MqttRoom send error]', e);
+          return false;
+        }
+      }
+
+      _clearMqttFailover(mid) {
+        if (!mid) return;
+        const timer = this.pendingMqttFailoverTimers.get(mid);
+        if (timer) clearTimeout(timer);
+        this.pendingMqttFailoverTimers.delete(mid);
+      }
+
+      _scheduleMqttFailover(message, jsonStr) {
+        const mid = message && message._mid;
+        if (!mid || this.closed || this.pendingMqttFailoverTimers.has(mid)) return;
+        const timer = setTimeout(() => {
+          this.pendingMqttFailoverTimers.delete(mid);
+          const pending = onlineReliableOutbox.get(mid);
+          // ACK 已到达，或消息已经由新连接接管时，不再从旧连接重复镜像。
+          if (!pending || pending.owner !== this || this.closed) return;
+          this._publishMqttPayload(jsonStr);
+        }, ONLINE_P2P_MQTT_FAILOVER_DELAY_MS);
+        this.pendingMqttFailoverTimers.set(mid, timer);
+      }
+
       _markTransportClosed(reason) {
         if (this.closed) return;
         this._releaseReliableOutboxOwner();
@@ -7871,8 +7931,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
         if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
 
-        // P2P 打通后优先走 WebRTC；可靠消息仍同时镜像 MQTT，覆盖 DataChannel 半开、
-        // 手机切网或某一条公共 Broker 链路短暂丢包的情况。
+        // P2P 打通后优先走 WebRTC；可靠消息先走低延迟直连，ACK 未及时回来时再镜像 MQTT，
+        // 兼顾正常对局延迟与 DataChannel 半开、手机切网、公共 Broker 抖动时的可靠性。
         let sentViaP2p = false;
         let sentViaMqtt = false;
         if (this.isP2pReady && this.dc && this.dc.readyState === 'open') {
@@ -7890,16 +7950,13 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           this._scheduleP2PRecovery('DataChannel 状态失效');
         }
 
-        const shouldMirror = MIRRORED_ONLINE_MESSAGE_TYPES.has(message.type) ||
-          !sentViaP2p || message.type === 'profile_sync' ||
-          message.type === 'ping' || message.type === 'pong';
-        if (shouldMirror && this.client && this.client.connected) {
-          try {
-            this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
-            sentViaMqtt = true;
-          } catch(e) {
-            console.warn('[MqttRoom send error]', e);
-          }
+        const isReliableData = RELIABLE_ONLINE_MESSAGE_TYPES.has(message.type);
+        const shouldMirrorImmediately = !sentViaP2p || ONLINE_IMMEDIATE_MIRROR_TYPES.has(message.type) ||
+          !MIRRORED_ONLINE_MESSAGE_TYPES.has(message.type);
+        if (sentViaP2p && isReliableData && !ONLINE_IMMEDIATE_MIRROR_TYPES.has(message.type)) {
+          this._scheduleMqttFailover(message, jsonStr);
+        } else if (shouldMirrorImmediately) {
+          sentViaMqtt = this._publishMqttPayload(jsonStr);
         }
         return sentViaP2p || sentViaMqtt;
       }
@@ -7960,6 +8017,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       _acknowledgeReliableMessage(ackId) {
         const entry = onlineReliableOutbox.get(ackId);
         if (!entry) return;
+        this._clearMqttFailover(ackId);
         onlineReliableOutbox.delete(ackId);
         if (entry.owner === this && ![...onlineReliableOutbox.values()].some(item => item.owner === this)) {
           if (this.reliableRetryTimer) clearTimeout(this.reliableRetryTimer);
@@ -7970,6 +8028,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       _releaseReliableOutboxOwner() {
         if (this.reliableRetryTimer) clearTimeout(this.reliableRetryTimer);
         this.reliableRetryTimer = null;
+        for (const mid of this.pendingMqttFailoverTimers.keys()) this._clearMqttFailover(mid);
         for (const entry of onlineReliableOutbox.values()) {
           if (entry.owner === this) entry.owner = null;
         }
@@ -8443,8 +8502,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     let onlineHeartbeatTimer = null;
-    const ONLINE_HEARTBEAT_INTERVAL_MS = 4000;
-    const ONLINE_PEER_TIMEOUT_MS = 12000;
+    const ONLINE_HEARTBEAT_INTERVAL_MS = 2500;
+    const ONLINE_PEER_TIMEOUT_MS = 9000;
     let onlineNetworkTelemetry = {
       localLatencyMs: null,
       remoteLatencyMs: null,
@@ -8509,8 +8568,21 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     }
 
     try {
-      window.addEventListener('online', updateOnlineNetworkUI);
-      window.addEventListener('offline', updateOnlineNetworkUI);
+      window.addEventListener('offline', () => {
+        updateOnlineNetworkUI();
+        if (gameMode === 'online' && !isOver) {
+          showGameNotice('📴 当前设备已离线，网络恢复后将自动重连…', true);
+        }
+      });
+      window.addEventListener('online', () => {
+        updateOnlineNetworkUI();
+        if (gameMode !== 'online' || isOver) return;
+        if (isReconnecting) {
+          manualTriggerReconnect();
+        } else if (!conn || !conn.open || !conn.ready) {
+          triggerOnlineReconnect('网络已恢复');
+        }
+      });
     } catch (_) {}
 
     // 🛡️ 联机技能反作弊拦截审计层：每轮手牌最多使用 3 次，神抽最多重铸 1 次

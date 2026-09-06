@@ -262,6 +262,7 @@ def main():
               const mqttPayloads = [];
               const transportProbe = {
                 open: true,
+                closed: false,
                 isP2pReady: true,
                 dc: { readyState: 'open', send(payload) { p2pPayloads.push(payload); } },
                 client: {
@@ -269,6 +270,9 @@ def main():
                   publish(topic, payload) { mqttPayloads.push({ topic, payload }); }
                 },
                 pubTopic: 'probe/profile',
+                pendingMqttFailoverTimers: new Map(),
+                _publishMqttPayload: MqttRoomConnection.prototype._publishMqttPayload,
+                _clearMqttFailover: MqttRoomConnection.prototype._clearMqttFailover,
                 _transmitMessage: MqttRoomConnection.prototype._transmitMessage,
                 _scheduleReliableRetry() {}
               };
@@ -284,6 +288,7 @@ def main():
                 closed: false,
                 roomCode: '654321',
                 reliableRetryTimer: null,
+                pendingMqttFailoverTimers: new Map(),
                 isP2pReady: true,
                 dc: { readyState: 'open', send(payload) { reliableP2pPayloads.push(payload); } },
                 client: {
@@ -291,6 +296,9 @@ def main():
                   publish(topic, payload) { reliableMqttPayloads.push({ topic, payload }); }
                 },
                 pubTopic: 'probe/reliable',
+                _publishMqttPayload: MqttRoomConnection.prototype._publishMqttPayload,
+                _clearMqttFailover: MqttRoomConnection.prototype._clearMqttFailover,
+                _scheduleMqttFailover: MqttRoomConnection.prototype._scheduleMqttFailover,
                 emit() {},
                 _transmitMessage: MqttRoomConnection.prototype._transmitMessage,
                 _scheduleReliableRetry: MqttRoomConnection.prototype._scheduleReliableRetry
@@ -298,7 +306,7 @@ def main():
               const reliableSent = MqttRoomConnection.prototype.send.call(reliableProbe, {
                 type: 'chat', text: '可靠 ACK 测试'
               });
-              await new Promise(resolve => setTimeout(resolve, 1000));
+              await new Promise(resolve => setTimeout(resolve, 1300));
               const reliableMessage = reliableP2pPayloads.length ? JSON.parse(reliableP2pPayloads[0]) : null;
               const reliableRetryOk = reliableP2pPayloads.length >= 2 && reliableMqttPayloads.length >= 2;
               if (reliableMessage && reliableMessage._mid) {

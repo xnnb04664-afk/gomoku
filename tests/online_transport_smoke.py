@@ -76,8 +76,10 @@ def main():
         if not latency_ok:
             raise AssertionError(json.dumps({"host": host_state, "guest": guest_state}, ensure_ascii=False))
 
+        host_sent_at = host.evaluate("Date.now()")
         host.evaluate("window.makeMove(7, 7, BLACK)")
-        guest.wait_for_timeout(350)
+        guest.wait_for_function("board[7][7] === BLACK", timeout=5_000)
+        host_to_guest_latency_ms = guest.evaluate(f"Date.now() - {host_sent_at}")
         guest_move = guest.evaluate("({ piece: board[7][7], steps: history.length, turn })")
         if guest_move != {"piece": 1, "steps": 1, "turn": 2}:
             raise AssertionError(f"host move did not reach guest: {guest_move}")
@@ -90,8 +92,10 @@ def main():
         if guest_chat_count != 1:
             raise AssertionError(f"chat was not delivered exactly once: {guest_chat_count}")
 
+        guest_sent_at = guest.evaluate("Date.now()")
         guest.evaluate("window.makeMove(7, 8, WHITE)")
-        host.wait_for_timeout(350)
+        host.wait_for_function("board[7][8] === WHITE", timeout=5_000)
+        guest_to_host_latency_ms = host.evaluate(f"Date.now() - {guest_sent_at}")
         host_move = host.evaluate("({ piece: board[7][8], steps: history.length, turn })")
         if host_move != {"piece": 2, "steps": 2, "turn": 1}:
             raise AssertionError(f"guest move did not reach host: {host_move}")
@@ -102,6 +106,10 @@ def main():
             "host": host_state,
             "guest": guest_state,
             "latencyVisible": latency_ok,
+            "moveLatencyMs": {
+                "hostToGuest": round(host_to_guest_latency_ms, 1),
+                "guestToHost": round(guest_to_host_latency_ms, 1)
+            },
             "bidirectionalMoves": True,
             "reliableChatExactlyOnce": guest_chat_count == 1,
             "pageErrors": errors,
