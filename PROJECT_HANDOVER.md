@@ -1041,7 +1041,15 @@ node publish.js
 - 为修复 Worker 备用入口，已使用 Wrangler 正式部署 `gomoku-backend`（版本 ID：`231a44ca-618f-48a3-8ff7-1744a0f40c7a`），确认 D1 绑定正常；随后在最后一次部署后重新绑定两个 Worker Secret。
 - **最终验证**：Worker 与 Pages 正式入口均返回 HTTP 200、`code=0`，并返回 Cloudflare `turn:`/`turns:` 临时 ICE 配置。每次响应的 username/credential 不同属于 1 小时短期凭据正常轮换。TURN 服务端配置已完成；发布含 TURN 客户端代码的新版本仍需单独执行构建/发布流程。
 
+## 三十五、Cloudflare TURN 客户端正式发布（2026-09-06，v1.0.110）
+
+- 发布内容：客户端在 WebRTC 探针启动前按需请求 /api/rtc/ice-servers，优先使用 Cloudflare TURN，失败时回退 STUN，P2P 仍失败时回退 MQTT；短期凭据只在内存缓存，不写入源码或 APK。
+- 正式版本：v1.0.110 (Build 111)，GitHub Release：https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.110；已上传 gomoku.apk 与 gomoku.html，Release 为正式版。
+- 线上验收：https://gomoku-api.pages.dev/api/version 返回 HTTP 200、code=0、tag=v1.0.110，同时签发 APK/HTML 短时票据；接口不暴露可复用下载直链。Worker/Pages TURN 接口均返回 code=0 和 turn/turns 配置。
+- 产物 SHA-256：APK E257BE576EF3079D7DD41806BC2148665679BD287855DE38F6EA35C4080818E8；HTML 0D42E823641880F137317D1F95F1013E787972C22F3160631189BA7E15BF3F0B。本地构建产物与线上版本接口摘要一致。
+- 部署边界：本次为客户端发版，按规则未再次部署 Cloudflare；TURN 服务端已在本轮前完成显式部署和凭据绑定。后续只改 HTML、AI 或资源时继续使用 node publish.js，只有改 Worker、D1、Pages、Secret 或票据逻辑时才显式部署 Cloudflare。
+
 ---
 *交接文档最后更新时间：2026年9月6日*
-*当前工程正式版本：v1.0.109 (Build 110)*
+*当前工程正式版本：v1.0.110 (Build 111)*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.109 GitHub Release；线上更新接口已返回 v1.0.109。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
