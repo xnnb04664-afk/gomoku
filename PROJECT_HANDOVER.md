@@ -1049,7 +1049,7 @@ node publish.js
 - 产物 SHA-256：APK E257BE576EF3079D7DD41806BC2148665679BD287855DE38F6EA35C4080818E8；HTML 0D42E823641880F137317D1F95F1013E787972C22F3160631189BA7E15BF3F0B。本地构建产物与线上版本接口摘要一致。
 - 部署边界：本次为客户端发版，按规则未再次部署 Cloudflare；TURN 服务端已在本轮前完成显式部署和凭据绑定。后续只改 HTML、AI 或资源时继续使用 node publish.js，只有改 Worker、D1、Pages、Secret 或票据逻辑时才显式部署 Cloudflare。
 
-## 三十六、P2P/MQTT 可靠业务消息层（2026-09-06，本地构建完成，未发布）
+## 三十六、P2P/MQTT 可靠业务消息层（2026-09-06，已发布 v1.0.111）
 
 - **本轮目标**：解决联机时偶发“落子一边有、一边没有”、P2P 半开后聊天丢失，以及 P2P 与 MQTT 镜像造成重复显示的问题；本轮只改客户端传输层、测试与派生构建资源，没有修改 Worker、Pages、D1、TURN 或更新票据逻辑。
 - **可靠传输协议**：
@@ -1065,10 +1065,12 @@ node publish.js
   - python -B tests/online_match_race_smoke.py：模拟首 Broker 失败、跨 Broker 汇合、ready 闸门、双向落子和 MQTT-only 可靠聊天只显示一次通过；
   - python -B tests/optimization_smoke.py、python -B tests/ai_worker_smoke.py、python -B tests/avatar_asset_smoke.py、node tests/turn_worker_unit.js、node tests/worker_unit.js、node tests/auth_refresh_unit.js、node tests/ai_strength_smoke.js、git diff --check 和全主题内嵌脚本语法检查均通过；页面无 console/page error。
 - **本地产物**：根页面 622,503 bytes，Android 内嵌页面 670,190 bytes，单文件版 1,188,986 bytes，APK 1,591,514 bytes；APK 仍使用仓库外正式签名密钥，保持覆盖安装签名兼容。
-- **产物 SHA-256**：index.html：62123E0AEDE76A329C57578C7DC318BB7B5868E30482B4C06893D98F978A2B83；android_src/assets/index.html：C04DC49FBA444EFB89783FB3F25C9B35D228FB64CB18EEA9AC7117C8C5029083；单文件版：881BBB5DD64ABA438FB1C47FEBB6449B93E36FC1A781A04D6C2F898C2A434A36；APK：86D2EAF15C66FB67E91755EE320B198DBF43F990ECD6F5CBBCC6BC032A3131E9。
-- **发布边界**：本轮没有部署 Cloudflare，也没有创建 GitHub Release；本地产物版本号仍为 v1.0.110 (Build 111)，线上热更新不会因为这次本地构建自动变化。确认真机联机体验后，如需推送给用户，再递增版本执行 node publish.js，普通客户端发版仍不需要重复部署 Cloudflare。
+- **产物 SHA-256**：index.html：569B0B60B2E6C858E607D3BF6E8B9E2C51FD10DA25928704EB0BE3843C556502；android_src/assets/index.html：7202AD467F0A46FA76D280997ACE32A3904EF26A1BB295ED51A926A4F20CC02F；单文件版：5EDEBE7A59639B77F382F6049EF75A27AD629C8778899509F37078B510739ED7；APK：AED31E87705E3E5CDE9D66675E234971E07DCEB00B75700FC2DFA1538C89F5B3。
+- **正式发布**：已发布 `v1.0.111 (Build 112)`，GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.111>；Release 已上传 `gomoku.apk` 与 `gomoku.html`，并已推送 `master`。
+- **线上验收**：`https://gomoku-api.pages.dev/api/version` 返回 `code=0、tag=v1.0.111`，并正常签发 APK/HTML 短时票据；接口不暴露可复用下载直链。
+- **部署边界**：本轮没有部署 Cloudflare，因为未修改 Worker、D1、Pages、TURN 或更新票据逻辑；现有线上 TURN 与更新服务继续使用。普通客户端发版仍不需要重复部署 Cloudflare。
 
 ---
 *交接文档最后更新时间：2026年9月6日*
-*当前工程正式版本：v1.0.110 (Build 111)；本地未发布可靠传输与 P2P 自动恢复改动已记录于“三十六”*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.109 GitHub Release；线上更新接口已返回 v1.0.109。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+*当前工程正式版本：v1.0.111 (Build 112)；P2P/MQTT 可靠传输与 P2P 自动恢复已发布，详见“三十六”*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层与 P2P 自动恢复均已完成源码、构建资源同步、正式签名构建、回归测试并已发布 v1.0.111 GitHub Release；线上更新接口已返回 v1.0.111。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
