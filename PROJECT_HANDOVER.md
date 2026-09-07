@@ -1138,7 +1138,7 @@ node publish.js
 - **本地产物**：根页面 652,664 bytes；Android 内嵌页面 700,351 bytes；单文件版 1,219,147 bytes；APK 1,599,706 bytes。SHA-256：根页面 `D9CEC6679D131A5D096F92CB2EC0B30A64B39541A88B61D71DD5135CFC1C71EF`；Android 内嵌页面 `06072EC4B78DC7BD75FB20E474C9DE837F05956115444705C9B4B7CF0EC726C6`；单文件版 `3C8E1F4CB7E88BFBBCE662B63E7DF4B43395CDC0D24AD72707C9FCAACE5D707D`；APK `7F6B31C61B6C5D76DE0A16D4052502162C1B11FA7DB263A24ED6611BA85D8399`。APK v1/v2/v3 签名验证通过，签名者数量为 1。
 - **部署边界**：本轮只改客户端联机握手、静态资源和测试，没有修改 Worker、D1、Pages、TURN Secret 或更新票据逻辑；按规则未部署 Cloudflare。普通客户端可通过现有热更新通道升级到 v1.0.115。
 
-## 四十四、项目自有房间中继与联机链路强化（2026-09-07，本地完成，待部署/发布）
+## 四十四、项目自有房间中继与联机链路强化（2026-09-07，已部署并发布 v1.0.116）
 
 - **根因确认**：公共 MQTT 四个节点在同一时段全部出现 WebSocket close，导致两端直接回到人机；继续堆公共 Broker 重试只能缓解，不能把它当作核心信令基础设施。
 - **新联机拓扑**：新增 Cloudflare Durable Object `GomokuRoom` 作为项目自有 WebSocket 房间中继，客户端优先连接 `gomoku-backend.xnnb04664.workers.dev/api/room/socket`，Pages 同路径作为备用；只有自有中继不可用或旧环境不支持 WebSocket 时，才回退公共 MQTT。P2P DataChannel 仍是棋局首选路径，TURN 只在直连失败时中继。
@@ -1146,7 +1146,7 @@ node publish.js
 - **服务端保护**：中继限制单条报文 64KB、每连接每秒 120 条，限制 topic 方向、角色和会话；v4 数据必须匹配发送角色，P2P 信令单独校验 WebRTC sessionId；中继不保存密码、账号或棋局历史，只在内存中短暂转发并缓存少量等待中的 join_request。
 - **客户端复用**：新增 `RoomRelayClient` 适配器，复用原有进房确认闸门、ACK/QoS 1 业务可靠层、`_mid` 去重、状态版本/摘要对账、P2P ICE restart、DataChannel 关闭后的整条 PeerConnection 重建和 WiFi/流量切换自愈。网络状态栏能区分 `P2P直连`、`P2P中继`、`WebSocket中继` 和 `MQTT中继`。
 - **连接池优化**：公共 MQTT 节点改为 300ms 错峰并行探测；首个可用节点先进入房间，其余节点后台容灾；初始探测未全部结束前不会因一个节点关闭就误判整个连接池离线。
-- **后端配置**：`wrangler.toml` 与 `deploy_worker.js` 已加入 `GOMOKU_ROOMS` Durable Object 绑定和 `GomokuRoom` SQLite migration；`pages_build/_worker.js` 已与 Worker 同步。Wrangler `--dry-run` 已确认绑定为 `env.GOMOKU_ROOMS (GomokuRoom)` 和现有 D1。由于本轮修改了 Worker/DO 配置，必须显式执行一次 `node deploy_worker.js` 后，自有中继才会在线；本轮没有替用户部署生产环境，也没有创建新 Release。
+- **后端配置**：`wrangler.worker.toml` 管理 `gomoku-backend` Worker 与 `GomokuRoom` SQLite migration；根目录 `wrangler.toml` 管理 Pages 项目，并通过 `script_name = "gomoku-backend"` 绑定已经部署的 Durable Object；`deploy_worker.js` 使用 Wrangler 管理迁移状态，重复部署不会重复执行 `v1` migration。`pages_build/_worker.js` 已与 Worker 同步。Wrangler `--dry-run` 已确认绑定为 `env.GOMOKU_ROOMS (GomokuRoom)` 和现有 D1。
 - **回归验证**：
   - `tests/online_relay_smoke.py`：自有中继双端模拟、双向落子、可靠聊天只显示一次、无页面错误；
   - `tests/online_match_race_smoke.py`：跨 Broker/延迟 ready/进房闸门通过；
@@ -1154,10 +1154,12 @@ node publish.js
   - `tests/online_reconnect_smoke.py`：WiFi→流量回调、房间轮次保持、重连后落子和聊天通过；
   - `tests/p2p_recovery_smoke.py`：DataChannel 关闭后 MQTT 兜底、自动恢复 P2P、恢复后落子通过；
   - `tests/optimization_smoke.py`、`tests/worker_unit.js`、`tests/turn_worker_unit.js`、HTML/Worker 语法检查及 `git diff --check` 通过；Wrangler 本地 DO 实测 WebSocket 101、bootstrap 转发和 v4 安全业务转发通过。
-- **本地未发布产物**：当前工程正式版本号仍为 v1.0.115；本地已重新生成单文件版和正式签名 APK。APK SHA-256：`9B671FDCC569642CAB2A0D61535CC3053257D0B82E5026BDD1B7DAB346F57CEC`；根页面 `06D9B26CA17A12E82B92E44DA07C833E2F57014DB5EA06FCF0C0AF44BE5397CE`；Android 内嵌页面 `D3BC8A4A0E9F3B993C124D3E5C274880773838CD2FD6B33D35BF66644F6B3447`；单文件版 `4AED19E3D44BCB6D09A0031DC3D3FA5E3C99403471E814E69715376FBB350408`；Worker 与 Pages 派生脚本 `DC8B0EA8EEDF90AD60E5B09BF8C0B676E36CE076BCF219CF2CED2AD763B75E51`。APK v1/v2/v3 签名和单签名者校验通过。
-- **下一步顺序**：先用本机 Cloudflare 凭据执行 `node deploy_worker.js`，线上测试 `/api/room/socket` 双端进房和断线；确认通过后再递增版本、运行完整回归并执行 `node publish.js`。只改客户端时不需要重复部署 Cloudflare；本轮属于后端/DO 改造，不能跳过部署就宣称用户已获得自有中继。
+- **线上验证**：Worker `wss://gomoku-backend.xnnb04664.workers.dev/api/room/socket` 与 Pages `wss://gomoku-api.pages.dev/api/room/socket` 均完成真实双端 WebSocket 101、`relay_ready`、v3 bootstrap 转发和 v4 业务转发测试；Worker 最终版本 ID 为 `761bf5b2-6818-461c-a21c-b26148caa9ac`。
+- **正式发布**：v1.0.116（Build 117）已推送 `master`，GitHub Release 已创建：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.116`，上传 `gomoku.apk` 与 `gomoku.html`；生产 `/api/version?channel=stable&client=v1.0.116` 返回 `code=0、tag=v1.0.116`。
+- **正式产物**：APK SHA-256：`86DB27B87ED98C8C09108D77BAE2B4BE19504A9D7CAD88DF2E841EBAFBCB68DE`；根页面 `B9DB2A0D44D70992B2E2C3A26B75FDA6C474F947E9DBB068BFD87E0310181CEB`；Android 内嵌页面 `DED281DD63E4D21D03C394CA9FF01E6D0DDBE059E95F9FACC1AFE2799561E1E4`；单文件版 `83EC7A08A231B1DA72994241A5FF83E2F3FF06DFC040F23219CAEC18B87F018B`；Worker 与 Pages 派生脚本 `DC8B0EA8EEDF90AD60E5B09BF8C0B676E36CE076BCF219CF2CED2AD763B75E51`。APK v1/v2/v3 签名和单签名者校验通过。
+- **后续规则**：普通客户端发版只需执行 `node publish.js`，不重复部署 Cloudflare；只有修改 Worker、DO、Pages 绑定、D1 或更新票据逻辑时，才执行 `node publish.js --deploy-cloudflare`。本轮后端改造已完成部署并随 v1.0.116 正式发布。
 
 ---
 *交接文档最后更新时间：2026年9月7日*
-*当前工程正式版本：v1.0.115 (Build 116)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连、断网恢复、WiFi/流量切换自愈和双端进房确认闸门均已随正式版本发布，详见“三十八”至“四十三”。*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性已发布；项目自有 Durable Object 房间中继、WebSocket 主信令、v4 会话/角色校验、公共 MQTT 兼容兜底和 DO 配置已在本地完成并通过回归，等待一次 Cloudflare 部署与新版本发布。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 node publish.js。*
+*当前工程正式版本：v1.0.116 (Build 117)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连、断网恢复、WiFi/流量切换自愈、双端进房确认闸门和项目自有 Durable Object WebSocket 房间中继均已正式发布，详见“三十八”至“四十四”。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、v4 会话/角色校验、公共 MQTT 兼容兜底和可重复 Cloudflare 部署流程均已完成并上线。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
