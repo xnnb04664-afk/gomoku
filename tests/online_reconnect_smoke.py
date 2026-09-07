@@ -82,6 +82,25 @@ def main():
             ):
                 raise AssertionError(json.dumps({"phase": "initial_join", **initial, "errors": errors}, ensure_ascii=False))
 
+            initial_persisted = guest.evaluate(
+                """
+                () => {
+                  const saved = JSON.parse(localStorage.getItem('gomoku_active_online_room') || '{}');
+                  return {
+                    liveSessionId: onlineSessionId,
+                    savedSessionId: saved.sessionId,
+                    savedRoundId: saved.roundId,
+                    savedHistoryLength: Array.isArray(saved.history) ? saved.history.length : -1
+                  };
+                }
+                """
+            )
+            if (not initial_persisted["liveSessionId"] or
+                    initial_persisted["savedSessionId"] != initial_persisted["liveSessionId"] or
+                    initial_persisted["savedRoundId"] != initial["guest"]["round"] or
+                    initial_persisted["savedHistoryLength"] != 0):
+                raise AssertionError(json.dumps({"phase": "persist_on_join", **initial_persisted}, ensure_ascii=False))
+
             round_before = initial["guest"]["round"]
             host.evaluate("window.makeMove(7, 7, BLACK)")
             guest.wait_for_function("board[7][7] === BLACK", timeout=5_000)
@@ -129,6 +148,57 @@ def main():
             if chat_count != 1:
                 raise AssertionError(f"post-reconnect chat was not delivered exactly once: {chat_count}")
 
+            # Android WebView may be destroyed while the emulator/app is backgrounded.
+            # A full page reload must retain the room identity, not merely its six-digit code.
+            persisted = guest.evaluate(
+                """
+                () => {
+                  persistGameState();
+                  const saved = JSON.parse(localStorage.getItem('gomoku_active_online_room') || '{}');
+                  return {
+                    liveSessionId: onlineSessionId,
+                    savedSessionId: saved.sessionId,
+                    savedRoundId: saved.roundId,
+                    savedJoinTicket: saved.joinTicket
+                  };
+                }
+                """
+            )
+            if not persisted["liveSessionId"] or persisted["savedSessionId"] != persisted["liveSessionId"]:
+                raise AssertionError(json.dumps({"phase": "persist_room_identity", **persisted}, ensure_ascii=False))
+
+            guest.reload(wait_until="domcontentloaded", timeout=30_000)
+            try:
+                guest.wait_for_load_state("networkidle", timeout=15_000)
+            except PlaywrightTimeoutError:
+                pass
+            guest.locator("#cvs").wait_for(state="visible", timeout=10_000)
+            # Reproduce the real mobile race: the surviving host has already
+            # discarded its old v4 game channel before the reloaded guest's
+            # delayed reconnect handshake arrives. The guest must also announce
+            # itself on the host's v3 admission channel.
+            host.evaluate("triggerOnlineReconnect('smoke simultaneous page reload')")
+
+            deadline = time.time() + 20
+            reloaded = {}
+            while time.time() < deadline:
+                reloaded = {"host": state(host), "guest": state(guest)}
+                if all(
+                    item["mode"] == "online" and item["conn"] and item["conn"]["open"] and item["conn"]["ready"]
+                    and not item["reconnecting"] and item["historyLength"] == 2
+                    for item in reloaded.values()
+                ):
+                    break
+                host.wait_for_timeout(500)
+            if not all(
+                item["mode"] == "online" and item["conn"] and item["conn"]["open"] and item["conn"]["ready"]
+                and not item["reconnecting"] and item["historyLength"] == 2
+                for item in reloaded.values()
+            ):
+                raise AssertionError(json.dumps({"phase": "page_reload_reconnect", **reloaded, "persisted": persisted, "logs": logs, "errors": errors}, ensure_ascii=False))
+            if reloaded["guest"]["round"] != round_before:
+                raise AssertionError(f"round changed during page reload: {round_before} -> {reloaded['guest']['round']}")
+
             if any(errors.values()):
                 raise AssertionError(json.dumps({"phase": "browser_errors", "errors": errors, "logs": logs}, ensure_ascii=False))
 
@@ -136,7 +206,10 @@ def main():
                 "pass": True,
                 "room": room,
                 "initial": initial,
+                "roomIdentityPersistedOnJoin": True,
                 "recovered": recovered,
+                "pageReloadRecovered": reloaded,
+                "roomIdentityPersisted": True,
                 "postReconnectMove": True,
                 "postReconnectChatExactlyOnce": chat_count == 1,
                 "pageErrors": errors

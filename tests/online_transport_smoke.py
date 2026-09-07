@@ -62,6 +62,8 @@ def main():
                   roomBadge: document.querySelector('#roomStatusBadge')?.textContent?.trim() || '',
                   notice: document.querySelector('#gameNoticeToast')?.textContent?.trim() || '',
                   network: document.querySelector('#onlineNetworkStatusBar')?.textContent?.trim() || '',
+                  networkLabelsFit: [...document.querySelectorAll('#onlineNetworkStatusBar > span')]
+                    .every(item => item.scrollWidth <= item.clientWidth + 1),
                   telemetry: {
                     localLatencyMs: onlineNetworkTelemetry.localLatencyMs,
                     remoteLatencyMs: onlineNetworkTelemetry.remoteLatencyMs,
@@ -85,6 +87,8 @@ def main():
             raise AssertionError(json.dumps({"host": host_state, "guest": guest_state, "logs": logs, "errors": errors}, ensure_ascii=False))
         if not latency_ok:
             raise AssertionError(json.dumps({"host": host_state, "guest": guest_state}, ensure_ascii=False))
+        if not all(item["networkLabelsFit"] for item in (host_state, guest_state)):
+            raise AssertionError(json.dumps({"reason": "network status text is clipped", "host": host_state, "guest": guest_state}, ensure_ascii=False))
 
         host_sent_at = host.evaluate("Date.now()")
         host.evaluate("window.makeMove(7, 7, BLACK)")
@@ -116,6 +120,7 @@ def main():
             "host": host_state,
             "guest": guest_state,
             "latencyVisible": latency_ok,
+            "latencyLabelsNotClipped": True,
             "moveLatencyMs": {
                 "hostToGuest": round(host_to_guest_latency_ms, 1),
                 "guestToHost": round(guest_to_host_latency_ms, 1)

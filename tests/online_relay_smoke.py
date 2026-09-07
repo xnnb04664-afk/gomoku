@@ -32,6 +32,8 @@ MOCK_RELAY_INIT = r"""
   };
 
   let socketRoom = '';
+  let firstJoinConfirmedAt = 0;
+  window.__gomokuDroppedJoinConfirmations = 0;
   class MockRelayWebSocket {
     constructor(url) {
       this.url = String(url);
@@ -53,6 +55,17 @@ MOCK_RELAY_INIT = r"""
       if (this.readyState !== 1) throw new Error('socket is not open');
       const message = JSON.parse(String(raw));
       if (message.type !== 'publish') return;
+      if (protocolRole === 'host') {
+        let payload = null;
+        try { payload = JSON.parse(String(message.payload || '')); } catch (_) {}
+        if (payload?.type === 'join_confirmed') {
+          if (!firstJoinConfirmedAt) firstJoinConfirmedAt = Date.now();
+          if (Date.now() - firstJoinConfirmedAt < 1600) {
+            window.__gomokuDroppedJoinConfirmations++;
+            return;
+          }
+        }
+      }
       channel.postMessage({
         kind: 'wire',
         source: clientId,
@@ -137,6 +150,9 @@ def main():
         if not all(item["mode"] == "online" and item["conn"] and item["conn"]["ready"] and item["conn"]["relay"]
                    for item in states.values()):
             raise AssertionError(json.dumps({"states": states, "errors": errors, "logs": logs}, ensure_ascii=False))
+        dropped_confirmations = pages["host"].evaluate("window.__gomokuDroppedJoinConfirmations || 0")
+        if dropped_confirmations < 3:
+            raise AssertionError(f"join-confirmation loss simulation did not run: {dropped_confirmations}")
 
         pages["host"].evaluate("window.makeMove(7, 7, BLACK)")
         pages["guest"].wait_for_function("board[7][7] === BLACK", timeout=5_000)
@@ -157,6 +173,7 @@ def main():
             "states": states,
             "bidirectionalMoves": True,
             "reliableChatExactlyOnce": chat_count == 1,
+            "recoveredFromDroppedJoinConfirmations": dropped_confirmations,
             "pageErrors": errors,
         }, ensure_ascii=False, indent=2))
         browser.close()

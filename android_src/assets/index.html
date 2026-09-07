@@ -2494,10 +2494,10 @@
 
     #onlineNetworkStatusBar {
       display: flex;
+      flex-direction: column;
       width: 100%;
-      gap: 8px;
-      align-items: center;
-      justify-content: space-between;
+      gap: 2px;
+      align-items: stretch;
       color: #dbeafe;
       font-size: 10.5px;
       font-weight: 900;
@@ -2505,12 +2505,11 @@
     }
     #onlineNetworkStatusBar > span {
       min-width: 0;
-      flex: 1 1 50%;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      flex: none;
+      overflow: visible;
       white-space: nowrap;
     }
-    #onlineNetworkStatusBar > span:last-child { text-align: right; }
+    #onlineNetworkStatusBar > span:last-child { text-align: left; }
 
     /* 🎨 手绘果冻风通用确认模态弹窗 (彻底替代丑陋的系统 confirm) */
     .custom-confirm-backdrop {
@@ -2996,7 +2995,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.1.8</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.1.9</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3682,7 +3681,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.118';
+    const CURRENT_VERSION_TAG = 'v1.0.119';
     // 仅用于界面显示：补丁号达到 100 后，把百位进到中间段并保留个位。
     // 例如内部版本 v1.0.117 显示为 v1.1.7；更新比较仍使用 CURRENT_VERSION_TAG。
     function formatDisplayVersionTag(tag) {
@@ -5124,6 +5123,11 @@
     const ONLINE_P2P_HIGH_RTT_SAMPLE_COUNT = 3;
     const ONLINE_P2P_REOPTIMIZE_COOLDOWN_MS = 90000;
     const ONLINE_P2P_MAX_REOPTIMIZE_ATTEMPTS = 2;
+    // 进房确认始终走项目自有 WebSocket 中继，与 WebRTC/P2P 是否打通无关。
+    // 移动网络切换或 WebView 短暂停顿时持续重发，避免三连发全部丢失后
+    // 出现房主已经进房、房客却退回人机模式的半开局面。
+    const ONLINE_JOIN_READY_RETRY_MS = 700;
+    const ONLINE_JOIN_CONFIRM_TIMEOUT_MS = 15000;
     const onlineReliableOutbox = new Map();
     const ONLINE_TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
     const ONLINE_MESSAGE_TYPES = new Set([
@@ -5907,7 +5911,6 @@
     const P2P_ICE_RESTART_WAIT_MS = 1800;
     const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
     const DEFAULT_WEBRTC_ICE_SERVERS = [
-      { urls: 'stun:stun.qq.com:3478' },
       { urls: 'stun:stun.cloudflare.com:3478' }
     ];
     const RTC_ICE_CACHE_MAX_AGE_MS = 45 * 60 * 1000;
@@ -7108,6 +7111,24 @@
           setTimeout(sendAccept, 350);
         };
 
+        const sendJoinConfirmedBurst = (targetUid) => {
+          const sendJoinConfirmed = () => {
+            if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode || onlineSessionId !== sessionId) return;
+            try {
+              client.publish(h2cTopic, JSON.stringify({
+                type: 'join_confirmed',
+                targetUid,
+                sessionId,
+                joinTicket: onlineJoinTicket,
+                roundId: onlineRoundId || undefined
+              }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
+            } catch (_) {}
+          };
+          sendJoinConfirmed();
+          setTimeout(sendJoinConfirmed, 150);
+          setTimeout(sendJoinConfirmed, 350);
+        };
+
         const onHostInvite = (topic, payload) => {
           if (transportGeneration !== onlineTransportGeneration) return;
           if (topic !== c2hTopic) return;
@@ -7136,6 +7157,14 @@
             // 否则客方建连失败时就会出现“房主看到对方、客方仍在和人机下棋”。
             if (data.type === 'join_ready') {
               const pending = pendingGuestReady;
+              // join_confirmed 可能在移动网络抖动时丢失。客方会继续重发
+              // join_ready；已完成闸门的房主必须幂等补发确认。
+              if ((!pending || pending.connection !== conn) && activeGuestUid === reqUid &&
+                  hostHandshakeDone && conn && conn.open && conn.ready &&
+                  currentRoomCode === roomCode && gameMode === 'online') {
+                sendJoinConfirmedBurst(reqUid);
+                return;
+              }
               if (!pending || pending.uid !== reqUid || pending.connection !== conn ||
                   !conn || !conn.open || !conn.ready || currentRoomCode !== roomCode) {
                 return;
@@ -7146,27 +7175,16 @@
               updatePlayerHeaderUI();
               if (gameMode !== 'online') setMode('online');
               else updateOnlineNetworkUI();
+              // 入房闸门完成就保存会话身份；即使尚未落子，WebView 被系统回收后
+              // 也能使用同一 sessionId 回到这局，而不是创建同房号的新会话。
+              persistGameState();
 
               if (badgeEl) {
                 badgeEl.innerHTML = '🟢 已与好友连接，可以开始对弈';
                 badgeEl.style.color = '#10b981';
               }
 
-              const sendJoinConfirmed = () => {
-                if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode || onlineSessionId !== sessionId) return;
-                try {
-                  client.publish(h2cTopic, JSON.stringify({
-                    type: 'join_confirmed',
-                    targetUid: reqUid,
-                    sessionId,
-                    joinTicket: onlineJoinTicket,
-                    roundId: onlineRoundId || undefined
-                  }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
-                } catch (_) {}
-              };
-              sendJoinConfirmed();
-              setTimeout(sendJoinConfirmed, 150);
-              setTimeout(sendJoinConfirmed, 350);
+              sendJoinConfirmedBurst(reqUid);
               showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
               closeOnlineModal();
               try {
@@ -7221,14 +7239,16 @@
               if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode ||
                   onlineSessionId !== sessionId || conn !== nextConn || !nextConn.open || !nextConn.ready) return;
 
-              // ACK 必须排在房主连接 ready 之后，且继续发送短 burst 兼容弱网/切后台。
-              sendAcceptedBurst(reqUid);
               if (reconnectingNow) {
+                // ACK 必须排在房主连接 ready 之后，且继续发送短 burst 兼容弱网/切后台。
+                sendAcceptedBurst(reqUid);
                 p2Name = guestName;
                 p2Avatar = guestAvatar;
                 updatePlayerHeaderUI();
                 onReconnectSuccess();
               } else {
+                // 先建立 pending 闸门再发送 accepted。WebSocket 同机房转发足够快时，
+                // 客方的首个 join_ready 可能在 sendAcceptedBurst 返回前抵达。
                 pendingGuestReady = {
                   uid: reqUid,
                   connection: nextConn,
@@ -7251,7 +7271,8 @@
                     badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
                     badgeEl.style.color = '#10b981';
                   }
-                }, 10000);
+                }, ONLINE_JOIN_CONFIRM_TIMEOUT_MS);
+                sendAcceptedBurst(reqUid);
                 if (badgeEl) {
                   badgeEl.innerHTML = '🟡 等待好友完成进房确认...';
                   badgeEl.style.color = '#f59e0b';
@@ -7425,14 +7446,30 @@
           stopReconnectHandshakeLoop();
           return;
         }
-        connection.send({
+        const handshake = {
           type: 'reconnect_handshake',
           role: 'client',
           uid: getOrCreateMatchUid(),
           name: normalizeNetworkName(p1Name, '棋友'),
           avatar: getNetworkAvatarValue(p1Avatar),
           stepCount: history.length
-        });
+        };
+        // v4 对局信道仍存活时可直接让房主回快照；如果房主也因心跳超时
+        // 正在重建，它此刻只监听 v3 入房信道。两路同时发送同一份、带原
+        // sessionId/roundId 的握手，避免弱网下双方恰好同时重连而擦肩。
+        connection.send(handshake);
+        try {
+          const inviteHandshake = {
+            ...handshake,
+            sessionId: onlineSessionId || undefined,
+            roundId: onlineRoundId || undefined
+          };
+          connection.client.publish(
+            `gomoku/v3/${currentRoomCode}/c2h`,
+            JSON.stringify(inviteHandshake),
+            { qos: MQTT_ROOM_DATA_QOS, retain: false }
+          );
+        } catch (_) {}
       };
       sendHandshake();
       reconnectHandshakeTimer = setInterval(sendHandshake, 700);
@@ -7451,6 +7488,7 @@
       }
 
       if (wasReconnecting) {
+        persistGameState();
         playPopSound();
         showGameNotice("🎉 联机重连成功！棋局已完好恢复，继续对弈~", false);
       }
@@ -7994,8 +8032,12 @@
         }
       };
       onlineHeartbeatTimer = setInterval(() => sendHeartbeat(true), ONLINE_HEARTBEAT_INTERVAL_MS);
-      // 不等待第一个 4 秒周期；若此时仍在完成进房闸门，后续周期会再次发起探测。
+      // setupConn 会早于双方进房闸门完成：0ms 首探测可能仍处于 AI 模式。
+      // 在移动 WebView 上补两次轻量探测，让进房后约 1 秒即可显示实际链路延迟，
+      // 不必等满第一个 4 秒心跳周期。
       setTimeout(() => sendHeartbeat(false), 0);
+      setTimeout(() => sendHeartbeat(false), 700);
+      setTimeout(() => sendHeartbeat(false), 1600);
 
       conn.on('close', () => {
         if (conn !== connection || gameMode !== 'online' || isOver) return;
@@ -9392,6 +9434,7 @@
         let joinInterval = null;
         let joinTimeout = null;
         let joinConfirmTimeout = null;
+        let joinReadyInterval = null;
 
         const restoreBtn = () => {
           if (btn) {
@@ -9405,8 +9448,14 @@
           joinConfirmTimeout = null;
         };
 
+        const clearJoinReadyRetry = () => {
+          if (joinReadyInterval) clearInterval(joinReadyInterval);
+          joinReadyInterval = null;
+        };
+
         const myJoinUid = getOrCreateMatchUid();
-        const sendJoinReadyBurst = (connection) => {
+        const startJoinReadyRetry = (connection) => {
+          clearJoinReadyRetry();
           const sendReady = () => {
             if (transportGeneration !== onlineTransportGeneration || hasJoined || joinCancelled ||
                 joiningConnection !== connection || conn !== connection || !connection.open || !connection.ready) return;
@@ -9424,6 +9473,7 @@
           sendReady();
           setTimeout(sendReady, 150);
           setTimeout(sendReady, 350);
+          joinReadyInterval = setInterval(sendReady, ONLINE_JOIN_READY_RETRY_MS);
         };
 
         const onClientInvite = (topic, payload) => {
@@ -9440,6 +9490,8 @@
                 joinCancelled = true;
                 clearInterval(joinInterval);
                 clearTimeout(joinTimeout);
+                clearJoinReadyRetry();
+                clearJoinConfirmTimeout();
                 client.removeListener('message', onClientInvite);
                 restoreBtn();
                 showGameNotice('🚫 该房间已有 2 位棋友正在对弈，人数已满！请让好友新建房间或更换房间码。', true);
@@ -9461,6 +9513,7 @@
               if (!readyConnection || conn !== readyConnection || !readyConnection.open || !readyConnection.ready) return;
               hasJoined = true;
               clearJoinConfirmTimeout();
+              clearJoinReadyRetry();
               clearInterval(joinInterval);
               clearTimeout(joinTimeout);
               client.removeListener('message', onClientInvite);
@@ -9468,6 +9521,7 @@
               closeOnlineModal();
               if (gameMode !== 'online') setMode('online');
               else updateOnlineNetworkUI();
+              persistGameState();
               const guestBadgeEl = document.getElementById('roomStatusBadge');
               if (guestBadgeEl) {
                 guestBadgeEl.innerHTML = '🟢 已与好友连接，可以开始对弈';
@@ -9491,6 +9545,8 @@
                   (typeof data.sessionId !== 'string' || data.sessionId.length > 96)) return;
               // accepted 可能会按 burst 重发；在上一条连接真正 ready 前只保留一个建连任务。
               if (joiningConnection) return;
+              clearInterval(joinInterval);
+              clearTimeout(joinTimeout);
               const acceptedSessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
               if (onlineSessionId && acceptedSessionId && onlineSessionId !== acceptedSessionId) return;
               onlineSessionId = acceptedSessionId || onlineSessionId;
@@ -9522,18 +9578,23 @@
                   }
                   // accepted 只代表房主信道已就绪；还要等待房主确认 join_ready，
                   // 防止一端提前显示进房、另一端仍停留在人机模式。
-                  sendJoinReadyBurst(nextConn);
+                  startJoinReadyRetry(nextConn);
                   clearJoinConfirmTimeout();
                   joinConfirmTimeout = setTimeout(() => {
                     if (hasJoined || joiningConnection !== nextConn) return;
+                    joinCancelled = true;
+                    clearJoinReadyRetry();
                     try { nextConn.close(true); } catch (_) {}
                     if (conn === nextConn) conn = null;
                     joiningConnection = null;
-                  }, 8000);
+                    restoreBtn();
+                    showGameNotice('❌ 对局确认超时，请重新匹配；P2P 不可用时仍会自动使用 WebSocket 中继', true);
+                  }, ONLINE_JOIN_CONFIRM_TIMEOUT_MS);
                   try { nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) }); } catch (_) {}
                 } catch (err) {
                   console.warn('[guest room connection]', err);
                   clearJoinConfirmTimeout();
+                  clearJoinReadyRetry();
                   if (conn === nextConn) {
                     try { nextConn.close(true); } catch (_) {}
                     conn = null;
@@ -9574,6 +9635,8 @@
             if (!hasJoined) {
               joinCancelled = true;
               clearInterval(joinInterval);
+              clearJoinReadyRetry();
+              clearJoinConfirmTimeout();
               client.removeListener('message', onClientInvite);
               if (joiningConnection) {
                 try { joiningConnection.close(true); } catch (_) {}
@@ -15046,6 +15109,11 @@
             roomCode: currentRoomCode,
             myColor: myOnlineColor,
             myRole: myOnlineColor === BLACK ? 'host' : 'client',
+            // 页面被系统回收后必须沿用原房间身份。只恢复房号会生成新的
+            // sessionId，仍在线的对端会按安全校验拒绝它，造成同房号两套会话。
+            sessionId: onlineSessionId,
+            joinTicket: onlineJoinTicket,
+            activeGuestUid: activeOnlineGuestUid,
             roundId: onlineRoundId,
             p1Name, p1Avatar, p2Name, p2Avatar,
             board, history, turn, winnerColor: gameWinnerColor,
@@ -15073,6 +15141,12 @@
             currentRoomCode = session.roomCode;
             lastActiveRoomCode = session.roomCode;
             myOnlineColor = session.myColor;
+            onlineSessionId = typeof session.sessionId === 'string' && session.sessionId.length <= 96
+              ? session.sessionId : '';
+            onlineJoinTicket = typeof session.joinTicket === 'string' && session.joinTicket.length <= 96
+              ? session.joinTicket : '';
+            activeOnlineGuestUid = typeof session.activeGuestUid === 'string' && session.activeGuestUid.length <= 128
+              ? session.activeGuestUid : '';
             onlineRoundId = typeof session.roundId === 'string' ? session.roundId : onlineRoundId;
             p1Name = session.p1Name || p1Name;
             p1Avatar = session.p1Avatar || p1Avatar;

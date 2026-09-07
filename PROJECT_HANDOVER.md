@@ -1169,7 +1169,34 @@ node publish.js
 - **正式发布与产物 SHA-256**：GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.117`；线上 `https://gomoku-api.pages.dev/api/version?channel=stable&client=v1.0.117` 已返回 `code=0、tag=v1.0.117`。根页面 `2A6E9FA5537DCAB54ECC635527092853FEE4D0FF4BC731F2705776315EB417EA`；Android 内嵌页面 `B641AC2D6513C8607685C07680225B6BAFC6E9EEFE563B6AD1E57E7073B9C33A`；单文件版 `10CCE034742020BD12537413FDC15FA247E55004FB03AACFF42FCE3CAABD27EB`；APK `FC96F024C494AF0DF05BCF29A6E2A427F8C33AB94003F9924BB5F117835E93C7`。
 - **部署边界**：本轮没有修改 Worker/DO、Pages、D1、TURN Secret 或更新票据逻辑，因此不需要重复部署 Cloudflare。后续若只发布客户端，执行 `node publish.js`；若同时改后端，再显式执行 `node publish.js --deploy-cloudflare`。
 
+## 四十六、界面折叠版本号与 v1.0.118 正式发布（2026-09-07）
+
+- **版本显示**：内部版本仍使用 `v1.0.118 (Build 119)` 做更新比较、Android `versionName/versionCode` 和发布标识；只在用户界面折叠显示为 `v1.1.8`，避免改变既有更新顺序。
+- **正式发布**：v1.0.118 已推送私有仓库并创建 GitHub Release；生产 `/api/version` 已确认返回 `v1.0.118`。网页、单文件版、Android 资源和 APK 均已同步，APK 继续使用仓库外原签名。
+- **部署边界**：本轮为客户端展示与静态资源发布，没有重新部署 Cloudflare 生产 Worker/Pages。
+
+## 四十七、手机流量联机进房竞态与延迟显示修复（2026-09-07，本地已验证，待下次发布）
+
+- **问题复现**：iQOO Z10x 使用 5G 流量、MuMu 使用电脑网络快速匹配时，曾出现模拟器进入房间而手机退回人机；旧状态栏把双方连接信息塞在同一行，真实毫秒数在窄屏上被省略号截断，看起来像“没有延迟”。
+- **进房修复**：房主现在先登记 `pendingGuestReady` 再发送 `join_accepted`，消除高速 WebSocket 回包先于本地状态登记的竞态；客方每 700ms 持续重发 `join_ready`，房主对已完成闸门的重复 ready 幂等补发 `join_confirmed`，确认窗口统一为 15 秒。P2P/TURN 是否成功不再影响 WebSocket 进房确认，确认超时也会给出明确提示。
+- **P2P 与延迟**：移除真机持续 DNS 失败的 `stun.qq.com` 默认项，保留 Cloudflare 官方 STUN，并继续从 `/api/rtc/ice-servers` 获取一小时短期 TURN 凭据；进房后的 0.7 秒与 1.6 秒补发心跳。状态栏改为上下两行，双方的 `P2P直连 / P2P中继 / WebSocket中继` 与毫秒数完整显示。
+- **真机结果**：修复版 APK 已覆盖安装到手机与 MuMu，均保持 `v1.0.118 (Build 119)`、原签名和原账号数据。两端最终进入同一房间 `523342`，先稳定显示 WebSocket 中继约 `490–504ms`，随后自动升级为 `P2P中继` 约 `473–492ms`；手机黑方与模拟器白方各落一子，双方棋盘均同步显示两手。
+- **自动化回归**：`online_relay_smoke.py` 模拟连续丢弃 14 条 `join_confirmed` 后仍自动进房，双向落子与可靠聊天通过；`online_match_race_smoke.py`、`online_transport_smoke.py`（含延迟文字不裁切）、`online_reconnect_smoke.py`、`online_no_public_mqtt_smoke.py`、`p2p_recovery_smoke.py`、`optimization_smoke.py`、`turn_worker_unit.js`、`worker_unit.js` 均通过，页面无错误，`git diff --check` 通过。
+- **本地产物**：根页面 683,612 bytes，SHA-256 `3E1C5F01F3A79BBEA9205ECB22A785891282E4E8F23AB5BA1F6F188A65D4DEE9`；Android 内嵌页面 731,299 bytes，SHA-256 `1F99F0B7337A9C6D8F762B1566B49A64E392885923A1DD24D0D8994C331C8369`；单文件版 1,250,095 bytes，SHA-256 `7B8517D17A43F423FE3A9AD29B39F7F8403C3E632409E43FF0FCC659CD7CC624`；APK 1,607,898 bytes，SHA-256 `BF7716EA7B5E17C1C44213BA8E430FA3842B40E0598F941B234AC52ECCD529E0`。APK v1/v2/v3 签名校验通过，签名证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **发布边界**：本轮只改客户端、静态派生产物和测试，没有改 Worker/DO/D1/Pages/Secret，未部署 Cloudflare，也未创建新的 Release。当前生产仍是已发布的 v1.0.118；若要让其他设备自动热更新到本修复，需要下一次执行普通客户端发布流程。
+
+## 四十八、Android 页面重建后的原房间恢复修复（2026-09-07，本地已验证，待下次发布）
+
+- **真机根因**：房间 `523342` 对局期间 MuMu 的 WebView/进程被系统重建。旧恢复数据只保存六位房号、棋盘和轮次，没有保存 `onlineSessionId`；MuMu 因而为同一房号生成新会话，手机仍持有旧会话并按安全规则拒绝新会话，形成手机显示旧对手在线、MuMu 显示等待对方的状态分叉。
+- **会话恢复**：五分钟有效的本地对局恢复记录现在同时保存原 `sessionId`、短期 `joinTicket` 和房主当前客方 UID；入房确认闸门一完成就立即落盘，即使尚未落子也可恢复。恢复值均执行原有长度限制，会话隔离、发送角色和轮次校验没有放宽；退出房间仍会立即清除恢复记录。
+- **同时重连竞态**：客方恢复时除在原 v4 对局信道发送 `reconnect_handshake`，还会把带原 `sessionId/roundId` 的同一握手发送到房主 v3 重建信道。这样房主若恰好也因心跳超时销毁旧 v4 连接，仍可发现合法客方并重建；非法或其他会话的握手继续被拒绝。
+- **真机验证**：最终 APK 覆盖安装到 iQOO Z10x 和 MuMu，账号与存档保留。双方进入房间 `762504` 后强制结束 MuMu 进程并重新启动，约 30 秒内自动恢复到同一房间，随后重新升级为 Cloudflare TURN 的 `P2P中继`，双方延迟约 `699–744ms`；恢复后黑白双方各落一子，两端棋盘均同步显示两手。
+- **自动化回归**：`tests/online_reconnect_smoke.py` 新增“零落子时立即保存会话身份、客方整页刷新、房主同时废弃旧连接”的回归，确认原房号、sessionId、roundId、两步棋、双向消息与可靠聊天全部恢复。`online_relay_smoke.py`、`online_match_race_smoke.py`、`online_transport_smoke.py`、`online_no_public_mqtt_smoke.py`、`p2p_recovery_smoke.py`、`optimization_smoke.py`、`turn_worker_unit.js`、`worker_unit.js` 和 `git diff --check` 均通过，页面无错误。
+- **同步与签名**：根页面、Android 内嵌页面、单文件版和 APK 已同步；APK v1/v2/v3 签名验证通过，签名证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **本地产物**：根页面 685,417 bytes，SHA-256 `2CFB8FD63A83904BA7A34ABD0988DFB4C2456E82992BFDD104F2495F3702209F`；Android 内嵌页面 733,104 bytes，SHA-256 `39B03C4846DE15CC8DB5EF434DE7097532BD40F443CB9447917FC1346C9AC295`；单文件版 1,251,900 bytes，SHA-256 `C7CC9ABC8B1F3347E0E409C4D9C70D75D2F28F4B542B33BC1C00FB3209CA7D70`；APK 1,607,898 bytes，SHA-256 `9A8E16227D0913593008121FC15A5A941D0DB8597B5BCD275A0390A836643EFA`。
+- **发布边界**：本轮仍只改客户端、静态派生产物和测试，没有修改 Worker/DO/D1/Pages/Secret，未部署 Cloudflare，也未创建 Release。生产版本仍为 v1.0.118；对外热更新需执行下一次普通客户端发布流程。
+
 ---
 *交接文档最后更新时间：2026年9月7日*
-*当前工程正式版本：v1.0.117 (Build 118)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连、断网恢复、WiFi/流量切换自愈、双端进房确认闸门、项目自有 Durable Object WebSocket 房间中继和生产链路移除公共 MQTT 依赖均已正式发布，详见“三十八”至“四十五”。*
+*当前工程正式版本：v1.0.118 (Build 119，界面显示 v1.1.8)；本地另有“四十七至四十八”的手机流量进房、延迟显示与 Android 页面重建恢复修复，已在手机和 MuMu 验证但尚未发布新 Release。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
