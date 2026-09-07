@@ -1159,17 +1159,17 @@ node publish.js
 - **正式产物**：APK SHA-256：`86DB27B87ED98C8C09108D77BAE2B4BE19504A9D7CAD88DF2E841EBAFBCB68DE`；根页面 `B9DB2A0D44D70992B2E2C3A26B75FDA6C474F947E9DBB068BFD87E0310181CEB`；Android 内嵌页面 `DED281DD63E4D21D03C394CA9FF01E6D0DDBE059E95F9FACC1AFE2799561E1E4`；单文件版 `83EC7A08A231B1DA72994241A5FF83E2F3FF06DFC040F23219CAEC18B87F018B`；Worker 与 Pages 派生脚本 `DC8B0EA8EEDF90AD60E5B09BF8C0B676E36CE076BCF219CF2CED2AD763B75E51`。APK v1/v2/v3 签名和单签名者校验通过。
 - **后续规则**：普通客户端发版只需执行 `node publish.js`，不重复部署 Cloudflare；只有修改 Worker、DO、Pages 绑定、D1 或更新票据逻辑时，才执行 `node publish.js --deploy-cloudflare`。本轮后端改造已完成部署并随 v1.0.116 正式发布。
 
-## 四十五、生产联机移除公共 MQTT 依赖（2026-09-07，本地代码完成，待发版）
+## 四十五、生产联机移除公共 MQTT 依赖（2026-09-07，已发布 v1.0.117）
 
 - **生产链路调整**：新版客户端默认只连接项目自有 Durable Object WebSocket 中继（Worker 主入口失败后再串行切换 Pages 备用入口），不再把公共 MQTT 当作生产信令或对局兜底。P2P DataChannel 仍优先承载低延迟棋局数据，TURN 继续负责无法直连时的穿透。
 - **修复重复抢房**：原先 Worker 与 Pages 两个 WebSocket 入口并行竞速，同一房间同一角色可能同时占用两个 DO 会话，导致一端显示进房、另一端被踢回人机。现在改为主入口失败后才尝试备用入口，避免重复会话。
 - **兼容边界**：旧 MQTT 连接池、适配器和模拟测试仍保留，但必须显式设置 `window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true` 才会启用；正常页面流程不会加载 `mqtt.min.js`，也不会请求四个公共 Broker。该开关不写入正式 UI，不作为用户可见配置。
-- **同步范围**：本轮修改了 `index.html` 与联机回归测试，并已重新生成 `android_src/assets/index.html`、`五子棋大师_单文件版.html` 和本地正式签名 `五子棋.apk`；尚未递增客户端版本或发布 GitHub Release。当前线上正式版仍为 v1.0.116，用户必须等下一次客户端发版后才会得到该链路修复。
+- **同步范围**：本轮修改了 `index.html` 与联机回归测试，并已重新生成 `android_src/assets/index.html`、`五子棋大师_单文件版.html` 和正式签名 `五子棋.apk`；版本已递增为 v1.0.117（Build 118）。
 - **回归验证**：`tests/online_no_public_mqtt_smoke.py`、`tests/online_relay_smoke.py`、`tests/online_match_race_smoke.py`、`tests/online_transport_smoke.py`、`tests/online_reconnect_smoke.py`、`tests/p2p_recovery_smoke.py`、`tests/optimization_smoke.py`、`tests/worker_unit.js`、`tests/turn_worker_unit.js`、Node 语法检查和 `git diff --check` 均通过；默认路径未请求 `mqtt.min.js`，自有 WebSocket 双端、P2P、断线恢复、可靠聊天和延迟显示无页面错误。APK v1/v2/v3 签名校验通过，签名者数量为 1。
-- **本地产物 SHA-256**：根页面 `06BED201BC91F9B5D58EEEB8FBFA5F4966E1886675F33AA2ED8396C9C42C6452`；Android 内嵌页面 `8239F9189E537B475D6539840EC4932C466D79C375C3FC63DA6F5B54EC9EAF92`；单文件版 `DE4FCE537FC6FFFF5929F31A0C7822481900049F791AEF6E5ECC2A7A6EDD3D5C`；APK `1C5BC5F5873E5D4DA056726ED04DBDDC6B69F3A5B67DF93E35E87F1AF942A476`。
+- **正式发布与产物 SHA-256**：GitHub Release：`https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.117`；线上 `https://gomoku-api.pages.dev/api/version?channel=stable&client=v1.0.117` 已返回 `code=0、tag=v1.0.117`。根页面 `2A6E9FA5537DCAB54ECC635527092853FEE4D0FF4BC731F2705776315EB417EA`；Android 内嵌页面 `B641AC2D6513C8607685C07680225B6BAFC6E9EEFE563B6AD1E57E7073B9C33A`；单文件版 `10CCE034742020BD12537413FDC15FA247E55004FB03AACFF42FCE3CAABD27EB`；APK `FC96F024C494AF0DF05BCF29A6E2A427F8C33AB94003F9924BB5F117835E93C7`。
 - **部署边界**：本轮没有修改 Worker/DO、Pages、D1、TURN Secret 或更新票据逻辑，因此不需要重复部署 Cloudflare。后续若只发布客户端，执行 `node publish.js`；若同时改后端，再显式执行 `node publish.js --deploy-cloudflare`。
 
 ---
 *交接文档最后更新时间：2026年9月7日*
-*当前工程正式版本：v1.0.116 (Build 117)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连、断网恢复、WiFi/流量切换自愈、双端进房确认闸门和项目自有 Durable Object WebSocket 房间中继均已正式发布，详见“三十八”至“四十四”。*
+*当前工程正式版本：v1.0.117 (Build 118)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连、断网恢复、WiFi/流量切换自愈、双端进房确认闸门、项目自有 Durable Object WebSocket 房间中继和生产链路移除公共 MQTT 依赖均已正式发布，详见“三十八”至“四十五”。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
