@@ -61,7 +61,9 @@ MOCK_MQTT_INIT = r"""
         const count = (client.subscribeCounts.get(topic) || 0) + 1;
         client.subscribeCounts.set(topic, count);
         const delayedHostRoomSubscription = role === 'host' && topic.endsWith('/c2h') && count >= 2;
-        const delayedGuestRoomSubscription = role === 'guest' && topic.endsWith('/h2c') && count >= 2;
+        // 客方首个业务订阅就延迟，确保冒烟测试真正覆盖“accepted 到达前/ready 之后”
+        // 的进房闸门，而不是依赖公共 Broker 的偶然时序。
+        const delayedGuestRoomSubscription = role === 'guest' && topic.endsWith('/h2c');
         // Host's first broker is healthy; guest's first broker is unreachable.
         // This reproduces asymmetric fallback selection between two networks.
         setTimeout(() => callback && callback(null), (delayedHostRoomSubscription || delayedGuestRoomSubscription) ? 700 : 0);
@@ -120,6 +122,7 @@ def main():
             page.add_init_script(
                 f"window.__gomokuMockRole = {json.dumps(role)}; "
                 f"window.__gomokuMockClientId = {json.dumps(role)}; "
+                "window.__GOMOKU_DISABLE_RELAY__ = true; "
                 "try { Object.defineProperty(window, 'RTCPeerConnection', { configurable: true, value: undefined }); } catch (_) {} "
                 "try { Object.defineProperty(window, 'webkitRTCPeerConnection', { configurable: true, value: undefined }); } catch (_) {}"
             )

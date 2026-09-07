@@ -66,49 +66,33 @@ fs.writeFileSync(
 );
 fs.writeFileSync(path.join(PAGES_BUILD_DIR, '_worker.js'), workerCode, 'utf8');
 
-async function deployWorker() {
+function deployWorker() {
   console.log(`>>> [1/2] 正在部署到 Cloudflare Workers (脚本: ${scriptName})...`);
-
-  const form = new FormData();
-  const metadata = {
-    main_module: 'worker.js',
-    compatibility_date: '2024-09-03',
-    bindings: [
-      {
-        type: 'd1',
-        name: 'DB',
-        id: d1DatabaseId
-      }
-    ]
-  };
-
-  form.append('metadata', JSON.stringify(metadata));
-  form.append('worker.js', new Blob([workerCode], { type: 'application/javascript+module' }), 'worker.js');
-
-  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${scriptName}`;
-  const response = await fetchWithTimeout(url, {
-    method: 'PUT',
-    headers: { Authorization: `Bearer ${deployToken.trim()}` },
-    body: form
+  // 由 Wrangler 管理 Durable Object migration tag，避免重复执行同一个迁移时
+  // 被 Cloudflare 拒绝；同时保留本机 API Token 自动注入和非交互部署能力。
+  const deployArgs = ['wrangler', 'deploy', '--config', 'wrangler.worker.toml'];
+  const command = deployArgs.join(' ');
+  const commandName = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'npx';
+  const commandArgs = process.platform === 'win32' ? ['/d', '/s', '/c', `npx.cmd ${command}`] : deployArgs;
+  execFileSync(commandName, commandArgs, {
+    cwd: ROOT_DIR,
+    env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: deployToken.trim() },
+    input: 'y\n',
+    stdio: ['pipe', 'inherit', 'inherit'],
+    timeout: 120000
   });
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (error) {
-    fail(`Worker 部署返回了无法解析的响应（HTTP ${response.status}）。`);
-  }
-  if (!response.ok || !data || data.success !== true) {
-    const detail = Array.isArray(data?.errors) ? data.errors.map(item => item.message || item.code || '未知错误').join('; ') : `HTTP ${response.status}`;
-    fail(`Worker 部署失败：${detail}`);
-  }
   console.log('✅ [1/2] Cloudflare Worker deployed successfully!');
 }
 
 function deployPages() {
   console.log(`>>> [2/2] 正在部署到 Cloudflare Pages (${PAGES_PROJECT_NAME})...`);
   // cwd 已固定为项目根目录，使用相对目录可避免 Windows cmd 在中文绝对路径上的引号转义问题。
-  const deployArgs = ['wrangler', 'pages', 'deploy', 'pages_build', '--project-name', PAGES_PROJECT_NAME, '--branch', 'main', '--commit-dirty=true'];
+  const deployArgs = [
+    'wrangler', 'pages', 'deploy', 'pages_build',
+    '--project-name', PAGES_PROJECT_NAME,
+    '--branch', 'main',
+    '--commit-dirty=true'
+  ];
   const command = deployArgs.join(' ');
   const commandName = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'npx';
   const commandArgs = process.platform === 'win32' ? ['/d', '/s', '/c', `npx.cmd ${command}`] : deployArgs;
@@ -122,7 +106,7 @@ function deployPages() {
 }
 
 (async () => {
-  await deployWorker();
+  deployWorker();
   deployPages();
 })().catch(error => {
   console.error(`❌ 云端部署失败：${error.message}`);

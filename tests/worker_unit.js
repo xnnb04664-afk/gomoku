@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 
 const workerSource = fs.readFileSync('backend/worker.js', 'utf8')
+  .replace('export class GomokuRoom', 'class GomokuRoom')
   .replace('export default {', 'globalThis.__gomokuWorker = {');
 
 const sandbox = {

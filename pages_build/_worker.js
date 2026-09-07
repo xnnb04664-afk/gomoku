@@ -41,6 +41,242 @@ const TURN_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const TURN_RATE_LIMIT_MAX_REQUESTS = 30;
 const TURN_API_ORIGIN = 'https://rtc.live.cloudflare.com';
 const turnRateLimitBuckets = new Map();
+const ROOM_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024;
+const ROOM_RELAY_MAX_MESSAGES_PER_SECOND = 120;
+const ROOM_RELAY_BOOTSTRAP_QUEUE_LIMIT = 4;
+
+function roomRelayByteLength(value) {
+  try {
+    return new TextEncoder().encode(String(value)).byteLength;
+  } catch (_) {
+    return String(value).length;
+  }
+}
+
+function roomRelaySafeId(value, maxLength = 96) {
+  const text = String(value || '');
+  return text.length > 0 && text.length <= maxLength && /^[A-Za-z0-9_-]+$/.test(text) ? text : '';
+}
+
+// 自有房间中继：只承担可靠信令/兜底转发，棋局仍由双方 P2P 优先传输，
+// 房主作为当前回合状态的权威端。Durable Object 让同一房间的两条 WebSocket
+// 始终落到同一个有序实例，避免公共 MQTT 节点不可用或跨节点串房。
+export class GomokuRoom {
+  constructor(state) {
+    this.state = state;
+    this.roomCode = '';
+    this.roomSessionId = '';
+    this.joinTicket = '';
+    this.host = null;
+    this.client = null;
+    this.pendingBootstrap = [];
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const roomCode = String(url.searchParams.get('room') || '');
+    const role = String(url.searchParams.get('role') || '');
+    const requestedSessionId = String(url.searchParams.get('session') || '');
+    const requestedJoinTicket = String(url.searchParams.get('ticket') || '');
+    if (!/^\d{6}$/.test(roomCode) || !['host', 'client'].includes(role)) {
+      return new Response('Invalid room relay parameters', { status: 400 });
+    }
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('WebSocket upgrade required', { status: 426 });
+    }
+    if (role === 'host' && (!roomRelaySafeId(requestedSessionId) || !roomRelaySafeId(requestedJoinTicket))) {
+      return new Response('Host session credentials required', { status: 401 });
+    }
+    if (requestedSessionId && !roomRelaySafeId(requestedSessionId)) {
+      return new Response('Invalid room session', { status: 400 });
+    }
+
+    if (!this.roomCode) this.roomCode = roomCode;
+    if (this.roomCode !== roomCode) return new Response('Room mismatch', { status: 409 });
+
+    const pair = new WebSocketPair();
+    const clientSocket = pair[0];
+    const serverSocket = pair[1];
+    serverSocket.accept();
+
+    const connection = {
+      socket: serverSocket,
+      role,
+      sessionId: requestedSessionId,
+      joinTicket: requestedJoinTicket,
+      messageCount: 0,
+      messageWindowAt: Date.now(),
+      closed: false
+    };
+
+    if (role === 'host') {
+      const sameHost = this.host && this.host.sessionId === requestedSessionId && this.joinTicket === requestedJoinTicket;
+      if (this.host && !sameHost) {
+        // 同一短房间码重新开局时，旧房间的客方也必须一起失效，防止旧局报文串入。
+        this._closeConnection(this.host, false);
+        this._closeConnection(this.client, true);
+        this.host = null;
+        this.client = null;
+        this.pendingBootstrap = [];
+      } else if (this.host) {
+        this._closeConnection(this.host, false);
+        this.host = null;
+      }
+      this.roomSessionId = requestedSessionId;
+      this.joinTicket = requestedJoinTicket;
+      this.host = connection;
+    } else {
+      if (this.client) {
+        const sameClientSession = !requestedSessionId || !this.client.sessionId || this.client.sessionId === requestedSessionId;
+        this._closeConnection(this.client, false);
+        this.client = null;
+        if (!sameClientSession) this.pendingBootstrap = [];
+      }
+      connection.sessionId = this.roomSessionId || requestedSessionId;
+      this.client = connection;
+    }
+
+    const onMessage = event => this._onMessage(connection, event.data);
+    const onClose = () => this._onClose(connection);
+    const onError = () => this._onClose(connection);
+    serverSocket.addEventListener('message', onMessage);
+    serverSocket.addEventListener('close', onClose);
+    serverSocket.addEventListener('error', onError);
+    connection.cleanup = () => {
+      try { serverSocket.removeEventListener('message', onMessage); } catch (_) {}
+      try { serverSocket.removeEventListener('close', onClose); } catch (_) {}
+      try { serverSocket.removeEventListener('error', onError); } catch (_) {}
+    };
+
+    this._send(connection, {
+      type: 'relay_ready',
+      role,
+      room: this.roomCode,
+      sessionId: this.roomSessionId || requestedSessionId
+    });
+    if (role === 'host') this._flushBootstrapQueue();
+    return new Response(null, { status: 101, webSocket: clientSocket });
+  }
+
+  _send(connection, payload) {
+    if (!connection || connection.closed || !connection.socket) return false;
+    try {
+      connection.socket.send(JSON.stringify(payload));
+      return true;
+    } catch (_) {
+      this._onClose(connection);
+      return false;
+    }
+  }
+
+  _closeConnection(connection, notifyPeer = true) {
+    if (!connection || connection.closed) return;
+    connection.closed = true;
+    if (typeof connection.cleanup === 'function') connection.cleanup();
+    if (notifyPeer) {
+      const peer = connection.role === 'host' ? this.client : this.host;
+      this._send(peer, { type: 'relay_peer_left', role: connection.role });
+    }
+    try { connection.socket.close(1000, 'room connection replaced'); } catch (_) {}
+  }
+
+  _onClose(connection) {
+    if (!connection || connection.closed) return;
+    connection.closed = true;
+    if (typeof connection.cleanup === 'function') connection.cleanup();
+    if (this.host === connection) this.host = null;
+    if (this.client === connection) this.client = null;
+    const peer = connection.role === 'host' ? this.client : this.host;
+    this._send(peer, { type: 'relay_peer_left', role: connection.role });
+  }
+
+  _consumeBudget(connection) {
+    const now = Date.now();
+    if (now - connection.messageWindowAt >= 1000) {
+      connection.messageWindowAt = now;
+      connection.messageCount = 0;
+    }
+    connection.messageCount += 1;
+    if (connection.messageCount > ROOM_RELAY_MAX_MESSAGES_PER_SECOND) {
+      this._closeConnection(connection, true);
+      return false;
+    }
+    return true;
+  }
+
+  _topicDirectionAllowed(connection, topic, payloadObject) {
+    const v3Root = `gomoku/v3/${this.roomCode}/`;
+    const v4Root = this.roomSessionId ? `gomoku/v4/${this.roomCode}/${this.roomSessionId}/` : '';
+    const outboundTopic = connection.role === 'host' ? `${v3Root}h2c` : `${v3Root}c2h`;
+    const secureOutboundTopic = connection.role === 'host' ? `${v4Root}h2c` : `${v4Root}c2h`;
+    const signalTopic = v4Root ? `${v4Root}p2p_speed_sig` : '';
+    const isBootstrap = topic === outboundTopic;
+    const isSecureData = topic === secureOutboundTopic;
+    const isSecureSignal = topic === signalTopic;
+    if (!isBootstrap && !isSecureData && !isSecureSignal) return false;
+
+    if (isBootstrap) {
+      const allowedBootstrapTypes = connection.role === 'client'
+        ? new Set(['join_request', 'join_ready', 'reconnect_handshake'])
+        : new Set(['join_accepted', 'join_confirmed', 'room_full']);
+      if (!allowedBootstrapTypes.has(payloadObject?.type)) return false;
+      if (payloadObject.sessionId && payloadObject.sessionId !== this.roomSessionId) return false;
+      if (payloadObject.joinTicket && payloadObject.joinTicket !== this.joinTicket) return false;
+      return true;
+    }
+
+    if (isSecureSignal) {
+      // P2P 信令里的 sessionId 是 WebRTC offer/answer 的 p2p 会话 ID，
+      // 与房间业务 envelope 的 room sessionId 不同；hello 初始包可以没有它。
+      return payloadObject.sender === connection.role &&
+        (!payloadObject.sessionId || roomRelaySafeId(payloadObject.sessionId));
+    }
+    if (payloadObject.sessionId !== this.roomSessionId) return false;
+    // v4 业务通道只服务新客户端，必须由服务端确认发送角色；缺少角色的
+    // 旧格式只能留在 v3 bootstrap 兼容通道，不能直接注入正式对局消息。
+    return payloadObject.senderRole === connection.role;
+  }
+
+  _forward(connection, topic, payload) {
+    const peer = connection.role === 'host' ? this.client : this.host;
+    if (peer && !peer.closed) {
+      this._send(peer, { type: 'message', topic, payload });
+      return true;
+    }
+    return false;
+  }
+
+  _flushBootstrapQueue() {
+    if (!this.host || this.host.closed || !this.pendingBootstrap.length) return;
+    const pending = this.pendingBootstrap.splice(0, ROOM_RELAY_BOOTSTRAP_QUEUE_LIMIT);
+    for (const item of pending) this._send(this.host, { type: 'message', topic: item.topic, payload: item.payload });
+  }
+
+  _onMessage(connection, rawMessage) {
+    if (!this._consumeBudget(connection)) return;
+    const raw = typeof rawMessage === 'string' ? rawMessage : '';
+    if (!raw || roomRelayByteLength(raw) > ROOM_RELAY_MAX_PAYLOAD_BYTES) return;
+    let message;
+    try { message = JSON.parse(raw); } catch (_) { return; }
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    if (message.type === 'subscribe') return;
+    if (message.type !== 'publish' || typeof message.topic !== 'string' || message.topic.length > 256) return;
+    const topic = message.topic;
+    const payload = typeof message.payload === 'string' ? message.payload : JSON.stringify(message.payload ?? '');
+    if (roomRelayByteLength(payload) > ROOM_RELAY_MAX_PAYLOAD_BYTES) return;
+    let payloadObject;
+    try { payloadObject = JSON.parse(payload); } catch (_) { return; }
+    if (!payloadObject || typeof payloadObject !== 'object' || Array.isArray(payloadObject)) return;
+    if (!this._topicDirectionAllowed(connection, topic, payloadObject)) return;
+
+    const forwarded = this._forward(connection, topic, payload);
+    if (!forwarded && connection.role === 'client' && topic === `gomoku/v3/${this.roomCode}/c2h` &&
+        payloadObject.type === 'join_request') {
+      this.pendingBootstrap.push({ topic, payload });
+      while (this.pendingBootstrap.length > ROOM_RELAY_BOOTSTRAP_QUEUE_LIMIT) this.pendingBootstrap.shift();
+    }
+  }
+}
 
 export default {
     async fetch(request, env) {
@@ -90,6 +326,23 @@ export default {
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
       }
     });
+
+    // 自有 Durable Object 房间中继优先于公共 MQTT。它只转发经过房间/角色/会话
+    // 校验的消息，不保存密码、账号或棋局历史；P2P 成功后大部分棋局流量仍不经过这里。
+    if (url.pathname === '/api/room/socket') {
+      if (request.method !== 'GET') return json({ code: 405, msg: '仅支持 WebSocket GET' }, 405);
+      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+        return json({ code: 426, msg: '需要 WebSocket 升级' }, 426);
+      }
+      if (requestOrigin && requestOrigin !== 'null' && !originAllowed) {
+        return json({ code: 403, msg: '房间中继来源不受信任' }, 403);
+      }
+      if (!env.GOMOKU_ROOMS) return json({ code: 503, msg: '房间中继尚未部署' }, 503);
+      const roomCode = String(url.searchParams.get('room') || '');
+      if (!/^\d{6}$/.test(roomCode)) return json({ code: 400, msg: '房间码无效' }, 400);
+      const roomId = env.GOMOKU_ROOMS.idFromName(`gomoku-room:${roomCode}`);
+      return env.GOMOKU_ROOMS.get(roomId).fetch(request);
+    }
 
     const publicServerError = (label, error) => {
       if (error && error.code === 'PAYLOAD_TOO_LARGE') {

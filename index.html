@@ -1823,7 +1823,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.115</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.116</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2509,7 +2509,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.115';
+    const CURRENT_VERSION_TAG = 'v1.0.116';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -3883,10 +3883,24 @@
     let mqttClientPromise = null;
     let mqttClientPromiseRoomKey = '';
     let mqttClientRequestSeq = 0;
+    let onlineTransportPromise = null;
+    let onlineTransportPromiseKey = '';
+    let onlineTransportRequestSeq = 0;
 
     // 不再等待所有节点都完成；最快节点先让页面进入房间，其余节点在后台补齐。
     const MQTT_CONNECT_TIMEOUT_MS = 2800;
     const MQTT_LIBRARY_WAIT_MS = 8000;
+    // MQTT 只作为信令/兜底中继：业务报文用 QoS 1，ICE 信令仍用 QoS 0，
+    // 由应用层 _mid + ACK 去重保证最终只应用一次。这样公共 Broker 短暂抖动时，
+    // 仍有 Broker 级别的重投递机会，同时不把实时 ICE 候选拖进可靠队列。
+    const MQTT_ROOM_DATA_QOS = 1;
+    // 自有 Cloudflare Durable Object 是首选信令/可靠中继；公共 MQTT 只保留为
+    // 老版本过渡和自有中继临时不可用时的最后兜底，不再承担唯一入口。
+    const ONLINE_RELAY_ENDPOINTS = [
+      'wss://gomoku-backend.xnnb04664.workers.dev/api/room/socket',
+      'wss://gomoku-api.pages.dev/api/room/socket'
+    ];
+    const ONLINE_RELAY_CONNECT_TIMEOUT_MS = 2800;
 
     const MAX_ONLINE_PAYLOAD_BYTES = 60 * 1024;
     const MAX_ONLINE_MESSAGES_PER_SECOND = 80;
@@ -3996,9 +4010,204 @@
       return MQTT_BROKER_URLS.map((url, index) => ({ url, index }));
     }
 
+    // 项目自有的 WebSocket 房间中继适配器。它故意实现和 MQTT 客户端相同的
+    // 最小接口，这样既能复用已有的 ACK、去重、P2P 探测和重连状态机，
+    // 又能在公共 Broker 整体不可用时直接切到项目自己的 Cloudflare 入口。
+    class RoomRelayClient {
+      constructor(endpoint, roomCode, role, sessionId = '', joinTicket = '') {
+        this.url = endpoint;
+        this.roomKey = String(roomCode || '');
+        this.roomCode = this.roomKey;
+        this.role = role;
+        this.sessionId = String(sessionId || '');
+        this.joinTicket = String(joinTicket || '');
+        this.transportType = 'relay';
+        this.connected = false;
+        this.closed = false;
+        this.listeners = new Map();
+        this.subscriptions = new Map();
+        this.ws = null;
+        this.connectTimer = null;
+        this.readySettled = false;
+        this.readyPromise = new Promise((resolve, reject) => {
+          this._resolveReady = resolve;
+          this._rejectReady = reject;
+        });
+        this._open();
+      }
+
+      _emit(event, ...args) {
+        const list = (this.listeners.get(event) || []).slice();
+        for (const item of list) {
+          if (item.once) this.removeListener(event, item.fn);
+          try { item.fn(...args); } catch (error) { console.error(`[Room relay ${event}]`, error); }
+        }
+      }
+
+      on(event, fn) {
+        if (typeof fn !== 'function') return this;
+        const list = this.listeners.get(event) || [];
+        list.push({ fn, once: false });
+        this.listeners.set(event, list);
+        return this;
+      }
+
+      once(event, fn) {
+        if (typeof fn !== 'function') return this;
+        const list = this.listeners.get(event) || [];
+        list.push({ fn, once: true });
+        this.listeners.set(event, list);
+        return this;
+      }
+
+      removeListener(event, fn) {
+        const list = this.listeners.get(event) || [];
+        this.listeners.set(event, list.filter(item => item.fn !== fn));
+        return this;
+      }
+
+      isUsable() {
+        return !this.closed && this.connected && this.ws && this.ws.readyState === 1;
+      }
+
+      _buildUrl() {
+        const url = new URL(this.url);
+        url.searchParams.set('room', this.roomCode);
+        url.searchParams.set('role', this.role);
+        if (this.sessionId) url.searchParams.set('session', this.sessionId);
+        if (this.joinTicket) url.searchParams.set('ticket', this.joinTicket);
+        return url.href;
+      }
+
+      _open() {
+        if (typeof WebSocket === 'undefined') {
+          this._failInitial(new Error('当前 WebView 不支持 WebSocket'));
+          return;
+        }
+        let socket;
+        try { socket = new WebSocket(this._buildUrl()); } catch (error) {
+          this._failInitial(error);
+          return;
+        }
+        this.ws = socket;
+        const failInitial = error => {
+          if (!this.readySettled) this._failInitial(error || new Error('房间中继连接失败'));
+        };
+        socket.onopen = () => {
+          if (this.closed) return;
+          if (this.connectTimer) clearTimeout(this.connectTimer);
+          this.connectTimer = null;
+          this.connected = true;
+          if (!this.readySettled) {
+            this.readySettled = true;
+            this._resolveReady(this);
+          }
+          this._emit('connect');
+          for (const topic of this.subscriptions.keys()) this._send({ type: 'subscribe', topic });
+        };
+        socket.onmessage = event => {
+          const raw = typeof event.data === 'string' ? event.data : '';
+          if (!raw || raw.length > 96 * 1024) return;
+          let message;
+          try { message = JSON.parse(raw); } catch (_) { return; }
+          if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+          if (message.type === 'relay_ready') {
+            if (typeof message.sessionId === 'string' && message.sessionId.length <= 96) {
+              this.relaySessionId = message.sessionId;
+            }
+            this._emit('relay_ready', message);
+            return;
+          }
+          if (message.type === 'relay_peer_left') {
+            this._emit('offline');
+            this._emit('close');
+            // 对端离开时主动释放本地 WebSocket；否则旧 relay 仍可能保持
+            // connected=true，重连逻辑会误把它复用成“假在线”连接。
+            this.end(true);
+            return;
+          }
+          if (message.type === 'relay_error') {
+            const error = new Error(String(message.message || '房间中继拒绝了消息'));
+            this._emit('error', error);
+            return;
+          }
+          if (message.type !== 'message' || typeof message.topic !== 'string' ||
+              typeof message.payload !== 'string') return;
+          this._emit('message', message.topic, message.payload);
+        };
+        socket.onerror = () => {
+          const error = new Error('房间中继网络异常');
+          failInitial(error);
+          this._emit('error', error);
+        };
+        socket.onclose = () => {
+          if (this.connectTimer) clearTimeout(this.connectTimer);
+          this.connectTimer = null;
+          const wasConnected = this.connected;
+          this.connected = false;
+          if (!this.readySettled) failInitial(new Error('房间中继连接关闭'));
+          if (!this.closed && wasConnected) {
+            this._emit('offline');
+            this._emit('close');
+          }
+        };
+        this.connectTimer = setTimeout(() => {
+          if (!this.isUsable()) {
+            try { socket.close(); } catch (_) {}
+            failInitial(new Error('房间中继连接超时'));
+          }
+        }, ONLINE_RELAY_CONNECT_TIMEOUT_MS);
+      }
+
+      _failInitial(error) {
+        if (this.readySettled) return;
+        this.readySettled = true;
+        this._rejectReady(error || new Error('房间中继连接失败'));
+        this._closeSocket(true);
+      }
+
+      _closeSocket(force = true) {
+        if (this.connectTimer) clearTimeout(this.connectTimer);
+        this.connectTimer = null;
+        try { if (this.ws) this.ws.close(force ? 1000 : undefined); } catch (_) {}
+      }
+
+      _send(payload) {
+        if (!this.isUsable()) return false;
+        try {
+          this.ws.send(JSON.stringify(payload));
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      subscribe(topic, options, callback) {
+        const cb = typeof options === 'function' ? options : callback;
+        const normalizedTopic = String(topic || '');
+        this.subscriptions.set(normalizedTopic, options && typeof options === 'object' ? options : {});
+        if (this.isUsable()) this._send({ type: 'subscribe', topic: normalizedTopic });
+        if (typeof cb === 'function') setTimeout(() => cb(), 0);
+      }
+
+      publish(topic, payload, _options) {
+        const text = payload && typeof payload.toString === 'function' ? payload.toString() : String(payload ?? '');
+        return this._send({ type: 'publish', topic: String(topic || ''), payload: text });
+      }
+
+      end(force = true) {
+        if (this.closed) return;
+        this.closed = true;
+        this.connected = false;
+        this._closeSocket(force);
+      }
+    }
+
     // 一个房间的信令池：多个 Broker 只用于容灾汇合，普通消息通过 _mid 去重。
     // 这样网页端和 Android WebView 即使对不同节点的可达性不同，也能在共同节点上完成握手。
-    const MQTT_FALLBACK_STAGGER_MS = 700;
+    // 节点采用轻量错峰并行探测：首节点不可达时不再串行等待 4 次超时，
+    // 但也不在同一毫秒内向公共 Broker 发起连接风暴。
+    const MQTT_FALLBACK_STAGGER_MS = 300;
     const MQTT_RECONNECT_INITIAL_DELAY_MS = 1500;
     const MQTT_RECONNECT_MAX_DELAY_MS = 15000;
 
@@ -4009,6 +4218,7 @@
         this.candidates = Array.isArray(candidates) ? candidates : [];
         this.clients = new Map();
         this.pendingCandidates = new Set();
+        this.initialCandidatesPending = 0;
         this.retryTimers = new Map();
         this.retryAttempts = new Map();
         this.subscriptions = new Map();
@@ -4029,33 +4239,43 @@
           this._rejectReady(new Error('没有可用的信令节点'));
           return;
         }
-        (async () => {
-          let attempted = 0;
-          for (const candidate of this.candidates) {
-            if (this.closed) return;
-            // 首节点成功后错峰探测备用节点，避免一次性打开 4 条 WebSocket 被公共 Broker 限流；
-            // 首节点失败则立即切换，仍保持快速容灾。
-            if (attempted > 0 && this.clients.size > 0) {
-              await new Promise(resolve => setTimeout(resolve, MQTT_FALLBACK_STAGGER_MS));
-              if (this.closed) return;
+        let settledCandidates = 0;
+        this.initialCandidatesPending = this.candidates.length;
+        const finishCandidate = () => {
+          this.initialCandidatesPending = Math.max(0, this.initialCandidatesPending - 1);
+          settledCandidates++;
+          if (settledCandidates >= this.candidates.length && !this._readySettled && this.clients.size === 0) {
+            this._readySettled = true;
+            this._rejectReady(new Error('所有信令节点均连接失败，请检查网络后重试'));
+          }
+        };
+        this.candidates.forEach((candidate, index) => {
+          let finalized = false;
+          const finishOnce = () => {
+            if (finalized) return;
+            finalized = true;
+            finishCandidate();
+          };
+          void (async () => {
+            if (index > 0) {
+              await new Promise(resolve => setTimeout(resolve, index * MQTT_FALLBACK_STAGGER_MS));
             }
-            attempted++;
+            if (this.closed) {
+              finishOnce();
+              return;
+            }
             try {
               const client = await this._connectCandidate(candidate);
               this._adoptClient(candidate, client);
             } catch (err) {
               console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 不可用`, err || '');
+            } finally {
+              finishOnce();
             }
-          }
-          if (!this._readySettled && this.clients.size === 0) {
-            this._readySettled = true;
-            this._rejectReady(new Error('所有信令节点均连接失败，请检查网络后重试'));
-          }
-        })().catch(err => {
-          if (!this._readySettled && this.clients.size === 0) {
-            this._readySettled = true;
-            this._rejectReady(err || new Error('所有信令节点均连接失败，请检查网络后重试'));
-          }
+          })().catch((err) => {
+            console.warn(`[MQTT] 节点 ${candidate.index + 1}/${MQTT_BROKER_URLS.length} 探测异常`, err || '');
+            finishOnce();
+          });
         });
       }
 
@@ -4222,7 +4442,7 @@
         try { entry.client.removeListener('offline', entry.offline); } catch (_) {}
         try { entry.client.removeListener('error', entry.error); } catch (_) {}
         if (this.clients.size > 0) this._scheduleCandidateRetry(entry.candidate);
-        if (this.clients.size === 0 && !this.closed) {
+        if (this.clients.size === 0 && !this.closed && this.initialCandidatesPending === 0) {
           this._markPoolOffline(eventName);
         }
       }
@@ -4346,9 +4566,12 @@
     function closeMqttClientPool() {
       const client = mqttClient;
       mqttClientRequestSeq++;
+      onlineTransportRequestSeq++;
       mqttClient = null;
       mqttClientPromise = null;
       mqttClientPromiseRoomKey = '';
+      onlineTransportPromise = null;
+      onlineTransportPromiseKey = '';
       if (client) {
         try { client.end(true); } catch (_) {}
       }
@@ -4404,11 +4627,107 @@
       return promise;
     }
 
+    function isOnlineRelayEnabled() {
+      try {
+        if (window.__GOMOKU_DISABLE_RELAY__ === true) return false;
+      } catch (_) {}
+      return typeof WebSocket !== 'undefined';
+    }
+
+    async function connectRoomRelay(roomKey, role, sessionId = '') {
+      return await new Promise((resolve, reject) => {
+        let remaining = ONLINE_RELAY_ENDPOINTS.length;
+        let settled = false;
+        let lastError = null;
+        const attempts = [];
+        for (const endpoint of ONLINE_RELAY_ENDPOINTS) {
+          const relay = new RoomRelayClient(endpoint, roomKey, role, sessionId, role === 'host' ? onlineJoinTicket : '');
+          attempts.push(relay);
+          relay.readyPromise.then(() => {
+            if (settled) {
+              relay.end(true);
+              return;
+            }
+            settled = true;
+            for (const other of attempts) {
+              if (other !== relay) {
+                try { other.end(true); } catch (_) {}
+              }
+            }
+            resolve(relay);
+          }).catch(error => {
+            lastError = error;
+            try { relay.end(true); } catch (_) {}
+            remaining--;
+            if (remaining <= 0 && !settled) {
+              settled = true;
+              reject(lastError || new Error('自有房间中继不可用'));
+            }
+          });
+        }
+      });
+    }
+
+    // 先走自有 Durable Object；只有自有入口未部署、临时不可达或旧环境不支持
+    // WebSocket 时才回退公共 MQTT。这样“公共 MQTT 四节点全挂”不再直接导致无法进房。
+    function getOrCreateOnlineTransport(roomKey = '', role = 'host', sessionId = '') {
+      const normalizedRoomKey = String(roomKey || '');
+      const normalizedRole = role === 'client' ? 'client' : 'host';
+      const normalizedSessionId = String(sessionId || '');
+      const transportKey = `${normalizedRoomKey}|${normalizedRole}|${normalizedSessionId}`;
+      const currentMatches = mqttClient && mqttClient.roomKey === normalizedRoomKey &&
+        mqttClient.transportType === 'relay' && mqttClient.role === normalizedRole &&
+        (normalizedRole !== 'host' || mqttClient.sessionId === normalizedSessionId) &&
+        isMqttPoolUsable(mqttClient);
+      const mqttMatches = mqttClient && mqttClient.roomKey === normalizedRoomKey &&
+        mqttClient.transportType !== 'relay' && isMqttPoolUsable(mqttClient);
+      if (currentMatches || mqttMatches) return Promise.resolve(mqttClient);
+      if (mqttClient && mqttClient.roomKey === normalizedRoomKey && !isMqttPoolUsable(mqttClient)) {
+        closeMqttClientPool();
+      }
+      if (mqttClient && mqttClient.roomKey === normalizedRoomKey && mqttClient.transportType === 'relay' && !currentMatches) {
+        closeMqttClientPool();
+      }
+      if (mqttClient && mqttClient.roomKey !== normalizedRoomKey) closeMqttClientPool();
+      if (onlineTransportPromise) {
+        if (onlineTransportPromiseKey === transportKey) return onlineTransportPromise;
+        const previousPromise = onlineTransportPromise;
+        return previousPromise.catch(() => null).then(() => getOrCreateOnlineTransport(normalizedRoomKey, normalizedRole, normalizedSessionId));
+      }
+
+      const requestSeq = ++onlineTransportRequestSeq;
+      const relayAttempt = isOnlineRelayEnabled()
+        ? connectRoomRelay(normalizedRoomKey, normalizedRole, normalizedSessionId)
+        : Promise.reject(new Error('本地测试已禁用自有中继'));
+      const promise = relayAttempt.catch((relayError) => {
+        console.warn('[Room relay] 自有中继不可用，回退 MQTT:', relayError?.message || relayError);
+        return getOrCreateMqttClient(normalizedRoomKey);
+      }).then(client => {
+        if (requestSeq !== onlineTransportRequestSeq || !client || client.closed) {
+          try { client?.end(true); } catch (_) {}
+          throw new Error('联机传输请求已取消');
+        }
+        mqttClient = client;
+        watchMqttClientLifecycle(client);
+        return client;
+      });
+      onlineTransportPromise = promise;
+      onlineTransportPromiseKey = transportKey;
+      promise.finally(() => {
+        if (onlineTransportPromise === promise) {
+          onlineTransportPromise = null;
+          onlineTransportPromiseKey = '';
+        }
+      }).catch(() => {});
+      return promise;
+    }
+
     const P2P_SIGNAL_RETRY_MS = 900;
     const P2P_SIGNAL_TIMEOUT_MS = 12000;
     const P2P_RECOVERY_INITIAL_DELAY_MS = 1200;
     const P2P_RECOVERY_MAX_DELAY_MS = 30000;
     const P2P_DISCONNECTED_GRACE_MS = 2500;
+    const P2P_ICE_RESTART_WAIT_MS = 1800;
     const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
     const DEFAULT_WEBRTC_ICE_SERVERS = [
       { urls: 'stun:stun.qq.com:3478' },
@@ -4485,19 +4804,40 @@
       return DEFAULT_WEBRTC_ICE_SERVERS;
     }
 
+    async function getWebRtcIceServersForRecovery() {
+      const immediate = getWebRtcIceServersForProbe();
+      if (immediate !== DEFAULT_WEBRTC_ICE_SERVERS) return immediate;
+      try {
+        // 重连不能被 TURN 接口拖住；给临时凭据一个短窗口，超时就先用 STUN
+        // 建链，后台请求完成后下一次 ICE 重建再自动带上新 TURN。
+        return await Promise.race([
+          getWebRtcIceServers(),
+          new Promise(resolve => setTimeout(() => resolve(DEFAULT_WEBRTC_ICE_SERVERS), P2P_ICE_RESTART_WAIT_MS))
+        ]);
+      } catch (_) {
+        return DEFAULT_WEBRTC_ICE_SERVERS;
+      }
+    }
+
     class MqttRoomConnection {
-      constructor(client, roomCode, role) {
+      constructor(client, roomCode, role, sessionId = '') {
         this.client = client;
         this.roomCode = roomCode;
         this.role = role;
+        this.sessionId = typeof sessionId === 'string' ? sessionId.slice(0, 96) : '';
         this.open = true;
         this.closed = false;
         this.ready = false;
         this.listeners = { data: [], close: [], error: [], open: [] };
 
-        this.pubTopic = role === 'host' ? `gomoku/v3/${roomCode}/h2c` : `gomoku/v3/${roomCode}/c2h`;
-        this.subTopic = role === 'host' ? `gomoku/v3/${roomCode}/c2h` : `gomoku/v3/${roomCode}/h2c`;
-        this.sigTopic = `gomoku/v3/${roomCode}/p2p_speed_sig`;
+        // 会话 ID 进入 MQTT topic，避免同一 6 位房间码的旧局/撞码报文串入新局。
+        // 没拿到会话 ID 时保留 v3 兼容路径，便于旧客户端完成升级过渡。
+        const topicRoot = this.sessionId
+          ? `gomoku/v4/${roomCode}/${this.sessionId}`
+          : `gomoku/v3/${roomCode}`;
+        this.pubTopic = role === 'host' ? `${topicRoot}/h2c` : `${topicRoot}/c2h`;
+        this.subTopic = role === 'host' ? `${topicRoot}/c2h` : `${topicRoot}/h2c`;
+        this.sigTopic = `${topicRoot}/p2p_speed_sig`;
 
         this.isP2pReady = false;
         this.pc = null;
@@ -4524,6 +4864,7 @@
         this.p2pGeneration = 0;
         this.p2pRecoveryTimer = null;
         this.p2pRecoveryAttempts = 0;
+        this.iceRestartInFlight = false;
         this.reliableRetryTimer = null;
         this.pendingMqttFailoverTimers = new Map();
         this.inboundWindowAt = Date.now();
@@ -4591,7 +4932,8 @@
           };
           topics.forEach((topic) => {
             try {
-              this.client.subscribe(topic, { qos: 0 }, (err) => {
+              const qos = topic === this.sigTopic ? 0 : MQTT_ROOM_DATA_QOS;
+              this.client.subscribe(topic, { qos }, (err) => {
                 if (err) return finish(err);
                 pending--;
                 if (pending === 0) finish();
@@ -4650,6 +4992,16 @@
         }
 
         if (!ONLINE_MESSAGE_TYPES.has(data.type)) return;
+        // 新版连接把房间会话和发送角色写入每条业务报文。没有会话隔离的旧 v3
+        // 连接仍可兼容接收；但进入 v4 topic 后必须带上完全匹配的 sessionId，
+        // 避免旧连接、撞码报文或恶意跨房间注入混入当前棋局。
+        if (this.sessionId &&
+            (typeof data.sessionId !== 'string' || data.sessionId.length > 96 ||
+             data.sessionId !== this.sessionId)) return;
+        if (!this.sessionId && data.sessionId !== undefined &&
+            (typeof data.sessionId !== 'string' || data.sessionId.length > 96)) return;
+        if (data.senderRole !== undefined &&
+            (data.senderRole !== 'host' && data.senderRole !== 'client' || data.senderRole === this.role)) return;
         if (data._mid !== undefined && (typeof data._mid !== 'string' || data._mid.length > 80)) return;
         if (data.type === 'delivery_ack' &&
             (typeof data.ackId !== 'string' || data.ackId.length === 0 || data.ackId.length > 80)) return;
@@ -4743,8 +5095,55 @@
         this.p2pRecoveryTimer = setTimeout(() => {
           this.p2pRecoveryTimer = null;
           if (this.closed || !this.open || !this.ready) return;
-          this._restartP2PProbe(reason);
+          void this._attemptIceRestart(reason).then((restarted) => {
+            if (!restarted && !this.closed && this.open && this.ready) {
+              this._restartP2PProbe(reason);
+            }
+          });
         }, delay);
+      }
+
+      async _attemptIceRestart(reason = 'ICE 线路恢复') {
+        if (this.closed || !this.open || !this.ready || this.role !== 'host' ||
+            this.iceRestartInFlight || !this.pc || typeof this.pc.createOffer !== 'function') return false;
+        // ICE restart 可以修复网络路径变化，但不能复活已经关闭的 SCTP
+        // DataChannel。此时两端必须一起重建 PeerConnection，否则房主会一直
+        // 保留“ICE connected + DataChannel closed”的假在线状态。
+        if (/DataChannel/i.test(String(reason)) ||
+            (this.dc && ['closing', 'closed'].includes(this.dc.readyState))) return false;
+        const pc = this.pc;
+        const generation = this.p2pGeneration;
+        this.iceRestartInFlight = true;
+        try {
+          const iceServers = await getWebRtcIceServersForRecovery();
+          if (this.closed || this.pc !== pc || this.p2pGeneration !== generation) return false;
+          if (typeof pc.setConfiguration === 'function') {
+            try { pc.setConfiguration({ iceServers, iceCandidatePoolSize: 4 }); } catch (_) {}
+          }
+          if (typeof pc.restartIce === 'function') {
+            try { pc.restartIce(); } catch (_) {}
+          }
+          this.p2pSessionId = this._createSessionId();
+          this.localOffer = null;
+          this.localIceCandidates = [];
+          this.remoteIceCandidates = new Set();
+          this.pendingRemoteIceCandidates = [];
+          this.remoteDescriptionSet = false;
+          this.remoteOfferSdp = '';
+          const offer = await pc.createOffer({ iceRestart: true });
+          if (this.closed || this.pc !== pc || this.p2pGeneration !== generation) return false;
+          await pc.setLocalDescription(offer);
+          if (this.closed || this.pc !== pc || this.p2pGeneration !== generation || !pc.localDescription) return false;
+          this.localOffer = { type: 'offer', sdp: pc.localDescription.sdp || offer.sdp };
+          this._startSignalRetry();
+          console.info(`[P2P] 已发起原位 ICE restart：${reason}`);
+          return true;
+        } catch (err) {
+          console.warn('[P2P ICE restart]', err?.message || err);
+          return false;
+        } finally {
+          if (this.p2pGeneration === generation) this.iceRestartInFlight = false;
+        }
       }
 
       _resetP2PSession() {
@@ -4764,16 +5163,18 @@
         this.remoteOfferSdp = '';
       }
 
-      _restartP2PProbe(reason = 'P2P 通道异常') {
+      async _restartP2PProbe(reason = 'P2P 通道异常') {
+        if (this.closed || !this.open || !this.ready) return;
+        const iceServers = await getWebRtcIceServersForRecovery();
         if (this.closed || !this.open || !this.ready) return;
         this._disposeP2P();
         this.p2pProbeStarted = false;
         this._resetP2PSession();
         console.info(`[P2P] 开始第 ${this.p2pRecoveryAttempts} 次通道重建：${reason}`);
-        this._startSilentP2PProbe(true);
+        this._startSilentP2PProbe(true, iceServers);
       }
 
-      async _startSilentP2PProbe(force = false) {
+      async _startSilentP2PProbe(force = false, iceServersOverride = null) {
         if (this.closed || (this.p2pProbeStarted && !force)) return;
         this.p2pProbeStarted = true;
         const generation = ++this.p2pGeneration;
@@ -4784,7 +5185,9 @@
             this.p2pProbeStarted = false;
             return;
           }
-          const iceServers = getWebRtcIceServersForProbe();
+          const iceServers = Array.isArray(iceServersOverride) && iceServersOverride.length
+            ? iceServersOverride
+            : getWebRtcIceServersForProbe();
           if (!isCurrent()) return;
           const usingFallbackIce = iceServers === DEFAULT_WEBRTC_ICE_SERVERS;
           if (usingFallbackIce) {
@@ -4915,13 +5318,16 @@
         if (!sig.sessionId || typeof sig.sessionId !== 'string' || sig.sessionId.length > 80) return;
 
         if (this.role === 'client') {
-          // 房主重建 PeerConnection 后会换 sessionId。若仍沿用旧 session，
-          // 客方会把新 offer 当成过期信令，导致两边都停在 MQTT 中继。
-          if (sig.type === 'offer' && typeof sig.sdp === 'string' &&
-              this.p2pSessionId && this.p2pSessionId !== sig.sessionId &&
-              this.remoteOfferSdp && this.remoteOfferSdp !== sig.sdp) {
-            this._scheduleP2PRecovery('收到新的 P2P 会话', 0);
-            return;
+          // 房主做原位 ICE restart 时会换 P2P sessionId，但不应销毁整个
+          // DataChannel/MQTT 房间连接。客方接受新的 offer，并让浏览器完成
+          // ICE 重协商；只有真正失败时才进入完整重建。
+          if (sig.type === 'offer' && this.p2pSessionId && this.p2pSessionId !== sig.sessionId) {
+            this.p2pSessionId = sig.sessionId;
+            this.remoteDescriptionSet = false;
+            this.remoteOfferSdp = '';
+            this.remoteIceCandidates = new Set();
+            this.pendingRemoteIceCandidates = [];
+            this.localAnswer = null;
           }
           if (!this.p2pSessionId) this.p2pSessionId = sig.sessionId;
           if (this.p2pSessionId !== sig.sessionId) return;
@@ -5127,6 +5533,7 @@
       _disposeP2P() {
         if (this.signalRetryTimer) clearTimeout(this.signalRetryTimer);
         this.signalRetryTimer = null;
+        this.iceRestartInFlight = false;
         this.p2pGeneration++;
         this._stopP2PStatsPolling();
         this.isP2pReady = false;
@@ -5148,7 +5555,7 @@
       _publishMqttPayload(jsonStr) {
         if (!isMqttPoolUsable(this.client)) return false;
         try {
-          this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
+          this.client.publish(this.pubTopic, jsonStr, { qos: MQTT_ROOM_DATA_QOS, retain: false });
           return true;
         } catch (e) {
           console.warn('[MqttRoom send error]', e);
@@ -5270,6 +5677,7 @@
         let adopted = false;
         for (const [mid, entry] of onlineReliableOutbox) {
           if (entry.roomCode !== this.roomCode ||
+              entry.sessionId !== this.sessionId ||
               (entry.message.roundId && onlineRoundId && entry.message.roundId !== onlineRoundId)) {
             onlineReliableOutbox.delete(mid);
             continue;
@@ -5315,9 +5723,17 @@
           ...data,
           _mid: typeof data._mid === 'string' && data._mid.length <= 80 ? data._mid : generateSecureId(10, 'm_')
         };
+        if (this.sessionId && !message.sessionId) message.sessionId = this.sessionId;
+        if (!message.senderRole) message.senderRole = this.role;
         // 每一局使用独立轮次标识，避免重开后延迟到达的旧落子/技能重新污染新棋局。
         const currentRound = typeof onlineRoundId === 'string' ? onlineRoundId : '';
         if (currentRound && !message.roundId) message.roundId = currentRound;
+        if (message.stateVersion === undefined && typeof history !== 'undefined') message.stateVersion = history.length;
+        if (message.stateDigest === undefined &&
+            ['ping', 'pong', 'state_snapshot'].includes(message.type) &&
+            typeof getOnlineStateDigest === 'function') {
+          message.stateDigest = getOnlineStateDigest();
+        }
         let jsonStr;
         try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
         if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
@@ -5329,6 +5745,7 @@
             message,
             owner: this,
             roomCode: this.roomCode,
+            sessionId: this.sessionId,
             attempts: 1,
             firstSentAt: Date.now(),
             lastSentAt: Date.now()
@@ -5376,10 +5793,30 @@
     }
 
     let currentRoomCode = '';
+    // 房间码只是用户可见的短码；真正隔离一局对战的是不可预测的会话 ID。
+    // 它会进入业务 topic、消息 envelope 和快照校验，防止旧连接/撞码报文串局。
+    let onlineSessionId = '';
+    // sessionId 负责隔离整局；joinTicket 再作为一次进房确认的短期能力票据，
+    // 防止仅知道 6 位房间码的第三方伪造 join_ready/confirmed。
+    let onlineJoinTicket = '';
+    let onlineTransportGeneration = 0;
     let isHostConnecting = false;
     let p2pChannel = null;
     let hostInviteBinding = null;
     let activeOnlineGuestUid = '';
+
+    function rotateOnlineSessionId() {
+      onlineSessionId = generateSecureId(18, 'room_').slice(0, 96);
+      onlineJoinTicket = generateSecureId(24, 'join_').slice(0, 96);
+      onlineTransportGeneration++;
+      clearOnlineReliableOutbox();
+      return onlineSessionId;
+    }
+
+    function ensureOnlineSessionId() {
+      if (!onlineSessionId) rotateOnlineSessionId();
+      return onlineSessionId;
+    }
 
     function detachHostInviteListener() {
       if (!hostInviteBinding) return;
@@ -5406,6 +5843,10 @@
 
     async function initHostMqttPeer(targetCode = null, forceNew = false) {
       const isDifferentRoom = targetCode && String(targetCode) !== String(currentRoomCode);
+      // 手动刷新房间/新匹配要换会话；断线重连沿用原会话，保证旧棋局可以恢复。
+      if (isDifferentRoom || !onlineSessionId || (forceNew && !isReconnecting)) {
+        rotateOnlineSessionId();
+      }
       if (isDifferentRoom) {
         clearOnlineReliableOutbox();
         activeOnlineGuestUid = '';
@@ -5418,6 +5859,8 @@
       if (isDifferentRoom) resetChatHistoryForRoom();
       if (targetCode) currentRoomCode = targetCode;
       if (!currentRoomCode) currentRoomCode = generateFastRoomCode();
+      const sessionId = ensureOnlineSessionId();
+      const transportGeneration = onlineTransportGeneration;
 
       const displayEl = document.getElementById('myRoomCodeDisplay');
       const badgeEl = document.getElementById('roomStatusBadge');
@@ -5445,7 +5888,10 @@
       const roomCode = currentRoomCode;
 
       try {
-        const client = await getOrCreateMqttClient(roomCode);
+        const client = await getOrCreateOnlineTransport(roomCode, 'host', sessionId);
+        if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode || onlineSessionId !== sessionId) {
+          return;
+        }
         const c2hTopic = `gomoku/v3/${roomCode}/c2h`;
         const h2cTopic = `gomoku/v3/${roomCode}/h2c`;
 
@@ -5466,14 +5912,17 @@
         // 旧逻辑先回 accepted、后建连接，客方会提前进入对局，房主连接失败时就会出现“一边断开、一边没进房”。
         const sendAcceptedBurst = (targetUid) => {
           const sendAccept = () => {
+            if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode || onlineSessionId !== sessionId) return;
             try {
               client.publish(h2cTopic, JSON.stringify({
                 type: 'join_accepted',
                 targetUid,
                 name: p1Name,
                 avatar: getNetworkAvatarValue(p1Avatar),
+                sessionId,
+                joinTicket: onlineJoinTicket,
                 roundId: onlineRoundId || undefined
-              }), { qos: 0 });
+              }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
             } catch(_) {}
           };
           sendAccept();
@@ -5482,6 +5931,7 @@
         };
 
         const onHostInvite = (topic, payload) => {
+          if (transportGeneration !== onlineTransportGeneration) return;
           if (topic !== c2hTopic) return;
           try {
             const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
@@ -5491,6 +5941,14 @@
             if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
             if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
             if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
+            if (data.sessionId !== undefined &&
+                (typeof data.sessionId !== 'string' || data.sessionId.length > 96 ||
+                 (data.sessionId && data.sessionId !== sessionId))) return;
+            if (data.joinTicket !== undefined &&
+                (typeof data.joinTicket !== 'string' || data.joinTicket.length > 96)) return;
+            // 新客户端必须回显房主下发的短期票据；旧客户端过渡期间仍允许
+            // 缺少票据的 ready，但不能接受一个不匹配的票据。
+            if (data.type === 'join_ready' && data.joinTicket !== undefined && data.joinTicket !== onlineJoinTicket) return;
             if (data.type === 'reconnect_handshake' && data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
             if (data.type === 'join_ready' && data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
             const reqUid = String(data.uid || data.name || 'guest').slice(0, 128);
@@ -5517,12 +5975,15 @@
               }
 
               const sendJoinConfirmed = () => {
+                if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode || onlineSessionId !== sessionId) return;
                 try {
                   client.publish(h2cTopic, JSON.stringify({
                     type: 'join_confirmed',
                     targetUid: reqUid,
+                    sessionId,
+                    joinTicket: onlineJoinTicket,
                     roundId: onlineRoundId || undefined
-                  }), { qos: 0 });
+                  }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
                 } catch (_) {}
               };
               sendJoinConfirmed();
@@ -5542,8 +6003,9 @@
                 client.publish(h2cTopic, JSON.stringify({
                   type: 'room_full',
                   targetUid: reqUid,
+                  sessionId,
                   msg: '该房间已有 2 人正在对弈，人数已满！'
-                }), { qos: 0 });
+                }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
               } catch(_) {}
               return;
             }
@@ -5570,7 +6032,7 @@
                 conn = null;
               }
 
-              const nextConn = new MqttRoomConnection(client, roomCode, 'host');
+              const nextConn = new MqttRoomConnection(client, roomCode, 'host', sessionId);
               conn = nextConn;
               myOnlineColor = BLACK;
               lastActiveRoomCode = roomCode;
@@ -5578,7 +6040,8 @@
               const guestAvatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👧';
               setupConn();
               await nextConn.readyPromise;
-              if (conn !== nextConn || !nextConn.open || !nextConn.ready) return;
+              if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode ||
+                  onlineSessionId !== sessionId || conn !== nextConn || !nextConn.open || !nextConn.ready) return;
 
               // ACK 必须排在房主连接 ready 之后，且继续发送短 burst 兼容弱网/切后台。
               sendAcceptedBurst(reqUid);
@@ -5632,7 +6095,7 @@
         // 房间创建函数现在真正等待信道订阅完成，匹配流程不再凭“已开始连接”提前进入房间。
         await new Promise((resolve, reject) => {
           try {
-            client.subscribe(c2hTopic, { qos: 0 }, err => err ? reject(err) : resolve());
+            client.subscribe(c2hTopic, { qos: MQTT_ROOM_DATA_QOS }, err => err ? reject(err) : resolve());
           } catch (err) {
             reject(err);
           }
@@ -5728,7 +6191,7 @@
 
       try {
         const roomCode = currentRoomCode;
-        const client = await getOrCreateMqttClient(roomCode);
+        const client = await getOrCreateOnlineTransport(roomCode, myOnlineColor === WHITE ? 'client' : 'host', onlineSessionId);
         if (conn && conn.open && conn.ready && isMqttPoolUsable(client)) {
           onReconnectSuccess();
           return;
@@ -5740,7 +6203,7 @@
         }
 
         if (myOnlineColor === WHITE) {
-          const nextConn = new MqttRoomConnection(client, roomCode, 'client');
+          const nextConn = new MqttRoomConnection(client, roomCode, 'client', onlineSessionId);
           conn = nextConn;
           setupConn();
           await nextConn.readyPromise;
@@ -5825,6 +6288,8 @@
         isOver: isOver,
         isDraw: gameResultIsDraw,
         winnerColor: gameWinnerColor,
+        stateVersion: history.length,
+        stateDigest: getOnlineStateDigest(),
         p1Name: p1Name,
         p1Avatar: getNetworkAvatarValue(p1Avatar),
         p2Name: p2Name,
@@ -5842,6 +6307,9 @@
       closeMqttClientPool();
       activeOnlineGuestUid = '';
       currentRoomCode = null;
+      onlineSessionId = '';
+      onlineJoinTicket = '';
+      onlineTransportGeneration++;
       clearOnlineReliableOutbox();
       onlineRoundId = '';
       pendingOnlineUndoId = '';
@@ -5888,7 +6356,7 @@
     }
 
     function normalizeOnlineNetworkState(value, fallback = '在线') {
-      const allowed = new Set(['离线', '断开', '连接中', '重连中', 'P2P直连', 'P2P中继', 'P2P检测', 'MQTT中继', '在线']);
+      const allowed = new Set(['离线', '断开', '连接中', '重连中', 'P2P直连', 'P2P中继', 'P2P检测', 'WebSocket中继', 'MQTT中继', '在线']);
       return typeof value === 'string' && allowed.has(value) ? value : fallback;
     }
 
@@ -5901,7 +6369,9 @@
         if (conn.p2pRoute === 'direct') return 'P2P直连';
         return 'P2P检测';
       }
-      if (conn.client && isMqttPoolUsable(conn.client)) return 'MQTT中继';
+      if (conn.client && isMqttPoolUsable(conn.client)) {
+        return conn.client.transportType === 'relay' ? 'WebSocket中继' : 'MQTT中继';
+      }
       return '在线';
     }
 
@@ -5921,7 +6391,7 @@
     }
 
     function onlineStateIcon(state) {
-      if (state === 'P2P直连' || state === 'P2P中继' || state === 'MQTT中继' || state === '在线') return '🟢';
+      if (state === 'P2P直连' || state === 'P2P中继' || state === 'WebSocket中继' || state === 'MQTT中继' || state === '在线') return '🟢';
       if (state === '连接中' || state === '重连中' || state === 'P2P检测') return '🟡';
       if (state === '离线' || state === '断开' || state === '连接超时') return '🔴';
       return '⚪';
@@ -6243,6 +6713,10 @@
       if (typeof data.isOver !== 'boolean') return false;
       if (data.isDraw !== undefined && typeof data.isDraw !== 'boolean') return false;
       if (data.winnerColor !== undefined && data.winnerColor !== 0 && data.winnerColor !== BLACK && data.winnerColor !== WHITE) return false;
+      if (data.stateVersion !== undefined && (!Number.isInteger(data.stateVersion) || data.stateVersion < 0 || data.stateVersion > 1024)) return false;
+      if (data.stateVersion !== undefined && data.stateVersion !== data.history.length) return false;
+      if (data.stateDigest !== undefined &&
+          (typeof data.stateDigest !== 'string' || !/^[0-9a-f]{8}$/i.test(data.stateDigest))) return false;
       if (data.cardUsedStatus !== undefined &&
           (!Array.isArray(data.cardUsedStatus) || data.cardUsedStatus.length !== 3 ||
            data.cardUsedStatus.some(value => typeof value !== 'boolean'))) return false;
@@ -6274,11 +6748,15 @@
       });
     }
 
-    function requestOnlineResync() {
+    let lastOnlineResyncAt = 0;
+    function requestOnlineResync(reason = '状态对账') {
       if (!conn || !conn.open) return;
+      const now = Date.now();
+      if (now - lastOnlineResyncAt < 900) return;
+      lastOnlineResyncAt = now;
       if (myOnlineColor === BLACK) sendFullStateSnapshot();
       else {
-        try { conn.send({ type: 'sync_req' }); } catch (_) {}
+        try { conn.send({ type: 'sync_req', reason: String(reason).slice(0, 80) }); } catch (_) {}
       }
     }
 
@@ -6323,6 +6801,8 @@
             if (!conn.send({
               type: 'ping',
               step: history.length,
+              stateVersion: history.length,
+              stateDigest: getOnlineStateDigest(),
               pingId,
               sentAt,
               networkState: getLocalOnlineNetworkState()
@@ -6340,13 +6820,13 @@
       setTimeout(() => sendHeartbeat(false), 0);
 
       conn.on('close', () => {
-        if (gameMode !== 'online' || isOver) return;
+        if (conn !== connection || gameMode !== 'online' || isOver) return;
         if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
         triggerOnlineReconnect("连接断开");
       });
 
       conn.on('error', (err) => {
-        if (gameMode !== 'online' || isOver) return;
+        if (conn !== connection || gameMode !== 'online' || isOver) return;
         console.warn('[conn error]', err);
         if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
         triggerOnlineReconnect("网络异常");
@@ -6363,6 +6843,7 @@
       });
 
       conn.on('data', (data, receivedTransport = 'mqtt') => {
+        if (conn !== connection || connection.closed) return;
         if (!data || typeof data !== 'object' || typeof data.type !== 'string' || data.type.length > 64) return;
         if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
         if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
@@ -6370,6 +6851,16 @@
         if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
         if (data.requestId !== undefined && (typeof data.requestId !== 'string' || data.requestId.length > 80)) return;
         if (data.nextRoundId !== undefined && (typeof data.nextRoundId !== 'string' || data.nextRoundId.length > 80)) return;
+        if (data.sessionId !== undefined &&
+            (typeof data.sessionId !== 'string' || data.sessionId.length > 96 ||
+             (onlineSessionId && data.sessionId !== onlineSessionId))) return;
+        if (data.senderRole !== undefined &&
+            (data.senderRole !== 'host' && data.senderRole !== 'client' ||
+             data.senderRole === (myOnlineColor === BLACK ? 'host' : 'client'))) return;
+        if (data.stateVersion !== undefined &&
+            (!Number.isInteger(data.stateVersion) || data.stateVersion < 0 || data.stateVersion > 1024)) return;
+        if (data.stateDigest !== undefined &&
+            (typeof data.stateDigest !== 'string' || !/^[0-9a-f]{8}$/i.test(data.stateDigest))) return;
         if (data.ackId !== undefined && (typeof data.ackId !== 'string' || data.ackId.length > 80)) return;
         if (data.pingId !== undefined && (typeof data.pingId !== 'string' || data.pingId.length > 80)) return;
         if (data.sentAt !== undefined && (!Number.isFinite(data.sentAt) || Math.abs(Date.now() - data.sentAt) > 120000)) return;
@@ -6388,6 +6879,7 @@
           markOnlinePeerSeen(data.networkState || data.peerState || '在线', undefined, data.peerTransportRttMs);
         }
         if (data.type === "leave_room") {
+          if (data.senderRole && data.senderRole === (myOnlineColor === BLACK ? 'host' : 'client')) return;
           showGameNotice(`⚠️ 对手【${normalizeNetworkName(data.name, p2Name)}】已退出房间，已自动切回人机对弈模式~`, false);
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
           detachHostInviteListener();
@@ -6396,6 +6888,9 @@
           if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
           activeOnlineGuestUid = '';
           currentRoomCode = null;
+          onlineSessionId = '';
+          onlineJoinTicket = '';
+          onlineTransportGeneration++;
           clearOnlineReliableOutbox();
           onlineRoundId = '';
           pendingOnlineUndoId = '';
@@ -6412,6 +6907,8 @@
             conn.send({
               type: 'pong',
               step: history.length,
+              stateVersion: history.length,
+              stateDigest: getOnlineStateDigest(),
               pingId: data.pingId,
               peerState: getLocalOnlineNetworkState(),
               peerLatencyMs: onlineNetworkTelemetry.localLatencyMs,
@@ -6420,8 +6917,9 @@
           } catch(e) {}
           // 🛡️ 心跳对账：若发现双方步数不一致，房主立即下发全量快照，客方主动请求
           if (data.step !== undefined && !isOver && data.step !== history.length) {
-            if (myOnlineColor === BLACK) sendFullStateSnapshot();
-            else try { conn.send({ type: 'sync_req' }); } catch(_) {}
+            requestOnlineResync('心跳步数不一致');
+          } else if (data.stateDigest && data.stateDigest !== getOnlineStateDigest()) {
+            requestOnlineResync('心跳摘要不一致');
           }
           return;
         }
@@ -6442,8 +6940,9 @@
           }
           markOnlinePeerSeen(data.peerState || '在线', data.peerLatencyMs, data.peerTransportRttMs);
           if (data.step !== undefined && !isOver && data.step !== history.length) {
-            if (myOnlineColor === BLACK) sendFullStateSnapshot();
-            else try { conn.send({ type: 'sync_req' }); } catch(_) {}
+            requestOnlineResync('对端步数不一致');
+          } else if (data.stateDigest && data.stateDigest !== getOnlineStateDigest()) {
+            requestOnlineResync('对端摘要不一致');
           }
           return;
         }
@@ -6454,23 +6953,33 @@
           return;
         }
         if (data.type === 'reconnect_handshake') {
-          // 房主收到客方重连，回传最新棋局快照
-          sendFullStateSnapshot();
-          onReconnectSuccess();
+          // 只有房主响应重连握手并下发权威快照；客方收到同类报文不反向覆盖棋局。
+          if (myOnlineColor === BLACK) {
+            sendFullStateSnapshot();
+            onReconnectSuccess();
+          }
           return;
         }
         if (data.type === 'state_snapshot') {
+          // 房主是唯一的公共棋局快照权威；客方快照不能反向覆盖房主状态。
+          if (myOnlineColor === BLACK || (data.senderRole && data.senderRole !== 'host')) return;
           // 🛡️ 收到全量快照：对等双向安全审计与防倒退/防篡改校验
           if (!validateIncomingSnapshot(data)) {
             console.warn('[state_snapshot] 拦截结构非法的棋局快照');
             return;
           }
+          if (!isIncomingStateDigestValid(data)) {
+            console.warn('[state_snapshot] 状态摘要校验失败，拒绝应用损坏快照');
+            requestOnlineResync('快照摘要校验失败');
+            return;
+          }
 
           // 1. 防倒退校验：如果发来的步数少于本地步数，说明对方因卡顿落后！
-          // 本地绝不倒退，而是立即反向将最新步数补发给对方，拉齐对方进度
-          if (data.history.length < history.length) {
-            console.warn('[state_snapshot] 对方步数落后于我方，反向发送全量局势快照拉齐对方');
-            sendFullStateSnapshot();
+          // 客方绝不倒退；它只请求房主再次对账，避免双方互相覆盖。
+          if (data.history.length < history.length ||
+              (data.stateVersion !== undefined && data.stateVersion < history.length)) {
+            console.warn('[state_snapshot] 房主快照落后于本地，等待下一次权威对账');
+            requestOnlineResync('房主快照落后');
             return;
           }
 
@@ -6496,8 +7005,8 @@
           }
 
           // 3. 安全核验通过，接纳恢复最新局势
-          board = data.board;
-          history = data.history;
+          board = data.board.map(row => [...row]);
+          history = data.history.map(step => ({ ...step }));
           turn = data.turn;
           isOver = data.isOver;
           gameResultIsDraw = data.isDraw === true;
@@ -6524,11 +7033,15 @@
           const isValidMove = Number.isInteger(data.r) && Number.isInteger(data.c) &&
             data.r >= 0 && data.r < 15 && data.c >= 0 && data.c < 15 &&
             data.p === remoteColor && board[data.r][data.c] === EMPTY;
-          if (!isValidMove) return;
+          if (!isValidMove) {
+            requestOnlineResync('收到非法或重复落子');
+            return;
+          }
           // 🛡️ 步数、回合和棋子颜色必须同时连续；错位后只请求对账，不继续执行可疑落子。
           if ((data.step !== undefined && (!Number.isInteger(data.step) || data.step !== history.length + 1)) ||
+              (data.stateVersion !== undefined && data.stateVersion !== history.length + 1) ||
               turn !== remoteColor) {
-            requestOnlineResync();
+            requestOnlineResync('落子顺序不一致');
             return;
           }
           makeMove(data.r, data.c, data.p, true);
@@ -6641,6 +7154,7 @@
           const incomingCard = SKILL_CARD_POOL.find(card => card.id === data.skillId);
           if (!incomingCard || !validateIncomingSkillUse(data)) {
             console.warn("[AntiCheat] 无效的无目标技能报文，已被裁判拦截");
+            requestOnlineResync('无目标技能顺序不一致');
             return;
           }
           // 远端无目标技能也要写入本地撤销栈，否则双方栈会错位，悔棋时无法恢复本地手牌额度。
@@ -6658,6 +7172,7 @@
           };
           if (!validateIncomingSkill(data)) {
             console.warn("[AntiCheat] 技能报文非法，已被裁判拦截丢弃:", data);
+            requestOnlineResync('技能状态不一致');
             return;
           }
           // destiny_point_1/2 是【命运神抽】的结果报文；前置 skill_use 已经记录了同一张牌，不能重复压栈。
@@ -7654,6 +8169,16 @@
     async function joinMqttRoom(code, btn) {
       if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
+      // 手动加入是一个全新的传输世代；先作废旧连接的异步回调。
+      // 房客不在这里伪造会话 ID，真正的 ID 只接受自房主的 join_accepted。
+      if (!isReconnecting || String(currentRoomCode || '') !== String(code)) {
+        onlineSessionId = '';
+        onlineJoinTicket = '';
+        onlineTransportGeneration++;
+        clearOnlineReliableOutbox();
+      }
+      const transportGeneration = onlineTransportGeneration;
+
       // 加入房间的一方固定执白。先在建连阶段写入颜色，避免 accepted 报文延迟时
       // 客户端仍沿用默认 BLACK，出现“双方都是黑子”并在首步互相拦截的假联机状态。
       setOnlineColor(WHITE);
@@ -7677,7 +8202,9 @@
       detachHostInviteListener();
 
       try {
-        const client = await getOrCreateMqttClient(code);
+        const client = await getOrCreateOnlineTransport(code, 'client', onlineSessionId);
+        if (transportGeneration !== onlineTransportGeneration ||
+            (currentRoomCode && String(currentRoomCode) !== String(code))) return;
         const c2hTopic = `gomoku/v3/${code}/c2h`;
         const h2cTopic = `gomoku/v3/${code}/h2c`;
 
@@ -7703,15 +8230,18 @@
         const myJoinUid = getOrCreateMatchUid();
         const sendJoinReadyBurst = (connection) => {
           const sendReady = () => {
-            if (hasJoined || joinCancelled || joiningConnection !== connection || conn !== connection || !connection.open || !connection.ready) return;
+            if (transportGeneration !== onlineTransportGeneration || hasJoined || joinCancelled ||
+                joiningConnection !== connection || conn !== connection || !connection.open || !connection.ready) return;
             const payload = JSON.stringify({
               type: 'join_ready',
               uid: myJoinUid,
               name: normalizeNetworkName(p1Name, '棋友'),
               avatar: getNetworkAvatarValue(p1Avatar),
+              sessionId: onlineSessionId || undefined,
+              joinTicket: onlineJoinTicket || undefined,
               roundId: onlineRoundId || undefined
             });
-            try { client.publish(c2hTopic, payload, { qos: 0 }); } catch (_) {}
+            try { client.publish(c2hTopic, payload, { qos: MQTT_ROOM_DATA_QOS, retain: false }); } catch (_) {}
           };
           sendReady();
           setTimeout(sendReady, 150);
@@ -7719,6 +8249,7 @@
         };
 
         const onClientInvite = (topic, payload) => {
+          if (transportGeneration !== onlineTransportGeneration) return;
           if (topic !== h2cTopic) return;
           try {
             const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
@@ -7740,6 +8271,12 @@
 
             if (data.type === 'join_confirmed' && !hasJoined) {
               if (data.targetUid && data.targetUid !== myJoinUid) return;
+              if (data.sessionId !== undefined &&
+                  (typeof data.sessionId !== 'string' || data.sessionId.length > 96 ||
+                   (onlineSessionId && data.sessionId !== onlineSessionId))) return;
+              if (data.joinTicket !== undefined &&
+                  (typeof data.joinTicket !== 'string' || data.joinTicket.length > 96)) return;
+              if (data.joinTicket !== undefined && onlineJoinTicket && data.joinTicket !== onlineJoinTicket) return;
               if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
               if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
               const readyConnection = joiningConnection;
@@ -7772,9 +8309,15 @@
               if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
               if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
               if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
+              if (data.sessionId !== undefined &&
+                  (typeof data.sessionId !== 'string' || data.sessionId.length > 96)) return;
               // accepted 可能会按 burst 重发；在上一条连接真正 ready 前只保留一个建连任务。
               if (joiningConnection) return;
-              const nextConn = new MqttRoomConnection(client, code, 'client');
+              const acceptedSessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+              if (onlineSessionId && acceptedSessionId && onlineSessionId !== acceptedSessionId) return;
+              onlineSessionId = acceptedSessionId || onlineSessionId;
+              onlineJoinTicket = typeof data.joinTicket === 'string' ? data.joinTicket : onlineJoinTicket;
+              const nextConn = new MqttRoomConnection(client, code, 'client', onlineSessionId);
               joiningConnection = nextConn;
               conn = nextConn;
               lastActiveRoomCode = code;
@@ -7795,7 +8338,8 @@
               (async () => {
                 try {
                   await nextConn.readyPromise;
-                  if (joinCancelled || joiningConnection !== nextConn || conn !== nextConn || !nextConn.open || !nextConn.ready) {
+                  if (transportGeneration !== onlineTransportGeneration || joinCancelled || joiningConnection !== nextConn ||
+                      conn !== nextConn || !nextConn.open || !nextConn.ready) {
                     throw new Error('加入请求已过期或房间连接未就绪');
                   }
                   // accepted 只代表房主信道已就绪；还要等待房主确认 join_ready，
@@ -7828,7 +8372,7 @@
         };
 
         client.on('message', onClientInvite);
-        client.subscribe(h2cTopic, { qos: 0 }, (err) => {
+        client.subscribe(h2cTopic, { qos: MQTT_ROOM_DATA_QOS }, (err) => {
           if (err) {
             joinCancelled = true;
             restoreBtn();
@@ -7837,13 +8381,13 @@
           }
 
           const sendReq = () => {
-            if (hasJoined) return;
+            if (transportGeneration !== onlineTransportGeneration || hasJoined) return;
             client.publish(c2hTopic, JSON.stringify({
               type: 'join_request',
               uid: myJoinUid,
               name: normalizeNetworkName(p1Name, '棋友'),
               avatar: getNetworkAvatarValue(p1Avatar)
-            }), { qos: 0 });
+            }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
           };
 
           sendReq();
@@ -12270,6 +12814,38 @@
       return true;
     }
 
+    // 轻量确定性状态摘要：不是密码学签名，而是用来发现丢包、乱序、旧快照和
+    // 两端技能结算不同步。真正的安全边界仍是会话隔离、角色校验和房主权威快照。
+    function getOnlineStateDigest(state = {}) {
+      const payload = {
+        board: state.board || board,
+        history: state.history || history,
+        turn: state.turn === undefined ? turn : state.turn,
+        isOver: state.isOver === undefined ? isOver : state.isOver,
+        isDraw: state.isDraw === undefined ? gameResultIsDraw : state.isDraw,
+        winnerColor: state.winnerColor === undefined ? gameWinnerColor : state.winnerColor
+      };
+      let hash = 2166136261;
+      const text = JSON.stringify(payload);
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    }
+
+    function isIncomingStateDigestValid(data) {
+      if (!data || !data.stateDigest) return true;
+      return data.stateDigest.toLowerCase() === getOnlineStateDigest({
+        board: data.board,
+        history: data.history,
+        turn: data.turn,
+        isOver: data.isOver,
+        isDraw: data.isDraw === true,
+        winnerColor: data.winnerColor || 0
+      });
+    }
+
     function settleRemoteSkillResult(reason = '对方发动干扰牌后') {
       if (isOver) return true;
       let winnerColor = 0;
@@ -12484,6 +13060,9 @@
       onlineNetworkTelemetry.localTransportRttMs = null;
       onlineNetworkTelemetry.remoteTransportRttMs = null;
       currentRoomCode = null;
+      onlineSessionId = '';
+      onlineJoinTicket = '';
+      onlineTransportGeneration++;
       clearOnlineReliableOutbox();
       onlineRoundId = '';
       pendingOnlineUndoId = '';
