@@ -13,7 +13,7 @@
         aiFast: { local: 'js/ai_fast.js' },
         audio: { local: 'js/assets/cherry_bomb_audio.js' },
         avatars: { local: 'js/assets/anime_avatars.js' },
-        // 旧版兼容层保留为按需资源；当前主联机链路直接使用页面内的 MQTT/WebRTC 实现。
+        // MQTT 仅供旧版迁移/自动化测试显式启用；当前主联机链路使用自有 WebSocket/WebRTC。
         peer: { local: 'js/peerjs.min.js', fallback: 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js' },
         p2p: { local: 'js/p2p-network.js' }
       };
@@ -2996,7 +2996,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.116</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.117</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3682,7 +3682,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.116';
+    const CURRENT_VERSION_TAG = 'v1.0.117';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -5043,8 +5043,8 @@
     // ==========================================
     // 🌐 极速秒开房间联机核心引擎 (全网络穿透·中国极速直连)
     // ==========================================
-    // 采用多个 WSS 节点分层容灾。房主和客方会逐步监听可用节点，
-    // 让两端即使处在不同运营商/网络环境，也能在共同可达的 Broker 上自动汇合。
+    // 生产联机使用项目自有 Durable Object WebSocket 中继；下面的公共 MQTT
+    // 代码仅作为旧版本迁移/自动化测试兼容层，不参与正常用户流程。
     const MQTT_BROKER_URLS = [
       'wss://broker.emqx.io:8084/mqtt',
       'wss://broker.hivemq.com:8884/mqtt',
@@ -5060,15 +5060,14 @@
     let onlineTransportPromiseKey = '';
     let onlineTransportRequestSeq = 0;
 
-    // 不再等待所有节点都完成；最快节点先让页面进入房间，其余节点在后台补齐。
+    // 旧 MQTT 兼容层的参数，仅在显式 legacy 开关下使用。
     const MQTT_CONNECT_TIMEOUT_MS = 2800;
     const MQTT_LIBRARY_WAIT_MS = 8000;
-    // MQTT 只作为信令/兜底中继：业务报文用 QoS 1，ICE 信令仍用 QoS 0，
-    // 由应用层 _mid + ACK 去重保证最终只应用一次。这样公共 Broker 短暂抖动时，
-    // 仍有 Broker 级别的重投递机会，同时不把实时 ICE 候选拖进可靠队列。
+    // 兼容适配器沿用 MQTT 的 publish/subscribe 形状：业务报文按 QoS 1 语义，
+    // ICE 信令按 QoS 0 语义；项目自有 WebSocket 中继会忽略 QoS 参数。
     const MQTT_ROOM_DATA_QOS = 1;
-    // 自有 Cloudflare Durable Object 是首选信令/可靠中继；公共 MQTT 只保留为
-    // 老版本过渡和自有中继临时不可用时的最后兜底，不再承担唯一入口。
+    // 自有 Cloudflare Durable Object 是生产信令/可靠中继；公共 MQTT 只保留为
+    // 老版本过渡和自动化测试兼容层，正常构建不会自动启用。
     const ONLINE_RELAY_ENDPOINTS = [
       'wss://gomoku-backend.xnnb04664.workers.dev/api/room/socket',
       'wss://gomoku-api.pages.dev/api/room/socket'
@@ -5078,7 +5077,7 @@
     const MAX_ONLINE_PAYLOAD_BYTES = 60 * 1024;
     const MAX_ONLINE_MESSAGES_PER_SECOND = 80;
     const MAX_ONLINE_SIGNAL_MESSAGES_PER_SECOND = 180;
-    // 会改变对局或玩家可见状态的消息不能“发出去就算完”：P2P 与 MQTT 双发，
+    // 会改变对局或玩家可见状态的消息不能“发出去就算完”：P2P 与项目自有 WebSocket 中继双发，
     // 收到端回 ACK；发送端在短时间内自动重发，接收端按 _mid 去重。
     const RELIABLE_ONLINE_MESSAGE_TYPES = new Set([
       'move', 'chat', 'sync_req', 'state_snapshot',
@@ -5092,7 +5091,7 @@
       'delivery_ack', 'profile_sync', 'reconnect_handshake', 'leave_room'
     ]);
     // 心跳只测量当前实际业务传输路径：P2P 打通后不再把 ping/pong 同时
-    // 镜像到 MQTT，否则 MQTT 的排队/跨区延迟会污染 P2P 延迟显示。
+    // 镜像到 WebSocket 中继，否则中继排队/跨区延迟会污染 P2P 延迟显示。
     const ONLINE_IMMEDIATE_MIRROR_TYPES = new Set([
       'delivery_ack', 'profile_sync', 'reconnect_handshake', 'leave_room'
     ]);
@@ -5100,7 +5099,8 @@
     const ONLINE_RELIABLE_RETRY_INTERVAL_MS = 900;
     const ONLINE_RELIABLE_MAX_ATTEMPTS = 8;
     const ONLINE_RELIABLE_MAX_AGE_MS = 10000;
-    // P2P 正常时先走直连；只有未收到 ACK 才延迟镜像到 MQTT，降低公共 Broker 抖动对落子/聊天的影响。
+    // P2P 正常时先走直连；只有未收到 ACK 才延迟镜像到项目自有中继，
+    // 降低中继短暂抖动对落子/聊天的影响。
     const ONLINE_P2P_MQTT_FAILOVER_DELAY_MS = 300;
     const ONLINE_LATENCY_SAMPLE_LIMIT = 5;
     const ONLINE_P2P_STATS_INTERVAL_MS = 2000;
@@ -5178,14 +5178,13 @@
     }
 
     function getMqttBrokerOrder(roomKey = '') {
-      // 所有房间保持同一优先级，优先命中通常最快的 EMQX；连接池会把其余节点
-      // 作为错峰备用，避免按房间随机到较慢节点，也避免双方各自命中不同备用节点。
+      // 仅供 legacy 兼容层使用；生产联机不再探测公共 Broker。
       return MQTT_BROKER_URLS.map((url, index) => ({ url, index }));
     }
 
-    // 项目自有的 WebSocket 房间中继适配器。它故意实现和 MQTT 客户端相同的
+    // 项目自有的 WebSocket 房间中继适配器。它故意实现和旧 MQTT 客户端相同的
     // 最小接口，这样既能复用已有的 ACK、去重、P2P 探测和重连状态机，
-    // 又能在公共 Broker 整体不可用时直接切到项目自己的 Cloudflare 入口。
+    // 以便复用旧业务层，同时把生产信令固定在项目自己的 Cloudflare 入口。
     class RoomRelayClient {
       constructor(endpoint, roomCode, role, sessionId = '', joinTicket = '') {
         this.url = endpoint;
@@ -5376,10 +5375,8 @@
       }
     }
 
-    // 一个房间的信令池：多个 Broker 只用于容灾汇合，普通消息通过 _mid 去重。
-    // 这样网页端和 Android WebView 即使对不同节点的可达性不同，也能在共同节点上完成握手。
-    // 节点采用轻量错峰并行探测：首节点不可达时不再串行等待 4 次超时，
-    // 但也不在同一毫秒内向公共 Broker 发起连接风暴。
+    // 旧版 MQTT 兼容池：仅在显式 legacy 开关下用于迁移/自动化测试。
+    // 生产用户不会创建这些公共 Broker 连接。
     const MQTT_FALLBACK_STAGGER_MS = 300;
     const MQTT_RECONNECT_INITIAL_DELAY_MS = 1500;
     const MQTT_RECONNECT_MAX_DELAY_MS = 15000;
@@ -5808,41 +5805,29 @@
     }
 
     async function connectRoomRelay(roomKey, role, sessionId = '') {
-      return await new Promise((resolve, reject) => {
-        let remaining = ONLINE_RELAY_ENDPOINTS.length;
-        let settled = false;
-        let lastError = null;
-        const attempts = [];
-        for (const endpoint of ONLINE_RELAY_ENDPOINTS) {
-          const relay = new RoomRelayClient(endpoint, roomKey, role, sessionId, role === 'host' ? onlineJoinTicket : '');
-          attempts.push(relay);
-          relay.readyPromise.then(() => {
-            if (settled) {
-              relay.end(true);
-              return;
-            }
-            settled = true;
-            for (const other of attempts) {
-              if (other !== relay) {
-                try { other.end(true); } catch (_) {}
-              }
-            }
-            resolve(relay);
-          }).catch(error => {
-            lastError = error;
-            try { relay.end(true); } catch (_) {}
-            remaining--;
-            if (remaining <= 0 && !settled) {
-              settled = true;
-              reject(lastError || new Error('自有房间中继不可用'));
-            }
-          });
+      // 同一房间的同一角色不能并行连接两个 DO 入口：后建立的连接会让
+      // 前一个连接被判定为重复会话，表现为“一边进房、另一边断开”。
+      // 因此这里按主入口 -> Pages 备用入口串行切换。
+      let lastError = null;
+      for (const endpoint of ONLINE_RELAY_ENDPOINTS) {
+        const relay = new RoomRelayClient(endpoint, roomKey, role, sessionId, role === 'host' ? onlineJoinTicket : '');
+        try {
+          return await relay.readyPromise;
+        } catch (error) {
+          lastError = error;
+          try { relay.end(true); } catch (_) {}
         }
-      });
+      }
+      throw lastError || new Error('自有房间中继不可用');
     }
 
-    // 先走自有 Durable Object；只有自有入口未部署、临时不可达或旧环境不支持
-    // WebSocket 时才回退公共 MQTT。这样“公共 MQTT 四节点全挂”不再直接导致无法进房。
+    function isLegacyMqttFallbackEnabled() {
+      // 公共 MQTT 只保留给旧版迁移/自动化测试，正常构建和用户流程默认关闭。
+      try { return window.__GOMOKU_ENABLE_LEGACY_MQTT__ === true; } catch (_) { return false; }
+    }
+
+    // 生产联机只使用项目自有 Durable Object WebSocket 中继。
+    // P2P/TURN 仍负责低延迟数据通道；WebSocket 中继负责信令和最终可靠兜底。
     function getOrCreateOnlineTransport(roomKey = '', role = 'host', sessionId = '') {
       const normalizedRoomKey = String(roomKey || '');
       const normalizedRole = role === 'client' ? 'client' : 'host';
@@ -5873,7 +5858,11 @@
         ? connectRoomRelay(normalizedRoomKey, normalizedRole, normalizedSessionId)
         : Promise.reject(new Error('本地测试已禁用自有中继'));
       const promise = relayAttempt.catch((relayError) => {
-        console.warn('[Room relay] 自有中继不可用，回退 MQTT:', relayError?.message || relayError);
+        if (!isLegacyMqttFallbackEnabled()) {
+          console.error('[Room relay] 项目自有 WebSocket 中继不可用:', relayError?.message || relayError);
+          throw new Error('项目联机中继不可用，请检查网络后重试');
+        }
+        console.warn('[Legacy MQTT] 仅测试/迁移开关已启用，使用公共 MQTT 兼容通道:', relayError?.message || relayError);
         return getOrCreateMqttClient(normalizedRoomKey);
       }).then(client => {
         if (requestSeq !== onlineTransportRequestSeq || !client || client.closed) {
@@ -5956,7 +5945,8 @@
           );
           return servers;
         } catch (error) {
-          // TURN 不可用时继续使用 STUN；MQTT 仍是最终联机兜底，不能因凭据接口失败阻断进房。
+          // TURN 不可用时继续使用 STUN；项目自有 WebSocket 中继仍可承接信令，
+          // 不能因凭据接口失败阻断进房。
           console.warn('[WebRTC ICE] TURN 凭据获取失败，回退 STUN:', error?.message || error);
           return DEFAULT_WEBRTC_ICE_SERVERS;
         } finally {
@@ -6183,12 +6173,12 @@
           this._acknowledgeReliableMessage(data.ackId);
           return;
         }
-        // 先确认“传输层已收到”，再做业务去重。这样 P2P/MQTT 重复到达时，
+        // 先确认“传输层已收到”，再做业务去重。这样 P2P/中继重复到达时，
         // 即使首个 ACK 丢了，重复报文也能再次触发 ACK，而不会重复落子或重复聊天。
         if (RELIABLE_ONLINE_MESSAGE_TYPES.has(data.type) && data._mid) {
           this.send({ type: 'delivery_ack', ackId: data._mid });
         }
-        // 消息去重（若 P2P 与 MQTT 收到同一条数据时自动忽略重复项）
+        // 消息去重（若 P2P 与中继收到同一条数据时自动忽略重复项）
         if (data._mid) {
           if (this.processedMsgIds.has(data._mid)) return;
           this.processedMsgIds.add(data._mid);
@@ -6782,8 +6772,8 @@
         try { jsonStr = JSON.stringify(message); } catch (_) { return false; }
         if (getOnlinePayloadByteLength(jsonStr) > MAX_ONLINE_PAYLOAD_BYTES) return false;
 
-        // P2P 打通后优先走 WebRTC；可靠消息先走低延迟直连，ACK 未及时回来时再镜像 MQTT，
-        // 兼顾正常对局延迟与 DataChannel 半开、手机切网、公共 Broker 抖动时的可靠性。
+        // P2P 打通后优先走 WebRTC；可靠消息先走低延迟直连，ACK 未及时回来时再镜像项目自有中继，
+        // 兼顾正常对局延迟与 DataChannel 半开、手机切网、中继抖动时的可靠性。
         let sentViaP2p = false;
         let sentViaMqtt = false;
         const allowP2p = preferredTransport !== 'mqtt';
@@ -7955,7 +7945,7 @@
         if (conn !== connection) return;
         if (conn && conn.open && gameMode === 'online' && !isOver) {
           if (countMiss) missedPings++;
-          // MQTT close/offline 会立即触发重连；只有半开连接才走心跳兜底，约 12 秒判定失联。
+          // WebSocket 中继 close/offline 会立即触发重连；只有半开连接才走心跳兜底。
           if (countMiss && missedPings >= 3) {
             triggerOnlineReconnect("心跳无响应");
             return;
@@ -8044,10 +8034,10 @@
             (!Number.isFinite(data.peerLatencyMs) || data.peerLatencyMs < 0 || data.peerLatencyMs > 120000)) return;
         if (data.peerTransportRttMs !== undefined && data.peerTransportRttMs !== null &&
             (!Number.isFinite(data.peerTransportRttMs) || data.peerTransportRttMs < 0 || data.peerTransportRttMs > 120000)) return;
-        // 新局轮次不一致的报文一律丢弃，防止旧 MQTT/P2P 报文在重开后再次触发旧胜局。
+        // 新局轮次不一致的报文一律丢弃，防止旧中继/P2P 报文在重开后再次触发旧胜局。
         if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
         // pong 的延迟只在后面确认“请求和响应走的是同一条链路”后记账，
-        // 避免 P2P 切换瞬间迟到的 MQTT pong 污染 P2P 延迟。
+        // 避免 P2P 切换瞬间迟到的中继 pong 污染 P2P 延迟。
         if (data.type !== 'pong') {
           markOnlinePeerSeen(data.networkState || data.peerState || '在线', undefined, data.peerTransportRttMs);
         }
@@ -10010,10 +10000,6 @@
       const prevAvatar = document.getElementById('matchMyAvatarPreview');
       if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
       document.getElementById('onlineModal').classList.add('show');
-      // 用户明确进入联机大厅后才加载 MQTT，首屏不再解析 300KB 联机库。
-      if (typeof window.ensureGomokuResource === 'function') {
-        void window.ensureGomokuResource('mqtt').catch(() => {});
-      }
       switchOnlineTab(tab);
     }
     function closeOnlineModal() {

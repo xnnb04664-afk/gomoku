@@ -123,6 +123,7 @@ def main():
                 f"window.__gomokuMockRole = {json.dumps(role)}; "
                 f"window.__gomokuMockClientId = {json.dumps(role)}; "
                 "window.__GOMOKU_DISABLE_RELAY__ = true; "
+                "window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true; "
                 "try { Object.defineProperty(window, 'RTCPeerConnection', { configurable: true, value: undefined }); } catch (_) {} "
                 "try { Object.defineProperty(window, 'webkitRTCPeerConnection', { configurable: true, value: undefined }); } catch (_) {}"
             )

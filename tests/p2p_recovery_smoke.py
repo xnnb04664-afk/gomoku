@@ -21,15 +21,16 @@ def main():
         context = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=1)
         host = context.new_page()
         guest = context.new_page()
-        host.add_init_script("window.__GOMOKU_DISABLE_RELAY__ = true;")
-        guest.add_init_script("window.__GOMOKU_DISABLE_RELAY__ = true;")
+        host.add_init_script("window.__GOMOKU_DISABLE_RELAY__ = true; window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;")
+        guest.add_init_script("window.__GOMOKU_DISABLE_RELAY__ = true; window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;")
 
         try:
             for name, page in (("host", host), ("guest", guest)):
                 page.add_init_script(
                     f"window.__gomokuMockRole = {json.dumps(name)}; "
                     f"window.__gomokuMockClientId = {json.dumps(name)}; "
-                    "window.__GOMOKU_DISABLE_RELAY__ = true;"
+                    "window.__GOMOKU_DISABLE_RELAY__ = true; "
+                    "window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;"
                 )
                 page.add_init_script(MOCK_MQTT_INIT)
                 page.route("**/js/mqtt.min.js", lambda route: route.fulfill(status=200, content_type="application/javascript", body="window.mqtt = window.__gomokuMockMqtt;"))
