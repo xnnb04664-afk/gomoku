@@ -4758,7 +4758,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.114</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.115</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -5444,7 +5444,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.114';
+    const CURRENT_VERSION_TAG = 'v1.0.115';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -6861,6 +6861,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
     const ONLINE_TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
     const ONLINE_MESSAGE_TYPES = new Set([
       'chat', 'delivery_ack', 'profile_sync', 'ping', 'pong', 'sync_req', 'state_snapshot', 'reconnect_handshake',
+      'join_ready', 'join_confirmed',
       'move', 'leave_room', 'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
       'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone', 'skill_shift_stone',
       'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
@@ -8387,6 +8388,14 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         let hostHandshakeDone = false;
         let activeGuestUid = activeOnlineGuestUid || null;
         let hostJoinInFlight = null;
+        let pendingGuestReady = null;
+        let hostJoinReadyTimer = null;
+
+        const clearPendingGuestReady = () => {
+          if (hostJoinReadyTimer) clearTimeout(hostJoinReadyTimer);
+          hostJoinReadyTimer = null;
+          pendingGuestReady = null;
+        };
 
         // 只有房主自己的房间信道和 MqttRoomConnection 都准备好后，才回送 accepted。
         // 旧逻辑先回 accepted、后建连接，客方会提前进入对局，房主连接失败时就会出现“一边断开、一边没进房”。
@@ -8413,15 +8422,57 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
             const rawPayload = payload && typeof payload.toString === 'function' ? payload.toString() : '';
             if (rawPayload.length > 64 * 1024) return;
             const data = JSON.parse(rawPayload);
-            if (data.type !== 'join_request' && data.type !== 'reconnect_handshake') return;
+            if (data.type !== 'join_request' && data.type !== 'reconnect_handshake' && data.type !== 'join_ready') return;
             if (data.name !== undefined && (typeof data.name !== 'string' || data.name.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return;
             if (data.avatar !== undefined && !isSafeNetworkAvatar(data.avatar)) return;
             if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
             if (data.type === 'reconnect_handshake' && data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
+            if (data.type === 'join_ready' && data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
             const reqUid = String(data.uid || data.name || 'guest').slice(0, 128);
 
+            // 客方只有在自己的 MqttRoomConnection ready 后才会发 join_ready。
+            // 房主在这一步之前不能把对方显示成已进房，更不能提前切入 online，
+            // 否则客方建连失败时就会出现“房主看到对方、客方仍在和人机下棋”。
+            if (data.type === 'join_ready') {
+              const pending = pendingGuestReady;
+              if (!pending || pending.uid !== reqUid || pending.connection !== conn ||
+                  !conn || !conn.open || !conn.ready || currentRoomCode !== roomCode) {
+                return;
+              }
+              clearPendingGuestReady();
+              p2Name = normalizeNetworkName(data.name, pending.name || '好友');
+              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (pending.avatar || '👧');
+              updatePlayerHeaderUI();
+              if (gameMode !== 'online') setMode('online');
+              else updateOnlineNetworkUI();
+
+              if (badgeEl) {
+                badgeEl.innerHTML = '🟢 已与好友连接，可以开始对弈';
+                badgeEl.style.color = '#10b981';
+              }
+
+              const sendJoinConfirmed = () => {
+                try {
+                  client.publish(h2cTopic, JSON.stringify({
+                    type: 'join_confirmed',
+                    targetUid: reqUid,
+                    roundId: onlineRoundId || undefined
+                  }), { qos: 0 });
+                } catch (_) {}
+              };
+              sendJoinConfirmed();
+              setTimeout(sendJoinConfirmed, 150);
+              setTimeout(sendJoinConfirmed, 350);
+              showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
+              closeOnlineModal();
+              try {
+                conn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
+              } catch (_) {}
+              return;
+            }
+
             // 🛡️ 第三人进房拦截：若房间已有客方在对局，且请求者不是当前对局客方，直接回绝人数已满
-            if (activeGuestUid && reqUid !== activeGuestUid && gameMode === 'online' && !isOver) {
+            if (activeGuestUid && reqUid !== activeGuestUid && (pendingGuestReady || (gameMode === 'online' && !isOver))) {
               try {
                 client.publish(h2cTopic, JSON.stringify({
                   type: 'room_full',
@@ -8458,9 +8509,8 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
               conn = nextConn;
               myOnlineColor = BLACK;
               lastActiveRoomCode = roomCode;
-              p2Name = normalizeNetworkName(data.name, p2Name || '好友');
-              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (p2Avatar || '👧');
-              updatePlayerHeaderUI();
+              const guestName = normalizeNetworkName(data.name, '好友');
+              const guestAvatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👧';
               setupConn();
               await nextConn.readyPromise;
               if (conn !== nextConn || !nextConn.open || !nextConn.ready) return;
@@ -8468,13 +8518,38 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
               // ACK 必须排在房主连接 ready 之后，且继续发送短 burst 兼容弱网/切后台。
               sendAcceptedBurst(reqUid);
               if (reconnectingNow) {
+                p2Name = guestName;
+                p2Avatar = guestAvatar;
+                updatePlayerHeaderUI();
                 onReconnectSuccess();
               } else {
-                showGameNotice("🎉 好友已成功加入房间！您执黑先行~", false);
-                closeOnlineModal();
-                if (gameMode !== 'online') setMode('online');
-                else updateOnlineNetworkUI();
-                nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
+                pendingGuestReady = {
+                  uid: reqUid,
+                  connection: nextConn,
+                  name: guestName,
+                  avatar: guestAvatar
+                };
+                if (hostJoinReadyTimer) clearTimeout(hostJoinReadyTimer);
+                hostJoinReadyTimer = setTimeout(() => {
+                  if (!pendingGuestReady || pendingGuestReady.connection !== nextConn || conn !== nextConn) return;
+                  clearPendingGuestReady();
+                  hostHandshakeDone = false;
+                  try { nextConn.close(true); } catch (_) {}
+                  if (conn === nextConn) conn = null;
+                  if (gameMode !== 'online') {
+                    p2Name = '大师AI';
+                    p2Avatar = '🤖';
+                    updatePlayerHeaderUI();
+                  }
+                  if (badgeEl) {
+                    badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
+                    badgeEl.style.color = '#10b981';
+                  }
+                }, 10000);
+                if (badgeEl) {
+                  badgeEl.innerHTML = '🟡 等待好友完成进房确认...';
+                  badgeEl.style.color = '#f59e0b';
+                }
               }
             })().catch((err) => {
               console.warn('[host room connection]', err);
@@ -10517,6 +10592,9 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
       // 加入房间的一方固定执白。先在建连阶段写入颜色，避免 accepted 报文延迟时
       // 客户端仍沿用默认 BLACK，出现“双方都是黑子”并在首步互相拦截的假联机状态。
       setOnlineColor(WHITE);
+      // 加入过程完成前冻结旧的人机搜索，避免用户已经点击加入房间却继续看见旧棋局中的 AI 落子。
+      aiTurnSeq++;
+      aiThinking = false;
 
       if (currentRoomCode && String(currentRoomCode) !== String(code)) {
         clearOnlineReliableOutbox();
@@ -10543,6 +10621,7 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
         let joiningConnection = null;
         let joinInterval = null;
         let joinTimeout = null;
+        let joinConfirmTimeout = null;
 
         const restoreBtn = () => {
           if (btn) {
@@ -10551,7 +10630,29 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
           }
         };
 
+        const clearJoinConfirmTimeout = () => {
+          if (joinConfirmTimeout) clearTimeout(joinConfirmTimeout);
+          joinConfirmTimeout = null;
+        };
+
         const myJoinUid = getOrCreateMatchUid();
+        const sendJoinReadyBurst = (connection) => {
+          const sendReady = () => {
+            if (hasJoined || joinCancelled || joiningConnection !== connection || conn !== connection || !connection.open || !connection.ready) return;
+            const payload = JSON.stringify({
+              type: 'join_ready',
+              uid: myJoinUid,
+              name: normalizeNetworkName(p1Name, '棋友'),
+              avatar: getNetworkAvatarValue(p1Avatar),
+              roundId: onlineRoundId || undefined
+            });
+            try { client.publish(c2hTopic, payload, { qos: 0 }); } catch (_) {}
+          };
+          sendReady();
+          setTimeout(sendReady, 150);
+          setTimeout(sendReady, 350);
+        };
+
         const onClientInvite = (topic, payload) => {
           if (topic !== h2cTopic) return;
           try {
@@ -10570,6 +10671,33 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
                 showGameNotice('🚫 该房间已有 2 位棋友正在对弈，人数已满！请让好友新建房间或更换房间码。', true);
                 return;
               }
+            }
+
+            if (data.type === 'join_confirmed' && !hasJoined) {
+              if (data.targetUid && data.targetUid !== myJoinUid) return;
+              if (data.roundId !== undefined && (typeof data.roundId !== 'string' || data.roundId.length > 80)) return;
+              if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
+              const readyConnection = joiningConnection;
+              if (!readyConnection || conn !== readyConnection || !readyConnection.open || !readyConnection.ready) return;
+              hasJoined = true;
+              clearJoinConfirmTimeout();
+              clearInterval(joinInterval);
+              clearTimeout(joinTimeout);
+              client.removeListener('message', onClientInvite);
+              restoreBtn();
+              closeOnlineModal();
+              if (gameMode !== 'online') setMode('online');
+              else updateOnlineNetworkUI();
+              const guestBadgeEl = document.getElementById('roomStatusBadge');
+              if (guestBadgeEl) {
+                guestBadgeEl.innerHTML = '🟢 已与好友连接，可以开始对弈';
+                guestBadgeEl.style.color = '#10b981';
+              }
+              showGameNotice('🎉 已成功连入好友房间！您执白~', false);
+              try {
+                readyConnection.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
+              } catch (_) {}
+              return;
             }
 
             if (data.type === 'join_accepted' && !hasJoined) {
@@ -10605,24 +10733,27 @@ const ANIME_AVATAR_GIRL = window.ANIME_AVATAR_GIRL;
                   if (joinCancelled || joiningConnection !== nextConn || conn !== nextConn || !nextConn.open || !nextConn.ready) {
                     throw new Error('加入请求已过期或房间连接未就绪');
                   }
-                  hasJoined = true;
-                  clearInterval(joinInterval);
-                  clearTimeout(joinTimeout);
-                  client.removeListener('message', onClientInvite);
-                  restoreBtn();
-                  closeOnlineModal();
-                  if (gameMode !== 'online') setMode('online');
-                  else updateOnlineNetworkUI();
-                  showGameNotice('🎉 已成功连入好友房间！您执白~', false);
-                  nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
+                  // accepted 只代表房主信道已就绪；还要等待房主确认 join_ready，
+                  // 防止一端提前显示进房、另一端仍停留在人机模式。
+                  sendJoinReadyBurst(nextConn);
+                  clearJoinConfirmTimeout();
+                  joinConfirmTimeout = setTimeout(() => {
+                    if (hasJoined || joiningConnection !== nextConn) return;
+                    try { nextConn.close(true); } catch (_) {}
+                    if (conn === nextConn) conn = null;
+                    joiningConnection = null;
+                  }, 8000);
+                  try { nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) }); } catch (_) {}
                 } catch (err) {
                   console.warn('[guest room connection]', err);
+                  clearJoinConfirmTimeout();
                   if (conn === nextConn) {
                     try { nextConn.close(true); } catch (_) {}
                     conn = null;
                   }
                 } finally {
-                  if (joiningConnection === nextConn) joiningConnection = null;
+                  // 等待 join_confirmed 时必须保留引用；否则确认报文会被当成旧连接直接丢弃。
+                  if (joiningConnection === nextConn && !joinConfirmTimeout && !hasJoined) joiningConnection = null;
                 }
               })();
             }

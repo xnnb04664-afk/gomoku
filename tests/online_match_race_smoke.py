@@ -61,9 +61,10 @@ MOCK_MQTT_INIT = r"""
         const count = (client.subscribeCounts.get(topic) || 0) + 1;
         client.subscribeCounts.set(topic, count);
         const delayedHostRoomSubscription = role === 'host' && topic.endsWith('/c2h') && count >= 2;
+        const delayedGuestRoomSubscription = role === 'guest' && topic.endsWith('/h2c') && count >= 2;
         // Host's first broker is healthy; guest's first broker is unreachable.
         // This reproduces asymmetric fallback selection between two networks.
-        setTimeout(() => callback && callback(null), delayedHostRoomSubscription ? 700 : 0);
+        setTimeout(() => callback && callback(null), (delayedHostRoomSubscription || delayedGuestRoomSubscription) ? 700 : 0);
       };
       client.publish = (topic, payload) => {
         try {
@@ -134,6 +135,18 @@ def main():
 
         pages["host"].evaluate("code => window.initHostPeer(code, true)", room)
         pages["guest"].evaluate("code => window.joinOnlineRoom(code)", room)
+        pages["host"].wait_for_timeout(250)
+
+        pending_states = {
+            role: page.evaluate(
+                "() => ({ mode: gameMode, p2: document.querySelector('#p2NameLabel')?.textContent || '', badge: document.querySelector('#roomStatusBadge')?.textContent?.trim() || '' })"
+            )
+            for role, page in pages.items()
+        }
+        if any(state["mode"] != "ai" for state in pending_states.values()):
+            raise AssertionError(f"a room must not enter online mode before both sides confirm readiness: {pending_states}")
+        if "大师AI" not in pending_states["host"]["p2"]:
+            raise AssertionError(f"host displayed a guest before join confirmation: {pending_states}")
         pages["guest"].wait_for_timeout(2_500)
 
         for role, page in pages.items():
