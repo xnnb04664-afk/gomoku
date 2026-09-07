@@ -7,6 +7,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -188,6 +192,61 @@ public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
     private static final int CHAT_EXPORT_REQUEST_CODE = 1002;
     private String mPendingChatExportContent;
+    private ConnectivityManager mConnectivityManager;
+    private ConnectivityManager.NetworkCallback mNetworkCallback;
+    private long mNetworkEventSequence = 0L;
+
+    private void registerNetworkMonitor() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
+        try {
+            mConnectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (mConnectivityManager == null) return;
+            NetworkRequest request = new NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build();
+            mNetworkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(Network network) {
+                    notifyWebNetworkChanged("network_available");
+                }
+
+                @Override
+                public void onLost(Network network) {
+                    notifyWebNetworkChanged("network_lost");
+                }
+
+                @Override
+                public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                    notifyWebNetworkChanged("network_capabilities_changed");
+                }
+            };
+            mConnectivityManager.registerNetworkCallback(request, mNetworkCallback);
+        } catch (Exception e) {
+            android.util.Log.w("MainActivity", "Network monitor unavailable: " + e.getMessage());
+            mNetworkCallback = null;
+        }
+    }
+
+    private void unregisterNetworkMonitor() {
+        if (mConnectivityManager == null || mNetworkCallback == null) return;
+        try {
+            mConnectivityManager.unregisterNetworkCallback(mNetworkCallback);
+        } catch (Exception ignored) {}
+        mNetworkCallback = null;
+        mConnectivityManager = null;
+    }
+
+    private void notifyWebNetworkChanged(final String reason) {
+        final long sequence = ++mNetworkEventSequence;
+        runOnUiThread(() -> {
+            if (mWebView == null) return;
+            String safeReason = org.json.JSONObject.quote(reason == null ? "network_changed" : reason);
+            String safeSequence = org.json.JSONObject.quote("android-network-" + sequence);
+            mWebView.evaluateJavascript(
+                    "if (window.__gomokuNativeNetworkChanged) window.__gomokuNativeNetworkChanged(" +
+                            safeReason + "," + safeSequence + ");", null);
+        });
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -254,6 +313,7 @@ public class MainActivity extends Activity {
         setContentView(mWebView);
 
         setupWebView();
+        registerNetworkMonitor();
 
         // WebView 初始化期间通常已经完成端口绑定；仅保留 120ms 极端兜底等待。
         boolean serverReady = mLocalServer.awaitReady(120);
@@ -849,6 +909,7 @@ public class MainActivity extends Activity {
         if (mWebView != null) {
             mWebView.onResume();
             mWebView.resumeTimers();
+            notifyWebNetworkChanged("android_resume");
         }
         // 如果是从系统授权页面返回且已获得安装权限，立即呼起安装已下载好的安装包
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sLastDownloadedFile != null && sLastDownloadedFile.exists()) {
@@ -1073,6 +1134,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        unregisterNetworkMonitor();
         mPendingChatExportContent = null;
         if (mFilePathCallback != null) {
             mFilePathCallback.onReceiveValue(null);

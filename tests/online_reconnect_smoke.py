@@ -79,10 +79,11 @@ def main():
             guest.evaluate(
                 """
                 () => {
-                  if (!conn || typeof conn._markTransportClosed !== 'function') {
-                    throw new Error('reconnect hook unavailable');
+                  if (typeof window.__gomokuNativeNetworkChanged !== 'function') {
+                    throw new Error('network handoff hook unavailable');
                   }
-                  conn._markTransportClosed(new Error('smoke reconnect'));
+                  // 模拟 Android ConnectivityManager 在 WiFi→蜂窝数据切换时的回调。
+                  window.__gomokuNativeNetworkChanged('smoke_wifi_to_cellular', 'smoke-cellular');
                 }
                 """
             )

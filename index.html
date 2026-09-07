@@ -1823,7 +1823,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.113</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.114</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2509,7 +2509,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.113';
+    const CURRENT_VERSION_TAG = 'v1.0.114';
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -4058,6 +4058,47 @@
         });
       }
 
+      _getLiveEntries() {
+        return [...this.clients.values()].filter(entry => entry && entry.client && entry.client.connected);
+      }
+
+      isUsable() {
+        if (this.closed) return false;
+        const liveEntries = this._getLiveEntries();
+        if (!liveEntries.length) {
+          if (this.clients.size > 0) this._markPoolOffline('连接状态失效');
+          else this.connected = false;
+          return false;
+        }
+        this.connected = true;
+        return true;
+      }
+
+      _markPoolOffline(eventName = '断开') {
+        if (this.closed) return;
+        this.closed = true;
+        this.connected = false;
+        for (const timer of this.retryTimers.values()) clearTimeout(timer);
+        this.retryTimers.clear();
+        this.pendingCandidates.clear();
+        const entries = [...this.clients.values()];
+        this.clients.clear();
+        for (const entry of entries) {
+          try { entry.client.removeListener('message', entry.message); } catch (_) {}
+          try { entry.client.removeListener('close', entry.close); } catch (_) {}
+          try { entry.client.removeListener('offline', entry.offline); } catch (_) {}
+          try { entry.client.removeListener('error', entry.error); } catch (_) {}
+          try { entry.client.end(true); } catch (_) {}
+        }
+        console.warn(`[MQTT] 房间信令池已${eventName}，准备自动重连`);
+        this.emit('offline');
+        this.emit('close');
+      }
+
+      invalidate(reason = '网络切换') {
+        this._markPoolOffline(reason);
+      }
+
       _connectCandidate(candidate) {
         return new Promise((resolve, reject) => {
           let client = null;
@@ -4181,14 +4222,7 @@
         try { entry.client.removeListener('error', entry.error); } catch (_) {}
         if (this.clients.size > 0) this._scheduleCandidateRetry(entry.candidate);
         if (this.clients.size === 0 && !this.closed) {
-          this.connected = false;
-          this.closed = true;
-          for (const timer of this.retryTimers.values()) clearTimeout(timer);
-          this.retryTimers.clear();
-          this.pendingCandidates.clear();
-          console.warn(`[MQTT] 房间信令池已${eventName}，准备自动重连`);
-          this.emit('offline');
-          this.emit('close');
+          this._markPoolOffline(eventName);
         }
       }
 
@@ -4196,8 +4230,9 @@
         const opts = options && typeof options === 'object' ? options : {};
         const cb = typeof options === 'function' ? options : callback;
         this.subscriptions.set(String(topic), opts);
-        const entries = [...this.clients.values()];
+        const entries = this._getLiveEntries();
         if (!entries.length) {
+          this._markPoolOffline('订阅时连接失效');
           if (typeof cb === 'function') setTimeout(() => cb(new Error('信令连接尚未就绪')), 0);
           return;
         }
@@ -4229,12 +4264,19 @@
 
       publish(topic, payload, options) {
         let sent = false;
-        for (const entry of this.clients.values()) {
+        const entries = this._getLiveEntries();
+        if (!entries.length) {
+          this._markPoolOffline('发送时连接失效');
+          return false;
+        }
+        for (const entry of entries) {
           try {
             entry.client.publish(topic, payload, options);
             sent = true;
           } catch (_) {}
         }
+        this.connected = sent;
+        if (!sent) this._markPoolOffline('发送失败');
         return sent;
       }
 
@@ -4272,6 +4314,9 @@
         if (this.closed) return;
         this.closed = true;
         this.connected = false;
+        for (const timer of this.retryTimers.values()) clearTimeout(timer);
+        this.retryTimers.clear();
+        this.pendingCandidates.clear();
         for (const entry of this.clients.values()) {
           try { entry.client.removeListener('message', entry.message); } catch (_) {}
           try { entry.client.removeListener('close', entry.close); } catch (_) {}
@@ -4308,12 +4353,18 @@
       }
     }
 
+    function isMqttPoolUsable(client) {
+      if (!client) return false;
+      if (typeof client.isUsable === 'function') return client.isUsable();
+      return client.connected === true;
+    }
+
     function getOrCreateMqttClient(roomKey = '') {
       const normalizedRoomKey = String(roomKey || '');
-      if (mqttClient && mqttClient.connected && mqttClient.roomKey === normalizedRoomKey) {
+      if (mqttClient && mqttClient.roomKey === normalizedRoomKey && isMqttPoolUsable(mqttClient)) {
         return Promise.resolve(mqttClient);
       }
-      if (mqttClient && mqttClient.roomKey === normalizedRoomKey && !mqttClient.connected) {
+      if (mqttClient && mqttClient.roomKey === normalizedRoomKey && !isMqttPoolUsable(mqttClient)) {
         closeMqttClientPool();
       }
       if (mqttClientPromise) {
@@ -4490,7 +4541,7 @@
         this.mqttCloseHandler = () => this._markTransportClosed(new Error('信令连接已断开'));
         this.mqttOfflineHandler = () => this._markTransportClosed(new Error('信令连接已离线'));
         this.mqttErrorHandler = (err) => {
-          if (this.open && (!this.client || !this.client.connected)) this._markTransportClosed(err || new Error('信令网络异常'));
+          if (this.open && !isMqttPoolUsable(this.client)) this._markTransportClosed(err || new Error('信令网络异常'));
         };
 
         this.client.on('message', this.messageHandler);
@@ -4523,7 +4574,7 @@
 
       _subscribeTopics() {
         return new Promise((resolve, reject) => {
-          if (!this.client || !this.client.connected) {
+          if (!isMqttPoolUsable(this.client)) {
             reject(new Error('信令连接尚未就绪'));
             return;
           }
@@ -4552,7 +4603,7 @@
       }
 
       _publishSignal(type, extra = {}) {
-        if (!this.open || !this.client || !this.client.connected || !P2P_SIGNAL_TYPES.has(type)) return false;
+        if (!this.open || !isMqttPoolUsable(this.client) || !P2P_SIGNAL_TYPES.has(type)) return false;
         const signal = { ...extra, sender: this.role, type };
         if (this.p2pSessionId) signal.sessionId = this.p2pSessionId;
         try {
@@ -5094,7 +5145,7 @@
       }
 
       _publishMqttPayload(jsonStr) {
-        if (!this.client || !this.client.connected) return false;
+        if (!isMqttPoolUsable(this.client)) return false;
         try {
           this.client.publish(this.pubTopic, jsonStr, { qos: 0 });
           return true;
@@ -5574,6 +5625,18 @@
       // 前 2 次采用轻量 HUD 提示，后台自动静默接续，不强行弹出全屏窗口干扰玩家
       showGameNotice("⚡ 网络连接轻微波动，正在后台自动接续...", false);
 
+      // 心跳超时并不一定伴随 WebSocket close（WiFi→流量时尤其常见）。
+      // 重连前主动废弃旧池和旧 P2P，禁止后续逻辑误把半开连接当成新连接复用。
+      const stalePool = mqttClient;
+      const staleConnection = conn;
+      if (stalePool && typeof stalePool.invalidate === 'function') {
+        stalePool.invalidate(`重连触发：${reason}`);
+      }
+      if (staleConnection && staleConnection.open && !staleConnection.closed &&
+          typeof staleConnection._markTransportClosed === 'function') {
+        staleConnection._markTransportClosed(new Error(`重连触发：${reason}`));
+      }
+
       if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
       doAutoReconnect();
     }
@@ -5591,7 +5654,7 @@
       try {
         const roomCode = currentRoomCode;
         const client = await getOrCreateMqttClient(roomCode);
-        if (conn && conn.open && conn.ready && client.connected) {
+        if (conn && conn.open && conn.ready && isMqttPoolUsable(client)) {
           onReconnectSuccess();
           return;
         }
@@ -5763,7 +5826,7 @@
         if (conn.p2pRoute === 'direct') return 'P2P直连';
         return 'P2P检测';
       }
-      if (conn.client && conn.client.connected) return 'MQTT中继';
+      if (conn.client && isMqttPoolUsable(conn.client)) return 'MQTT中继';
       return '在线';
     }
 
@@ -5774,7 +5837,7 @@
 
     function getLocalOnlineTransportPath() {
       if (conn && conn.isP2pReady && conn.dc && conn.dc.readyState === 'open') return 'p2p';
-      if (conn && conn.client && conn.client.connected) return 'mqtt';
+      if (conn && conn.client && isMqttPoolUsable(conn.client)) return 'mqtt';
       return '';
     }
 
@@ -5847,21 +5910,96 @@
       }
     }
 
+    let onlineNetworkChangeTimer = null;
+    let lastOnlineNetworkSignature = '';
+    let lastOnlineNetworkResetAt = 0;
+    let onlineNetworkChangeSequence = 0;
+    const ONLINE_NETWORK_CHANGE_DEBOUNCE_MS = 650;
+    const ONLINE_NETWORK_RESET_COOLDOWN_MS = 1200;
+
+    function getBrowserNetworkSignature() {
+      try {
+        const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        const parts = [navigator.onLine === false ? 'offline' : 'online'];
+        if (connection) {
+          parts.push(connection.type || '');
+          parts.push(connection.effectiveType || '');
+          parts.push(Number.isFinite(connection.downlink) ? String(connection.downlink) : '');
+          parts.push(Number.isFinite(connection.rtt) ? String(connection.rtt) : '');
+          parts.push(connection.saveData ? 'save-data' : 'normal');
+        }
+        return parts.join('|');
+      } catch (_) {
+        return navigator.onLine === false ? 'offline' : 'online';
+      }
+    }
+
+    function handleOnlineNetworkChange(reason = '网络切换', signature = '', force = false) {
+      const nextSignature = String(signature || getBrowserNetworkSignature()).slice(0, 160);
+      if (!force && nextSignature && nextSignature === lastOnlineNetworkSignature) return;
+      lastOnlineNetworkSignature = nextSignature || `event-${Date.now()}`;
+      updateOnlineNetworkUI();
+      if (gameMode !== 'online' || isOver) return;
+      const now = Date.now();
+      if (!force && now - lastOnlineNetworkResetAt < ONLINE_NETWORK_RESET_COOLDOWN_MS) return;
+      lastOnlineNetworkResetAt = now;
+
+      // 网络接口切换时，旧 WebSocket/ICE 可能长时间保持“假连接”。先主动销毁旧信令池，
+      // 让 conn.close/error 路径接管当前房间，再由原有重连逻辑用同一房间号和 roundId 重建。
+      const resetReason = `网络切换：${String(reason).slice(0, 80)}`;
+      const activeConnection = conn;
+      const activePool = mqttClient;
+      if (activePool && typeof activePool.invalidate === 'function') {
+        activePool.invalidate(resetReason);
+      }
+      if (activeConnection && activeConnection.open && !activeConnection.closed &&
+          typeof activeConnection._markTransportClosed === 'function') {
+        activeConnection._markTransportClosed(new Error(resetReason));
+      }
+      if ((!activeConnection || !activeConnection.open) && !isReconnecting) {
+        triggerOnlineReconnect(resetReason);
+      }
+    }
+
+    function scheduleOnlineNetworkChange(reason = '网络变化', signature = '', force = false) {
+      if (onlineNetworkChangeTimer) clearTimeout(onlineNetworkChangeTimer);
+      const sequence = ++onlineNetworkChangeSequence;
+      onlineNetworkChangeTimer = setTimeout(() => {
+        onlineNetworkChangeTimer = null;
+        if (sequence !== onlineNetworkChangeSequence) return;
+        handleOnlineNetworkChange(reason, signature, force);
+      }, ONLINE_NETWORK_CHANGE_DEBOUNCE_MS);
+    }
+
+    // Android 原生 ConnectivityManager、Chrome Network Information API 和普通 online/offline
+    // 事件统一进入同一去抖入口；这样 WiFi→4G/5G 不依赖浏览器是否派发 offline 事件。
+    window.__gomokuNativeNetworkChanged = (reason = 'Android网络变化', signature = '') => {
+      scheduleOnlineNetworkChange(reason, signature || `${reason}-${Date.now()}`, true);
+    };
+
     try {
       window.addEventListener('offline', () => {
-        updateOnlineNetworkUI();
+        scheduleOnlineNetworkChange('设备离线', 'offline', true);
         if (gameMode === 'online' && !isOver) {
           showGameNotice('📴 当前设备已离线，网络恢复后将自动重连…', true);
         }
       });
       window.addEventListener('online', () => {
-        updateOnlineNetworkUI();
-        if (gameMode !== 'online' || isOver) return;
-        if (isReconnecting) {
-          manualTriggerReconnect();
-        } else if (!conn || !conn.open || !conn.ready) {
-          triggerOnlineReconnect('网络已恢复');
+        scheduleOnlineNetworkChange('网络已恢复', `online-${Date.now()}`, true);
+      });
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (connection && typeof connection.addEventListener === 'function') {
+        connection.addEventListener('change', () => {
+          scheduleOnlineNetworkChange('网络接口变化', getBrowserNetworkSignature(), false);
+        });
+      }
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          scheduleOnlineNetworkChange('页面恢复前台', getBrowserNetworkSignature(), false);
         }
+      });
+      window.addEventListener('pageshow', () => {
+        scheduleOnlineNetworkChange('页面恢复', getBrowserNetworkSignature(), false);
       });
     } catch (_) {}
 
