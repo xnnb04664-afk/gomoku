@@ -1117,7 +1117,17 @@ node publish.js
 - **产物 SHA-256**：根页面 `index.html`：`3531D520F1BC5D8AAD76C778D19451F55968278F35590EDBCB1A5509735F2EF8`；Android 内嵌页面：`1D907DB7D1F32DA93FA4DAC997F22E748690E84B378B442B22C9B3990FDEE41C`；单文件版：`022003D958204BDE44AD0CDA369090847AEF22AF47ED25FB3D84D3FBDC199E6E`；正式 APK：`A99E8B5F57BE9CC9E7C018D41AEFABCCDF923A200104D7770D8E567014D5982C`。APK v1/v2/v3 签名验证通过，签名者数量为 1。
 - **部署边界**：本次只发布客户端和静态资源，没有修改 Worker、D1、Pages、TURN Secret 或更新票据逻辑，因此按规则未重新部署 Cloudflare；后续普通客户端版本更新仍直接执行 `node publish.js` 即可。
 
+## 四十二、WiFi/流量切换联机自愈正式发布（2026-09-07，已发布 v1.0.114）
+
+- **问题根因**：WiFi 切到 4G/5G 时浏览器不一定派发 `offline/online`；旧 MQTT WebSocket 可能半开但连接池仍标记为 connected，重连又复用旧池；P2P 重新协商需要 MQTT 信令，因此最终表现为切流量后房间无法恢复。
+- **连接修复**：MQTT 池新增真实可用性检查和主动失效接口，只要底层没有 live client 就拒绝复用；心跳超时或网络变化时先销毁半开 MQTT/WebRTC，再按原房间码、roundId 和可靠消息队列重建，不再误判旧连接为“重连成功”。
+- **网络变化检测**：网页端监听 `navigator.connection`、`online/offline`、页面恢复；Android 新增 `ConnectivityManager.NetworkCallback`，通过安全的 JS 回调通知 WiFi、流量和网络能力变化。事件统一去抖，避免一次切网触发多次重连。
+- **回归验证**：`tests/online_reconnect_smoke.py` 已模拟 Android WiFi→蜂窝数据回调，房间码与轮次保持不变，重连后双向落子和可靠聊天只显示一次；`tests/online_transport_smoke.py`、`tests/p2p_recovery_smoke.py`、`tests/online_match_race_smoke.py`、`tests/optimization_smoke.py`、全主题语法检查、`git diff --check` 均通过，页面无 console/page error；Android Java 编译和 APK v1/v2/v3 签名校验通过。
+- **正式版本**：`v1.0.114 (Build 115)`，GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.114>；已上传 `gomoku.apk` 与 `gomoku.html`，并推送 `master`。线上 `/api/version` 返回 `code=0、tag=v1.0.114`，APK/HTML 短时票据均存在。
+- **产物**：APK 1,599,706 bytes；单文件 HTML 1,212,815 bytes。SHA-256：根页面 `F2C293268B8C8703A00627CC2CDC10C367F74FB1C2729475F03B40861D564310`；Android 内嵌页面 `AAE32875D28AB6E4AE4C13E20F18DFC8484EBCE716914736200335898D5B3BC5`；单文件版 `5D0C22B27984D0CC0ADEC2B3582836A1C209ADFC3A4EAF820314C5451C968207`；APK `EE20B7F815C42ECE340FD049A23195E7AA411A6BE602B7B336FDAB180A2C8A0C`。
+- **部署边界**：本次只发布客户端、Android 网络监听和静态资源，没有修改 Worker、D1、Pages、TURN Secret 或更新票据逻辑，因此未重新部署 Cloudflare；普通客户端更新仍可直接走现有热更新通道。
+
 ---
-*交接文档最后更新时间：2026年9月6日*
-*当前工程正式版本：v1.0.113 (Build 114)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连优先与断网恢复均已随正式版本发布，详见“三十八”至“四十一”。*
-*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染与高 RTT 线路自动重选均已完成源码、构建资源同步、正式签名并通过回归。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 node publish.js。*
+*交接文档最后更新时间：2026年9月7日*
+*当前工程正式版本：v1.0.114 (Build 115)；D1 反馈修复、P2P 心跳线路校准、高延迟线路自动重选、低延迟直连、断网恢复和 WiFi/流量切换自愈均已随正式版本发布，详见“三十八”至“四十二”。*
+*当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈均已完成源码、构建资源同步、正式签名并通过回归。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 node publish.js。*
