@@ -204,6 +204,18 @@ if (codeMatch && nameMatch) {
 
 // 2. 同步更新所有 HTML 中的 CURRENT_VERSION_TAG 与 UI 显示
 console.log('>>> [2/8] 同步前端版本号到 6 大主题...');
+function formatDisplayVersionName(versionName) {
+  const match = String(versionName || '').trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return `v${versionName}`;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch) || patch < 100) {
+    return `v${match[1]}.${match[2]}.${match[3]}`;
+  }
+  return `v${major}.${minor + Math.floor(patch / 100)}.${patch % 10}`;
+}
+const displayVersionTag = formatDisplayVersionName(newName);
 const htmlFiles = [
   'index.html',
   'theme1_zen_dark.html',
@@ -217,7 +229,7 @@ htmlFiles.forEach(f => {
   if (fs.existsSync(fp)) {
     let c = fs.readFileSync(fp, 'utf8');
     c = c.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
-    c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/(?:div|span)>/g, `id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v${newName}</div>`);
+    c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/(?:div|span)>/g, `id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">${displayVersionTag}</div>`);
     fs.writeFileSync(fp, c, 'utf8');
   }
 });

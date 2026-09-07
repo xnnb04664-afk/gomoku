@@ -2996,7 +2996,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.0.117</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.1.8</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3613,7 +3613,7 @@
       <div style="text-align:center; font-size:36px; margin-bottom:4px;" id="updateModalIcon">🚀</div>
       <div style="text-align:center; font-size:16px; font-weight:900; color:#2d3436; margin-bottom:4px;" id="updateModalTitle">发现新版本！</div>
       <div style="text-align:center; margin-bottom:8px;">
-        <span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:10px; font-size:11.5px; font-weight:900;" id="updateTagText">v1.0.1 ➔ v1.0.2</span>
+        <span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:10px; font-size:11.5px; font-weight:900;" id="updateTagText">v1.1.6 ➔ v1.1.7</span>
       </div>
       <div id="updateNotesTitle" style="font-size:11px; font-weight:800; color:#64748b; margin-bottom:4px;">更新内容说明：</div>
       <div id="updateNotesContent" style="max-height:120px; overflow-y:auto; background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:10px; padding:8px; font-size:11px; color:#334155; line-height:1.5; white-space:pre-wrap; margin-bottom:12px;"></div>
@@ -3682,7 +3682,22 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.117';
+    const CURRENT_VERSION_TAG = 'v1.0.118';
+    // 仅用于界面显示：补丁号达到 100 后，把百位进到中间段并保留个位。
+    // 例如内部版本 v1.0.117 显示为 v1.1.7；更新比较仍使用 CURRENT_VERSION_TAG。
+    function formatDisplayVersionTag(tag) {
+      const value = String(tag || '').trim();
+      const match = value.match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+      if (!match) return value;
+      const major = Number(match[1]);
+      const minor = Number(match[2]);
+      const patch = Number(match[3]);
+      if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch) || patch < 100) {
+        return `v${match[1]}.${match[2]}.${match[3]}`;
+      }
+      return `v${major}.${minor + Math.floor(patch / 100)}.${patch % 10}`;
+    }
+    const DISPLAY_VERSION_TAG = formatDisplayVersionTag(CURRENT_VERSION_TAG);
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -11415,7 +11430,7 @@
       if (!modal) return;
       const verEl = document.getElementById('feedbackAppVer');
       if (verEl && typeof CURRENT_VERSION_TAG !== 'undefined') {
-        verEl.textContent = CURRENT_VERSION_TAG;
+        verEl.textContent = DISPLAY_VERSION_TAG;
       }
       modal.classList.add('show');
     }
@@ -15158,7 +15173,7 @@
     ];
     try {
       const verEl = document.getElementById('appVersionDisplay');
-      if (verEl) verEl.textContent = CURRENT_VERSION_TAG;
+      if (verEl) verEl.textContent = DISPLAY_VERSION_TAG;
     } catch(e) {}
     const UPDATE_PROXY_ORIGIN = 'https://gomoku-api.pages.dev';
     const UPDATE_API_URL = `${UPDATE_PROXY_ORIGIN}/api/version`;
@@ -15375,12 +15390,12 @@
           const sessKey = "notified_update_" + versionData.tag;
           if (!sessionStorage.getItem(sessKey)) {
             sessionStorage.setItem(sessKey, "1");
-            showGameNotice(`🔔 发现新版本 ${versionData.tag}，可随时在个人中心点击更新`, false);
+            showGameNotice(`🔔 发现新版本 ${formatDisplayVersionTag(versionData.tag)}，可随时在个人中心点击更新`, false);
           }
           const versionEl = document.getElementById('appVersionDisplay');
           if (versionEl) {
-            versionEl.textContent = `有新版本 ${versionData.tag}`;
-            versionEl.title = `发现 ${versionData.tag}，点击检查更新`;
+            versionEl.textContent = `有新版本 ${formatDisplayVersionTag(versionData.tag)}`;
+            versionEl.title = `发现 ${formatDisplayVersionTag(versionData.tag)}，点击检查更新`;
           }
         }
         return;
@@ -15448,7 +15463,7 @@
         if (modalIcon) modalIcon.textContent = "🚀";
         if (modalTitle) modalTitle.textContent = "发现新版本！";
         if (tagEl) {
-          tagEl.textContent = `${effectiveVersion} ➔ ${versionData.tag}`;
+          tagEl.textContent = `${DISPLAY_VERSION_TAG} ➔ ${formatDisplayVersionTag(versionData.tag)}`;
           tagEl.style.background = "#e0f2fe";
           tagEl.style.color = "#0369a1";
         }
@@ -15556,12 +15571,12 @@
         if (modalIcon) modalIcon.textContent = "✅";
         if (modalTitle) modalTitle.textContent = "当前已是最新正式版！";
         if (tagEl) {
-          tagEl.textContent = `${effectiveVersion} (最新正式版)`;
+          tagEl.textContent = `${DISPLAY_VERSION_TAG} (最新正式版)`;
           tagEl.style.background = "#dcfce7";
           tagEl.style.color = "#15803d";
         }
         if (notesTitle) notesTitle.textContent = "📜 当前版本更新说明：";
-        if (notesEl) notesEl.textContent = `恭喜！您的游戏已处于最新正式版本 (${effectiveVersion})。\n\n` + CURRENT_UPDATE_NOTES.join("\n\n");
+        if (notesEl) notesEl.textContent = `恭喜！您的游戏已处于最新正式版本 (${DISPLAY_VERSION_TAG})。\n\n` + CURRENT_UPDATE_NOTES.join("\n\n");
         
         if (btnFast) btnFast.style.display = "none";
         if (btnCancel) {
@@ -15572,7 +15587,7 @@
           btnCancel.style.padding = "10px 0";
           btnCancel.style.fontSize = "13px";
         }
-        showGameNotice(`🎉 检查完成！当前已是最新正式版 (${effectiveVersion})！`, false);
+        showGameNotice(`🎉 检查完成！当前已是最新正式版 (${DISPLAY_VERSION_TAG})！`, false);
       }
 
       openUpdateModal();
@@ -15596,7 +15611,7 @@
             if (modalIcon) modalIcon.textContent = "🎉";
             if (modalTitle) modalTitle.textContent = "欢迎体验全新版本！";
             if (tagEl) {
-              tagEl.textContent = `已成功升级至 ${CURRENT_VERSION_TAG} 旗舰版`;
+              tagEl.textContent = `已成功升级至 ${DISPLAY_VERSION_TAG} 旗舰版`;
               tagEl.style.background = "#dcfce7";
               tagEl.style.color = "#15803d";
             }
