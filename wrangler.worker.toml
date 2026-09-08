@@ -11,6 +11,14 @@ database_id = "4cd53ea1-ef41-450e-843c-b48f6121cf7c"
 name = "GOMOKU_ROOMS"
 class_name = "GomokuRoom"
 
+[[durable_objects.bindings]]
+name = "GOMOKU_SOCIAL"
+class_name = "SocialHub"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GomokuRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SocialHub"]

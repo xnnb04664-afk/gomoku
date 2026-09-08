@@ -23,6 +23,8 @@ def main():
         page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         page.locator("#cvs").wait_for(state="visible", timeout=10_000)
+        page.evaluate("() => window.ensureGomokuFeature('online')")
+        page.wait_for_function("() => window.__GOMOKU_ONLINE_READY__ === true", timeout=30_000)
 
         result = page.evaluate(
             """

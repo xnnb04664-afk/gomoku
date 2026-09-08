@@ -13,6 +13,11 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 }
 const SHOULD_DEPLOY_CLOUDFLARE = process.argv.includes('--deploy-cloudflare')
   || String(process.env.GOMOKU_DEPLOY_CLOUDFLARE || '').trim() === '1';
+// A failed artifact build may leave the already-prepared version in the tree.
+// This flag lets a resumed publish finish that exact version without bumping twice.
+const SKIP_VERSION_BUMP = String(process.env.GOMOKU_SKIP_VERSION_BUMP || '').trim() === '1';
+
+execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 const vm = require('vm');
 
@@ -38,6 +43,9 @@ function runPreflightChecks() {
   const indexPath = path.join(ROOT_DIR, 'index.html');
   if (fs.existsSync(indexPath)) {
     const html = fs.readFileSync(indexPath, 'utf8');
+    const appPath = path.join(ROOT_DIR, 'js', 'app.js');
+    const appSource = fs.existsSync(appPath) ? fs.readFileSync(appPath, 'utf8') : '';
+    const applicationSource = html + '\n' + appSource;
     const scriptRegex = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
     let match;
     let scriptIdx = 0;
@@ -65,8 +73,23 @@ function runPreflightChecks() {
 
     const criticalFuncs = ['draw', 'makeMove', 'checkWin', 'triggerGameEnd', 'reportMatchResult', 'showGameResultModal', 'resetBoardOnly'];
     for (const funcName of criticalFuncs) {
-      if (!html.includes(`function ${funcName}`)) {
+      if (!applicationSource.includes(`function ${funcName}`)) {
         console.error(`\n❌ [发布致命拦截] index.html 缺失关键核心函数: function ${funcName}`);
+        hasError = true;
+      }
+    }
+
+    for (const relativePath of ['js/app.js', 'js/app.min.js', 'js/account.js', 'js/account.min.js', 'js/replay.js', 'js/replay.min.js', 'js/settings.js', 'js/settings.min.js', 'js/online.js', 'js/online.min.js', 'js/social.js', 'js/social.min.js']) {
+      const scriptPath = path.join(ROOT_DIR, relativePath);
+      if (!fs.existsSync(scriptPath)) {
+        console.error(`\n❌ [发布致命拦截] 缺失应用脚本: ${relativePath}`);
+        hasError = true;
+        continue;
+      }
+      try {
+        new vm.Script(fs.readFileSync(scriptPath, 'utf8'), { filename: relativePath });
+      } catch (err) {
+        console.error(`\n❌ [发布致命拦截] ${relativePath} 存在语法错误: ${err.message}`);
         hasError = true;
       }
     }
@@ -149,6 +172,11 @@ function runSecretFileGuard() {
 
 runSecretFileGuard();
 
+if (SHOULD_DEPLOY_CLOUDFLARE) {
+  console.log('>>> [安全前置] 正在将生产 D1 完整备份到仓库外目录...');
+  execSync('node backup_d1.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+}
+
 // 六套主题都必须在发包前单独解析，避免某个切换主题携带语法错误或截断代码。
 function runAllThemeSyntaxChecks() {
   const files = ['index.html', 'theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'];
@@ -186,14 +214,18 @@ let newName = '1.0.1';
 
 if (codeMatch && nameMatch) {
   const currentCode = parseInt(codeMatch[1], 10);
-  newCode = currentCode + 1;
+  newCode = SKIP_VERSION_BUMP ? currentCode : currentCode + 1;
 
-  const parts = nameMatch[1].split('.').map(n => parseInt(n, 10));
-  if (parts.length === 3) {
-    parts[2] += 1;
-    newName = parts.join('.');
+  if (SKIP_VERSION_BUMP) {
+    newName = nameMatch[1];
   } else {
-    newName = `1.0.${newCode}`;
+    const parts = nameMatch[1].split('.').map(n => parseInt(n, 10));
+    if (parts.length === 3) {
+      parts[2] += 1;
+      newName = parts.join('.');
+    } else {
+      newName = `1.0.${newCode}`;
+    }
   }
 
   manifestContent = manifestContent.replace(/android:versionCode="\d+"/, `android:versionCode="${newCode}"`);
@@ -234,62 +266,39 @@ htmlFiles.forEach(f => {
   }
 });
 
+// 主应用逻辑已从 index.html 拆到独立源码；版本比较必须继续使用内部版本号。
+const appSourcePath = path.join(ROOT_DIR, 'js', 'app.js');
+if (fs.existsSync(appSourcePath)) {
+  let appSource = fs.readFileSync(appSourcePath, 'utf8');
+  appSource = appSource.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
+  fs.writeFileSync(appSourcePath, appSource, 'utf8');
+}
+
 // 同步更新 version.json（兼容旧客户端；新客户端统一走 Cloudflare Worker 中转）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
+const releaseHighlights = [
+  `👥 【完整好友系统】正式账号支持精确查找、申请/同意/拒绝/取消、在线状态、最近对手、删除好友和黑名单管理`,
+  `💬 【实时文字私聊】好友之间支持文字、Emoji、快捷短语、历史分页、未读同步和仅清空自己一侧记录`,
+  `🎮 【好友实时邀战】邀请方自动创建房间并发送 2 分钟有效邀请；接受后自动进房，P2P 失败仍可通过 TURN/WebSocket 继续`,
+  `⚡ 【启动性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包；4× CPU、5 次冷启动中位 FCP 1444ms、可操作 2010.4ms`,
+  `🎨 【自动画质】新增自动/高清/流畅三档，Canvas DPR 上限分别按设备能力控制，弱机和后台场景降低发热与内存占用`,
+  `📡 【联机入口与重连】并行探测 Worker/Pages 并缓存 30 分钟较快入口；断线按 0、1、2、4、8、12 秒退避恢复`,
+  `🛡️ 【社交隐私安全】完整关系/拉黑复验、精确账号搜索、防枚举最近对手、消息幂等与 60 秒一次性 WebSocket 票据`,
+  `📊 【匿名质量统计】只采样启动区间、画质档位、入口、链路类型、RTT 和重连结果，不上传账号、房号、聊天或棋盘，可关闭`,
+  `📱 【Android 内存治理】内存回收只清理特效、Canvas 和空闲 AI Worker，不再强制清 WebView 缓存或调用 System.gc()`
+];
+const releaseUpdateLog = [
+  `五子棋 v${newName} 官方正式版更新说明：`,
+  ...releaseHighlights
+].join('\n\n');
 const vJson = {
   versionName: newName,
   versionCode: newCode,
   releaseTag: `v${newName}`,
   publishTime: todayStr,
-  updateLog: [
-    `五子棋 v${newName} 官方正式版更新说明：`,
-    `🎯 【主棋盘大屏动态复盘】历史战绩点击「查看棋局」，直接平滑跳转至主棋盘大屏！每颗棋子中心清晰印上落子序号（1, 2, 3...），支持滑动条拖拽推演、单步进退、自动电影级播放与终局一键跳转`,
-    `🔒 【设置弹窗按钮底部常驻】个人中心弹窗底部「保存并应用」与「关闭」按钮改为永远固定常驻在屏幕最下方，打开弹窗一眼可见，彻底告别必须滑到最底部的繁琐操作`,
-    `☁️ 【历史战绩云端存储与双向彻底抹除】全盘走法谱与棋局数据全自动备份至 Cloudflare D1 云端数据库，换手机/重装账号一键找回；清空记录本地与云端彻底同步抹除`,
-    `⚡ 【免安装在线热更新】由 Cloudflare Worker 安全中转私有仓库文件，手机端无需 GitHub 权限`,
-    `🌐 【账号登录网络加速】登录弹窗提前选择最快官方出口，减少 Android WebView 跨域预检与重复等待；网络超时显示明确中文提示`,
-    `📡 【更新检测稳定性】版本清单改用无预检 GET，增加防缓存与自动重试，避免手机端因跨域预检或冷启动超时漏报更新`,
-    `🧠 【最强大师 AI v3】补齐根节点战术候选、断四/断三评估、强制威胁空间搜索与 Alpha-Beta 迭代加深；AI 只负责落子，不会读写或发送干扰牌状态`,
-    `🚀 【移动端 AI 性能】AI 搜索移入 Web Worker，使用扁平 Uint8Array、位图与数字棋型表；Worker 异常时按相同快速引擎低预算回退，并正确传递移动端威胁深度`,
-    `🌐 【联机技能账本同步】对方技能、炸弹洗牌和天命抹除均写入可回滚历史；状态快照支持全量补发并拒绝幽灵落子，减少联机胜后重复结算与悔棋错位`,
-    `⚡ 【跨端联机稳态升级】房间信令采用错峰多节点容灾，房主 ready 后才确认加入，去除匹配成功后的固定等待与重复建连，改善网页端与手机端进房失败、误显示对方断开的情况`,
-    `🛡️ 【双端进房确认闸门】客方信道 ready 后发送 join_ready，房主确认后双方才切入在线；弱网自动重试，避免房主显示已进房而客方仍在与人机对弈`,
-    `📡 【P2P 低延迟与中继自愈】心跳仅走当前真实链路，实时区分 P2P 直连/TURN 中继并显示 WebRTC RTT；连续高延迟时自动限次重选线路，重选期间由项目自有 WebSocket 中继可靠承接，避免落子和聊天丢失`,
-    `📶 【WiFi/流量切换自愈】检测 Android 原生网络接口与浏览器网络变化，主动废弃半开 WebSocket/WebRTC 连接并按原房间/轮次重建；不再复用假连接，切换网络后可继续落子和聊天`,
-    `🛰️ 【自有房间中继】新增 Cloudflare Durable Object WebSocket 房间中继，P2P 直连失败时优先使用项目自有可靠通道；房间会话、角色和消息方向均由服务端校验`,
-    `🚫 【生产链路移除公共 MQTT】默认不再加载公共 MQTT 或并行抢占多个信令节点；Worker 主中继失败后串行切换 Pages 备用入口，旧 MQTT 仅保留显式迁移/测试开关`,
-    `🛠️ 【联机恢复强化】修复旧连接串房、对端离开后假在线、DataChannel 关闭后无法复原等边界；支持 ACK/去重、权威快照对账和断线后继续落子聊天`,
-    `🔑 【全服匹配自动续期】匹配遇到更新后或长时间运行产生的旧 Token 时，自动使用 Refresh Token 换发并重试，避免登录状态看似正常却无法入队`,
-    `🌐 【联机 API 出口稳态】正式 Pages 出口固定优先，Worker 仅在主出口故障时接管，避免备用节点预检成功但业务未完整配置导致匹配失败`,
-    `📱 【手机图标焕新】更换为晴空浮岛草坪对决主视觉图标，保留纯黑白棋子、金色干扰牌与皇冠元素`,
-    `🖼️ 【榜单头像显示优化】新增情侣动漫头像压缩资源，榜单打开时先完成头像资源加载；普通页面按需请求 JPG，单文件版离线内嵌 JPEG，修复榜单显示文字或空白问题`,
-    `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
-  ].join('\n\n'),
-  notes: [
-    `五子棋 v${newName} 官方正式版更新说明：`,
-    `🎯 【主棋盘大屏动态复盘】历史战绩点击「查看棋局」，直接平滑跳转至主棋盘大屏！每颗棋子中心清晰印上落子序号（1, 2, 3...），支持滑动条拖拽推演、单步进退、自动电影级播放与终局一键跳转`,
-    `🔒 【设置弹窗按钮底部常驻】个人中心弹窗底部「保存并应用」与「关闭」按钮改为永远固定常驻在屏幕最下方，打开弹窗一眼可见，彻底告别必须滑到最底部的繁琐操作`,
-    `☁️ 【历史战绩云端存储与双向彻底抹除】全盘走法谱与棋局数据全自动备份至 Cloudflare D1 云端数据库，换手机/重装账号一键找回；清空记录本地与云端彻底同步抹除`,
-    `⚡ 【免安装在线热更新】由 Cloudflare Worker 安全中转私有仓库文件，手机端无需 GitHub 权限`,
-    `🌐 【账号登录网络加速】登录弹窗提前选择最快官方出口，减少 Android WebView 跨域预检与重复等待；网络超时显示明确中文提示`,
-    `📡 【更新检测稳定性】版本清单改用无预检 GET，增加防缓存与自动重试，避免手机端因跨域预检或冷启动超时漏报更新`,
-    `🧠 【最强大师 AI v3】补齐根节点战术候选、断四/断三评估、强制威胁空间搜索与 Alpha-Beta 迭代加深；AI 只负责落子，不会读写或发送干扰牌状态`,
-    `🚀 【移动端 AI 性能】AI 搜索移入 Web Worker，使用扁平 Uint8Array、位图与数字棋型表；Worker 异常时按相同快速引擎低预算回退，并正确传递移动端威胁深度`,
-    `🌐 【联机技能账本同步】对方技能、炸弹洗牌和天命抹除均写入可回滚历史；状态快照支持全量补发并拒绝幽灵落子，减少联机胜后重复结算与悔棋错位`,
-    `⚡ 【跨端联机稳态升级】房间信令采用错峰多节点容灾，房主 ready 后才确认加入，去除匹配成功后的固定等待与重复建连，改善网页端与手机端进房失败、误显示对方断开的情况`,
-    `🛡️ 【双端进房确认闸门】客方信道 ready 后发送 join_ready，房主确认后双方才切入在线；弱网自动重试，避免房主显示已进房而客方仍在与人机对弈`,
-    `📡 【P2P 低延迟与中继自愈】心跳仅走当前真实链路，实时区分 P2P 直连/TURN 中继并显示 WebRTC RTT；连续高延迟时自动限次重选线路，重选期间由项目自有 WebSocket 中继可靠承接，避免落子和聊天丢失`,
-    `📶 【WiFi/流量切换自愈】检测 Android 原生网络接口与浏览器网络变化，主动废弃半开 WebSocket/WebRTC 连接并按原房间/轮次重建；不再复用假连接，切换网络后可继续落子和聊天`,
-    `🛰️ 【自有房间中继】新增 Cloudflare Durable Object WebSocket 房间中继，P2P 直连失败时优先使用项目自有可靠通道；房间会话、角色和消息方向均由服务端校验`,
-    `🚫 【生产链路移除公共 MQTT】默认不再加载公共 MQTT 或并行抢占多个信令节点；Worker 主中继失败后串行切换 Pages 备用入口，旧 MQTT 仅保留显式迁移/测试开关`,
-    `🛠️ 【联机恢复强化】修复旧连接串房、对端离开后假在线、DataChannel 关闭后无法复原等边界；支持 ACK/去重、权威快照对账和断线后继续落子聊天`,
-    `🔑 【全服匹配自动续期】匹配遇到更新后或长时间运行产生的旧 Token 时，自动使用 Refresh Token 换发并重试，避免登录状态看似正常却无法入队`,
-    `🌐 【联机 API 出口稳态】正式 Pages 出口固定优先，Worker 仅在主出口故障时接管，避免备用节点预检成功但业务未完整配置导致匹配失败`,
-    `📱 【手机图标焕新】更换为晴空浮岛草坪对决主视觉图标，保留纯黑白棋子、金色干扰牌与皇冠元素`,
-    `🖼️ 【榜单头像显示优化】新增情侣动漫头像压缩资源，榜单打开时先完成头像资源加载；普通页面按需请求 JPG，单文件版离线内嵌 JPEG，修复榜单显示文字或空白问题`,
-    `🚫 【开机零干扰体验】更新后启动直接 0.2 秒秒开进棋盘，绝不主动弹出任何卡片打扰您`
-  ].join('\n\n'),
+  updateLog: releaseUpdateLog,
+  notes: releaseUpdateLog,
   updateTransport: 'cloudflare-ticket-protected'
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');

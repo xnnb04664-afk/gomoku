@@ -924,13 +924,22 @@ public class MainActivity extends Activity {
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level >= TRIM_MEMORY_MODERATE) {
-            if (mWebView != null) {
-                mWebView.clearCache(false);
-                mWebView.freeMemory();
+        // 让网页按告警级别释放粒子、Canvas 缓存和空闲 Worker。不要在这里清理
+        // WebView HTTP 缓存：缓存中可能包含热更新资源，清理后反而会增加恢复耗时和流量。
+        final int trimLevel = level;
+        runOnUiThread(() -> {
+            if (mWebView == null) return;
+            mWebView.evaluateJavascript(
+                    "try{if(typeof window.__gomokuTrimMemory==='function')" +
+                            "window.__gomokuTrimMemory(" + trimLevel + ");}catch(e){}",
+                    null);
+
+            // COMPLETE 表示后台进程已接近被系统回收。此时只暂停定时器；onResume
+            // 会恢复它们。避免 freeMemory/System.gc 造成前台卡顿或破坏热更新缓存。
+            if (trimLevel >= TRIM_MEMORY_COMPLETE && !hasWindowFocus()) {
+                mWebView.pauseTimers();
             }
-            System.gc();
-        }
+        });
     }
 
     @Override

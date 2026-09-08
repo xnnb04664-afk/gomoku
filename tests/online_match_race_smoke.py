@@ -135,6 +135,8 @@ def main():
             except PlaywrightTimeoutError:
                 pass
             page.locator("#cvs").wait_for(state="visible", timeout=10_000)
+            page.evaluate("() => window.ensureGomokuFeature('online')")
+            page.wait_for_function("() => window.__GOMOKU_ONLINE_READY__ === true", timeout=30_000)
             output[role] = {"pageErrors": page_errors, "consoleErrors": console_errors, "consoleLogs": console_logs}
 
         pages["host"].evaluate("code => window.initHostPeer(code, true)", room)

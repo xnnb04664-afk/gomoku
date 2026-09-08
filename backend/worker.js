@@ -44,6 +44,12 @@ const turnRateLimitBuckets = new Map();
 const ROOM_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024;
 const ROOM_RELAY_MAX_MESSAGES_PER_SECOND = 120;
 const ROOM_RELAY_BOOTSTRAP_QUEUE_LIMIT = 4;
+const SOCIAL_TICKET_TTL_MS = 60 * 1000;
+const SOCIAL_INVITE_TTL_MS = 2 * 60 * 1000;
+const SOCIAL_MAX_FRIENDS = 200;
+const SOCIAL_MAX_MESSAGE_CHARS = 500;
+const SOCIAL_MAX_PAGE_SIZE = 50;
+const socialRateLimitBuckets = new Map();
 
 function roomRelayByteLength(value) {
   try {
@@ -278,12 +284,140 @@ export class GomokuRoom {
   }
 }
 
+// 好友在线状态与实时事件独立于棋局房间。永久关系和消息仍以 D1 为准；
+// Durable Object 只保留当前 WebSocket，并把“有新状态”推给账号的所有设备。
+export class SocialHub {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.fallbackSockets = new Set();
+  }
+
+  _sockets() {
+    if (typeof this.state.getWebSockets === 'function') return this.state.getWebSockets();
+    return Array.from(this.fallbackSockets);
+  }
+
+  _sendAll(payload) {
+    const text = JSON.stringify(payload);
+    let sent = 0;
+    for (const socket of this._sockets()) {
+      try { socket.send(text); sent += 1; } catch (_) { this.fallbackSockets.delete(socket); }
+    }
+    return sent;
+  }
+
+  async _broadcastPresence(uid, online) {
+    if (!this.env?.DB || !this.env?.GOMOKU_SOCIAL) return;
+    try {
+      const setting = await this.env.DB.prepare('SELECT presence_hidden FROM user_social_settings WHERE uid = ?').bind(uid).first();
+      // 没有设置记录时采用数据库列的默认语义：在线状态可见。不能把
+      // undefined 转成 NaN 后误判为隐身，否则新账号永远只广播“离线”。
+      const visibleOnline = online && Number(setting?.presence_hidden || 0) === 0;
+      const now = Date.now();
+      // 在线快照落在 D1，好友列表一次 JOIN 即可返回 200 位好友状态，避免
+      // 单次请求扇出访问最多 200 个 Durable Object 并触发子请求额度上限。
+      await this.env.DB.prepare(`
+        INSERT INTO user_social_settings (uid, presence_online, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET presence_online = excluded.presence_online, updated_at = excluded.updated_at
+      `).bind(uid, online ? 1 : 0, now).run();
+      const rows = await this.env.DB.prepare(`
+        SELECT CASE WHEN user_a_uid = ? THEN user_b_uid ELSE user_a_uid END AS friend_uid
+        FROM friendships WHERE user_a_uid = ? OR user_b_uid = ? LIMIT ${SOCIAL_MAX_FRIENDS}
+      `).bind(uid, uid, uid).all();
+      await Promise.all((rows.results || []).map(async row => {
+        const friendUid = String(row.friend_uid || '');
+        if (!friendUid) return;
+        const id = this.env.GOMOKU_SOCIAL.idFromName(`social:${friendUid}`);
+        await this.env.GOMOKU_SOCIAL.get(id).fetch('https://social.internal/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Gomoku-Social-Uid': friendUid },
+          body: JSON.stringify({ kind: 'presence', uid, online: visibleOnline, at: now })
+        });
+      }));
+    } catch (_) {}
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const uid = String(request.headers.get('X-Gomoku-Social-Uid') || '').trim();
+    if (!uid || uid.length > 64) return new Response('Unauthorized', { status: 401 });
+
+    if (url.pathname === '/presence') {
+      return Response.json({ online: this._sockets().length > 0 });
+    }
+
+    if (url.pathname === '/notify' && request.method === 'POST') {
+      let event = null;
+      try { event = await request.json(); } catch (_) {}
+      if (!event || typeof event !== 'object' || Array.isArray(event)) {
+        return new Response('Invalid event', { status: 400 });
+      }
+      const sent = this._sendAll({ type: 'social_event', event });
+      return Response.json({ ok: true, sent });
+    }
+
+    if (url.pathname !== '/socket' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('WebSocket upgrade required', { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    if (typeof this.state.acceptWebSocket === 'function') {
+      this.state.acceptWebSocket(server, [uid]);
+    } else {
+      server.accept();
+      this.fallbackSockets.add(server);
+      const remove = () => {
+        this.fallbackSockets.delete(server);
+        if (this.fallbackSockets.size === 0) void this._broadcastPresence(uid, false);
+      };
+      server.addEventListener('close', remove);
+      server.addEventListener('error', remove);
+      server.addEventListener('message', event => this._handleSocketMessage(server, event.data));
+    }
+    try { server.send(JSON.stringify({ type: 'social_ready', uid })); } catch (_) {}
+    this.state.waitUntil(this._broadcastPresence(uid, true));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  _handleSocketMessage(socket, raw) {
+    let message = null;
+    try { message = JSON.parse(typeof raw === 'string' ? raw : ''); } catch (_) {}
+    if (message?.type === 'ping') {
+      try { socket.send(JSON.stringify({ type: 'pong', sentAt: Number(message.sentAt) || Date.now() })); } catch (_) {}
+    }
+  }
+
+  webSocketMessage(socket, raw) {
+    this._handleSocketMessage(socket, raw);
+  }
+
+  _handleSocketGone(socket) {
+    try {
+      const tags = typeof this.state.getTags === 'function' ? this.state.getTags(socket) : [];
+      const uid = String(tags?.[0] || '');
+      const remaining = this._sockets().filter(candidate => candidate !== socket && candidate?.readyState !== 3).length;
+      if (uid && remaining === 0) this.state.waitUntil(this._broadcastPresence(uid, false));
+    } catch (_) {}
+  }
+
+  webSocketClose(socket) {
+    this._handleSocketGone(socket);
+  }
+  webSocketError(socket) {
+    this._handleSocketGone(socket);
+    try { socket.close(1011, 'WebSocket error'); } catch (_) {}
+  }
+}
+
 export default {
     async fetch(request, env) {
       const url = new URL(request.url);
 
       const corsHeaders = {
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket',
       'Access-Control-Max-Age': '600',
       'Vary': 'Origin',
@@ -326,6 +460,18 @@ export default {
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
       }
     });
+
+    if (url.pathname === '/api/network/probe' && request.method === 'GET') {
+      return json({
+        code: 0,
+        data: {
+          schema: 1,
+          endpoint: url.hostname.includes('workers.dev') ? 'worker' : 'pages',
+          colo: String(request.cf?.colo || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12),
+          serverTime: Date.now()
+        }
+      });
+    }
 
     // 自有 Durable Object 房间中继优先于公共 MQTT。它只转发经过房间/角色/会话
     // 校验的消息，不保存密码、账号或棋局历史；P2P 成功后大部分棋局流量仍不经过这里。
@@ -615,6 +761,146 @@ export default {
             user_agent TEXT,
             ip TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS friend_requests (
+            id TEXT PRIMARY KEY,
+            pair_key TEXT,
+            sender_uid TEXT NOT NULL,
+            receiver_uid TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        try { await env.DB.prepare(`ALTER TABLE friend_requests ADD COLUMN pair_key TEXT`).run(); } catch (_) {}
+        // 兼容曾经已创建但尚无 pair_key 的预发布数据库。先回填并收敛同一
+        // 用户对的重复待处理记录，再建立部分唯一索引，避免迁移中途失败。
+        await env.DB.prepare(`
+          UPDATE friend_requests
+          SET pair_key = CASE
+            WHEN sender_uid < receiver_uid THEN sender_uid || ':' || receiver_uid
+            ELSE receiver_uid || ':' || sender_uid
+          END
+          WHERE pair_key IS NULL OR pair_key = ''
+        `).run();
+        await env.DB.prepare(`
+          UPDATE friend_requests SET status = 'cancelled', updated_at = ?
+          WHERE status = 'pending' AND pair_key IS NOT NULL AND rowid NOT IN (
+            SELECT MIN(rowid) FROM friend_requests
+            WHERE status = 'pending' AND pair_key IS NOT NULL GROUP BY pair_key
+          )
+        `).bind(Date.now()).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver_status ON friend_requests(receiver_uid, status, updated_at DESC)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_friend_requests_sender_status ON friend_requests(sender_uid, status, updated_at DESC)`).run();
+        await env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pending_pair ON friend_requests(pair_key) WHERE status = 'pending' AND pair_key IS NOT NULL`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS friendships (
+            user_a_uid TEXT NOT NULL,
+            user_b_uid TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (user_a_uid, user_b_uid)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_friendships_b ON friendships(user_b_uid, created_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS user_blocks (
+            blocker_uid TEXT NOT NULL,
+            blocked_uid TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (blocker_uid, blocked_uid)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_uid)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS private_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pair_key TEXT NOT NULL,
+            sender_uid TEXT NOT NULL,
+            receiver_uid TEXT NOT NULL,
+            client_message_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(sender_uid, client_message_id)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_private_messages_pair_id ON private_messages(pair_key, id DESC)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_private_messages_receiver_id ON private_messages(receiver_uid, id DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS message_state (
+            uid TEXT NOT NULL,
+            pair_key TEXT NOT NULL,
+            last_read_id INTEGER NOT NULL DEFAULT 0,
+            cleared_before_id INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (uid, pair_key)
+          )
+        `).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS recent_opponents (
+            uid TEXT NOT NULL,
+            opponent_uid TEXT NOT NULL,
+            games_count INTEGER NOT NULL DEFAULT 1,
+            last_played_at INTEGER NOT NULL,
+            PRIMARY KEY (uid, opponent_uid)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_recent_opponents_uid_time ON recent_opponents(uid, last_played_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS recent_opponent_reports (
+            reporter_uid TEXT NOT NULL,
+            opponent_uid TEXT NOT NULL,
+            reported_at INTEGER NOT NULL,
+            PRIMARY KEY (reporter_uid, opponent_uid)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_recent_opponent_reports_time ON recent_opponent_reports(reported_at)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS user_social_settings (
+            uid TEXT PRIMARY KEY,
+            presence_hidden INTEGER NOT NULL DEFAULT 0,
+            presence_online INTEGER NOT NULL DEFAULT 0,
+            metrics_enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        try { await env.DB.prepare(`ALTER TABLE user_social_settings ADD COLUMN presence_online INTEGER NOT NULL DEFAULT 0`).run(); } catch (_) {}
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS social_socket_tickets (
+            ticket_hash TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_tickets_expiry ON social_socket_tickets(expires_at)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS game_invites (
+            id TEXT PRIMARY KEY,
+            sender_uid TEXT NOT NULL,
+            receiver_uid TEXT NOT NULL,
+            room_code TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_invites_receiver_status ON game_invites(receiver_uid, status, expires_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS metrics_daily (
+            day TEXT NOT NULL,
+            client_version TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            bucket TEXT NOT NULL,
+            endpoint TEXT NOT NULL DEFAULT '',
+            route TEXT NOT NULL DEFAULT '',
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            value_sum REAL NOT NULL DEFAULT 0,
+            value_min REAL,
+            value_max REAL,
+            PRIMARY KEY (day, client_version, platform, metric, bucket, endpoint, route)
           )
         `).run();
             try {
@@ -995,6 +1281,652 @@ export default {
       }
       const auth = await requireUser(cleanUid, token);
       return auth.response ? auth : { uid: cleanUid, user: auth.user };
+    }
+
+    const socialPairKey = (left, right) => [String(left), String(right)].sort().join(':');
+    const socialPair = (left, right) => [String(left), String(right)].sort();
+
+    function consumeSocialRate(uid, action, limit, windowMs) {
+      const key = `${String(uid)}:${action}`;
+      const now = Date.now();
+      let bucket = socialRateLimitBuckets.get(key);
+      if (!bucket || now - bucket.startedAt >= windowMs) bucket = { startedAt: now, count: 0 };
+      bucket.count += 1;
+      socialRateLimitBuckets.set(key, bucket);
+      if (socialRateLimitBuckets.size > 3000) {
+        for (const [entryKey, entry] of socialRateLimitBuckets) {
+          if (now - entry.startedAt > Math.max(windowMs, 3600000)) socialRateLimitBuckets.delete(entryKey);
+        }
+      }
+      return bucket.count <= limit;
+    }
+
+    async function requireRegisteredUser(uid, token) {
+      const auth = await requireUser(uid, token);
+      if (auth.response) return auth;
+      if (!auth.user.username) return { response: json({ code: 403, msg: '好友功能仅供正式账号使用' }, 403) };
+      return auth;
+    }
+
+    async function areFriends(left, right) {
+      const [a, b] = socialPair(left, right);
+      return Boolean(await env.DB.prepare('SELECT 1 AS ok FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?').bind(a, b).first());
+    }
+
+    async function isBlockedEitherWay(left, right) {
+      return Boolean(await env.DB.prepare(`
+        SELECT 1 AS ok FROM user_blocks
+        WHERE (blocker_uid = ? AND blocked_uid = ?) OR (blocker_uid = ? AND blocked_uid = ?)
+        LIMIT 1
+      `).bind(left, right, right, left).first());
+    }
+
+    async function friendCount(uid) {
+      const row = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM friendships WHERE user_a_uid = ? OR user_b_uid = ?').bind(uid, uid).first();
+      return Number(row?.cnt) || 0;
+    }
+
+    async function notifySocialUser(uid, event) {
+      if (!env.GOMOKU_SOCIAL || !uid) return false;
+      try {
+        const id = env.GOMOKU_SOCIAL.idFromName(`social:${uid}`);
+        const response = await env.GOMOKU_SOCIAL.get(id).fetch('https://social.internal/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Gomoku-Social-Uid': String(uid) },
+          body: JSON.stringify(event)
+        });
+        return response.ok;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function notifySocialFriends(uid, event) {
+      const rows = await env.DB.prepare(`
+        SELECT CASE WHEN user_a_uid = ? THEN user_b_uid ELSE user_a_uid END AS friend_uid
+        FROM friendships WHERE user_a_uid = ? OR user_b_uid = ? LIMIT ${SOCIAL_MAX_FRIENDS}
+      `).bind(uid, uid, uid).all();
+      await Promise.all((rows.results || []).map(row => notifySocialUser(row.friend_uid, event)));
+    }
+
+    async function socialPresence(uid) {
+      if (!env.GOMOKU_SOCIAL || !uid) return false;
+      try {
+        const id = env.GOMOKU_SOCIAL.idFromName(`social:${uid}`);
+        const response = await env.GOMOKU_SOCIAL.get(id).fetch('https://social.internal/presence', {
+          headers: { 'X-Gomoku-Social-Uid': String(uid) }
+        });
+        const data = response.ok ? await response.json() : null;
+        return data?.online === true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function acceptPendingFriendRequest(requestId, receiverUid, senderUid, now) {
+      const [a, b] = socialPair(receiverUid, senderUid);
+      const results = await env.DB.batch([
+        env.DB.prepare(`
+          INSERT OR IGNORE INTO friendships (user_a_uid, user_b_uid, created_at)
+          SELECT ?, ?, ? WHERE EXISTS (
+            SELECT 1 FROM friend_requests WHERE id = ? AND receiver_uid = ? AND status = 'pending'
+          )
+        `).bind(a, b, now, requestId, receiverUid),
+        env.DB.prepare(`UPDATE friend_requests SET status = 'accepted', updated_at = ? WHERE id = ? AND receiver_uid = ? AND status = 'pending'`).bind(now, requestId, receiverUid)
+      ]);
+      return Number(results?.[1]?.meta?.changes) > 0;
+    }
+
+    async function getSocialAuthFromBody(body) {
+      const uid = typeof body?.uid === 'string' ? body.uid.trim() : '';
+      return requireRegisteredUser(uid, getRequestToken(request, body || {}));
+    }
+
+    // ── 好友、私聊、在线状态与邀战 ─────────────────────────
+    if (url.pathname === '/api/friends/search' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRate(uid, 'search', 30, 3600000)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
+      const username = String(url.searchParams.get('username') || '').trim().slice(0, 32);
+      if (!username) return json({ code: 400, msg: '请输入完整账号名' }, 400);
+      const target = await env.DB.prepare(`
+        SELECT uid, username, nickname, avatar, score FROM users
+        WHERE username = ? AND username IS NOT NULL AND username != ''
+      `).bind(username).first();
+      if (!target || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) {
+        return json({ code: 404, msg: '未找到可添加的账号' }, 404);
+      }
+      const [a, b] = socialPair(uid, target.uid);
+      const friendship = await env.DB.prepare('SELECT 1 AS ok FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?').bind(a, b).first();
+      const pending = await env.DB.prepare(`
+        SELECT id, sender_uid, receiver_uid FROM friend_requests
+        WHERE status = 'pending' AND ((sender_uid = ? AND receiver_uid = ?) OR (sender_uid = ? AND receiver_uid = ?))
+        ORDER BY created_at DESC LIMIT 1
+      `).bind(uid, target.uid, target.uid, uid).first();
+      return json({ code: 0, data: {
+        uid: target.uid,
+        username: target.username,
+        nickname: sanitizeText(target.nickname || target.username, 16),
+        avatar: compactAvatar(target.avatar),
+        score: Number(target.score) || 1000,
+        relationship: friendship ? 'friend' : (pending ? (pending.sender_uid === uid ? 'outgoing' : 'incoming') : 'none'),
+        requestId: pending?.id || ''
+      }});
+    }
+
+    if (url.pathname === '/api/friends' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      const friendsResult = await env.DB.prepare(`
+        SELECT u.uid, u.username, u.nickname, u.avatar, u.score, f.created_at,
+               COALESCE(s.presence_hidden, 0) AS presence_hidden,
+               COALESCE(s.presence_online, 0) AS presence_online
+        FROM friendships f
+        JOIN users u ON u.uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
+        LEFT JOIN user_social_settings s ON s.uid = u.uid
+        WHERE f.user_a_uid = ? OR f.user_b_uid = ?
+        ORDER BY f.created_at DESC LIMIT ${SOCIAL_MAX_FRIENDS}
+      `).bind(uid, uid, uid).all();
+      const requestResult = await env.DB.prepare(`
+        SELECT r.id, r.sender_uid, r.receiver_uid, r.created_at,
+               u.uid AS user_uid, u.username, u.nickname, u.avatar
+        FROM friend_requests r
+        JOIN users u ON u.uid = CASE WHEN r.sender_uid = ? THEN r.receiver_uid ELSE r.sender_uid END
+        WHERE (r.sender_uid = ? OR r.receiver_uid = ?) AND r.status = 'pending'
+        ORDER BY r.created_at DESC LIMIT 100
+      `).bind(uid, uid, uid).all();
+      const unreadResult = await env.DB.prepare(`
+        SELECT m.sender_uid, COUNT(*) AS cnt
+        FROM private_messages m
+        LEFT JOIN message_state s ON s.uid = ? AND s.pair_key = m.pair_key
+        WHERE m.receiver_uid = ? AND m.id > MAX(COALESCE(s.last_read_id, 0), COALESCE(s.cleared_before_id, 0))
+        GROUP BY m.sender_uid
+      `).bind(uid, uid).all();
+      const now = Date.now();
+      const inviteResult = await env.DB.prepare(`
+        SELECT i.id, i.sender_uid, i.room_code, i.expires_at, u.username, u.nickname, u.avatar
+        FROM game_invites i JOIN users u ON u.uid = i.sender_uid
+        WHERE i.receiver_uid = ? AND i.status = 'pending' AND i.expires_at > ?
+        ORDER BY i.created_at DESC LIMIT 20
+      `).bind(uid, now).all();
+      const unreadMap = new Map((unreadResult.results || []).map(row => [String(row.sender_uid), Number(row.cnt) || 0]));
+      const friends = (friendsResult.results || []).map(row => ({
+        uid: String(row.uid),
+        username: row.username,
+        nickname: sanitizeText(row.nickname || row.username, 16),
+        avatar: compactAvatar(row.avatar),
+        score: Number(row.score) || 1000,
+        online: Number(row.presence_hidden) === 0 && Number(row.presence_online) !== 0,
+        presenceHidden: Number(row.presence_hidden) !== 0,
+        unread: unreadMap.get(String(row.uid)) || 0
+      }));
+      const requests = (requestResult.results || []).map(row => ({
+        id: row.id,
+        direction: row.sender_uid === uid ? 'outgoing' : 'incoming',
+        uid: row.user_uid,
+        username: row.username,
+        nickname: sanitizeText(row.nickname || row.username, 16),
+        avatar: compactAvatar(row.avatar),
+        createdAt: Number(row.created_at) || 0
+      }));
+      const settings = await env.DB.prepare('SELECT presence_hidden, metrics_enabled FROM user_social_settings WHERE uid = ?').bind(uid).first();
+      return json({ code: 0, data: {
+        friends,
+        requests,
+        invites: (inviteResult.results || []).map(row => ({
+          inviteId: row.id,
+          fromUid: row.sender_uid,
+          username: row.username,
+          nickname: sanitizeText(row.nickname || row.username, 16),
+          avatar: compactAvatar(row.avatar),
+          roomCode: row.room_code,
+          expiresAt: Number(row.expires_at) || 0
+        })),
+        // 已删除或已拉黑关系的旧消息不能让总角标永久残留，也不能旁路
+        // 当前好友关系泄露对方仍在发送消息这一事实。
+        unreadTotal: friends.reduce((sum, friend) => sum + friend.unread, 0),
+        presenceHidden: Number(settings?.presence_hidden) !== 0,
+        metricsEnabled: settings ? Number(settings.metrics_enabled) !== 0 : true
+      }});
+    }
+
+    if (url.pathname === '/api/friends/requests' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRate(uid, 'friend-request', 20, 86400000)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
+      const targetUsername = String(body.targetUsername || '').trim().slice(0, 32);
+      const target = await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
+      if (!target || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) return json({ code: 404, msg: '未找到可添加的账号' }, 404);
+      if (await areFriends(uid, target.uid)) return json({ code: 409, msg: '你们已经是好友' }, 409);
+      if (await friendCount(uid) >= SOCIAL_MAX_FRIENDS || await friendCount(target.uid) >= SOCIAL_MAX_FRIENDS) return json({ code: 409, msg: '好友数量已达上限' }, 409);
+      const reverse = await env.DB.prepare(`SELECT id FROM friend_requests WHERE sender_uid = ? AND receiver_uid = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`).bind(target.uid, uid).first();
+      const now = Date.now();
+      if (reverse) {
+        if (!await acceptPendingFriendRequest(reverse.id, uid, target.uid, now)) return json({ code: 409, msg: '申请状态已变化，请刷新后重试' }, 409);
+        await notifySocialUser(target.uid, { kind: 'friend_accepted', fromUid: uid, at: now });
+        return json({ code: 0, data: { accepted: true } });
+      }
+      const existing = await env.DB.prepare(`SELECT id FROM friend_requests WHERE sender_uid = ? AND receiver_uid = ? AND status = 'pending'`).bind(uid, target.uid).first();
+      if (existing) return json({ code: 0, data: { requestId: existing.id, duplicate: true } });
+      const id = generateSecureHex(12);
+      try {
+        await env.DB.prepare(`INSERT INTO friend_requests (id, pair_key, sender_uid, receiver_uid, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)`).bind(id, socialPairKey(uid, target.uid), uid, target.uid, now, now).run();
+      } catch (_) {
+        const concurrent = await env.DB.prepare(`SELECT id, sender_uid, receiver_uid FROM friend_requests WHERE pair_key = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`).bind(socialPairKey(uid, target.uid)).first();
+        if (concurrent?.sender_uid === target.uid && concurrent?.receiver_uid === uid &&
+            await acceptPendingFriendRequest(concurrent.id, uid, target.uid, now)) {
+          await notifySocialUser(target.uid, { kind: 'friend_accepted', fromUid: uid, at: now });
+          return json({ code: 0, data: { accepted: true } });
+        }
+        if (concurrent) return json({ code: 0, data: { requestId: concurrent.id, duplicate: true } });
+        throw _;
+      }
+      await notifySocialUser(target.uid, { kind: 'friend_request', requestId: id, fromUid: uid, at: now });
+      return json({ code: 0, data: { requestId: id } });
+    }
+
+    const friendRequestAction = url.pathname.match(/^\/api\/friends\/requests\/([A-Fa-f0-9]{24})\/(accept|reject|cancel)$/);
+    if (friendRequestAction && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const [, requestId, action] = friendRequestAction;
+      const record = await env.DB.prepare(`SELECT * FROM friend_requests WHERE id = ? AND status = 'pending'`).bind(requestId).first();
+      if (!record) return json({ code: 404, msg: '申请不存在或已处理' }, 404);
+      if (action === 'cancel' ? record.sender_uid !== uid : record.receiver_uid !== uid) return json({ code: 403, msg: '无权处理该申请' }, 403);
+      const peerUid = record.sender_uid === uid ? record.receiver_uid : record.sender_uid;
+      const now = Date.now();
+      if (action === 'accept') {
+        if (await isBlockedEitherWay(uid, peerUid)) return json({ code: 409, msg: '当前无法建立好友关系' }, 409);
+        if (await friendCount(uid) >= SOCIAL_MAX_FRIENDS || await friendCount(peerUid) >= SOCIAL_MAX_FRIENDS) return json({ code: 409, msg: '好友数量已达上限' }, 409);
+        if (!await acceptPendingFriendRequest(requestId, uid, peerUid, now)) return json({ code: 409, msg: '申请状态已变化，请刷新后重试' }, 409);
+        await notifySocialUser(peerUid, { kind: 'friend_accepted', fromUid: uid, at: now });
+      } else {
+        const processed = await env.DB.prepare(`UPDATE friend_requests SET status = ?, updated_at = ? WHERE id = ? AND status = 'pending'`).bind(action === 'cancel' ? 'cancelled' : 'rejected', now, requestId).run();
+        if (!Number(processed?.meta?.changes)) return json({ code: 409, msg: '申请状态已变化，请刷新后重试' }, 409);
+        await notifySocialUser(peerUid, { kind: `friend_${action}`, fromUid: uid, at: now });
+      }
+      return json({ code: 0 });
+    }
+
+    const friendDeleteMatch = url.pathname.match(/^\/api\/friends\/([^/]+)$/);
+    if (friendDeleteMatch && request.method === 'DELETE') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const peerUid = decodeURIComponent(friendDeleteMatch[1]).slice(0, 64);
+      if (!peerUid || peerUid === uid) return json({ code: 400, msg: '好友身份无效' }, 400);
+      const [a, b] = socialPair(uid, peerUid);
+      const now = Date.now();
+      const results = await env.DB.batch([
+        env.DB.prepare('DELETE FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?').bind(a, b),
+        env.DB.prepare(`UPDATE friend_requests SET status = 'cancelled', updated_at = ? WHERE status = 'pending' AND ((sender_uid = ? AND receiver_uid = ?) OR (sender_uid = ? AND receiver_uid = ?))`).bind(now, uid, peerUid, peerUid, uid),
+        env.DB.prepare(`UPDATE game_invites SET status = 'cancelled', updated_at = ? WHERE status = 'pending' AND ((sender_uid = ? AND receiver_uid = ?) OR (sender_uid = ? AND receiver_uid = ?))`).bind(now, uid, peerUid, peerUid, uid)
+      ]);
+      if (Number(results?.[0]?.meta?.changes) > 0) {
+        await notifySocialUser(peerUid, { kind: 'friend_removed', fromUid: uid, at: Date.now() });
+      }
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/blocks' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      const rows = await env.DB.prepare(`
+        SELECT u.uid, u.username, u.nickname, u.avatar, b.created_at
+        FROM user_blocks b JOIN users u ON u.uid = b.blocked_uid
+        WHERE b.blocker_uid = ? ORDER BY b.created_at DESC LIMIT 200
+      `).bind(uid).all();
+      return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatar(row.avatar) })) });
+    }
+
+    if (url.pathname === '/api/blocks' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRate(uid, 'block', 60, 3600000)) return json({ code: 429, msg: '黑名单操作过于频繁' }, 429);
+      const targetUid = String(body.targetUid || '').trim().slice(0, 64);
+      if (!targetUid || targetUid === uid) return json({ code: 400, msg: '拉黑对象无效' }, 400);
+      const target = await env.DB.prepare(`SELECT uid FROM users WHERE uid = ? AND username IS NOT NULL AND username != ''`).bind(targetUid).first();
+      if (!target) return json({ code: 404, msg: '账号不存在' }, 404);
+      const [a, b] = socialPair(uid, targetUid);
+      const now = Date.now();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT OR REPLACE INTO user_blocks (blocker_uid, blocked_uid, created_at) VALUES (?, ?, ?)`).bind(uid, targetUid, now),
+        env.DB.prepare(`DELETE FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?`).bind(a, b),
+        env.DB.prepare(`UPDATE friend_requests SET status = 'blocked', updated_at = ? WHERE status = 'pending' AND ((sender_uid = ? AND receiver_uid = ?) OR (sender_uid = ? AND receiver_uid = ?))`).bind(now, uid, targetUid, targetUid, uid),
+        env.DB.prepare(`UPDATE game_invites SET status = 'cancelled', updated_at = ? WHERE status = 'pending' AND ((sender_uid = ? AND receiver_uid = ?) OR (sender_uid = ? AND receiver_uid = ?))`).bind(now, uid, targetUid, targetUid, uid),
+        env.DB.prepare(`DELETE FROM recent_opponent_reports WHERE (reporter_uid = ? AND opponent_uid = ?) OR (reporter_uid = ? AND opponent_uid = ?)`).bind(uid, targetUid, targetUid, uid),
+        env.DB.prepare(`DELETE FROM recent_opponents WHERE (uid = ? AND opponent_uid = ?) OR (uid = ? AND opponent_uid = ?)`).bind(uid, targetUid, targetUid, uid)
+      ]);
+      await notifySocialUser(targetUid, { kind: 'relationship_changed', at: now });
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/blocks' && request.method === 'DELETE') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      await env.DB.prepare('DELETE FROM user_blocks WHERE blocker_uid = ? AND blocked_uid = ?').bind(auth.user.uid, String(body.targetUid || '')).run();
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/messages' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const friendUid = String(url.searchParams.get('friendUid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '仅好友可以查看私聊' }, 403);
+      const pairKey = socialPairKey(uid, friendUid);
+      const state = await env.DB.prepare('SELECT cleared_before_id FROM message_state WHERE uid = ? AND pair_key = ?').bind(uid, pairKey).first();
+      const requestedBefore = Number(url.searchParams.get('before'));
+      const before = Number.isSafeInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : Number.MAX_SAFE_INTEGER;
+      const requestedLimit = Number(url.searchParams.get('limit'));
+      const limit = Number.isSafeInteger(requestedLimit) ? Math.min(SOCIAL_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : 30;
+      const rows = await env.DB.prepare(`
+        SELECT id, sender_uid, receiver_uid, body, created_at FROM private_messages
+        WHERE pair_key = ? AND id < ? AND id > ? ORDER BY id DESC LIMIT ?
+      `).bind(pairKey, before, Number(state?.cleared_before_id) || 0, limit).all();
+      return json({ code: 0, data: (rows.results || []).reverse() });
+    }
+
+    if (url.pathname === '/api/messages' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const receiverUid = String(body.receiverUid || '').trim().slice(0, 64);
+      const text = String(body.text || '').trim();
+      const clientMessageId = String(body.clientMessageId || '').trim();
+      if (!text || Array.from(text).length > SOCIAL_MAX_MESSAGE_CHARS || !/^[A-Za-z0-9_-]{8,80}$/.test(clientMessageId)) {
+        return json({ code: 400, msg: `消息内容需为 1-${SOCIAL_MAX_MESSAGE_CHARS} 个字符` }, 400);
+      }
+      if (!consumeSocialRate(uid, 'message', 60, 60000)) return json({ code: 429, msg: '消息发送过快' }, 429);
+      if (!await areFriends(uid, receiverUid) || await isBlockedEitherWay(uid, receiverUid)) return json({ code: 403, msg: '仅好友可以私聊' }, 403);
+      const pairKey = socialPairKey(uid, receiverUid);
+      const [friendA, friendB] = socialPair(uid, receiverUid);
+      const now = Date.now();
+      const insertResult = await env.DB.prepare(`
+        INSERT OR IGNORE INTO private_messages (pair_key, sender_uid, receiver_uid, client_message_id, body, created_at)
+        SELECT ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?
+        ) AND NOT EXISTS (
+          SELECT 1 FROM user_blocks
+          WHERE (blocker_uid = ? AND blocked_uid = ?) OR (blocker_uid = ? AND blocked_uid = ?)
+        )
+      `).bind(pairKey, uid, receiverUid, clientMessageId, text, now,
+        friendA, friendB, uid, receiverUid, receiverUid, uid).run();
+      const message = await env.DB.prepare(`SELECT id, sender_uid, receiver_uid, body, created_at FROM private_messages WHERE sender_uid = ? AND client_message_id = ?`).bind(uid, clientMessageId).first();
+      if (!message) return json({ code: 403, msg: '好友关系已变化，消息未发送' }, 403);
+      // clientMessageId 对发送方全局唯一。重试若改变接收人或正文，不能把
+      // 旧会话的消息当作本次成功结果返回。
+      if (!message || String(message.receiver_uid) !== receiverUid || String(message.body) !== text) {
+        return json({ code: 409, msg: '客户端消息 ID 已用于另一条消息' }, 409);
+      }
+      if (Number(insertResult?.meta?.changes) > 0) {
+        await notifySocialUser(receiverUid, { kind: 'message', fromUid: uid, messageId: Number(message?.id) || 0, at: now });
+      }
+      return json({ code: 0, data: message });
+    }
+
+    if (url.pathname === '/api/messages/read' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const friendUid = String(body.friendUid || '').trim().slice(0, 64);
+      const requestedMessageId = Number(body.lastMessageId);
+      const lastMessageId = Number.isSafeInteger(requestedMessageId) && requestedMessageId > 0 ? requestedMessageId : 0;
+      if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '好友关系无效' }, 403);
+      const pairKey = socialPairKey(uid, friendUid);
+      await env.DB.prepare(`
+        INSERT INTO message_state (uid, pair_key, last_read_id, cleared_before_id) VALUES (?, ?, ?, 0)
+        ON CONFLICT(uid, pair_key) DO UPDATE SET last_read_id = MAX(message_state.last_read_id, excluded.last_read_id)
+      `).bind(uid, pairKey, lastMessageId).run();
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/messages/clear' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const friendUid = String(body.friendUid || '').trim().slice(0, 64);
+      if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '好友关系无效' }, 403);
+      const pairKey = socialPairKey(uid, friendUid);
+      const latest = await env.DB.prepare('SELECT MAX(id) AS max_id FROM private_messages WHERE pair_key = ?').bind(pairKey).first();
+      const maxId = Number(latest?.max_id) || 0;
+      await env.DB.prepare(`
+        INSERT INTO message_state (uid, pair_key, last_read_id, cleared_before_id) VALUES (?, ?, ?, ?)
+        ON CONFLICT(uid, pair_key) DO UPDATE SET
+          last_read_id = MAX(message_state.last_read_id, excluded.last_read_id),
+          cleared_before_id = MAX(message_state.cleared_before_id, excluded.cleared_before_id)
+      `).bind(uid, pairKey, maxId, maxId).run();
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/recent-opponents' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      const rows = await env.DB.prepare(`
+        SELECT u.uid, u.username, u.nickname, u.avatar, u.score, r.games_count, r.last_played_at
+        FROM recent_opponents r JOIN users u ON u.uid = r.opponent_uid
+        WHERE r.uid = ? AND NOT EXISTS (
+          SELECT 1 FROM user_blocks b WHERE (b.blocker_uid = ? AND b.blocked_uid = u.uid) OR (b.blocker_uid = u.uid AND b.blocked_uid = ?)
+        ) ORDER BY r.last_played_at DESC LIMIT 30
+      `).bind(uid, uid, uid).all();
+      return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatar(row.avatar) })) });
+    }
+
+    if (url.pathname === '/api/recent-opponents' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const opponentUid = String(body.opponentUid || '').trim().slice(0, 64);
+      if (!opponentUid || opponentUid === uid) return json({ code: 400, msg: '对手身份无效' }, 400);
+      if (!consumeSocialRate(uid, 'recent-opponent', 60, 60000)) return json({ code: 429, msg: '对手记录更新过于频繁' }, 429);
+      // 单方客户端上报不能证明真实对局，也不能让 6 位 UID 被批量枚举。
+      // 两个正式账号需在 10 分钟内互相上报，才把该用户对写入双方最近对手。
+      const unconfirmed = () => json({ code: 0, data: { confirmed: false } });
+      if (await isBlockedEitherWay(uid, opponentUid)) return unconfirmed();
+      const opponent = await env.DB.prepare(`SELECT uid FROM users WHERE uid = ? AND username IS NOT NULL AND username != ''`).bind(opponentUid).first();
+      if (!opponent) return unconfirmed();
+      const now = Date.now();
+      const cutoff = now - 10 * 60 * 1000;
+      await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO recent_opponent_reports (reporter_uid, opponent_uid, reported_at) VALUES (?, ?, ?)
+          ON CONFLICT(reporter_uid, opponent_uid) DO UPDATE SET reported_at = excluded.reported_at
+        `).bind(uid, opponentUid, now),
+        env.DB.prepare(`DELETE FROM recent_opponent_reports WHERE reported_at < ?`).bind(cutoff)
+      ]);
+      const reciprocal = await env.DB.prepare(`
+        SELECT 1 AS ok FROM recent_opponent_reports
+        WHERE reporter_uid = ? AND opponent_uid = ? AND reported_at >= ?
+      `).bind(opponentUid, uid, cutoff).first();
+      if (!reciprocal) return unconfirmed();
+      await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO recent_opponents (uid, opponent_uid, games_count, last_played_at)
+          SELECT ?, ?, 1, ? WHERE NOT EXISTS (
+            SELECT 1 FROM user_blocks
+            WHERE (blocker_uid = ? AND blocked_uid = ?) OR (blocker_uid = ? AND blocked_uid = ?)
+          )
+          ON CONFLICT(uid, opponent_uid) DO UPDATE SET games_count = recent_opponents.games_count + 1, last_played_at = excluded.last_played_at
+        `).bind(uid, opponentUid, now, uid, opponentUid, opponentUid, uid),
+        env.DB.prepare(`
+          INSERT INTO recent_opponents (uid, opponent_uid, games_count, last_played_at)
+          SELECT ?, ?, 1, ? WHERE NOT EXISTS (
+            SELECT 1 FROM user_blocks
+            WHERE (blocker_uid = ? AND blocked_uid = ?) OR (blocker_uid = ? AND blocked_uid = ?)
+          )
+          ON CONFLICT(uid, opponent_uid) DO UPDATE SET games_count = recent_opponents.games_count + 1, last_played_at = excluded.last_played_at
+        `).bind(opponentUid, uid, now, uid, opponentUid, opponentUid, uid),
+        env.DB.prepare(`DELETE FROM recent_opponent_reports WHERE (reporter_uid = ? AND opponent_uid = ?) OR (reporter_uid = ? AND opponent_uid = ?)`).bind(uid, opponentUid, opponentUid, uid),
+        env.DB.prepare(`DELETE FROM recent_opponents WHERE uid = ? AND opponent_uid NOT IN (SELECT opponent_uid FROM recent_opponents WHERE uid = ? ORDER BY last_played_at DESC LIMIT 30)`).bind(uid, uid),
+        env.DB.prepare(`DELETE FROM recent_opponents WHERE uid = ? AND opponent_uid NOT IN (SELECT opponent_uid FROM recent_opponents WHERE uid = ? ORDER BY last_played_at DESC LIMIT 30)`).bind(opponentUid, opponentUid)
+      ]);
+      return json({ code: 0, data: { confirmed: true } });
+    }
+
+    if (url.pathname === '/api/game-invites' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const friendUid = String(body.friendUid || '').trim().slice(0, 64);
+      const roomCode = String(body.roomCode || '').trim();
+      if (!/^\d{6}$/.test(roomCode)) return json({ code: 400, msg: '房间尚未准备好' }, 400);
+      if (!consumeSocialRate(uid, 'invite', 20, 60000)) return json({ code: 429, msg: '邀战发送过快' }, 429);
+      if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '仅好友可以邀战' }, 403);
+      const now = Date.now();
+      const id = generateSecureHex(12);
+      const [friendA, friendB] = socialPair(uid, friendUid);
+      const inserted = await env.DB.prepare(`
+        INSERT INTO game_invites (id, sender_uid, receiver_uid, room_code, status, created_at, expires_at, updated_at)
+        SELECT ?, ?, ?, ?, 'pending', ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?
+        ) AND NOT EXISTS (
+          SELECT 1 FROM user_blocks
+          WHERE (blocker_uid = ? AND blocked_uid = ?) OR (blocker_uid = ? AND blocked_uid = ?)
+        )
+      `).bind(id, uid, friendUid, roomCode, now, now + SOCIAL_INVITE_TTL_MS, now,
+        friendA, friendB, uid, friendUid, friendUid, uid).run();
+      if (!Number(inserted?.meta?.changes)) return json({ code: 403, msg: '好友关系已变化，邀战未发送' }, 403);
+      await notifySocialUser(friendUid, { kind: 'game_invite', inviteId: id, fromUid: uid, roomCode, expiresAt: now + SOCIAL_INVITE_TTL_MS });
+      return json({ code: 0, data: { inviteId: id, expiresAt: now + SOCIAL_INVITE_TTL_MS } });
+    }
+
+    const inviteAction = url.pathname.match(/^\/api\/game-invites\/([A-Fa-f0-9]{24})\/respond$/);
+    if (inviteAction && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const invite = await env.DB.prepare(`SELECT * FROM game_invites WHERE id = ? AND receiver_uid = ?`).bind(inviteAction[1], uid).first();
+      if (!invite) return json({ code: 404, msg: '邀战不存在' }, 404);
+      const now = Date.now();
+      if (invite.status !== 'pending' || Number(invite.expires_at) <= now) {
+        await env.DB.prepare(`UPDATE game_invites SET status = 'expired', updated_at = ? WHERE id = ? AND status = 'pending'`).bind(now, invite.id).run();
+        return json({ code: 410, msg: '邀战已失效' }, 410);
+      }
+      const response = ['accepted', 'rejected', 'busy'].includes(body.response) ? body.response : 'rejected';
+      if (!await areFriends(uid, invite.sender_uid) || await isBlockedEitherWay(uid, invite.sender_uid)) return json({ code: 403, msg: '邀战已失效' }, 403);
+      const claimed = await env.DB.prepare(`
+        UPDATE game_invites SET status = ?, updated_at = ?
+        WHERE id = ? AND receiver_uid = ? AND status = 'pending' AND expires_at > ?
+      `).bind(response, now, invite.id, uid, now).run();
+      if (!Number(claimed?.meta?.changes)) return json({ code: 410, msg: '邀战已失效' }, 410);
+      await notifySocialUser(invite.sender_uid, { kind: 'game_invite_response', inviteId: invite.id, fromUid: uid, response, at: now });
+      return json({ code: 0, data: { roomCode: response === 'accepted' ? invite.room_code : '' } });
+    }
+
+    if (url.pathname === '/api/social/settings' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      if (!consumeSocialRate(auth.user.uid, 'social-settings', 30, 60000)) return json({ code: 429, msg: '设置更新过于频繁' }, 429);
+      const hidden = body.presenceHidden === true ? 1 : 0;
+      const metrics = body.metricsEnabled === false ? 0 : 1;
+      await env.DB.prepare(`
+        INSERT INTO user_social_settings (uid, presence_hidden, metrics_enabled, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET presence_hidden = excluded.presence_hidden, metrics_enabled = excluded.metrics_enabled, updated_at = excluded.updated_at
+      `).bind(auth.user.uid, hidden, metrics, Date.now()).run();
+      const visibleOnline = hidden === 0 && await socialPresence(auth.user.uid);
+      await notifySocialFriends(auth.user.uid, { kind: 'presence', uid: auth.user.uid, online: visibleOnline, refresh: true, at: Date.now() });
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/social/socket-ticket' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      if (!consumeSocialRate(auth.user.uid, 'social-ticket', 60, 60000)) return json({ code: 429, msg: '连接请求过于频繁' }, 429);
+      const ticket = generateSecureHex(24);
+      const ticketHash = await hashWithSalt(ticket, 'social-ticket');
+      const now = Date.now();
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM social_socket_tickets WHERE expires_at <= ? OR used != 0').bind(now),
+        env.DB.prepare('INSERT INTO social_socket_tickets (ticket_hash, uid, expires_at, used) VALUES (?, ?, ?, 0)').bind(ticketHash, auth.user.uid, now + SOCIAL_TICKET_TTL_MS)
+      ]);
+      return json({ code: 0, data: { ticket, expiresAt: now + SOCIAL_TICKET_TTL_MS } });
+    }
+
+    if (url.pathname === '/api/social/socket' && request.method === 'GET') {
+      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ code: 426, msg: '需要 WebSocket 升级' }, 426);
+      if (!env.GOMOKU_SOCIAL) return json({ code: 503, msg: '好友实时服务尚未部署' }, 503);
+      const ticket = String(url.searchParams.get('ticket') || '');
+      if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) return json({ code: 401, msg: '好友连接票据无效' }, 401);
+      const ticketHash = await hashWithSalt(ticket, 'social-ticket');
+      const now = Date.now();
+      const record = await env.DB.prepare(`SELECT uid FROM social_socket_tickets WHERE ticket_hash = ? AND used = 0 AND expires_at > ?`).bind(ticketHash, now).first();
+      if (!record) return json({ code: 401, msg: '好友连接票据已失效' }, 401);
+      const claimed = await env.DB.prepare(`UPDATE social_socket_tickets SET used = 1 WHERE ticket_hash = ? AND used = 0 AND expires_at > ?`).bind(ticketHash, now).run();
+      if (!claimed.meta?.changes) return json({ code: 401, msg: '好友连接票据已使用' }, 401);
+      const id = env.GOMOKU_SOCIAL.idFromName(`social:${record.uid}`);
+      const headers = new Headers(request.headers);
+      headers.set('X-Gomoku-Social-Uid', String(record.uid));
+      return env.GOMOKU_SOCIAL.get(id).fetch(new Request('https://social.internal/socket', { method: 'GET', headers }));
+    }
+
+    if (url.pathname === '/api/metrics' && request.method === 'POST') {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      if (!consumeSocialRate(ip, 'metrics', 30, 3600000)) return json({ code: 429, msg: '统计提交过于频繁' }, 429);
+      const body = await readJsonBody(request);
+      const samples = Array.isArray(body.samples) ? body.samples.slice(0, 20) : [];
+      const rawVersion = sanitizeText(body.clientVersion || '', 20);
+      const version = /^v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]{1,12})?$/.test(rawVersion) ? rawVersion : 'unknown';
+      const rawPlatform = sanitizeText(body.platform || '', 20).toLowerCase();
+      const platform = new Set(['web', 'android', 'single-file']).has(rawPlatform) ? rawPlatform : 'unknown';
+      const day = new Date().toISOString().slice(0, 10);
+      const statements = [];
+      const timingBuckets = new Set(['fast', 'normal', 'slow', 'very_slow']);
+      const allowedBucketsByMetric = new Map([
+        ['fcp', timingBuckets],
+        ['dcl', timingBuckets],
+        ['board_ready', timingBuckets],
+        ['interactive', timingBuckets],
+        ['network_rtt', timingBuckets],
+        ['reconnect_ms', timingBuckets],
+        ['reconnect_result', new Set(['success', 'failure'])],
+        ['graphics_quality', new Set(['auto', 'high', 'standard', 'smooth'])]
+      ]);
+      const allowedEndpoints = new Set(['', 'pages', 'worker']);
+      const allowedRoutes = new Set(['', 'direct', 'turn', 'websocket']);
+      for (const sample of samples) {
+        const metric = sanitizeText(sample?.metric || '', 32);
+        const bucket = sanitizeText(sample?.bucket || '', 24);
+        const endpoint = sanitizeText(sample?.endpoint || '', 20);
+        const route = sanitizeText(sample?.route || '', 20);
+        const value = Number(sample?.value);
+        const metricBuckets = allowedBucketsByMetric.get(metric);
+        if (!metricBuckets?.has(bucket) || !allowedEndpoints.has(endpoint) || !allowedRoutes.has(route) ||
+            (metric === 'graphics_quality' && value !== 1) ||
+            !Number.isFinite(value) || value < 0 || value > 3600000) continue;
+        statements.push(env.DB.prepare(`
+          INSERT INTO metrics_daily (day, client_version, platform, metric, bucket, endpoint, route, sample_count, value_sum, value_min, value_max)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+          ON CONFLICT(day, client_version, platform, metric, bucket, endpoint, route) DO UPDATE SET
+            sample_count = metrics_daily.sample_count + 1,
+            value_sum = metrics_daily.value_sum + excluded.value_sum,
+            value_min = MIN(metrics_daily.value_min, excluded.value_min),
+            value_max = MAX(metrics_daily.value_max, excluded.value_max)
+        `).bind(day, version, platform, metric, bucket, endpoint, route, value, value, value));
+      }
+      if (statements.length) await env.DB.batch(statements);
+      return json({ code: 0, data: { accepted: statements.length } });
     }
 
     // ── 智能动态 UID 分配引擎（支持 6 位靓号到亿级自动平滑扩容） ──

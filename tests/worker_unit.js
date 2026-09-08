@@ -5,6 +5,7 @@ const { webcrypto } = require('node:crypto');
 
 const workerSource = fs.readFileSync('backend/worker.js', 'utf8')
   .replace('export class GomokuRoom', 'class GomokuRoom')
+  .replace('export class SocialHub', 'class SocialHub')
   .replace('export default {', 'globalThis.__gomokuWorker = {');
 
 const sandbox = {

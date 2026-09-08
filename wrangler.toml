@@ -11,3 +11,8 @@ database_id = "4cd53ea1-ef41-450e-843c-b48f6121cf7c"
 name = "GOMOKU_ROOMS"
 class_name = "GomokuRoom"
 script_name = "gomoku-backend"
+
+[[durable_objects.bindings]]
+name = "GOMOKU_SOCIAL"
+class_name = "SocialHub"
+script_name = "gomoku-backend"

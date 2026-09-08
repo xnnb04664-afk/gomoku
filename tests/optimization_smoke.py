@@ -58,6 +58,10 @@ def main():
             }
             """
         )
+        page.evaluate("() => window.ensureGomokuFeature('online')")
+        page.wait_for_function(
+            "() => window.__GOMOKU_ONLINE_READY__ === true", timeout=30_000
+        )
         chat_export = page.evaluate(
             """
             async () => {

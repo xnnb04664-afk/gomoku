@@ -168,7 +168,7 @@ const tests = [];
 }
 
 {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
   const start = source.indexOf('async function smartAiMove');
   const end = source.indexOf('// 显式挂到 window', start);
   const body = start >= 0 && end > start ? source.slice(start, end) : '';

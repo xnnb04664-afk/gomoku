@@ -1,10 +1,13 @@
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const { createInlineAiWorkerTag, injectAiWorkerSource } = require('./build_ai_worker');
 
 const ROOT_DIR = __dirname;
 const SOURCE_HTML = path.join(ROOT_DIR, 'index.html');
 const OUTPUT_FILE = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
+
+execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 console.log('>>> [1/3] 读取当前最新 index.html 母本代码...');
 let html = fs.readFileSync(SOURCE_HTML, 'utf8');
@@ -54,6 +57,36 @@ if (fs.existsSync(aiFastPath)) {
   aiFastContent = fs.readFileSync(aiFastPath, 'utf8');
 }
 
+const socialPath = path.join(ROOT_DIR, 'js', 'social.min.js');
+let socialContent = '';
+if (fs.existsSync(socialPath)) {
+  socialContent = fs.readFileSync(socialPath, 'utf8');
+}
+
+const accountPath = path.join(ROOT_DIR, 'js', 'account.min.js');
+let accountContent = '';
+if (fs.existsSync(accountPath)) {
+  accountContent = fs.readFileSync(accountPath, 'utf8');
+}
+
+const replayPath = path.join(ROOT_DIR, 'js', 'replay.min.js');
+const replayContent = fs.existsSync(replayPath) ? fs.readFileSync(replayPath, 'utf8') : '';
+const settingsPath = path.join(ROOT_DIR, 'js', 'settings.min.js');
+const settingsContent = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf8') : '';
+
+const onlinePath = path.join(ROOT_DIR, 'js', 'online.min.js');
+let onlineContent = '';
+if (fs.existsSync(onlinePath)) {
+  onlineContent = fs.readFileSync(onlinePath, 'utf8');
+}
+
+const appPath = path.join(ROOT_DIR, 'js', 'app.min.js');
+const appContent = fs.readFileSync(appPath, 'utf8');
+html = html.replace(
+  /\s*<script defer src="js\/app\.min\.js"><\/script>/i,
+  `\n  <script>\n${appContent.replace(/<\/script/gi, '<\\/script')}\n  </script>`
+);
+
 // 压缩库可能包含 </script> 字符串；内联时必须转义，否则浏览器会提前结束脚本标签。
 const escapeInlineScript = content => content.replace(/<\/script/gi, '<\\/script');
 
@@ -86,8 +119,14 @@ if (styleStart < 0) {
 const inlineOptionalResources = [
   inlineResourceTag('mqtt', '内联 MQTT 极速联机引擎（进入联机时载入）', mqttJsContent),
   inlineResourceTag('aiFast', '内联快速五子棋 AI 引擎（Worker 异常时按需回退）', aiFastContent),
+  inlineResourceTag('aiCore', '内联兼容五子棋 AI 引擎（双重异常时按需回退）', aiEngineContent),
   inlineResourceTag('audio', '内联樱桃炸弹 MP3 原声 Base64 数据（首次操作时载入）', cherryAudioContent),
   inlineResourceTag('avatars', '内联压缩二次元情侣动漫头像数据（打开头像设置时载入）', animeAvatarsInlineContent)
+  ,inlineResourceTag('account', '内联账号扩展、排行榜与反馈模块（首次使用时载入）', accountContent)
+  ,inlineResourceTag('replay', '内联战绩与复盘模块（首次查看时载入）', replayContent)
+  ,inlineResourceTag('settings', '内联扩展设置模块（首次打开时载入）', settingsContent)
+  ,inlineResourceTag('online', '内联联机状态机（进入联机或好友邀战时载入）', onlineContent)
+  ,inlineResourceTag('social', '内联好友与私聊模块（登录或打开好友中心时载入）', socialContent)
 ].join('');
 html = html.slice(0, styleStart) + inlineOptionalResources + '\n' + html.slice(styleStart);
 
@@ -107,7 +146,8 @@ if (fs.existsSync(girlImgPath)) {
 html = html.replace(/<title>.*?<\/title>/i, '<title>五子棋大师 · 单文件全功能旗舰版 🌐🎴💬🌿</title>');
 
 console.log('>>> [3/3] 写入生成单文件版: ' + OUTPUT_FILE);
-fs.writeFileSync(OUTPUT_FILE, html, 'utf8');
+// 生成包统一去除行尾空格，避免单文件构建造成无意义的 diff 噪声。
+fs.writeFileSync(OUTPUT_FILE, html.replace(/[ \t]+$/gm, ''), 'utf8');
 
 const stat = fs.statSync(OUTPUT_FILE);
 console.log(`✅ 单文件全功能版打包成功！`);

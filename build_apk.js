@@ -7,7 +7,14 @@ const { injectAiWorkerSource } = require('./build_ai_worker');
 
 function run(cmd, args, options = {}) {
   console.log(`> [EXEC] ${path.basename(cmd)} ${args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
-  const res = spawnSync(cmd, args, { stdio: 'inherit', ...options });
+  const spawnOptions = { stdio: 'inherit', ...options };
+  // Node 25 on Windows can return EINVAL when launching .cmd/.bat directly.
+  // Let ComSpec resolve these launcher scripts while keeping all arguments intact.
+  if (process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(String(cmd))) {
+    spawnOptions.shell = true;
+    spawnOptions.windowsHide = true;
+  }
+  const res = spawnSync(cmd, args, spawnOptions);
   if (res.error) {
     console.error('Execution error:', res.error);
     process.exit(1);
@@ -47,6 +54,7 @@ const ZIPALIGN = path.join(BUILD_TOOLS, 'zipalign.exe');
 const APKSIGNER = path.join(BUILD_TOOLS, 'apksigner.bat');
 
 const ROOT_DIR = __dirname;
+run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:app'], { cwd: ROOT_DIR });
 const SRC_DIR = path.join(ROOT_DIR, 'android_src');
 const OUTPUT_APK = path.join(ROOT_DIR, '五子棋.apk');
 
