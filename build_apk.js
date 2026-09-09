@@ -43,7 +43,11 @@ function copyRecursiveSync(src, dest) {
   }
 }
 
-const SDK_DIR = 'C:\\Users\\ZhuanZ1\\AppData\\Local\\Android\\Sdk';
+// Prefer the relocated SDK path from the environment; keep the historical C:\\ path
+// as a fallback for other machines that have not configured ANDROID_SDK_ROOT yet.
+const SDK_DIR = process.env.ANDROID_SDK_ROOT
+  || process.env.ANDROID_HOME
+  || 'C:\\Users\\ZhuanZ1\\AppData\\Local\\Android\\Sdk';
 const BUILD_TOOLS = path.join(SDK_DIR, 'build-tools', '35.0.0');
 const ANDROID_JAR = path.join(SDK_DIR, 'platforms', 'android-35', 'android.jar');
 
