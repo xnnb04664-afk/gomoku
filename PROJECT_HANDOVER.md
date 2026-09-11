@@ -24,11 +24,11 @@
 
 ### 官网首版（2026-09-11）
 
-- **部署状态**：已创建独立 Cloudflare Pages 项目 `gomoku-home`，稳定地址为 `https://gomoku-home.pages.dev/`，最近预览部署地址为 `https://39485418.gomoku-home.pages.dev/`；不使用 VPS，不改动 `gomoku-api`、Worker、D1 或现有联机线路。
+- **部署状态**：独立 Cloudflare Pages 项目 `gomoku-home` 已持续部署，稳定地址为 `https://gomoku-home.pages.dev/`，当前生产部署为 `https://a81bc0d7.gomoku-home.pages.dev/`；不使用 VPS，联机仍走现有 `gomoku-api`、Worker、D1 和 P2P/TURN 链路。
 - **页面内容**：官网首页、`/play/` 网页游戏、`/help/` 帮助、`/privacy/` 隐私说明、`/robots.txt` 与 `sitemap.xml` 已上线；首页支持移动端导航和可点击棋盘演示。
 - **下载边界**：官网 `_worker.js` 仅在服务端向现有 `gomoku-api.pages.dev` 请求 90 秒短时票据，再代理 `/download/apk` 和 `/download/html`；浏览器不接触私有 GitHub 仓库、长期令牌或可复用直链。
 - **维护方式**：运行 `npm run build:official-site`（或 `node build_official_site.js`）会将当前游戏同步到 `official-site/play/`，再执行 `npx wrangler pages deploy official-site --project-name gomoku-home`；`official-site/play/` 是构建产物，不手工修改。
-- **验证结果**：本地静态官网 smoke、Wrangler Pages Worker smoke 均通过；线上首页、`/play/`、帮助/隐私页、`/api/site-version`（返回 `v1.0.120`/Build `121`）、APK/HTML 下载、favicon、robots 和 sitemap 均返回 HTTP 200。下载接口验收的 APK 为 1,731,582 bytes，单文件版为 1,048,909 bytes。
+- **验证结果**：本地静态官网 smoke、线上首页、`/play/`、帮助/隐私页、`/api/site-version`（当前返回 `v1.0.121`/Build `122`）、APK/HTML 下载、favicon、robots 和 sitemap 均返回 HTTP 200；官网生产页已包含语音与十字棋懒加载资源。
 
 ### 🌟 核心亮点
 1. **6 套高颜值前端主题体系**：涵盖现代浮岛、极简暗黑禅意、新中式宣纸、现代奢华毛玻璃、Clean iOS 暖白手机版、以及粉蓝撞色的情侣专属版；
@@ -1232,17 +1232,19 @@ node publish.js
 - **真实验收**：官网两页浏览器成功建立同一房间，先通过 WebSocket 中继完成进房，再自动升级为 `P2P直连`，实测约 2ms；黑白双方双向落子同步，页面无 console/page error。API 从官网来源返回 `Access-Control-Allow-Origin: https://gomoku-home.pages.dev`。
 - **回归**：`node tests/worker_unit.js`、Worker 语法检查、`git diff --check` 和真实双页 Playwright 联机验证通过。修复代码待提交到私有仓库，未改 APK、版本号或 GitHub Release。
 
-## 五十一、社交安全、房间语音、十字棋实验与 Android 开屏（2026-09-11，准备发布 v1.0.121）
+## 五十一、社交安全、房间语音、十字棋实验与 Android 开屏（2026-09-11，已发布 v1.0.121）
 
 - **安全/好友后端**：`backend/worker.js` 与 `pages_build/_worker.js` 统一校验官网稳定/预览来源、API 自身来源、localhost 与原生 `Origin: null`；拒绝带路径/端口/凭据的伪造 Origin。社交搜索、申请、拉黑、消息、最近对手、邀战、设置和社交票据增加账号 + Cloudflare IP 分层限频；SocialHub WebSocket 同样校验来源。既有好友关系、黑名单、消息幂等和一次性 60 秒票据规则不放宽。
 - **房间语音**：新增 `js/voice.js`，按需加载且默认关闭；用户明确授权麦克风后，复用现有房间连接传递短期 SDP/ICE，优先 WebRTC 直连，支持 TURN 配置、早到 ICE 缓冲、静音、断线清理和重连。长期登录令牌不进入 URL，单文件版以内嵌非执行文本保存。
 - **十字棋实验**：新增 `js/cross.js` 与底部入口“✚ 十字棋”。19×19 十字轴棋盘横/竖十连获胜，每方每回合连续两次行动；支持提示、缩放、滚轮/拖动、实验干扰牌和双人同屏。每次落子后自动将镜头跟随最新落点，尤其是对方落子时视角会转到对方位置。
 - **Android 开屏**：新增原生 `GomokuSplashView`，棋盘/十字落子动画与 WebView 并行启动；支持减少动画、轻触跳过、后台暂停、1.4 秒兜底和销毁清理，不调用 `System.gc()` 或清空 WebView 缓存。APK 继续使用仓库外原正式签名。
-- **交付与部署**：D1 生产备份保存到仓库外 `Documents\\GomokuBackups`；安全 Worker 已部署（版本 ID `d1f8c72e-a35f-4b65-beee-143decdaa22f`），`gomoku-api` Pages 已更新；官网 `gomoku-home.pages.dev` 的 `/play/` 已同步语音、十字棋和按钮。VPS 不参与任何联机或部署链路。
-- **回归**：`node tests/social_worker_unit.js`、`node tests/worker_unit.js`、`python tests/social_frontend_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、单文件构建、Android 构建与 APK v1/v2/v3 签名校验通过；官网线上 `/api/site-version` 返回 Build 121，官网来源 API 返回 CORS，恶意来源返回 403。
-- **发布边界**：本节内容发布为下一个客户端版本后，需同步更新本节版本号、GitHub Release、APK/单文件 SHA-256 与正式下载验证；后续若修改 Worker/D1/Pages 仍须先备份再显式部署。不得提交或输出任何密钥、长期令牌或短时下载票据。
+- **交付与部署**：D1 生产备份保存到仓库外 `Documents\\GomokuBackups`；安全 Worker 最新版本 ID 为 `cf5b8b59-07e0-4a7b-8218-8925245d512c`，`gomoku-api` Pages 预览为 `https://51ff855e.gomoku-api.pages.dev`；官网生产部署为 `https://a81bc0d7.gomoku-home.pages.dev`，稳定域名 `https://gomoku-home.pages.dev/play/` 已同步语音、十字棋和按钮。VPS 不参与任何联机或部署链路。
+- **正式版本**：内部版本 `v1.0.121 (Build 122)`，界面显示 `v1.2.1`；GitHub Release：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.121>，包含新签名 APK 与单文件 HTML。生产 `/api/version` 与官网 `/api/site-version` 均返回 `v1.0.121` / Build `122`。
+- **产物**：APK 1,752,190 bytes，SHA-256 `69F53BD30D3E2239C98368349635B44AC078658451C64994E1C5B73010EAE39C`；根页面 143,913 bytes，SHA-256 `D556C7E0454AC55049E6BC413AD2A010D24641F98F19AD6BED6EEE8398537953`；Android 内嵌页面 191,600 bytes，SHA-256 `DA323DB127A586075A620F64212C5FAFA83D0B43767A04CAC8BB25BDA2B411FC`；单文件版 1,093,032 bytes，SHA-256 `C609BCE3BFD3499CEFE960B81871A21AE2BEB664C1DDACD9451D25EA86C13FD9`。APK v1/v2/v3 签名通过，单签名者和原签名证书保持不变。
+- **回归与线上验收**：`node tests/social_worker_unit.js`、`node tests/worker_unit.js`、`python tests/social_frontend_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、单文件构建、Android 构建和 APK 签名校验通过；线上 API 版本、APK/HTML 短时票据和 SHA-256 均匹配，官网来源 CORS 正常、恶意来源返回 403，线上 `/play/` 十字棋与语音懒加载冒烟通过。
+- **后续约束**：后续若修改 Worker/D1/Pages 仍须先备份再显式部署；普通客户端发版默认不重复部署 Cloudflare。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
 
 ---
 *交接文档最后更新时间：2026年9月11日*
-*当前工程正式版本：v1.0.120 (Build 121，界面显示 v1.2.0)；“四十七至四十八”的手机流量进房、延迟显示与 Android 页面重建恢复修复已随“四十九”正式发布；“五十”的独立官网 CORS/WebSocket 来源修复已部署，VPS 不参与联机。*
+*当前工程正式版本：v1.0.121 (Build 122，界面显示 v1.2.1)；“五十”的独立官网 CORS/WebSocket 来源修复及“五十一”的社交安全、房间语音、十字棋实验、Android 开屏均已部署并随 v1.0.121 正式发布，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
