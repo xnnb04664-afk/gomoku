@@ -25,9 +25,89 @@ def main():
         # 未进入房间时不得请求麦克风，也不得抛异常。
         assert page.evaluate("() => window.GomokuVoice.toggle()") is False
         assert "请先进入联机房间" in page.locator("#gomokuVoiceStatus").inner_text()
+
+        # 不访问真实麦克风或公网：用最小 WebRTC 假实现验证房间语音的
+        # hello → offer → answer/早到 ICE 信令和关闭时音轨清理。
+        page.evaluate("""() => {
+            gameMode = 'online';
+            myOnlineColor = 1;
+            window.__voiceMockConnection = {
+                open: true,
+                closed: false,
+                sent: [],
+                send(message) { this.sent.push(message); return true; }
+            };
+            window.__gomokuGetOnlineConnection = () => window.__voiceMockConnection;
+            const track = {
+                enabled: true,
+                stopped: false,
+                stop() { this.stopped = true; },
+            };
+            window.__voiceMockTrack = track;
+            Object.defineProperty(navigator, 'mediaDevices', {
+                configurable: true,
+                value: { getUserMedia: async () => ({
+                    getTracks: () => [track],
+                    getAudioTracks: () => [track],
+                }) }
+            });
+            window.__voiceMockRtc = null;
+            window.RTCPeerConnection = class {
+                constructor() {
+                    this.signalingState = 'stable';
+                    this.connectionState = 'new';
+                    this.iceConnectionState = 'new';
+                    this.localDescription = null;
+                    this.candidates = [];
+                    window.__voiceMockRtc = this;
+                }
+                addTrack() {}
+                async createOffer() { return { type: 'offer', sdp: 'fake-offer' }; }
+                async createAnswer() { return { type: 'answer', sdp: 'fake-answer' }; }
+                async setLocalDescription(description) { this.localDescription = description; }
+                async setRemoteDescription(description) { this.remoteDescription = description; }
+                async addIceCandidate(candidate) { this.candidates.push(candidate); }
+                close() { this.connectionState = 'closed'; }
+            };
+        }""")
+        handshake = page.evaluate("""async () => {
+            const enabled = await window.GomokuVoice.toggle();
+            const sent = window.__voiceMockConnection.sent;
+            const hello = sent.find(item => item.type === 'voice_hello');
+            const offer = sent.find(item => item.type === 'voice_offer');
+            if (!enabled || !hello || !offer) return { enabled, hello: !!hello, offer: !!offer };
+            await window.GomokuVoice.handleSignal({
+                type: 'voice_ice', voiceSessionId: hello.voiceSessionId,
+                candidate: { candidate: 'early-candidate' }
+            });
+            const beforeAnswer = window.__voiceMockRtc.candidates.length;
+            await window.GomokuVoice.handleSignal({
+                type: 'voice_answer', voiceSessionId: hello.voiceSessionId, sdp: 'remote-answer'
+            });
+            const afterAnswer = window.__voiceMockRtc.candidates.length;
+            window.GomokuVoice.stop();
+            return {
+                enabled,
+                hello: true,
+                offer: true,
+                earlyIceBuffered: beforeAnswer === 0,
+                earlyIceFlushed: afterAnswer === 1,
+                trackStopped: window.__voiceMockTrack.stopped,
+                bye: sent.some(item => item.type === 'voice_bye')
+            };
+        }""")
+        assert handshake == {
+            "enabled": True,
+            "hello": True,
+            "offer": True,
+            "earlyIceBuffered": True,
+            "earlyIceFlushed": True,
+            "trackStopped": True,
+            "bye": True,
+        }, handshake
         assert not errors, errors
         assert not console_errors, console_errors
-        print('{"pass":true,"voiceLazyLoaded":true,"defaultOff":true,"permissionDeferred":true,"pageErrors":[]}')
+        print('{"pass":true,"voiceLazyLoaded":true,"defaultOff":true,"permissionDeferred":true,"signalingHandshake":true,"earlyIceBuffer":true,"cleanup":true,"pageErrors":[]}')
         browser.close()
 
 
