@@ -39,6 +39,8 @@ function injectOfficialSiteReturnLink(filePath) {
       width: min(calc(100% - 24px), 460px);
       margin: 6px auto 0;
       display: flex;
+      align-items: center;
+      gap: 6px;
       justify-content: flex-start;
       pointer-events: none;
     }
@@ -62,7 +64,7 @@ function injectOfficialSiteReturnLink(filePath) {
       outline-offset: 2px;
     }
   </style>`;
-  const link = `${marker}\n  <div class="official-return-strip"><a href="/" aria-label="返回五子棋官方站">← 官网</a></div>`;
+  const link = `${marker}\n  <div class="official-return-strip"><a href="/" aria-label="返回五子棋官方站">← 官网</a><a href="/social/" aria-label="打开独立好友中心">👥 好友</a></div>`;
   source = source.replace('</head>', `${style}\n</head>`).replace('<body>', `<body>\n  ${link}`);
   fs.writeFileSync(filePath, source);
 }

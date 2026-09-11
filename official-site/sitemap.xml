@@ -2,6 +2,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://gomoku-home.pages.dev/</loc></url>
   <url><loc>https://gomoku-home.pages.dev/play/</loc><changefreq>monthly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://gomoku-home.pages.dev/social/</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://gomoku-home.pages.dev/help/</loc></url>
   <url><loc>https://gomoku-home.pages.dev/privacy/</loc></url>
 </urlset>

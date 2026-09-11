@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d1b2a">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta name="description" content="五子棋独立好友中心：管理好友、处理申请、私聊、邀战和黑名单。">
+    <meta name="robots" content="index,follow">
+    <meta property="og:title" content="五子棋 · 好友中心">
+    <meta property="og:description" content="从最近对手开始，发消息，约下一盘。">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="五子棋官方站">
+    <meta property="og:url" content="https://gomoku-home.pages.dev/social/">
+    <meta property="og:image" content="https://gomoku-home.pages.dev/favicon.png">
+    <link rel="canonical" href="https://gomoku-home.pages.dev/social/">
+    <link rel="icon" href="/favicon.png" type="image/png">
+    <link rel="stylesheet" href="/styles.css">
+    <title>五子棋 · 好友中心</title>
+    <style>
+      .social-page { min-height: 100vh; background: var(--ink); color: var(--paper); }
+      .social-page-header { width: min(100% - 48px, 1180px); min-height: 76px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid rgba(247,241,229,.14); }
+      .social-page-nav { display: flex; align-items: center; gap: 18px; font-size: 12px; font-weight: 800; }
+      .social-page-nav a { color: #bdc8c7; text-decoration: none; }
+      .social-page-nav a:hover, .social-page-nav a[aria-current="page"] { color: var(--sun); }
+      .social-page-main { width: min(100% - 48px, 1180px); margin: 0 auto; padding: 58px 0 80px; }
+      .social-page-intro { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-bottom: 28px; }
+      .social-page-intro h1 { margin: 0 0 12px; color: var(--paper); font-family: var(--display); font-size: clamp(38px, 6vw, 70px); line-height: .98; letter-spacing: -.07em; }
+      .social-page-intro h1 em { color: var(--sun); font-style: normal; }
+      .social-page-intro p { max-width: 540px; margin: 0; color: #aebbc0; font-size: 14px; line-height: 1.8; }
+      .social-page-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+      .social-page-badge { padding: 8px 10px; border: 1px solid rgba(159,195,178,.45); border-radius: 999px; color: #b9d6c8; font-size: 10px; font-weight: 900; white-space: nowrap; }
+      .social-page-frame { overflow: hidden; min-height: 650px; border: 1px solid rgba(247,241,229,.18); border-radius: 10px; background: #bfe8ff; box-shadow: 0 22px 60px rgba(0,0,0,.3); }
+      .social-page-frame iframe { display: block; width: 100%; height: min(760px, 78vh); min-height: 650px; border: 0; background: #bfe8ff; }
+      .social-page-note { margin: 14px 0 0; color: #8fa59c; font-size: 11px; line-height: 1.7; }
+      @media (max-width: 720px) {
+        .social-page-header, .social-page-main { width: min(100% - 34px, 560px); }
+        .social-page-header { min-height: 68px; }
+        .social-page-nav { gap: 10px; }
+        .social-page-nav a[href="/play/"] { display: none; }
+        .social-page-main { padding: 42px 0 54px; }
+        .social-page-intro { display: block; margin-bottom: 20px; }
+        .social-page-intro h1 { font-size: 48px; }
+        .social-page-intro p { font-size: 13px; }
+        .social-page-badges { justify-content: flex-start; margin-top: 16px; }
+        .social-page-frame { min-height: 600px; border-radius: 8px; }
+        .social-page-frame iframe { height: 690px; min-height: 600px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="social-page">
+      <header class="social-page-header">
+        <a class="brand" href="/" aria-label="返回五子棋官方站首页">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="brand-name">五子棋</span>
+          <span class="brand-label">SOCIAL</span>
+        </a>
+        <nav class="social-page-nav" aria-label="社交中心导航">
+          <a href="/">官网</a>
+          <a href="/play/">棋盘</a>
+          <a href="/social/" aria-current="page">好友中心</a>
+        </nav>
+      </header>
+      <main class="social-page-main">
+        <section class="social-page-intro" aria-labelledby="socialPageTitle">
+          <div>
+            <p class="eyebrow">AFTER THE LAST STONE / SOCIAL</p>
+            <h1 id="socialPageTitle">把棋友，<em>留在身边。</em></h1>
+            <p>这里是独立好友中心。登录正式账号后，可以查找好友、处理申请、发起私聊和邀战，也能管理黑名单与最近对手。</p>
+          </div>
+          <div class="social-page-badges" aria-label="好友中心功能">
+            <span class="social-page-badge">好友与申请</span>
+            <span class="social-page-badge">文字 / Emoji 私聊</span>
+            <span class="social-page-badge">永久云端留存</span>
+          </div>
+        </section>
+        <section class="social-page-frame" aria-label="好友中心应用">
+          <iframe src="/play/#friends" title="五子棋好友中心" loading="eager"></iframe>
+        </section>
+        <p class="social-page-note">好友功能仅对正式账号开放。私聊消息永久保存在 D1 云端数据库；“清空我的记录”只隐藏你这一侧，不会删除对方记录。</p>
+      </main>
+    </div>
+  </body>
+</html>

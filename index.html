@@ -96,6 +96,34 @@
       window.openFriendsModal = function() {
         return ensure('social').then(() => window.GomokuSocial.open());
       };
+      // 官网使用 /play/#friends 作为好友中心深链接。社交模块是延迟加载的，
+      // 因此等核心脚本完成后再打开；游客会自然进入登录引导。
+      let friendsHashOpened = false;
+      function openFriendsFromHash() {
+        if (String(location.hash || '').toLowerCase() !== '#friends' || friendsHashOpened) return;
+        friendsHashOpened = true;
+        const startedAt = Date.now();
+        const attempt = () => {
+          if (typeof window.openFriendsModal !== 'function') {
+            if (Date.now() - startedAt < 8000) setTimeout(attempt, 150);
+            return;
+          }
+          // app.min.js 是 defer 脚本；给首屏棋盘留出绘制时间后打开社交层。
+          Promise.resolve(window.openFriendsModal()).catch(error => {
+            console.warn('[friends deep link]', error?.message || error);
+          });
+        };
+        setTimeout(attempt, 450);
+      }
+      window.addEventListener('hashchange', () => {
+        friendsHashOpened = false;
+        openFriendsFromHash();
+      });
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', openFriendsFromHash, { once: true });
+      } else {
+        openFriendsFromHash();
+      }
       window.toggleGomokuVoice = function() {
         return ensure('voice').then(() => window.GomokuVoice.toggle()).catch(error => {
           const status = document.getElementById('gomokuVoiceStatus');
@@ -2039,6 +2067,7 @@
           <button class="btn-chat-tool" onclick="GomokuSocial.closeChat()" style="font-size:11px; padding:4px 8px;">✕</button>
         </div>
       </div>
+      <div style="padding:6px 2px 0; color:#64748b; font-size:10px; line-height:1.45; font-weight:700;">☁️ 聊天消息永久保存在云端数据库；“清空我的记录”只隐藏你这一侧，不会删除对方记录。</div>
       <div id="socialChatMessages" style="flex:1; overflow:auto; padding:10px 2px; display:flex; flex-direction:column; gap:7px;"></div>
       <div style="display:flex; gap:6px; border-top:1px solid #e2e8f0; padding-top:8px;">
         <input id="socialChatInput" maxlength="500" placeholder="输入文字或表情…" onkeydown="if(event.key==='Enter'){event.preventDefault();GomokuSocial.sendMessage()}" style="flex:1; min-width:0; padding:9px 10px; border:1.5px solid #93c5fd; border-radius:10px; outline:none; user-select:text; -webkit-user-select:text;" />

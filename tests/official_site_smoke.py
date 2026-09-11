@@ -23,6 +23,8 @@ def main():
         assert desktop.locator('link[rel="canonical"]').get_attribute("href") == "https://gomoku-home.pages.dev/"
         assert desktop.locator('meta[property="og:url"]').get_attribute("content") == "https://gomoku-home.pages.dev/"
         assert desktop.locator("h1").count() == 1
+        assert desktop.locator('#siteNav a[href="/social/"]').count() == 1
+        assert desktop.locator('.social-retention-note').inner_text().startswith("私聊消息会永久保存在云端数据库")
         assert desktop.locator(".js-version").first.inner_text() == "v1.2.1"
         assert desktop.locator(".js-build").first.inner_text() == "122"
         assert desktop.locator("[data-demo-status]").get_attribute("aria-live") == "polite"
@@ -67,7 +69,17 @@ def main():
                 assert page.locator(".doc-nav").get_attribute("aria-label") == "文档导航"
                 assert page.locator(".doc-nav").is_visible()
                 assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+            if path == "/play/":
+                assert "openFriendsFromHash" in page.content()
+                assert page.locator('.official-return-strip a[href="/social/"]').count() == 1
             page.close()
+
+        social = browser.new_page(viewport={"width": 390, "height": 844})
+        social.goto("http://127.0.0.1:4173/social/", wait_until="domcontentloaded")
+        assert social.locator("#socialPageTitle").inner_text().startswith("把棋友")
+        assert social.locator('iframe[title="五子棋好友中心"]').get_attribute("src") == "/play/#friends"
+        assert social.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+        social.close()
 
         browser.close()
     print("official site smoke: PASS")

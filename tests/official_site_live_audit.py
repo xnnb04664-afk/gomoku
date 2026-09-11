@@ -55,6 +55,7 @@ def main():
         settle_page(home)
         assert home.locator("h1").inner_text().startswith("一盘棋")
         assert home.locator('a[href="/play/"]').count() >= 1
+        assert home.locator('a[href="/social/"]').count() >= 1
         assert home.locator('a[href="/help/"]').count() >= 1
         assert_no_horizontal_overflow(home)
 
@@ -72,10 +73,18 @@ def main():
         play.wait_for_selector("#cvs", timeout=30000)
         play.wait_for_timeout(1200)
         assert play.locator(".official-return-strip").count() == 1
-        assert play.locator(".official-return-strip a").get_attribute("href") == "/"
+        assert play.locator('.official-return-strip a[href="/"]').count() == 1
+        assert play.locator('.official-return-strip a[href="/social/"]').count() == 1
         assert_no_horizontal_overflow(play)
         if os.environ.get("SAVE_SCREENSHOT") == "1":
             play.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-play-mobile.png", full_page=True)
+
+        social = browser.new_page(viewport={"width": 390, "height": 844})
+        mock_local_api(social)
+        social.goto(f"{BASE_URL}/social/", wait_until="domcontentloaded", timeout=30000)
+        social.wait_for_selector('iframe[title="五子棋好友中心"]', timeout=15000)
+        assert social.locator('iframe[title="五子棋好友中心"]').get_attribute("src") == "/play/#friends"
+        assert_no_horizontal_overflow(social)
 
         assert errors == [], errors
         browser.close()

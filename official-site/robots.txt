@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
 Allow: /play/
+Allow: /social/
 
 Sitemap: https://gomoku-home.pages.dev/sitemap.xml
