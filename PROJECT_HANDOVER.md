@@ -1244,16 +1244,16 @@ node publish.js
 - **回归与线上验收**：`node tests/social_worker_unit.js`、`node tests/worker_unit.js`、`python tests/social_frontend_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、单文件构建、Android 构建和 APK 签名校验通过；线上 API 版本、APK/HTML 短时票据和 SHA-256 均匹配，官网来源 CORS 正常、恶意来源返回 403，线上 `/play/` 十字棋与语音懒加载冒烟通过。
 - **后续约束**：后续若修改 Worker/D1/Pages 仍须先备份再显式部署；普通客户端发版默认不重复部署 Cloudflare。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
 
-## 五十二、官网行业规范与入口统一（2026-09-11，本地已验证，待官网静态部署）
+## 五十二、官网行业规范与入口统一（2026-09-11，已部署官网静态资源）
 
 - **官方站入口**：`build_official_site.js` 在官网专用 `/play/` 副本顶部注入“← 官网”返回入口，只影响官网副本，不改变 APK、单文件版和原始游戏页；官网移动端 320/390px 均无横向溢出。
 - **SEO 与分享元数据**：首页、帮助和隐私页补齐 canonical、robots、Open Graph、Twitter Card、站点名、图标说明和稳定域名；sitemap 纳入 `/play/`，robots 允许官网游戏入口抓取。
 - **可访问性与渐进增强**：演示状态使用 `aria-live`；移动导航同步 `aria-expanded`/`aria-label`，支持点击外部区域关闭和 Esc 关闭后回焦；加入键盘跳过链接、无脚本内容可见、减少动画偏好支持和无脚本提示。
 - **浏览器能力策略**：官网 `_headers` 与 `_worker.js` 的 `Permissions-Policy` 保持摄像头/定位关闭，仅允许同源 `/play/` 在用户点击开启语音后申请麦克风；不会把麦克风权限静默开放给第三方嵌入页。
 - **版本一致性**：首页静态回退、游戏页、Android 内嵌页和反馈栏统一显示 `v1.2.1 / Build 122`；官网 API 失败时回退 `/version.json`，不再出现旧的 `v1.1.1`、`v1.0.91` 或 `v1.2.0`。
-- **回归验证**：`tests/official_site_smoke.py` 覆盖 SEO、版本、演示棋盘、移动导航、320px 窄屏与帮助/隐私页；`tests/official_site_live_audit.py` 覆盖官网首页、移动导航、官网 `/play/` 返回入口、无横向溢出和页面错误；`node --check build_official_site.js`、官网 `site.js`、`git diff --check` 已通过。当前改动尚未重新发布 APK、GitHub Release 或 Worker/D1。
+- **回归验证与部署**：`tests/official_site_smoke.py` 覆盖 SEO、版本、演示棋盘、移动导航、320px 窄屏与帮助/隐私页；`tests/official_site_live_audit.py` 覆盖官网首页、移动导航、官网 `/play/` 返回入口、无横向溢出和页面错误；`tests/official_site_worker_smoke.py` 支持本地 Worker 与线上站点验收；`node --check build_official_site.js`、官网 `site.js`、`git diff --check` 已通过。官网静态资源已部署到预览 `https://fea0529a.gomoku-home.pages.dev`，稳定域名 `https://gomoku-home.pages.dev/` 已复验；本轮未重新发布 APK、GitHub Release 或 Worker/D1。
 
 ---
 *交接文档最后更新时间：2026年9月11日*
-*当前工程正式版本：v1.0.121 (Build 122，界面显示 v1.2.1)；“五十”的独立官网 CORS/WebSocket 来源修复及“五十一”的社交安全、房间语音、十字棋实验、Android 开屏均已部署并随 v1.0.121 正式发布，VPS 不参与联机。*
+*当前工程正式版本：v1.0.121 (Build 122，界面显示 v1.2.1)；“五十”的独立官网 CORS/WebSocket 来源修复、“五十一”的社交安全/房间语音/十字棋实验/Android 开屏及“五十二”的官网行业规范改造均已完成，官网静态资源已部署，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
