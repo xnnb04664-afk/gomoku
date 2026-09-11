@@ -20,7 +20,7 @@ function withSecurityHeaders(response, requestUrl) {
   const headers = new Headers(response.headers);
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()');
   headers.set('X-Frame-Options', 'DENY');
   const url = new URL(requestUrl);
   if (url.protocol === 'https:') headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -38,7 +38,7 @@ function json(data, status = 200) {
       'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
-      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+      'Permissions-Policy': 'camera=(), microphone=(self), geolocation=()',
       'X-Frame-Options': 'DENY'
     }
   });
