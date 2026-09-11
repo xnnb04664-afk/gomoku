@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from urllib.request import urlopen
 
 
@@ -8,11 +9,13 @@ def get(path):
 
 
 def main():
+    version = json.loads((Path(__file__).resolve().parents[1] / "official-site" / "version.json").read_text(encoding="utf-8"))
     status, _, body = get("/api/site-version")
     assert status == 200
     data = json.loads(body)
     assert data["code"] == 0 and data["tag"].startswith("v")
-    assert data["build"] == 121
+    assert data["tag"] == version["releaseTag"]
+    assert data["build"] == version["versionCode"]
 
     for path, marker in (("/", "一盘棋"), ("/help/", "怎样开始一局"), ("/privacy/", "我们保存什么"), ("/play/", "gomokuResourceLoader")):
         status, _, body = get(path)

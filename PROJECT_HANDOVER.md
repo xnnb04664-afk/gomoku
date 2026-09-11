@@ -1244,6 +1244,15 @@ node publish.js
 - **回归与线上验收**：`node tests/social_worker_unit.js`、`node tests/worker_unit.js`、`python tests/social_frontend_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、单文件构建、Android 构建和 APK 签名校验通过；线上 API 版本、APK/HTML 短时票据和 SHA-256 均匹配，官网来源 CORS 正常、恶意来源返回 403，线上 `/play/` 十字棋与语音懒加载冒烟通过。
 - **后续约束**：后续若修改 Worker/D1/Pages 仍须先备份再显式部署；普通客户端发版默认不重复部署 Cloudflare。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
 
+## 五十二、官网行业规范与入口统一（2026-09-11，本地已验证，待官网静态部署）
+
+- **官方站入口**：`build_official_site.js` 在官网专用 `/play/` 副本顶部注入“← 官网”返回入口，只影响官网副本，不改变 APK、单文件版和原始游戏页；官网移动端 320/390px 均无横向溢出。
+- **SEO 与分享元数据**：首页、帮助和隐私页补齐 canonical、robots、Open Graph、Twitter Card、站点名、图标说明和稳定域名；sitemap 纳入 `/play/`，robots 允许官网游戏入口抓取。
+- **可访问性与渐进增强**：演示状态使用 `aria-live`；移动导航同步 `aria-expanded`/`aria-label`，支持点击外部区域关闭和 Esc 关闭后回焦；加入键盘跳过链接、无脚本内容可见、减少动画偏好支持和无脚本提示。
+- **浏览器能力策略**：官网 `Permissions-Policy` 保持摄像头/定位关闭，仅允许同源 `/play/` 在用户点击开启语音后申请麦克风；不会把麦克风权限静默开放给第三方嵌入页。
+- **版本一致性**：首页静态回退、游戏页、Android 内嵌页和反馈栏统一显示 `v1.2.1 / Build 122`；官网 API 失败时回退 `/version.json`，不再出现旧的 `v1.1.1`、`v1.0.91` 或 `v1.2.0`。
+- **回归验证**：`tests/official_site_smoke.py` 覆盖 SEO、版本、演示棋盘、移动导航、320px 窄屏与帮助/隐私页；`tests/official_site_live_audit.py` 覆盖官网首页、移动导航、官网 `/play/` 返回入口、无横向溢出和页面错误；`node --check build_official_site.js`、官网 `site.js`、`git diff --check` 已通过。当前改动尚未重新发布 APK、GitHub Release 或 Worker/D1。
+
 ---
 *交接文档最后更新时间：2026年9月11日*
 *当前工程正式版本：v1.0.121 (Build 122，界面显示 v1.2.1)；“五十”的独立官网 CORS/WebSocket 来源修复及“五十一”的社交安全、房间语音、十字棋实验、Android 开屏均已部署并随 v1.0.121 正式发布，VPS 不参与联机。*

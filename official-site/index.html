@@ -1,19 +1,30 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="no-js">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0d1b2a">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta name="description" content="五子棋官方站：轻量、跨端、P2P 优先的五子棋游戏。和朋友落在同一盘棋上。">
+    <meta name="robots" content="index,follow">
     <meta property="og:title" content="五子棋 · 一盘棋，落在同一刻">
     <meta property="og:description" content="跨端联机、好友邀战、离线 AI。打开棋盘，下一手现在就开始。">
     <meta property="og:type" content="website">
-    <meta property="og:image" content="/favicon.png">
+    <meta property="og:site_name" content="五子棋官方站">
+    <meta property="og:url" content="https://gomoku-home.pages.dev/">
+    <meta property="og:image" content="https://gomoku-home.pages.dev/favicon.png">
+    <meta property="og:image:alt" content="五子棋官方站图标">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="五子棋 · 一盘棋，落在同一刻">
+    <meta name="twitter:description" content="跨端联机、好友邀战、离线 AI。打开棋盘，下一手现在就开始。">
+    <meta name="twitter:image" content="https://gomoku-home.pages.dev/favicon.png">
+    <link rel="canonical" href="https://gomoku-home.pages.dev/">
     <link rel="icon" href="/favicon.png" type="image/png">
     <link rel="stylesheet" href="/styles.css">
     <title>五子棋 · 一盘棋，落在同一刻</title>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="site-shell">
       <header class="site-header" data-header>
         <a class="brand" href="/" aria-label="五子棋官方站首页">
@@ -21,7 +32,7 @@
           <span class="brand-name">五子棋</span>
           <span class="brand-label">OFFICIAL</span>
         </a>
-        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="siteNav">
+        <button class="nav-toggle" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="siteNav">
           <span></span><span></span>
           <span class="sr-only">打开导航</span>
         </button>
@@ -33,7 +44,7 @@
         </nav>
       </header>
 
-      <main>
+      <main id="main-content">
         <section class="hero section-wrap" aria-labelledby="heroTitle">
           <div class="hero-copy reveal">
             <p class="eyebrow"><span class="eyebrow-dot"></span> GOMOKU / OFFICIAL HOME</p>
@@ -45,9 +56,9 @@
             </div>
             <div class="hero-meta" role="group" aria-label="当前版本">
               <span class="live-dot"></span>
-              <span>当前版本 <strong class="js-version">v1.2.0</strong></span>
+              <span>当前版本 <strong class="js-version">v1.2.1</strong></span>
               <span class="meta-separator">/</span>
-              <span>Build <strong class="js-build">121</strong></span>
+              <span>Build <strong class="js-build">122</strong></span>
             </div>
           </div>
 
@@ -66,7 +77,7 @@
               <span class="board-pencil-note">你的下一手？</span>
             </div>
             <div class="board-caption board-caption-bottom">
-              <span class="demo-status" data-demo-status>点击棋盘，放下第一手</span>
+              <span class="demo-status" data-demo-status aria-live="polite" aria-atomic="true">点击棋盘，放下第一手</span>
               <button class="board-reset" type="button" data-reset-board>重置演示</button>
             </div>
           </div>
@@ -156,8 +167,8 @@
             <p>网页端打开即玩，Android 端支持离线对弈和应用内更新。版本会从官方通道校验后再交付。</p>
           </div>
           <div class="download-card">
-            <div class="download-card-head"><span class="download-badge">ANDROID</span><span class="js-version">v1.2.0</span></div>
-            <div class="download-card-main"><strong>五子棋正式版</strong><span>Build <span class="js-build">121</span> · 原签名覆盖升级</span></div>
+            <div class="download-card-head"><span class="download-badge">ANDROID</span><span class="js-version">v1.2.1</span></div>
+            <div class="download-card-main"><strong>五子棋正式版</strong><span>Build <span class="js-build">122</span> · 原签名覆盖升级</span></div>
             <a class="button button-download" href="/download/apk">下载 APK <span aria-hidden="true">↓</span></a>
             <p class="download-note">下载由官方 Pages 代理完成，不公开私有仓库地址。</p>
           </div>
@@ -176,6 +187,7 @@
         <p>© <span data-current-year>2026</span> Gomoku. 先落一子，再见棋友。</p>
       </footer>
     </div>
+    <noscript><div class="noscript-banner">此页面的试玩棋盘需要启用 JavaScript；官网说明和下载入口仍可正常浏览。</div></noscript>
     <script src="/site.js" defer></script>
   </body>
 </html>
