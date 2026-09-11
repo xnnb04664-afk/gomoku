@@ -99,6 +99,12 @@ async function main() {
   assert.equal(JSON.stringify(versionA).includes('unit-test-token'), false, '响应不得泄露 GitHub Token');
   assert.match(versionA.apkTicket, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 
+  const officialSiteResponse = await worker.fetch(new Request('https://gomoku-api.pages.dev/api/version', {
+    headers: { Origin: 'https://gomoku-home.pages.dev' },
+  }), env);
+  assert.equal(officialSiteResponse.status, 200, '官网来源应能访问 API');
+  assert.equal(officialSiteResponse.headers.get('Access-Control-Allow-Origin'), 'https://gomoku-home.pages.dev');
+
   const blockedResponse = await worker.fetch(new Request('https://gomoku-api.pages.dev/api/update/apk', {
     headers: {
       Origin: 'null',

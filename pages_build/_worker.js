@@ -51,6 +51,18 @@ const SOCIAL_MAX_MESSAGE_CHARS = 500;
 const SOCIAL_MAX_PAGE_SIZE = 50;
 const socialRateLimitBuckets = new Map();
 
+// 官网与游戏 API 分属不同的 Cloudflare Pages 项目。只信任官网项目的
+// 稳定域名及其部署预览域，避免把 CORS/WebSocket 房间中继开放给任意站点。
+function isTrustedOfficialSiteOrigin(origin) {
+  try {
+    const parsed = new URL(String(origin || ''));
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return false;
+    return parsed.hostname === 'gomoku-home.pages.dev' || parsed.hostname.endsWith('.gomoku-home.pages.dev');
+  } catch (_) {
+    return false;
+  }
+}
+
 function roomRelayByteLength(value) {
   try {
     return new TextEncoder().encode(String(value)).byteLength;
@@ -437,7 +449,8 @@ export default {
         const parsedOrigin = new URL(requestOrigin);
         originAllowed = (parsedOrigin.protocol === 'http:' &&
           (parsedOrigin.hostname === 'localhost' || parsedOrigin.hostname === '127.0.0.1' || parsedOrigin.hostname === '[::1]')) ||
-          requestOrigin === 'https://gomoku-api.pages.dev';
+          requestOrigin === 'https://gomoku-api.pages.dev' ||
+          isTrustedOfficialSiteOrigin(requestOrigin);
       } catch (_) {
         originAllowed = false;
       }

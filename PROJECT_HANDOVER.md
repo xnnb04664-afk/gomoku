@@ -1224,7 +1224,15 @@ node publish.js
 - **签名与门禁**：APK v1/v2/v3 签名均通过，签名证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。发布前静态完整性、安全门禁、Android 构建和联机回归均通过。
 - **部署边界**：本次执行普通 `node publish.js`，没有重新部署 Cloudflare。未修改 Worker/DO、D1、Pages 绑定、TURN Secret 或票据逻辑，现有生产后端继续服务。
 
+## 五十、独立官网来源导致联机失败修复（2026-09-11）
+
+- **问题根因**：独立官网 `https://gomoku-home.pages.dev/play/` 与 API `https://gomoku-api.pages.dev` 属于不同来源；生产 Worker 之前只允许 API 自身来源，官网浏览器的版本请求、匹配请求和房间 WebSocket 升级均被 CORS/来源校验返回 403，表现为“无法联机”。VPS 未使用，也不作为联机依赖。
+- **修复范围**：`backend/worker.js` 与 `pages_build/_worker.js` 现在额外信任官网稳定域名及其 `*.gomoku-home.pages.dev` 预览域；仍拒绝任意第三方来源、非 HTTPS、带端口或带凭据的来源。房间角色、房间码、会话、票据、D1、TURN 和好友权限校验未放宽。
+- **生产部署**：已部署 `gomoku-backend` Worker，版本 ID 为 `38a8337a-d680-4e28-9c49-10ccc1687457`；已同步部署 `gomoku-api` Pages（本次部署预览：`https://46d1e3ea.gomoku-api.pages.dev`）。稳定 API 继续使用 `https://gomoku-api.pages.dev`。
+- **真实验收**：官网两页浏览器成功建立同一房间，先通过 WebSocket 中继完成进房，再自动升级为 `P2P直连`，实测约 2ms；黑白双方双向落子同步，页面无 console/page error。API 从官网来源返回 `Access-Control-Allow-Origin: https://gomoku-home.pages.dev`。
+- **回归**：`node tests/worker_unit.js`、Worker 语法检查、`git diff --check` 和真实双页 Playwright 联机验证通过。修复代码待提交到私有仓库，未改 APK、版本号或 GitHub Release。
+
 ---
-*交接文档最后更新时间：2026年9月7日*
-*当前工程正式版本：v1.0.119 (Build 120，界面显示 v1.1.9)；“四十七至四十八”的手机流量进房、延迟显示与 Android 页面重建恢复修复已随“四十九”正式发布。*
+*交接文档最后更新时间：2026年9月11日*
+*当前工程正式版本：v1.0.120 (Build 121，界面显示 v1.2.0)；“四十七至四十八”的手机流量进房、延迟显示与 Android 页面重建恢复修复已随“四十九”正式发布；“五十”的独立官网 CORS/WebSocket 来源修复已部署，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
