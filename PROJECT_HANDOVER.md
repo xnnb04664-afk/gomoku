@@ -1261,7 +1261,15 @@ node publish.js
 - **同步范围**：修改 `index.html`、`official-site/index.html`、`official-site/social/index.html`、`official-site/styles.css`、`official-site/_headers`、sitemap/robots、`build_official_site.js` 和官网冒烟断言；已运行 `npm run build:official-site`，未修改 Worker/D1、APK、单文件版或版本号。部署不需要 VPS、D1 迁移或客户端发版。
 - **回归与线上部署**：`python tests/official_site_smoke.py`、`python tests/official_site_live_audit.py`、`node --check build_official_site.js`、`node --check js/social.js`、`git diff --check` 通过；本地 Playwright 访问 `/social/` 的同源 iframe 能自动进入游客登录引导，无 console/page error。官网静态部署预览为 `https://97f53f4d.gomoku-home.pages.dev`，稳定 `https://gomoku-home.pages.dev/social/` 已复验。现有 `node tests/social_worker_unit.js` 已覆盖清空聊天不删除永久消息记录。
 
+## 五十四、游戏页八宫格、签到金币与亲密关系（2026-09-12，本地候选，待云端验收）
+
+- **游戏页布局**：将游戏页底部功能区固定为八个按钮：好友、最近对手、排行、背包、任务、成就、活动签到、设置。好友按钮直接进入现有好友中心，亲密关系/好感度摘要嵌入好友中心；设置固定为第八个按钮，活动按钮承载签到入口。
+- **签到与金币**：新增正式账号专用 `/api/economy/summary`、`/api/economy/checkin`；金币、连续签到、累计签到和每日幂等领取记录存入 D1，服务端按北京时间计算奖励，游客只显示登录引导。新增 `user_wallets`、`daily_checkins`、`daily_checkin_claims`、`social_affinity` 表；私聊成功发送时双方好感度安全递增并封顶。
+- **版本与同步**：候选内部版本 `v1.0.122 (Build 123)`，界面显示 `v1.2.2`；根页面、Android 内嵌页面、五套主题、单文件版和官网版本回退文本已同步。APK 已使用仓库外原正式签名构建，1,756,286 bytes，SHA-256 `BBD1B89CBD8AB92090205048D5F368D55CB9BAF043BF364851357CF3B185D072`，v1/v2/v3 签名通过，单签名者保持不变。
+- **本地回归**：`tests/game_social_dock_smoke.py`、`node tests/social_worker_unit.js`、Worker/页面脚本语法检查、`git diff --check` 已通过；官方站静态版本文字已同步到 v1.2.2 / Build 123。
+- **发布边界**：当前仅为本地候选，尚未备份/部署 D1、Worker 或官网 Pages，尚未创建 GitHub Release；云端接续任务必须先读取本节并在生产部署前按既有流程备份 D1。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
 ---
-*交接文档最后更新时间：2026年9月11日*
-*当前工程正式版本：v1.0.121 (Build 122，界面显示 v1.2.1)；“五十”的独立官网 CORS/WebSocket 来源修复、“五十一”的社交安全/房间语音/十字棋实验/Android 开屏、“五十二”的官网行业规范改造及“五十三”的独立社交中心与私聊留存说明已完成并部署，VPS 不参与联机。*
+*交接文档最后更新时间：2026年9月12日*
+*当前工程正式版本仍为 v1.0.121 (Build 122，界面显示 v1.2.1)；v1.0.122 (Build 123，界面显示 v1.2.2) 为本地候选，包含“五十四”的游戏页八宫格、签到金币和好友亲密关系改动，尚未部署或创建 Release，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*

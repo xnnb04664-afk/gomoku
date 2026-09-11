@@ -49,6 +49,12 @@ const SOCIAL_INVITE_TTL_MS = 2 * 60 * 1000;
 const SOCIAL_MAX_FRIENDS = 200;
 const SOCIAL_MAX_MESSAGE_CHARS = 500;
 const SOCIAL_MAX_PAGE_SIZE = 50;
+// 社交轻量经济数据：签到奖励只作为可消费的客户端展示余额，不影响积分榜。
+// 上限和增量都在服务端固定，客户端不能提交金币数量或签到日期。
+const CHECKIN_BASE_COINS = 10;
+const CHECKIN_STREAK_BONUS = 2;
+const CHECKIN_STREAK_CAP = 7;
+const SOCIAL_AFFINITY_MAX_POINTS = 10000;
 const socialRateLimitBuckets = new Map();
 
 // 官网与游戏 API 分属不同的 Cloudflare Pages 项目。只信任官网项目的
@@ -924,6 +930,47 @@ export default {
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_invites_receiver_status ON game_invites(receiver_uid, status, expires_at DESC)`).run();
+        // 轻量签到奖励与好友亲密度使用独立表，避免改写 users 主表并兼容已有 D1。
+        // 这三张表会在首次请求时自动 IF NOT EXISTS 创建；正式发布前仍应先备份 D1。
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS user_wallets (
+            uid TEXT PRIMARY KEY,
+            coins INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS daily_checkins (
+            uid TEXT PRIMARY KEY,
+            checkin_day TEXT NOT NULL,
+            streak INTEGER NOT NULL DEFAULT 1,
+            total_days INTEGER NOT NULL DEFAULT 1,
+            last_reward INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_daily_checkins_day ON daily_checkins(checkin_day)`).run();
+        // 每日唯一领取记录用于抵御并发重复签到；daily_checkins 只保存当前汇总状态。
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS daily_checkin_claims (
+            uid TEXT NOT NULL,
+            checkin_day TEXT NOT NULL,
+            reward INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (uid, checkin_day)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_daily_checkin_claims_day ON daily_checkin_claims(checkin_day)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS social_affinity (
+            pair_key TEXT PRIMARY KEY,
+            user_a_uid TEXT NOT NULL,
+            user_b_uid TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_affinity_users ON social_affinity(user_a_uid, user_b_uid)`).run();
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS metrics_daily (
             day TEXT NOT NULL,
@@ -1435,6 +1482,92 @@ export default {
       return requireRegisteredUser(uid, getRequestToken(request, body || {}));
     }
 
+    // ── 轻量经济与亲密关系 ─────────────────────────────────
+    // 日期统一按北京时间结算，客户端不能提交日期或奖励数值。
+    const beijingDay = (timestamp = Date.now()) => new Date(Number(timestamp) + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const previousBeijingDay = (day) => {
+      const parsed = new Date(`${String(day)}T00:00:00Z`);
+      return new Date(parsed.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    };
+    const readEconomySummary = async (uid) => {
+      const day = beijingDay();
+      const [wallet, checkin, friendRows] = await Promise.all([
+        env.DB.prepare('SELECT coins FROM user_wallets WHERE uid = ?').bind(uid).first(),
+        env.DB.prepare('SELECT checkin_day, streak, total_days, last_reward FROM daily_checkins WHERE uid = ?').bind(uid).first(),
+        env.DB.prepare(`
+          SELECT
+            CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END AS friend_uid,
+            u.username, u.nickname, u.avatar,
+            COALESCE(a.points, 0) AS affinity_points
+          FROM friendships f
+          JOIN users u ON u.uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
+          LEFT JOIN social_affinity a ON a.pair_key = CASE
+            WHEN f.user_a_uid < f.user_b_uid THEN f.user_a_uid || ':' || f.user_b_uid
+            ELSE f.user_b_uid || ':' || f.user_a_uid
+          END
+          WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)
+            AND NOT EXISTS (
+              SELECT 1 FROM user_blocks b
+              WHERE (b.blocker_uid = ? AND b.blocked_uid = u.uid)
+                 OR (b.blocker_uid = u.uid AND b.blocked_uid = ?)
+            )
+          ORDER BY affinity_points DESC, u.username ASC
+          LIMIT ${SOCIAL_MAX_FRIENDS}
+        `).bind(uid, uid, uid, uid, uid, uid).all()
+      ]);
+      const row = checkin || {};
+      return {
+        coins: Math.max(0, Number(wallet?.coins) || 0),
+        checkinDay: String(row.checkin_day || ''),
+        checkedIn: String(row.checkin_day || '') === day,
+        streak: Math.max(0, Number(row.streak) || 0),
+        totalDays: Math.max(0, Number(row.total_days) || 0),
+        lastReward: Math.max(0, Number(row.last_reward) || 0),
+        day,
+        affinity: (friendRows.results || []).map(friend => ({
+          uid: String(friend.friend_uid || ''),
+          username: String(friend.username || ''),
+          nickname: String(friend.nickname || friend.username || '棋友').slice(0, 32),
+          avatar: compactAvatar(friend.avatar),
+          points: Math.min(SOCIAL_AFFINITY_MAX_POINTS, Math.max(0, Number(friend.affinity_points) || 0)),
+          level: Math.min(100, 1 + Math.floor(Math.max(0, Number(friend.affinity_points) || 0) / 100))
+        }))
+      };
+    };
+
+    if (url.pathname === '/api/economy/summary' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'economy-summary', 60, 60000, 240)) return json({ code: 429, msg: '数据读取过于频繁' }, 429);
+      return json({ code: 0, data: await readEconomySummary(uid) });
+    }
+
+    if (url.pathname === '/api/economy/checkin' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'economy-checkin', 5, 24 * 60 * 60 * 1000, 20)) return json({ code: 429, msg: '签到请求过于频繁' }, 429);
+      const now = Date.now();
+      const day = beijingDay(now);
+      const previousDay = previousBeijingDay(day);
+      const current = await env.DB.prepare('SELECT checkin_day, streak, total_days FROM daily_checkins WHERE uid = ?').bind(uid).first();
+      const previousStreak = current && String(current.checkin_day || '') === previousDay ? Math.max(0, Number(current.streak) || 0) : 0;
+      const streak = Math.min(CHECKIN_STREAK_CAP, previousStreak + 1);
+      const reward = CHECKIN_BASE_COINS + Math.min(CHECKIN_STREAK_CAP - 1, Math.max(0, streak - 1)) * CHECKIN_STREAK_BONUS;
+      const results = await env.DB.batch([
+        env.DB.prepare('INSERT OR IGNORE INTO daily_checkin_claims (uid, checkin_day, reward, created_at) VALUES (?, ?, ?, ?)').bind(uid, day, reward, now),
+        env.DB.prepare('INSERT OR IGNORE INTO user_wallets (uid, coins, updated_at) SELECT ?, 0, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(uid, now, uid, day, now),
+        env.DB.prepare('UPDATE user_wallets SET coins = coins + ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(reward, now, uid, uid, day, now),
+        env.DB.prepare('INSERT OR IGNORE INTO daily_checkins (uid, checkin_day, streak, total_days, last_reward, updated_at) SELECT ?, ?, ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(uid, day, streak, reward, now, uid, day, now),
+        env.DB.prepare('UPDATE daily_checkins SET checkin_day = ?, streak = ?, total_days = total_days + 1, last_reward = ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(day, streak, reward, now, uid, uid, day, now)
+      ]);
+      const claimed = Number(results?.[0]?.meta?.changes) > 0;
+      const data = await readEconomySummary(uid);
+      return json({ code: 0, data: { ...data, reward: claimed ? reward : 0, alreadyCheckedIn: !claimed } });
+    }
+
     // ── 好友、私聊、在线状态与邀战 ─────────────────────────
     if (url.pathname === '/api/friends/search' && request.method === 'GET') {
       const uid = String(url.searchParams.get('uid') || '').trim();
@@ -1726,6 +1859,15 @@ export default {
         return json({ code: 409, msg: '客户端消息 ID 已用于另一条消息' }, 409);
       }
       if (Number(insertResult?.meta?.changes) > 0) {
+        // 私聊是双方明确的互动信号：只给真实好友关系增加固定 1 点，
+        // 不接受客户端提交的好感度数值，也不在日志中记录消息正文。
+        await env.DB.prepare(`
+          INSERT INTO social_affinity (pair_key, user_a_uid, user_b_uid, points, updated_at)
+          VALUES (?, ?, ?, 1, ?)
+          ON CONFLICT(pair_key) DO UPDATE SET
+            points = MIN(?, social_affinity.points + 1),
+            updated_at = excluded.updated_at
+        `).bind(pairKey, friendA, friendB, now, SOCIAL_AFFINITY_MAX_POINTS).run();
         await notifySocialUser(receiverUid, { kind: 'message', fromUid: uid, messageId: Number(message?.id) || 0, at: now });
       }
       return json({ code: 0, data: message });

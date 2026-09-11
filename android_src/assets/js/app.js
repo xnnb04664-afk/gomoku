@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.121';
+    const CURRENT_VERSION_TAG = 'v1.0.122';
     // 仅用于界面显示：补丁号达到 100 后，把百位进到中间段并保留个位。
     // 例如内部版本 v1.0.117 显示为 v1.1.7；更新比较仍使用 CURRENT_VERSION_TAG。
     function formatDisplayVersionTag(tag) {

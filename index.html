@@ -132,6 +132,123 @@
           return false;
         });
       };
+      // 底部活动区先提供入口；签到/亲密关系仅在用户点击后访问云端，避免拖慢首屏。
+      const GAME_ECONOMY_LOCAL_KEY = 'gomoku_economy_preview_v1';
+      let gameEconomyState = { coins: 0, checkedIn: false, streak: 0, totalDays: 0, affinity: [], day: '' };
+      function gameEconomyRegistered() {
+        return typeof hasRegisteredAccountSession === 'function' && hasRegisteredAccountSession();
+      }
+      function gameEconomyNotice(message, error = false) {
+        if (typeof window.showGameNotice === 'function') window.showGameNotice(message, error);
+        else console.info('[game economy]', message);
+      }
+      function gameEconomyDisplayName(item) {
+        return String(item?.nickname || item?.username || '棋友').replace(/[<>"'&]/g, '').slice(0, 24) || '棋友';
+      }
+      function renderGameEconomyDock() {
+        const coins = document.getElementById('gameCoinBalance');
+        const checkin = document.getElementById('btnGameActivity');
+        const status = document.getElementById('gameEconomyStatus');
+        const count = Array.isArray(gameEconomyState.affinity) ? gameEconomyState.affinity.length : 0;
+        const bestLevel = count ? Math.max(...gameEconomyState.affinity.map(item => Number(item.level) || 1)) : 0;
+        if (coins) coins.textContent = `🪙 ${Number(gameEconomyState.coins) || 0} 金币`;
+        if (checkin) {
+          checkin.textContent = gameEconomyState.checkedIn ? `✅ 已签到 · ${Number(gameEconomyState.streak) || 1}天` : '🎁 签到 +10';
+          checkin.setAttribute('aria-label', gameEconomyState.checkedIn ? '今日已签到' : '每日签到，领取金币');
+        }
+        const friendsButton = document.getElementById('btnGameFriends');
+        if (friendsButton) friendsButton.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
+        if (status) status.textContent = gameEconomyRegistered() ? (gameEconomyState.checkedIn ? `今日已签到 · 连续 ${Number(gameEconomyState.streak) || 1} 天` : '今日签到可领 10 金币') : '登录正式账号后可云端保存金币与亲密度';
+      }
+      function saveGameEconomyPreview() {
+        try {
+          const uid = typeof currentUserUid !== 'undefined' ? String(currentUserUid || 'guest') : 'guest';
+          localStorage.setItem(`${GAME_ECONOMY_LOCAL_KEY}_${uid}`, JSON.stringify(gameEconomyState));
+        } catch (_) {}
+      }
+      function loadGameEconomyPreview() {
+        try {
+          const uid = typeof currentUserUid !== 'undefined' ? String(currentUserUid || 'guest') : 'guest';
+          const value = JSON.parse(localStorage.getItem(`${GAME_ECONOMY_LOCAL_KEY}_${uid}`) || '{}');
+          if (value && typeof value === 'object') gameEconomyState = { ...gameEconomyState, ...value };
+        } catch (_) {}
+        renderGameEconomyDock();
+      }
+      async function refreshGameEconomy({ quiet = true } = {}) {
+        loadGameEconomyPreview();
+        if (!gameEconomyRegistered() || typeof safeApiFetch !== 'function' || typeof currentUserUid === 'undefined' || !currentUserUid) return gameEconomyState;
+        try {
+          const response = await safeApiFetch(`/api/economy/summary?uid=${encodeURIComponent(String(currentUserUid))}`, { timeoutMs: 5500 });
+          const payload = await response.json();
+          if (!response.ok || !payload || payload.code !== 0 || !payload.data) throw new Error(payload?.msg || '经济数据暂不可用');
+          gameEconomyState = { ...gameEconomyState, ...payload.data };
+          saveGameEconomyPreview();
+          renderGameEconomyDock();
+          return gameEconomyState;
+        } catch (error) {
+          if (!quiet) gameEconomyNotice(error?.message || '金币数据同步失败，请稍后重试', true);
+          return gameEconomyState;
+        }
+      }
+      window.openGameCheckIn = async function() {
+        if (!gameEconomyRegistered()) {
+          gameEconomyNotice('🔐 每日签到需要登录正式账号，金币会安全保存到云端', false);
+          if (typeof window.openAuthModal === 'function') window.openAuthModal('login');
+          return false;
+        }
+        const button = document.getElementById('btnGameActivity');
+        if (button) button.disabled = true;
+        try {
+          await refreshGameEconomy({ quiet: true });
+          if (gameEconomyState.checkedIn) {
+            gameEconomyNotice(`✅ 今天已经签到过啦 · 当前金币 ${Number(gameEconomyState.coins) || 0}`, false);
+            return true;
+          }
+          if (typeof safeApiFetch !== 'function') throw new Error('云端服务尚未加载');
+          const response = await safeApiFetch('/api/economy/checkin', { method: 'POST', body: JSON.stringify({ uid: String(currentUserUid) }), timeoutMs: 6500 });
+          const payload = await response.json();
+          if (!response.ok || !payload || payload.code !== 0 || !payload.data) throw new Error(payload?.msg || '签到失败，请稍后重试');
+          gameEconomyState = { ...gameEconomyState, ...payload.data };
+          saveGameEconomyPreview();
+          renderGameEconomyDock();
+          gameEconomyNotice(payload.data.alreadyCheckedIn ? '✅ 今天已经签到过啦' : `🎉 签到成功，获得 ${Number(payload.data.reward) || 0} 金币！`, false);
+          return true;
+        } catch (error) {
+          gameEconomyNotice(error?.message || '签到失败，请检查网络后重试', true);
+          return false;
+        } finally {
+          if (button) button.disabled = false;
+        }
+      };
+      window.openGameAffinity = async function() {
+        if (!gameEconomyRegistered()) {
+          gameEconomyNotice('🔐 亲密关系仅对正式账号开放', false);
+          if (typeof window.openAuthModal === 'function') window.openAuthModal('login');
+          return false;
+        }
+        const opened = typeof window.openFriendsModal === 'function' ? await window.openFriendsModal() : false;
+        await refreshGameEconomy({ quiet: false });
+        const panel = document.getElementById('socialAffinitySummary');
+        if (panel) {
+          const affinity = Array.isArray(gameEconomyState.affinity) ? gameEconomyState.affinity : [];
+          panel.innerHTML = affinity.length
+            ? `<div style="display:flex;flex-direction:column;gap:5px;">${affinity.slice(0, 8).map(item => `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;border:1px solid #fbcfe8;border-radius:9px;background:#fff7fb;font-size:11px;font-weight:800;color:#475569;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">💞 ${gameEconomyDisplayName(item)}</span><span style="color:#db2777;white-space:nowrap;">Lv.${Number(item.level) || 1} · ${Number(item.points) || 0}</span></div>`).join('')}</div>`
+            : '<div style="padding:8px;color:#94a3b8;font-size:11px;font-weight:800;">先添加好友并聊几句，好感度会从 0 点慢慢累积。</div>';
+        }
+        return opened;
+      };
+      window.refreshGameEconomy = refreshGameEconomy;
+      document.addEventListener('DOMContentLoaded', () => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200), { once: true });
+      window.openGameFeaturePlaceholder = function(label) {
+        const name = String(label || '该功能').slice(0, 24);
+        const message = `🧪 ${name}正在准备中，先把这一局下完吧！`;
+        if (typeof window.showGameNotice === 'function') window.showGameNotice(message, false);
+        else console.info('[game feature placeholder]', name);
+      };
+      window.openGameSettings = function() {
+        if (typeof window.openThemeModal === 'function') return window.openThemeModal();
+        return window.openGameFeaturePlaceholder('设置');
+      };
       window.openCrossChess = function() {
         return ensure('cross').then(() => window.GomokuCross.open()).catch(error => {
           if (typeof window.showGameNotice === 'function') window.showGameNotice('十字棋实验模块加载失败，请刷新后重试', true);
@@ -500,34 +617,78 @@
       line-height: 17px;
       width: 100%;
     }
-    /* 游戏网页主界面的独立社交入口：无需先打开联机大厅。 */
-    .game-social-entry {
+    /* 游戏页底部社交/活动区：入口独立于好友弹窗，移动端保持单行可滑动。 */
+    .game-social-dock {
+      width: 100%;
+      max-width: 500px;
       display: flex;
-      width: 100%;
-      margin-top: 1px;
+      flex-direction: column;
+      gap: 4px;
+      padding: 4px 5px;
+      margin: 0 auto 3px;
+      border: 1px solid rgba(90, 56, 24, .24);
+      border-radius: 12px;
+      background: rgba(255, 253, 245, .86);
+      box-shadow: 0 2px 8px rgba(90, 56, 24, .12);
+      z-index: 10;
       flex-shrink: 0;
+      touch-action: manipulation;
     }
-    .game-social-entry button {
-      width: 100%;
-      min-height: 31px;
-      padding: 4px 10px;
+    .game-social-dock-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 4px;
+    }
+    .game-social-dock-grid button {
+      min-width: 0;
+      min-height: 30px;
+      padding: 4px 5px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 8px;
+      background: #fff;
+      color: #334155;
+      font-size: 11px;
+      font-weight: 900;
+      line-height: 1.15;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      touch-action: manipulation;
+    }
+    .game-social-dock-grid button:hover { filter: brightness(.98); background: #f8fafc; }
+    .game-social-dock-grid button:active { transform: translateY(1px); }
+    .game-social-dock-grid button:focus-visible {
+      outline: 3px solid rgba(14, 165, 233, .42);
+      outline-offset: 1px;
+    }
+    #btnGameFriends { background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
+    #btnGameActivity { background: linear-gradient(135deg, #fff7ed, #ffedd5); border-color: #fdba74; color: #c2410c; }
+    #btnGameSettings { background: linear-gradient(135deg, #f1f5f9, #e2e8f0); border-color: #cbd5e1; color: #475569; }
+    .game-social-dock-grid button:nth-child(2),
+    .game-social-dock-grid button:nth-child(3),
+    .game-social-dock-grid button:nth-child(4),
+    .game-social-dock-grid button:nth-child(5),
+    .game-social-dock-grid button:nth-child(6) { background: rgba(248,250,252,.95); border-color: #e2e8f0; color: #475569; }
+    .game-social-dock-status {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      border: 1.5px solid #1d4ed8;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #eff6ff, #dbeafe);
-      color: #1d4ed8;
-      box-shadow: 0 2px 0 rgba(29,78,216,.3);
-      font-size: 12px;
-      font-weight: 900;
-      cursor: pointer;
-      touch-action: manipulation;
+      padding: 0 2px;
+      color: #64748b;
+      font-size: 9.5px;
+      font-weight: 800;
+      line-height: 1.2;
     }
-    .game-social-entry button:hover { background: linear-gradient(135deg, #dbeafe, #bfdbfe); }
-    .game-social-entry button:active { transform: translateY(1px); box-shadow: none; }
-    .game-social-entry small { color: #64748b; font-size: 10px; font-weight: 800; }
+    .game-social-dock-status strong { color: #b45309; white-space: nowrap; }
+    .game-social-dock-note {
+      color: #94a3b8;
+      font-size: 9px;
+      font-weight: 800;
+      text-align: center;
+      line-height: 1.2;
+    }
     .chat-tag-me {
       background: #fed385; color: #4a2810; padding: 0 4px; border-radius: 3px; font-size: 10.5px; font-weight: 900; flex-shrink: 0; line-height: 15px; height: 15px;
     }
@@ -1553,12 +1714,23 @@
         gap: 2px !important;
         padding-top: 1px !important;
       }
-      .game-social-entry button {
-        min-height: 28px !important;
-        padding: 3px 8px !important;
-        font-size: 11.5px !important;
+      .game-social-dock {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        padding: 3px 3px !important;
+        margin-bottom: 2px !important;
+        border-radius: 10px !important;
+        gap: 3px !important;
       }
-      .game-social-entry small { font-size: 9.5px !important; }
+      .game-social-dock-grid { gap: 3px !important; }
+      .game-social-dock-grid button {
+        min-height: 28px !important;
+        padding: 3px 2px !important;
+        font-size: 10.5px !important;
+        border-radius: 7px !important;
+      }
+      .game-social-dock-status { font-size: 8.5px !important; gap: 4px !important; }
+      .game-social-dock-note { font-size: 8.5px !important; }
       .main-chat-line {
         font-size: 11px !important;
         height: 16px !important;
@@ -1782,6 +1954,21 @@
     <div class="card-slots-area" id="cardSlotsArea"></div>
   </div>
 
+  <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
+  <section class="game-social-dock" id="gameSocialDock" aria-label="社交、签到与活动入口">
+    <div class="game-social-dock-grid" role="list" aria-label="游戏功能八宫格">
+      <button type="button" id="btnGameFriends" role="listitem" onclick="openGameAffinity()" aria-label="打开好友、私聊与亲密关系">👥 好友</button>
+      <button type="button" id="btnGameRecent" role="listitem" onclick="openGameFeaturePlaceholder('最近对手')">🧑‍🤝‍🧑 最近</button>
+      <button type="button" id="btnGameRank" role="listitem" onclick="openLeaderboardModal()">🏆 排行</button>
+      <button type="button" id="btnGameBag" role="listitem" onclick="openGameFeaturePlaceholder('背包')">🎒 背包</button>
+      <button type="button" id="btnGameTasks" role="listitem" onclick="openGameFeaturePlaceholder('任务中心')">🗓️ 任务</button>
+      <button type="button" id="btnGameAchievements" role="listitem" onclick="openGameFeaturePlaceholder('成就')">🏅 成就</button>
+      <button type="button" id="btnGameActivity" role="listitem" onclick="openGameCheckIn()" aria-label="打开活动并每日签到">🎁 活动签到</button>
+      <button type="button" id="btnGameSettings" role="listitem" onclick="openGameSettings()" aria-label="打开设置">⚙️ 设置</button>
+    </div>
+    <div class="game-social-dock-status"><strong id="gameCoinBalance">🪙 0 金币</strong><span id="gameEconomyStatus">登录正式账号后可云端保存金币与亲密度</span></div>
+  </section>
+
   <!-- 底部平铺按键区 (第4个固定为【🌐 联机】，1秒直接打开开房弹窗，无需多点) -->
   <div class="bottom-controls">
     <button class="btn-ctrl btn-chat" id="btnOpenChat">💬 聊天</button>
@@ -1930,7 +2117,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.1</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.2</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -2079,6 +2266,10 @@
         <button class="btn-chat-tool" onclick="GomokuSocial.search()" style="background:#2563eb;color:#fff;border-color:#1d4ed8;">精确查找</button>
       </div>
       <div id="socialSearchResult" style="display:none; margin-bottom:8px;"></div>
+      <div id="socialAffinitySummary" style="margin-bottom:8px; padding:7px 8px; border:1px solid #fbcfe8; border-radius:10px; background:#fff7fb;">
+        <div style="font-size:11px; font-weight:900; color:#be185d;">💞 亲密关系与好感度</div>
+        <div style="margin-top:3px; color:#94a3b8; font-size:10.5px; font-weight:800;">和好友私聊后，好感度会从 0 点慢慢累积。</div>
+      </div>
       <div style="flex:1; min-height:160px; max-height:48vh; overflow:auto; padding-right:2px;">
         <div id="socialFriendsList"></div>
         <div id="socialRequestsList" style="display:none;"></div>
@@ -2089,12 +2280,6 @@
         <label><input id="socialPresenceHidden" type="checkbox" onchange="GomokuSocial.saveSettings()" /> 隐藏在线状态</label>
         <label><input id="socialMetricsEnabled" type="checkbox" checked onchange="GomokuSocial.saveSettings()" /> 匿名性能统计</label>
       </div>
-    </div>
-    <div class="game-social-entry" role="group" aria-label="游戏社交功能">
-      <button type="button" id="btnGameSocial" onclick="openFriendsModal()">
-        <span>👥 好友与私聊</span>
-        <small>好友 · 申请 · 邀战</small>
-      </button>
     </div>
   </div>
 
@@ -2508,7 +2693,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.1</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.2</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">

@@ -37,7 +37,7 @@ def mock_local_api(page):
             lambda route: route.fulfill(
                 status=200,
                 content_type="application/json",
-                body='{"code":0,"tag":"v1.0.120","build":121}',
+                body='{"code":0,"tag":"v1.0.122","build":123}',
             ),
         )
 
@@ -75,7 +75,8 @@ def main():
         assert play.locator(".official-return-strip").count() == 1
         assert play.locator('.official-return-strip a[href="/"]').count() == 1
         assert play.locator('.official-return-strip a[href="/social/"]').count() == 1
-        assert play.locator("#btnGameSocial").count() == 1
+        assert play.locator("#gameSocialDock .game-social-dock-grid button").count() == 8
+        assert play.locator("#btnGameSettings").count() == 1
         assert_no_horizontal_overflow(play)
         if os.environ.get("SAVE_SCREENSHOT") == "1":
             play.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-play-mobile.png", full_page=True)
