@@ -1256,6 +1256,7 @@ node publish.js
 ## 五十三、官网独立社交中心与私聊留存说明（2026-09-11，已部署官网静态资源）
 
 - **好友入口**：官网新增独立 `/social/` 社交中心，主导航、首页好友区、页脚和官网 `/play/` 顶部入口均可直达；独立页以内嵌同源 `/play/#friends` 的方式复用现有账号、好友、私聊、邀战和黑名单安全逻辑，不复制权限链路。直接访问 `/play/#friends` 仍会在首屏绘制后自动打开好友中心。游客会进入正式账号登录/注册引导，登录后可直接看到好友、申请、最近对手和黑名单。
+- **游戏页直达**：游戏网页主界面新增“👥 好友与私聊”按钮（`#btnGameSocial`），位于常驻对局聊天框下方，点击即可打开好友中心，不必先进入联机大厅；联机大厅内原有好友入口继续保留。
 - **私聊留存**：`private_messages` 使用 D1 永久表，没有过期字段或自动清理任务；发送使用 `(sender_uid, client_message_id)` 幂等约束。聊天窗口明确提示“永久保存在云端数据库”，用户点击“清空我的记录”只推进本人 `message_state.cleared_before_id`，不会删除 D1 消息，也不会影响对方历史。
 - **同步范围**：修改 `index.html`、`official-site/index.html`、`official-site/social/index.html`、`official-site/styles.css`、`official-site/_headers`、sitemap/robots、`build_official_site.js` 和官网冒烟断言；已运行 `npm run build:official-site`，未修改 Worker/D1、APK、单文件版或版本号。部署不需要 VPS、D1 迁移或客户端发版。
 - **回归与线上部署**：`python tests/official_site_smoke.py`、`python tests/official_site_live_audit.py`、`node --check build_official_site.js`、`node --check js/social.js`、`git diff --check` 通过；本地 Playwright 访问 `/social/` 的同源 iframe 能自动进入游客登录引导，无 console/page error。官网静态部署预览为 `https://97f53f4d.gomoku-home.pages.dev`，稳定 `https://gomoku-home.pages.dev/social/` 已复验。现有 `node tests/social_worker_unit.js` 已覆盖清空聊天不删除永久消息记录。

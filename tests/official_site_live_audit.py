@@ -75,6 +75,7 @@ def main():
         assert play.locator(".official-return-strip").count() == 1
         assert play.locator('.official-return-strip a[href="/"]').count() == 1
         assert play.locator('.official-return-strip a[href="/social/"]').count() == 1
+        assert play.locator("#btnGameSocial").count() == 1
         assert_no_horizontal_overflow(play)
         if os.environ.get("SAVE_SCREENSHOT") == "1":
             play.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-play-mobile.png", full_page=True)

@@ -500,6 +500,34 @@
       line-height: 17px;
       width: 100%;
     }
+    /* 游戏网页主界面的独立社交入口：无需先打开联机大厅。 */
+    .game-social-entry {
+      display: flex;
+      width: 100%;
+      margin-top: 1px;
+      flex-shrink: 0;
+    }
+    .game-social-entry button {
+      width: 100%;
+      min-height: 31px;
+      padding: 4px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1.5px solid #1d4ed8;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #eff6ff, #dbeafe);
+      color: #1d4ed8;
+      box-shadow: 0 2px 0 rgba(29,78,216,.3);
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .game-social-entry button:hover { background: linear-gradient(135deg, #dbeafe, #bfdbfe); }
+    .game-social-entry button:active { transform: translateY(1px); box-shadow: none; }
+    .game-social-entry small { color: #64748b; font-size: 10px; font-weight: 800; }
     .chat-tag-me {
       background: #fed385; color: #4a2810; padding: 0 4px; border-radius: 3px; font-size: 10.5px; font-weight: 900; flex-shrink: 0; line-height: 15px; height: 15px;
     }
@@ -1525,6 +1553,12 @@
         gap: 2px !important;
         padding-top: 1px !important;
       }
+      .game-social-entry button {
+        min-height: 28px !important;
+        padding: 3px 8px !important;
+        font-size: 11.5px !important;
+      }
+      .game-social-entry small { font-size: 9.5px !important; }
       .main-chat-line {
         font-size: 11px !important;
         height: 16px !important;
@@ -2055,6 +2089,12 @@
         <label><input id="socialPresenceHidden" type="checkbox" onchange="GomokuSocial.saveSettings()" /> 隐藏在线状态</label>
         <label><input id="socialMetricsEnabled" type="checkbox" checked onchange="GomokuSocial.saveSettings()" /> 匿名性能统计</label>
       </div>
+    </div>
+    <div class="game-social-entry" role="group" aria-label="游戏社交功能">
+      <button type="button" id="btnGameSocial" onclick="openFriendsModal()">
+        <span>👥 好友与私聊</span>
+        <small>好友 · 申请 · 邀战</small>
+      </button>
     </div>
   </div>
 

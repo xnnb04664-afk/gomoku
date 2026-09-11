@@ -71,6 +71,8 @@ def main():
                 assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
             if path == "/play/":
                 assert "openFriendsFromHash" in page.content()
+                assert page.locator("#btnGameSocial").count() == 1
+                assert "好友与私聊" in page.locator("#btnGameSocial").inner_text()
                 assert page.locator('.official-return-strip a[href="/social/"]').count() == 1
             page.close()
 
