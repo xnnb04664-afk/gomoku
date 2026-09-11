@@ -452,6 +452,7 @@ async function main() {
   await Promise.all(hubWaits);
   assert.equal(hubEvents.at(-1).event.online, false, '最后一个设备连接断开后应广播离线');
 
+  let result;
   for (const [path, options] of [
     ['/api/friends/search?uid=100001&username=bob', {}],
     ['/api/friends/requests', { method: 'POST', body: { uid: '100001', targetUsername: 'bob' } }],
@@ -463,7 +464,27 @@ async function main() {
     assert.ok([401, 403].includes(result.response.status), `${path} 必须拒绝未认证请求`);
   }
 
-  let result = await call(env, '/api/friends/search?uid=100001&username=bob', { token: 'token-alice' });
+  // CORS headers alone are not a CSRF boundary: a hostile page can still send
+  // a simple request even when it cannot read the response. Authenticated API
+  // and the social WebSocket ticket endpoint must reject an untrusted Origin;
+  // native/Android `Origin: null` remains covered by the cases above.
+  result = await call(env, '/api/friends?uid=100001', {
+    token: 'token-alice',
+    headers: { Origin: 'https://evil.example' },
+  });
+  assert.equal(result.response.status, 403, '不可信网页来源不得访问好友 API');
+  result = await call(env, '/api/social/socket-ticket', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    headers: { Origin: 'https://evil.example' }, body: {},
+  });
+  assert.equal(result.response.status, 403, '不可信网页来源不得申请社交 WebSocket 票据');
+  result = await call(env, '/api/friends?uid=100001', {
+    token: 'token-alice',
+    headers: { Origin: 'https://gomoku-home.pages.dev/forged-path' },
+  });
+  assert.equal(result.response.status, 403, 'Origin 伪造路径不得绕过来源白名单');
+
+  result = await call(env, '/api/friends/search?uid=100001&username=bob', { token: 'token-alice' });
   assert.equal(result.response.status, 200);
   assert.equal(result.payload.data.username, 'bob', '搜索必须按完整账号精确返回');
   result = await call(env, '/api/friends/search?uid=100001&username=bo', { token: 'token-alice' });
@@ -639,6 +660,10 @@ async function main() {
     [/samples\.slice\(0, 20\)/, '单次匿名统计批量大小受限'],
     [/\['graphics_quality', new Set\(\['auto', 'high', 'standard', 'smooth'\]\)\]/, '画质统计只接受四个受控档位'],
     [/WHERE pair_key IS NULL OR pair_key = ''/, '旧 friend_requests 会回填 pair_key'],
+    [/isAllowedClientOrigin\(requestOrigin\)/, 'HTTP 与 WebSocket 共用来源白名单'],
+    [/url\.pathname\.startsWith\('\/api\/'\).*请求来源不受信任/s, 'API 在业务处理前拒绝跨站写请求'],
+    [/consumeSocialRequestRate\(uid, 'message'/, '社交接口同时执行账号与边缘 IP 限频'],
+    [/candidate\.length <= 256/, '认证令牌输入长度受限'],
   ];
   for (const [pattern, messageText] of sourceChecks) assert.match(workerSource, pattern, messageText);
 

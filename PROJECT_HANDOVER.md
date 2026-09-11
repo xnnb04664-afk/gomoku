@@ -1232,6 +1232,16 @@ node publish.js
 - **真实验收**：官网两页浏览器成功建立同一房间，先通过 WebSocket 中继完成进房，再自动升级为 `P2P直连`，实测约 2ms；黑白双方双向落子同步，页面无 console/page error。API 从官网来源返回 `Access-Control-Allow-Origin: https://gomoku-home.pages.dev`。
 - **回归**：`node tests/worker_unit.js`、Worker 语法检查、`git diff --check` 和真实双页 Playwright 联机验证通过。修复代码待提交到私有仓库，未改 APK、版本号或 GitHub Release。
 
+## 五十一、社交安全、房间语音、十字棋实验与 Android 开屏（2026-09-11，准备发布 v1.0.121）
+
+- **安全/好友后端**：`backend/worker.js` 与 `pages_build/_worker.js` 统一校验官网稳定/预览来源、API 自身来源、localhost 与原生 `Origin: null`；拒绝带路径/端口/凭据的伪造 Origin。社交搜索、申请、拉黑、消息、最近对手、邀战、设置和社交票据增加账号 + Cloudflare IP 分层限频；SocialHub WebSocket 同样校验来源。既有好友关系、黑名单、消息幂等和一次性 60 秒票据规则不放宽。
+- **房间语音**：新增 `js/voice.js`，按需加载且默认关闭；用户明确授权麦克风后，复用现有房间连接传递短期 SDP/ICE，优先 WebRTC 直连，支持 TURN 配置、早到 ICE 缓冲、静音、断线清理和重连。长期登录令牌不进入 URL，单文件版以内嵌非执行文本保存。
+- **十字棋实验**：新增 `js/cross.js` 与底部入口“✚ 十字棋”。19×19 十字轴棋盘横/竖十连获胜，每方每回合连续两次行动；支持提示、缩放、滚轮/拖动、实验干扰牌和双人同屏。每次落子后自动将镜头跟随最新落点，尤其是对方落子时视角会转到对方位置。
+- **Android 开屏**：新增原生 `GomokuSplashView`，棋盘/十字落子动画与 WebView 并行启动；支持减少动画、轻触跳过、后台暂停、1.4 秒兜底和销毁清理，不调用 `System.gc()` 或清空 WebView 缓存。APK 继续使用仓库外原正式签名。
+- **交付与部署**：D1 生产备份保存到仓库外 `Documents\\GomokuBackups`；安全 Worker 已部署（版本 ID `d1f8c72e-a35f-4b65-beee-143decdaa22f`），`gomoku-api` Pages 已更新；官网 `gomoku-home.pages.dev` 的 `/play/` 已同步语音、十字棋和按钮。VPS 不参与任何联机或部署链路。
+- **回归**：`node tests/social_worker_unit.js`、`node tests/worker_unit.js`、`python tests/social_frontend_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、单文件构建、Android 构建与 APK v1/v2/v3 签名校验通过；官网线上 `/api/site-version` 返回 Build 121，官网来源 API 返回 CORS，恶意来源返回 403。
+- **发布边界**：本节内容发布为下一个客户端版本后，需同步更新本节版本号、GitHub Release、APK/单文件 SHA-256 与正式下载验证；后续若修改 Worker/D1/Pages 仍须先备份再显式部署。不得提交或输出任何密钥、长期令牌或短时下载票据。
+
 ---
 *交接文档最后更新时间：2026年9月11日*
 *当前工程正式版本：v1.0.120 (Build 121，界面显示 v1.2.0)；“四十七至四十八”的手机流量进房、延迟显示与 Android 页面重建恢复修复已随“四十九”正式发布；“五十”的独立官网 CORS/WebSocket 来源修复已部署，VPS 不参与联机。*

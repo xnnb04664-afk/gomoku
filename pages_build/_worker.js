@@ -56,8 +56,28 @@ const socialRateLimitBuckets = new Map();
 function isTrustedOfficialSiteOrigin(origin) {
   try {
     const parsed = new URL(String(origin || ''));
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return false;
+    // Origin is a serialized origin, never a URL with a path/query/fragment.
+    // Requiring the canonical serialization also rejects hand-crafted values
+    // such as `https://gomoku-home.pages.dev/evil`.
+    if (parsed.origin !== String(origin) || parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return false;
     return parsed.hostname === 'gomoku-home.pages.dev' || parsed.hostname.endsWith('.gomoku-home.pages.dev');
+  } catch (_) {
+    return false;
+  }
+}
+
+// Browser clients are either the official site, the API's own origin, or a
+// local/native build. Native WebViews commonly send `Origin: null` (and some
+// older clients omit Origin entirely), so those values remain intentionally
+// compatible. This helper is shared by HTTP and WebSocket entry points.
+function isAllowedClientOrigin(origin) {
+  if (!origin || origin === 'null') return true;
+  try {
+    const parsed = new URL(String(origin));
+    if (parsed.origin !== String(origin)) return false;
+    const local = parsed.protocol === 'http:' &&
+      (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]');
+    return local || origin === 'https://gomoku-api.pages.dev' || isTrustedOfficialSiteOrigin(origin);
   } catch (_) {
     return false;
   }
@@ -355,6 +375,11 @@ export class SocialHub {
     const uid = String(request.headers.get('X-Gomoku-Social-Uid') || '').trim();
     if (!uid || uid.length > 64) return new Response('Unauthorized', { status: 401 });
 
+    const requestOrigin = request.headers.get('Origin') || '';
+    if (!isAllowedClientOrigin(requestOrigin)) {
+      return new Response('Untrusted origin', { status: 403 });
+    }
+
     if (url.pathname === '/presence') {
       return Response.json({ online: this._sockets().length > 0 });
     }
@@ -443,18 +468,7 @@ export default {
 
     // 允许本地开发/Android 内嵌 localhost 与无 Origin 请求；拒绝任意第三方网页跨站调用。
     const requestOrigin = request.headers.get('Origin') || '';
-    let originAllowed = !requestOrigin || requestOrigin === 'null';
-    if (requestOrigin && requestOrigin !== 'null') {
-      try {
-        const parsedOrigin = new URL(requestOrigin);
-        originAllowed = (parsedOrigin.protocol === 'http:' &&
-          (parsedOrigin.hostname === 'localhost' || parsedOrigin.hostname === '127.0.0.1' || parsedOrigin.hostname === '[::1]')) ||
-          requestOrigin === 'https://gomoku-api.pages.dev' ||
-          isTrustedOfficialSiteOrigin(requestOrigin);
-      } catch (_) {
-        originAllowed = false;
-      }
-    }
+    const originAllowed = isAllowedClientOrigin(requestOrigin);
     if (requestOrigin === 'null' || !requestOrigin) {
       corsHeaders['Access-Control-Allow-Origin'] = '*';
     } else if (originAllowed) {
@@ -473,6 +487,16 @@ export default {
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
       }
     });
+
+    // Authenticated API calls are bearer-token based, but an untrusted web page
+    // must not be able to submit a simple cross-site request and mutate state.
+    // CORS alone is not a CSRF boundary: browsers still send a request when the
+    // response is not readable. Keep the explicit null/no-Origin allowance for
+    // Android WebView, local file builds and native clients, while rejecting any
+    // other web origin before it reaches a handler.
+    if (url.pathname.startsWith('/api/') && requestOrigin && requestOrigin !== 'null' && !originAllowed) {
+      return json({ code: 403, msg: '请求来源不受信任' }, 403);
+    }
 
     if (url.pathname === '/api/network/probe' && request.method === 'GET') {
       return json({
@@ -1264,8 +1288,13 @@ export default {
 
     function getRequestToken(request, body = {}) {
       const authorization = request.headers.get('Authorization') || '';
-      if (/^Bearer\s+/i.test(authorization)) return authorization.replace(/^Bearer\s+/i, '').trim();
-      return typeof body.token === 'string' ? body.token.trim() : '';
+      const candidate = /^Bearer\s+/i.test(authorization)
+        ? authorization.replace(/^Bearer\s+/i, '').trim()
+        : (typeof body.token === 'string' ? body.token.trim() : '');
+      // Session tokens are currently 48 hex chars. Keep a larger compatibility
+      // ceiling for legacy sessions, but never pass unbounded attacker input to
+      // D1 or to downstream logging/error paths.
+      return candidate.length <= 256 ? candidate : '';
     }
 
     async function requireUser(uid, token) {
@@ -1312,6 +1341,17 @@ export default {
         }
       }
       return bucket.count <= limit;
+    }
+
+    // Account-scoped limits stop one user from spamming; an IP-scoped ceiling
+    // prevents a farm of short-lived accounts from bypassing the same social
+    // endpoint. Cloudflare supplies CF-Connecting-IP at the edge. Local/native
+    // callers without that header keep the account-only behavior for offline
+    // development and Android WebView compatibility.
+    function consumeSocialRequestRate(uid, action, limit, windowMs, ipLimit = Math.max(limit * 4, 60)) {
+      const ip = String(request.headers.get('CF-Connecting-IP') || '').trim().slice(0, 64);
+      if (ip && !consumeSocialRate(`ip:${ip}`, `social:${action}`, ipLimit, windowMs)) return false;
+      return consumeSocialRate(uid, action, limit, windowMs);
     }
 
     async function requireRegisteredUser(uid, token) {
@@ -1400,7 +1440,7 @@ export default {
       const uid = String(url.searchParams.get('uid') || '').trim();
       const auth = await requireRegisteredUser(uid, getRequestToken(request));
       if (auth.response) return auth.response;
-      if (!consumeSocialRate(uid, 'search', 30, 3600000)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
+      if (!consumeSocialRequestRate(uid, 'search', 30, 3600000, 120)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
       const username = String(url.searchParams.get('username') || '').trim().slice(0, 32);
       if (!username) return json({ code: 400, msg: '请输入完整账号名' }, 400);
       const target = await env.DB.prepare(`
@@ -1510,7 +1550,7 @@ export default {
       const auth = await getSocialAuthFromBody(body);
       if (auth.response) return auth.response;
       const uid = String(auth.user.uid);
-      if (!consumeSocialRate(uid, 'friend-request', 20, 86400000)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
+      if (!consumeSocialRequestRate(uid, 'friend-request', 20, 86400000, 100)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
       const targetUsername = String(body.targetUsername || '').trim().slice(0, 32);
       const target = await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
       if (!target || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) return json({ code: 404, msg: '未找到可添加的账号' }, 404);
@@ -1605,7 +1645,7 @@ export default {
       const auth = await getSocialAuthFromBody(body);
       if (auth.response) return auth.response;
       const uid = String(auth.user.uid);
-      if (!consumeSocialRate(uid, 'block', 60, 3600000)) return json({ code: 429, msg: '黑名单操作过于频繁' }, 429);
+      if (!consumeSocialRequestRate(uid, 'block', 60, 3600000, 240)) return json({ code: 429, msg: '黑名单操作过于频繁' }, 429);
       const targetUid = String(body.targetUid || '').trim().slice(0, 64);
       if (!targetUid || targetUid === uid) return json({ code: 400, msg: '拉黑对象无效' }, 400);
       const target = await env.DB.prepare(`SELECT uid FROM users WHERE uid = ? AND username IS NOT NULL AND username != ''`).bind(targetUid).first();
@@ -1662,7 +1702,7 @@ export default {
       if (!text || Array.from(text).length > SOCIAL_MAX_MESSAGE_CHARS || !/^[A-Za-z0-9_-]{8,80}$/.test(clientMessageId)) {
         return json({ code: 400, msg: `消息内容需为 1-${SOCIAL_MAX_MESSAGE_CHARS} 个字符` }, 400);
       }
-      if (!consumeSocialRate(uid, 'message', 60, 60000)) return json({ code: 429, msg: '消息发送过快' }, 429);
+      if (!consumeSocialRequestRate(uid, 'message', 60, 60000, 600)) return json({ code: 429, msg: '消息发送过快' }, 429);
       if (!await areFriends(uid, receiverUid) || await isBlockedEitherWay(uid, receiverUid)) return json({ code: 403, msg: '仅好友可以私聊' }, 403);
       const pairKey = socialPairKey(uid, receiverUid);
       const [friendA, friendB] = socialPair(uid, receiverUid);
@@ -1748,7 +1788,7 @@ export default {
       const uid = String(auth.user.uid);
       const opponentUid = String(body.opponentUid || '').trim().slice(0, 64);
       if (!opponentUid || opponentUid === uid) return json({ code: 400, msg: '对手身份无效' }, 400);
-      if (!consumeSocialRate(uid, 'recent-opponent', 60, 60000)) return json({ code: 429, msg: '对手记录更新过于频繁' }, 429);
+      if (!consumeSocialRequestRate(uid, 'recent-opponent', 60, 60000, 300)) return json({ code: 429, msg: '对手记录更新过于频繁' }, 429);
       // 单方客户端上报不能证明真实对局，也不能让 6 位 UID 被批量枚举。
       // 两个正式账号需在 10 分钟内互相上报，才把该用户对写入双方最近对手。
       const unconfirmed = () => json({ code: 0, data: { confirmed: false } });
@@ -1801,7 +1841,7 @@ export default {
       const friendUid = String(body.friendUid || '').trim().slice(0, 64);
       const roomCode = String(body.roomCode || '').trim();
       if (!/^\d{6}$/.test(roomCode)) return json({ code: 400, msg: '房间尚未准备好' }, 400);
-      if (!consumeSocialRate(uid, 'invite', 20, 60000)) return json({ code: 429, msg: '邀战发送过快' }, 429);
+      if (!consumeSocialRequestRate(uid, 'invite', 20, 60000, 120)) return json({ code: 429, msg: '邀战发送过快' }, 429);
       if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '仅好友可以邀战' }, 403);
       const now = Date.now();
       const id = generateSecureHex(12);
@@ -1850,7 +1890,7 @@ export default {
       const body = await readJsonBody(request);
       const auth = await getSocialAuthFromBody(body);
       if (auth.response) return auth.response;
-      if (!consumeSocialRate(auth.user.uid, 'social-settings', 30, 60000)) return json({ code: 429, msg: '设置更新过于频繁' }, 429);
+      if (!consumeSocialRequestRate(auth.user.uid, 'social-settings', 30, 60000, 120)) return json({ code: 429, msg: '设置更新过于频繁' }, 429);
       const hidden = body.presenceHidden === true ? 1 : 0;
       const metrics = body.metricsEnabled === false ? 0 : 1;
       await env.DB.prepare(`
@@ -1866,7 +1906,7 @@ export default {
       const body = await readJsonBody(request);
       const auth = await getSocialAuthFromBody(body);
       if (auth.response) return auth.response;
-      if (!consumeSocialRate(auth.user.uid, 'social-ticket', 60, 60000)) return json({ code: 429, msg: '连接请求过于频繁' }, 429);
+      if (!consumeSocialRequestRate(auth.user.uid, 'social-ticket', 60, 60000, 180)) return json({ code: 429, msg: '连接请求过于频繁' }, 429);
       const ticket = generateSecureHex(24);
       const ticketHash = await hashWithSalt(ticket, 'social-ticket');
       const now = Date.now();

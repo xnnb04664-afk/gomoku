@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="splash_bg">#101824</color>
+    <color name="splash_board">#2b3543</color>
+    <color name="splash_grid">#bd8a5b</color>
+    <color name="splash_ink">#f0f4f7</color>
+    <color name="splash_stone_light">#f4ede1</color>
+    <color name="splash_stone_dark">#0d1421</color>
+    <color name="splash_accent">#ef8370</color>
+</resources>

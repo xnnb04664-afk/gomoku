@@ -23,6 +23,8 @@
         ,settings: { local: 'js/settings.min.js' }
         ,online: { local: 'js/online.min.js' }
         ,social: { local: 'js/social.min.js' }
+        ,voice: { local: 'js/voice.js' }
+        ,cross: { local: 'js/cross.js' }
       };
       const promises = Object.create(null);
 
@@ -38,6 +40,8 @@
         if (name === 'replay') return window.__GOMOKU_REPLAY_READY__ === true;
         if (name === 'settings') return window.__GOMOKU_SETTINGS_READY__ === true;
         if (name === 'social') return Boolean(window.GomokuSocial && typeof window.GomokuSocial.open === 'function');
+        if (name === 'voice') return Boolean(window.GomokuVoice && typeof window.GomokuVoice.toggle === 'function');
+        if (name === 'cross') return Boolean(window.GomokuCross && typeof window.GomokuCross.open === 'function');
         if (name === 'online') return window.__GOMOKU_ONLINE_READY__ === true;
         return false;
       }
@@ -91,6 +95,21 @@
       window.ensureGomokuFeature = ensure;
       window.openFriendsModal = function() {
         return ensure('social').then(() => window.GomokuSocial.open());
+      };
+      window.toggleGomokuVoice = function() {
+        return ensure('voice').then(() => window.GomokuVoice.toggle()).catch(error => {
+          const status = document.getElementById('gomokuVoiceStatus');
+          if (status) status.textContent = '语音组件加载失败，请刷新后重试';
+          console.warn('[voice resource]', error?.message || error);
+          return false;
+        });
+      };
+      window.openCrossChess = function() {
+        return ensure('cross').then(() => window.GomokuCross.open()).catch(error => {
+          if (typeof window.showGameNotice === 'function') window.showGameNotice('十字棋实验模块加载失败，请刷新后重试', true);
+          console.warn('[cross resource]', error?.message || error);
+          return false;
+        });
       };
       requestAnimationFrame(() => { try { performance.mark('gomoku_first_paint'); } catch (_) {} });
     })();
@@ -1637,6 +1656,15 @@
       <span id="myNetworkStatusLabel">我方: 🟡 连接中 · --ms</span>
       <span id="peerNetworkStatusLabel">对方: ⚪ 等待对方 · --ms</span>
     </div>
+    <!-- 房间可选语音：默认关闭，仅在用户点击后请求麦克风；音频通过房间 WebRTC 直连/现有中继链路传输。 -->
+    <div id="gomokuVoicePanel" style="display:none; width:100%; align-items:center; justify-content:space-between; gap:6px; padding-top:3px; border-top:1px solid rgba(255,255,255,.14);" role="group" aria-label="房间语音">
+      <span id="gomokuVoiceStatus" aria-live="polite" style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; color:#cbd5e1; font-weight:800;">🎙️ 语音默认关闭</span>
+      <span style="display:flex; align-items:center; gap:5px; flex:none;">
+        <button type="button" id="gomokuVoiceToggle" onclick="toggleGomokuVoice()" aria-pressed="false" style="border:1px solid rgba(255,255,255,.25); border-radius:8px; padding:4px 8px; background:#0f766e; color:#fff; font-size:10.5px; font-weight:900; cursor:pointer;">🎙️ 开启语音</button>
+        <button type="button" id="gomokuVoiceMute" onclick="GomokuVoice.toggleMute()" disabled aria-pressed="false" style="border:1px solid rgba(255,255,255,.18); border-radius:8px; padding:4px 7px; background:rgba(255,255,255,.1); color:#cbd5e1; font-size:10.5px; font-weight:900; cursor:pointer; opacity:.55;">🔇 静音</button>
+      </span>
+      <audio id="gomokuVoiceRemoteAudio" autoplay playsinline></audio>
+    </div>
   </div>
 
   <!-- 🔍 主棋盘复盘模式顶部状态栏 (跳转到大棋盘后直观显示) -->
@@ -1698,6 +1726,7 @@
     <button class="btn-ctrl btn-primary" id="btnRestart">🔄 重开</button>
     <button class="btn-ctrl btn-undo" id="btnUndo">↩️ 悔棋</button>
     <button class="btn-ctrl btn-online" id="btnOnline" onclick="openOnlineModal('match')"><span class="btn-text-match">⚡ 匹配<span class="btn-match-extra">对战</span></span></button>
+    <button class="btn-ctrl" id="btnCrossChess" onclick="openCrossChess()" style="background:#ccfbf1; color:#115e59; border-color:#5eead4;">✚ 十字棋</button>
     <button class="btn-ctrl btn-leave-room" id="btnLeaveRoom" onclick="confirmLeaveOnlineRoom()" style="display:none;"><span class="btn-text-match">🚪 退出<span class="btn-match-extra">房间</span></span></button>
   </div>
 
@@ -1839,7 +1868,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.1.0</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.1.1</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>

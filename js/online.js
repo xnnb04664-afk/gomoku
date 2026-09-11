@@ -42,7 +42,9 @@
       'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
       'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone',
       'skill_shift_stone', 'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
-      'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2'
+      'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2',
+      // 语音只使用房间内的短期 WebRTC SDP/ICE 信令；它不承载棋局数据。
+      'voice_hello', 'voice_offer', 'voice_answer', 'voice_ice', 'voice_bye'
     ]);
     const MIRRORED_ONLINE_MESSAGE_TYPES = new Set([
       ...RELIABLE_ONLINE_MESSAGE_TYPES,
@@ -80,7 +82,8 @@
       'move', 'leave_room', 'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
       'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone', 'skill_shift_stone',
       'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
-      'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2'
+      'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2',
+      'voice_hello', 'voice_offer', 'voice_answer', 'voice_ice', 'voice_bye'
     ]);
     const P2P_SIGNAL_TYPES = new Set(['hello', 'offer', 'answer', 'ice', 'ice_batch']);
 
@@ -949,6 +952,38 @@
         return DEFAULT_WEBRTC_ICE_SERVERS;
       }
     }
+
+    // 语音模块按需加载，不能在它未加载时把麦克风或音频逻辑挂进棋局主路径。
+    // 这里仅提供当前房间连接的只读观察点；连接对象本身仍由联机状态机管理。
+    const gomokuOnlineConnectionListeners = new Set();
+    function notifyGomokuOnlineConnection(eventName, connection) {
+      for (const listener of [...gomokuOnlineConnectionListeners]) {
+        try { listener(eventName, connection); } catch (error) {
+          console.warn('[online connection listener]', error?.message || error);
+        }
+      }
+    }
+    window.__gomokuGetOnlineConnection = () => {
+      try {
+        const current = typeof conn !== 'undefined' ? conn : null;
+        return current && current.open && current.ready && !current.closed ? current : null;
+      } catch (_) {
+        return null;
+      }
+    };
+    window.__gomokuRegisterOnlineConnectionListener = (listener) => {
+      if (typeof listener !== 'function') return () => {};
+      gomokuOnlineConnectionListeners.add(listener);
+      const current = window.__gomokuGetOnlineConnection();
+      if (current) {
+        try { listener('open', current); } catch (error) {
+          console.warn('[online connection listener]', error?.message || error);
+        }
+      }
+      return () => gomokuOnlineConnectionListeners.delete(listener);
+    };
+    // 只返回内存中的临时 STUN/TURN 配置；短期 TURN 凭据永不进入房间 URL 或日志。
+    window.__gomokuGetWebRtcIceServers = () => getWebRtcIceServersForRecovery();
 
     class MqttRoomConnection {
       constructor(client, roomCode, role, sessionId = '') {
@@ -2489,6 +2524,8 @@
       stopReconnectHandshakeLoop();
       showReconnectOverlay(false);
       detachHostInviteListener();
+      // 手动转回人机时连接会静默关闭，补发关闭事件让语音立即停止本地音轨。
+      if (conn) notifyGomokuOnlineConnection('close', conn);
       if (conn) { try { conn.close(true); } catch(e) {} conn = null; }
       closeMqttClientPool();
       activeOnlineGuestUid = '';
@@ -2973,6 +3010,13 @@
 
       let missedPings = 0;
       const connection = conn;
+      // `open` 可能在 setupConn 之后才触发；按需语音模块通过此事件绑定当前连接。
+      // 不在这里主动加载语音，也不请求任何媒体权限。
+      connection.on('open', () => {
+        if (conn === connection && connection.open && connection.ready && !connection.closed) {
+          notifyGomokuOnlineConnection('open', connection);
+        }
+      });
       const sendHeartbeat = (countMiss = true) => {
         if (conn !== connection) return;
         if (conn && conn.open && gameMode === 'online' && !isOver) {
@@ -3021,6 +3065,7 @@
       conn.on('close', () => {
         if (conn !== connection || gameMode !== 'online' || isOver) return;
         if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+        notifyGomokuOnlineConnection('close', connection);
         triggerOnlineReconnect("连接断开");
       });
 
@@ -3072,6 +3117,14 @@
             (!Number.isFinite(data.peerTransportRttMs) || data.peerTransportRttMs < 0 || data.peerTransportRttMs > 120000)) return;
         // 新局轮次不一致的报文一律丢弃，防止旧中继/P2P 报文在重开后再次触发旧胜局。
         if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
+        // 语音信令与棋局业务完全分流。voice.js 只在用户明确开启麦克风后
+        // 处理这些短期 SDP/ICE 报文；未加载语音模块时直接忽略，不影响对弈。
+        if (data.type.startsWith('voice_')) {
+          try { window.GomokuVoice?.handleSignal?.(data, receivedTransport, connection); } catch (error) {
+            console.warn('[voice signal]', error?.message || error);
+          }
+          return;
+        }
         // pong 的延迟只在后面确认“请求和响应走的是同一条链路”后记账，
         // 避免 P2P 切换瞬间迟到的中继 pong 污染 P2P 延迟。
         if (data.type !== 'pong') {
@@ -4322,6 +4375,10 @@
     function setMode(mode, silent = false) {
       const previousMode = gameMode;
       gameMode = mode;
+      if (previousMode === 'online' && mode !== 'online') {
+        // leaveOnlineRoom 在 app.js 中使用静默 close；语音必须在离开房间时清理。
+        try { if (typeof conn !== 'undefined' && conn) notifyGomokuOnlineConnection('close', conn); } catch (_) {}
+      }
       if (mode === 'online' && previousMode !== 'online') {
         resetChatHistoryForRoom();
       }

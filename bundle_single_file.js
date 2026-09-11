@@ -63,6 +63,18 @@ if (fs.existsSync(socialPath)) {
   socialContent = fs.readFileSync(socialPath, 'utf8');
 }
 
+const crossPath = path.join(ROOT_DIR, 'js', 'cross.js');
+let crossContent = '';
+if (fs.existsSync(crossPath)) {
+  crossContent = fs.readFileSync(crossPath, 'utf8');
+}
+
+const voicePath = path.join(ROOT_DIR, 'js', 'voice.js');
+let voiceContent = '';
+if (fs.existsSync(voicePath)) {
+  voiceContent = fs.readFileSync(voicePath, 'utf8');
+}
+
 const accountPath = path.join(ROOT_DIR, 'js', 'account.min.js');
 let accountContent = '';
 if (fs.existsSync(accountPath)) {
@@ -127,6 +139,8 @@ const inlineOptionalResources = [
   ,inlineResourceTag('settings', '内联扩展设置模块（首次打开时载入）', settingsContent)
   ,inlineResourceTag('online', '内联联机状态机（进入联机或好友邀战时载入）', onlineContent)
   ,inlineResourceTag('social', '内联好友与私聊模块（登录或打开好友中心时载入）', socialContent)
+  ,inlineResourceTag('voice', '内联房间语音模块（用户开启语音时载入）', voiceContent)
+  ,inlineResourceTag('cross', '内联十字棋实验模式（打开实验棋盘时载入）', crossContent)
 ].join('');
 html = html.slice(0, styleStart) + inlineOptionalResources + '\n' + html.slice(styleStart);
 

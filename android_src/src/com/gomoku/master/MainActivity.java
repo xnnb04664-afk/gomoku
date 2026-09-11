@@ -6,7 +6,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -15,6 +14,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -28,6 +29,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.content.SharedPreferences;
 import android.provider.Settings;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 import java.io.File;
 import java.io.FileInputStream;
@@ -186,6 +188,10 @@ public class MainActivity extends Activity {
     }
 
     private WebView       mWebView;
+    private FrameLayout   mRootLayout;
+    private GomokuSplashView mSplashView;
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable mSplashFailSafe = this::dismissNativeSplash;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
     private ValueCallback<Uri[]> mFilePathCallback;
@@ -195,6 +201,43 @@ public class MainActivity extends Activity {
     private ConnectivityManager mConnectivityManager;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
     private long mNetworkEventSequence = 0L;
+
+    /**
+     * Installs the native splash over the WebView without putting WebView
+     * startup behind an animation.  The user can dismiss it at any time;
+     * otherwise first committed content removes it and the timeout is only a
+     * last-resort guard for a broken/offline page.
+     */
+    private void showNativeSplash() {
+        if (mRootLayout == null || mSplashView != null) return;
+        mSplashView = new GomokuSplashView(this);
+        mSplashView.setDismissListener(this::dismissNativeSplash);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        mRootLayout.addView(mSplashView, params);
+        mSplashView.startAnimation();
+        mMainHandler.postDelayed(mSplashFailSafe, 1400L);
+    }
+
+    private void dismissNativeSplash() {
+        if (mSplashView == null) return;
+        mMainHandler.removeCallbacks(mSplashFailSafe);
+        GomokuSplashView splash = mSplashView;
+        mSplashView = null;
+        splash.stopAnimation();
+        if (mRootLayout != null) {
+            mRootLayout.removeView(splash);
+        }
+        splash.setVisibility(View.GONE);
+    }
+
+    private void onWebContentVisible() {
+        // Keep this posted so WebView can finish its first draw before the
+        // overlay is removed.  There is no artificial minimum splash delay.
+        if (mSplashView != null) {
+            mMainHandler.post(this::dismissNativeSplash);
+        }
+    }
 
     private void registerNetworkMonitor() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return;
@@ -308,9 +351,15 @@ public class MainActivity extends Activity {
         mLocalServer.startAsync();
 
         mWebView = new WebView(this);
-        // 使用浅色首屏底色，避免 WebView 冷启动期间整屏显示深蓝空白。
-        mWebView.setBackgroundColor(Color.parseColor("#eef8ff"));
-        setContentView(mWebView);
+        // 使用与启动窗口一致的底色，避免 WebView 冷启动期间出现突兀空白。
+        mWebView.setBackgroundColor(getResources().getColor(R.color.splash_bg));
+        mRootLayout = new FrameLayout(this);
+        mRootLayout.setBackgroundColor(getResources().getColor(R.color.splash_bg));
+        mRootLayout.addView(mWebView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(mRootLayout);
+        // 原生动画与 WebView 并行启动；动画不作为页面可操作性的门槛。
+        showNativeSplash();
 
         setupWebView();
         registerNetworkMonitor();
@@ -717,6 +766,18 @@ public class MainActivity extends Activity {
         // 页面导航保持在 WebView 内部；外链 APK 自动下载安装
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                onWebContentVisible();
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                super.onPageCommitVisible(view, url);
+                onWebContentVisible();
+            }
+
+            @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, android.webkit.WebResourceRequest request) {
                 // localhost 流量 100% 交由成熟完善的 LocalWebServer HTTP 协议栈处理（原生返回标准的 200 OK 与 Content-Type，避免 WebView 解析异常）
                 // 仅当协议为 file:// 时（极罕见端口完全被占用的极端兜底），才通过内存流拦截
@@ -906,6 +967,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (mSplashView != null) {
+            mSplashView.resumeAnimation();
+        }
         if (mWebView != null) {
             mWebView.onResume();
             mWebView.resumeTimers();
@@ -945,6 +1009,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (mSplashView != null) {
+            mSplashView.pauseAnimation();
+        }
         if (mWebView != null) {
             mWebView.onPause();
             mWebView.pauseTimers();
@@ -1143,6 +1210,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mMainHandler.removeCallbacks(mSplashFailSafe);
+        if (mSplashView != null) {
+            mSplashView.stopAnimation();
+            mSplashView = null;
+        }
+        mRootLayout = null;
         unregisterNetworkMonitor();
         mPendingChatExportContent = null;
         if (mFilePathCallback != null) {
