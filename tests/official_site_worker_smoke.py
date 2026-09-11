@@ -1,10 +1,15 @@
 import json
+import os
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
+
+
+BASE_URL = os.environ.get("GOMOKU_OFFICIAL_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
 
 
 def get(path):
-    with urlopen(f"http://127.0.0.1:8788{path}", timeout=20) as response:
+    request = Request(f"{BASE_URL}{path}", headers={"User-Agent": "GomokuOfficialSmoke/1.0", "Accept": "application/json, text/html"})
+    with urlopen(request, timeout=20) as response:
         return response.status, response.headers, response.read()
 
 
