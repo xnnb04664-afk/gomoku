@@ -22,6 +22,14 @@
 - **后续约束**：继续保持私有仓库、Cloudflare 短时票据更新链路和原签名；修改后端/D1 时先备份再显式部署，普通客户端发版无需重复部署 Cloudflare；绝不提交或输出任何密钥、长期令牌、聊天正文或短时票据。
 - **本机环境迁移（2026-09-09）**：Android SDK 已迁移至 `D:\Android\Sdk`，npm 缓存已迁移至 `D:\npm-cache`；用户环境变量 `ANDROID_SDK_ROOT`/`ANDROID_HOME` 和 npm 全局缓存配置已同步，`build_apk.js` 优先读取环境变量。Node.js、Java、GitHub CLI 仍为 C 盘系统级运行时，不要直接剪切目录。
 
+### 官网首版（2026-09-11）
+
+- **部署状态**：已创建独立 Cloudflare Pages 项目 `gomoku-home`，稳定地址为 `https://gomoku-home.pages.dev/`，最近预览部署地址为 `https://39485418.gomoku-home.pages.dev/`；不使用 VPS，不改动 `gomoku-api`、Worker、D1 或现有联机线路。
+- **页面内容**：官网首页、`/play/` 网页游戏、`/help/` 帮助、`/privacy/` 隐私说明、`/robots.txt` 与 `sitemap.xml` 已上线；首页支持移动端导航和可点击棋盘演示。
+- **下载边界**：官网 `_worker.js` 仅在服务端向现有 `gomoku-api.pages.dev` 请求 90 秒短时票据，再代理 `/download/apk` 和 `/download/html`；浏览器不接触私有 GitHub 仓库、长期令牌或可复用直链。
+- **维护方式**：运行 `npm run build:official-site`（或 `node build_official_site.js`）会将当前游戏同步到 `official-site/play/`，再执行 `npx wrangler pages deploy official-site --project-name gomoku-home`；`official-site/play/` 是构建产物，不手工修改。
+- **验证结果**：本地静态官网 smoke、Wrangler Pages Worker smoke 均通过；线上首页、`/play/`、帮助/隐私页、`/api/site-version`（返回 `v1.0.120`/Build `121`）、APK/HTML 下载、favicon、robots 和 sitemap 均返回 HTTP 200。下载接口验收的 APK 为 1,731,582 bytes，单文件版为 1,048,909 bytes。
+
 ### 🌟 核心亮点
 1. **6 套高颜值前端主题体系**：涵盖现代浮岛、极简暗黑禅意、新中式宣纸、现代奢华毛玻璃、Clean iOS 暖白手机版、以及粉蓝撞色的情侣专属版；
 2. **实时无缝换装与棋局持久化**：在主界面对弈中可一键无缝换装，正在对局的每一步棋子坐标与回合进度通过 `sessionStorage` 100% 保持；

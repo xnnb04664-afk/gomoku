@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "backup:d1": "node backup_d1.js",
-    "build:app": "terser js/app.js --compress passes=2 --mangle --output js/app.min.js && terser js/account.js --compress passes=2 --mangle --output js/account.min.js && terser js/replay.js --compress passes=2 --mangle --output js/replay.min.js && terser js/settings.js --compress passes=2 --mangle --output js/settings.min.js && terser js/online.js --compress passes=2 --mangle --output js/online.min.js && terser js/social.js --compress passes=2 --mangle --output js/social.min.js"
+    "build:app": "terser js/app.js --compress passes=2 --mangle --output js/app.min.js && terser js/account.js --compress passes=2 --mangle --output js/account.min.js && terser js/replay.js --compress passes=2 --mangle --output js/replay.min.js && terser js/settings.js --compress passes=2 --mangle --output js/settings.min.js && terser js/online.js --compress passes=2 --mangle --output js/online.min.js && terser js/social.js --compress passes=2 --mangle --output js/social.min.js",
+    "build:official-site": "node build_official_site.js"
   },
   "devDependencies": {
     "terser": "5.51.2"

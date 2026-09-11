@@ -1,4 +1,6 @@
 node_modules/
+.wrangler/
+official-site/play/
 android_build_tmp/
 android_src/classes/
 .DS_Store
