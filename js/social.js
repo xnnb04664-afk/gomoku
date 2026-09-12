@@ -2,6 +2,8 @@
   'use strict';
 
   const MESSAGE_LIMIT = 500;
+  const SEARCH_DEBOUNCE_MS = 320;
+  const SEARCH_CACHE_TTL_MS = 15000;
   const SOCKET_RETRY_DELAYS = [0, 1000, 2000, 4000, 8000, 12000];
   const state = {
     started: false,
@@ -24,11 +26,39 @@
     socketPingTimer: null,
     refreshTimer: null,
     ticketOrigin: '',
-    refreshPromise: null
+    refreshPromise: null,
+    searchTimer: null,
+    searchController: null,
+    searchGeneration: 0,
+    searchPromise: null,
+    searchPendingUsername: '',
+    searchUsername: '',
+    searchAt: 0,
+    pendingRequests: new Set(),
+    dom: Object.create(null),
+    domListeners: null,
+    lifecycle: 0
   };
 
   function byId(id) {
-    return document.getElementById(id);
+    const cached = state.dom[id];
+    if (cached && cached.isConnected !== false) return cached;
+    const element = document.getElementById(id);
+    state.dom[id] = element || null;
+    return element;
+  }
+
+  function cacheDom() {
+    const ids = [
+      'friendsModal', 'socialChatModal', 'socialConnectionStatus', 'socialSearchInput',
+      'socialSearchResult', 'socialFriendsList', 'socialRequestsList', 'socialRecentList',
+      'socialBlocksList', 'socialPresenceHidden', 'socialMetricsEnabled',
+      'socialChatInput', 'socialChatMessages', 'socialChatTitle'
+    ];
+    ids.forEach(byId);
+    const modal = state.dom.friendsModal;
+    state.dom.socialTabs = modal ? Array.from(modal.querySelectorAll('[data-social-tab]')) : [];
+    return state.dom;
   }
 
   function escapeHtml(value) {
@@ -229,6 +259,7 @@
 
   function switchTab(name) {
     const selected = ['friends', 'requests', 'recent', 'blocks'].includes(name) ? name : 'friends';
+    cacheDom();
     const roots = {
       friends: byId('socialFriendsList'),
       requests: byId('socialRequestsList'),
@@ -238,7 +269,7 @@
     Object.entries(roots).forEach(([key, root]) => {
       if (root) root.style.display = key === selected ? '' : 'none';
     });
-    document.querySelectorAll('#friendsModal [data-social-tab]').forEach(tab => {
+    state.dom.socialTabs.forEach(tab => {
       tab.classList.toggle('active', tab.dataset.socialTab === selected);
     });
   }
@@ -273,11 +304,13 @@
     if (!isRegistered()) return false;
     if (state.refreshPromise) return state.refreshPromise;
     const quiet = options && options.quiet;
-    state.refreshPromise = Promise.all([
+    const lifecycle = state.lifecycle;
+    const request = Promise.all([
       api('/api/friends'),
       api('/api/recent-opponents'),
       api('/api/blocks')
     ]).then(([friendsResult, recentResult, blocksResult]) => {
+      if (lifecycle !== state.lifecycle || state.stopping || !state.started) return false;
       const social = friendsResult.data || {};
       state.friends = Array.isArray(social.friends) ? social.friends : [];
       state.requests = Array.isArray(social.requests) ? social.requests : [];
@@ -297,35 +330,122 @@
     }).catch(error => {
       if (!quiet) notice(error.message || '好友列表加载失败', true);
       return false;
-    }).finally(() => {
-      state.refreshPromise = null;
     });
-    return state.refreshPromise;
+    state.refreshPromise = request;
+    request.then(() => {
+      if (state.refreshPromise === request) state.refreshPromise = null;
+    }, () => {
+      if (state.refreshPromise === request) state.refreshPromise = null;
+    });
+    return request;
+  }
+
+  function invalidateSearch() {
+    state.searchGeneration += 1;
+    if (state.searchTimer) clearTimeout(state.searchTimer);
+    state.searchTimer = null;
+    if (state.searchController) {
+      try { state.searchController.abort(); } catch (_) {}
+    }
+    state.searchController = null;
+    state.searchPromise = null;
+    state.searchPendingUsername = '';
+    return state.searchGeneration;
+  }
+
+  function clearSearchResult() {
+    state.searchResult = null;
+    state.searchUsername = '';
+    state.searchAt = 0;
+    renderSearch();
+  }
+
+  function executeSearch(username, generation, quiet) {
+    const query = String(username || '').trim();
+    if (!query || query.length > 32) return Promise.resolve(false);
+    if (generation !== state.searchGeneration) return Promise.resolve(false);
+    if (state.searchPromise && state.searchPendingUsername === query) return state.searchPromise;
+    if (state.searchUsername === query && state.searchAt > 0 && Date.now() - state.searchAt < SEARCH_CACHE_TTL_MS) {
+      renderSearch();
+      return Promise.resolve(Boolean(state.searchResult));
+    }
+
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    state.searchController = controller;
+    state.searchPendingUsername = query;
+    const request = api(makeQuery('/api/friends/search', { username: query }), controller ? { signal: controller.signal } : undefined)
+      .then(result => {
+        // safeApiFetch 的旧版实现不一定接收 signal，因此还要用 generation
+        // 做结果隔离，避免慢请求覆盖用户刚输入的新账号名。
+        if (generation !== state.searchGeneration || controller?.signal.aborted) return false;
+        state.searchResult = result.data || null;
+        state.searchUsername = query;
+        state.searchAt = Date.now();
+        renderSearch();
+        return Boolean(state.searchResult);
+      })
+      .catch(error => {
+        if (generation !== state.searchGeneration || controller?.signal.aborted) return false;
+        state.searchResult = null;
+        state.searchUsername = query;
+        state.searchAt = Date.now();
+        renderSearch();
+        if (!quiet) notice(error.message || '未找到可添加的账号', true);
+        return false;
+      });
+    state.searchPromise = request;
+    request.then(() => {
+      if (state.searchPromise === request) {
+        state.searchPromise = null;
+        state.searchPendingUsername = '';
+        state.searchController = null;
+      }
+    }, () => {
+      if (state.searchPromise === request) {
+        state.searchPromise = null;
+        state.searchPendingUsername = '';
+        state.searchController = null;
+      }
+    });
+    return request;
+  }
+
+  function scheduleSearch() {
+    if (!isRegistered()) {
+      invalidateSearch();
+      clearSearchResult();
+      return;
+    }
+    const input = byId('socialSearchInput');
+    const username = String(input && input.value || '').trim();
+    const generation = invalidateSearch();
+    if (state.searchUsername !== username) clearSearchResult();
+    if (!username || username.length > 32 || username.length < 2) return;
+    state.searchTimer = setTimeout(() => {
+      state.searchTimer = null;
+      executeSearch(username, generation, true);
+    }, SEARCH_DEBOUNCE_MS);
   }
 
   async function search() {
-    if (!requireAccount()) return;
+    if (!requireAccount()) return false;
     const input = byId('socialSearchInput');
     const username = String(input && input.value || '').trim();
+    const generation = invalidateSearch();
     if (!username || username.length > 32) {
+      clearSearchResult();
       notice('请输入对方完整账号名', true);
-      return;
+      return false;
     }
-    try {
-      const result = await api(makeQuery('/api/friends/search', { username }));
-      state.searchResult = result.data || null;
-      renderSearch();
-    } catch (error) {
-      state.searchResult = null;
-      renderSearch();
-      notice(error.message || '未找到可添加的账号', true);
-    }
+    return executeSearch(username, generation, false);
   }
 
   async function sendFriendRequest(username) {
     if (!requireAccount()) return;
     const targetUsername = String(username || state.searchResult?.username || '').trim();
     if (!targetUsername) return notice('缺少对方账号名', true);
+    if (state.pendingRequests.has(targetUsername)) return;
+    state.pendingRequests.add(targetUsername);
     try {
       const result = await api('/api/friends/requests', {
         method: 'POST', body: JSON.stringify({ targetUsername })
@@ -339,6 +459,8 @@
       }
     } catch (error) {
       notice(error.message, true);
+    } finally {
+      state.pendingRequests.delete(targetUsername);
     }
   }
 
@@ -754,7 +876,8 @@
   }
 
   function onActionClick(event) {
-    const target = event.target.closest('[data-social-action]');
+    const target = event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('[data-social-action]') : null;
     if (!target) return;
     const action = target.dataset.socialAction;
     const targetUid = target.dataset.uid || '';
@@ -782,48 +905,98 @@
     else if (action === 'invite-busy') respondInvite(inviteId, 'busy', roomCode);
   }
 
+  function onSearchKeyDown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      search();
+    }
+  }
+
+  function onSearchInput() {
+    scheduleSearch();
+  }
+
+  function onChatKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function onSettingsChange() {
+    saveSettings();
+  }
+
   function bindDom() {
-    const friendsModal = byId('friendsModal');
-    const chatModal = byId('socialChatModal');
+    cacheDom();
+    if (state.domListeners) {
+      ensureChatControls();
+      return;
+    }
+    const friendsModal = state.dom.friendsModal;
+    const chatModal = state.dom.socialChatModal;
+    const searchInput = state.dom.socialSearchInput;
+    const chatInput = state.dom.socialChatInput;
+    const presence = state.dom.socialPresenceHidden;
+    const metrics = state.dom.socialMetricsEnabled;
+    const listeners = state.domListeners = { friendsModal, chatModal, searchInput, chatInput, presence, metrics };
     for (const root of [friendsModal, chatModal]) {
-      if (root && !root.dataset.socialBound) {
+      if (root) {
         root.dataset.socialBound = '1';
         // 弹窗卡片自身会 stopPropagation，动态列表按钮必须在捕获阶段委托，
         // 否则申请、私聊、邀战、删除和拉黑按钮都会看得到但点不动。
         root.addEventListener('click', onActionClick, true);
       }
     }
-    const searchInput = byId('socialSearchInput');
-    if (searchInput && !searchInput.dataset.socialBound) {
+    if (searchInput) {
       searchInput.dataset.socialBound = '1';
       searchInput.maxLength = 32;
-      searchInput.addEventListener('keydown', event => {
-        if (event.key === 'Enter') { event.preventDefault(); search(); }
-      });
+      searchInput.addEventListener('keydown', onSearchKeyDown);
+      searchInput.addEventListener('input', onSearchInput);
     }
-    const chatInput = byId('socialChatInput');
-    if (chatInput && !chatInput.dataset.socialBound) {
+    if (chatInput) {
       chatInput.dataset.socialBound = '1';
       chatInput.maxLength = MESSAGE_LIMIT;
       // 主页面保留了无脚本时的内联回退；模块加载后由这里统一接管，避免重复发送，
       // 并确保中文输入法组合状态下按回车不会误发消息。
       chatInput.removeAttribute('onkeydown');
-      chatInput.addEventListener('keydown', event => {
-        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-          event.preventDefault();
-          sendMessage();
-        }
-      });
+      chatInput.addEventListener('keydown', onChatKeyDown);
     }
-    for (const id of ['socialPresenceHidden', 'socialMetricsEnabled']) {
-      const control = byId(id);
-      if (control && !control.dataset.socialBound) {
+    for (const control of [presence, metrics]) {
+      if (control) {
         control.dataset.socialBound = '1';
         control.removeAttribute('onchange');
-        control.addEventListener('change', saveSettings);
+        control.addEventListener('change', onSettingsChange);
       }
     }
     ensureChatControls();
+  }
+
+  function unbindDom() {
+    const listeners = state.domListeners;
+    if (!listeners) return;
+    for (const root of [listeners.friendsModal, listeners.chatModal]) {
+      if (root) {
+        root.removeEventListener('click', onActionClick, true);
+        delete root.dataset.socialBound;
+      }
+    }
+    if (listeners.searchInput) {
+      listeners.searchInput.removeEventListener('keydown', onSearchKeyDown);
+      listeners.searchInput.removeEventListener('input', onSearchInput);
+      delete listeners.searchInput.dataset.socialBound;
+    }
+    if (listeners.chatInput) {
+      listeners.chatInput.removeEventListener('keydown', onChatKeyDown);
+      delete listeners.chatInput.dataset.socialBound;
+    }
+    for (const control of [listeners.presence, listeners.metrics]) {
+      if (control) {
+        control.removeEventListener('change', onSettingsChange);
+        delete control.dataset.socialBound;
+      }
+    }
+    state.domListeners = null;
   }
 
   function onVisibilityChange() {
@@ -867,6 +1040,8 @@
   function stop() {
     state.stopping = true;
     state.started = false;
+    state.lifecycle += 1;
+    invalidateSearch();
     clearSocketTimers();
     if (state.refreshTimer) clearInterval(state.refreshTimer);
     state.refreshTimer = null;
@@ -882,7 +1057,11 @@
     state.recent = [];
     state.blocks = [];
     state.searchResult = null;
+    state.searchUsername = '';
+    state.searchAt = 0;
+    state.pendingRequests.clear();
     state.pendingInvites.clear();
+    unbindDom();
     closeChat();
     close();
     renderAll();

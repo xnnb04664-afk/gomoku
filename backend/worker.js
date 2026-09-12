@@ -55,6 +55,19 @@ const CHECKIN_BASE_COINS = 10;
 const CHECKIN_STREAK_BONUS = 2;
 const CHECKIN_STREAK_CAP = 7;
 const SOCIAL_AFFINITY_MAX_POINTS = 10000;
+// 付费货币只保留服务端账本模型。当前没有接入支付渠道，因此默认关闭；
+// 只有部署到明确的沙盒环境时才允许创建 sandbox_pending 订单，任何模式都
+// 不会因为客户端请求直接增加 diamonds。正式支付回调接入前不要新增“模拟到账”接口。
+const PREMIUM_CURRENCY = 'diamonds';
+const PREMIUM_DEFAULT_PAYMENT_MODE = 'disabled';
+const PREMIUM_PRODUCTS = Object.freeze([
+  Object.freeze({ id: 'diamonds_60', diamonds: 60, priceCents: 600, name: '60 钻石' }),
+  Object.freeze({ id: 'diamonds_300', diamonds: 300, priceCents: 3000, name: '300 钻石' }),
+  Object.freeze({ id: 'diamonds_680', diamonds: 680, priceCents: 6800, name: '680 钻石' })
+]);
+const GAME_LAYOUT_DEFAULT_ORDER = Object.freeze([
+  'friends', 'recent', 'rank', 'bag', 'tasks', 'achievements', 'activity', 'settings'
+]);
 const socialRateLimitBuckets = new Map();
 
 // 官网与游戏 API 分属不同的 Cloudflare Pages 项目。只信任官网项目的
@@ -971,6 +984,55 @@ export default {
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_affinity_users ON social_affinity(user_a_uid, user_b_uid)`).run();
+        // 付费货币与订单只做不可伪造的服务端账本骨架。当前支付模式为
+        // disabled（生产默认）或 sandbox；没有支付回调时绝不写入 diamonds。
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS premium_wallets (
+            uid TEXT PRIMARY KEY,
+            diamonds INTEGER NOT NULL DEFAULT 0 CHECK (diamonds >= 0),
+            purchased_diamonds INTEGER NOT NULL DEFAULT 0 CHECK (purchased_diamonds >= 0),
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS premium_orders (
+            id TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            diamonds INTEGER NOT NULL CHECK (diamonds > 0),
+            price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+            currency TEXT NOT NULL DEFAULT 'CNY',
+            payment_mode TEXT NOT NULL DEFAULT 'disabled',
+            status TEXT NOT NULL DEFAULT 'disabled',
+            client_order_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE (uid, client_order_id)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_premium_orders_uid_time ON premium_orders(uid, created_at DESC)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_premium_orders_status_time ON premium_orders(status, updated_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS premium_ledger (
+            id TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            order_id TEXT,
+            currency TEXT NOT NULL DEFAULT 'diamonds',
+            delta INTEGER NOT NULL,
+            balance_after INTEGER NOT NULL CHECK (balance_after >= 0),
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE (order_id)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_premium_ledger_uid_time ON premium_ledger(uid, created_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS user_game_layouts (
+            uid TEXT PRIMARY KEY,
+            button_order TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS metrics_daily (
             day TEXT NOT NULL,
@@ -1491,7 +1553,7 @@ export default {
     };
     const readEconomySummary = async (uid) => {
       const day = beijingDay();
-      const [wallet, checkin, friendRows] = await Promise.all([
+      const [wallet, checkin, friendRows, premiumWallet] = await Promise.all([
         env.DB.prepare('SELECT coins FROM user_wallets WHERE uid = ?').bind(uid).first(),
         env.DB.prepare('SELECT checkin_day, streak, total_days, last_reward FROM daily_checkins WHERE uid = ?').bind(uid).first(),
         env.DB.prepare(`
@@ -1513,11 +1575,14 @@ export default {
             )
           ORDER BY affinity_points DESC, u.username ASC
           LIMIT ${SOCIAL_MAX_FRIENDS}
-        `).bind(uid, uid, uid, uid, uid, uid).all()
+        `).bind(uid, uid, uid, uid, uid, uid).all(),
+        env.DB.prepare('SELECT diamonds, purchased_diamonds FROM premium_wallets WHERE uid = ?').bind(uid).first()
       ]);
       const row = checkin || {};
       return {
         coins: Math.max(0, Number(wallet?.coins) || 0),
+        diamonds: Math.max(0, Number(premiumWallet?.diamonds) || 0),
+        purchasedDiamonds: Math.max(0, Number(premiumWallet?.purchased_diamonds) || 0),
         checkinDay: String(row.checkin_day || ''),
         checkedIn: String(row.checkin_day || '') === day,
         streak: Math.max(0, Number(row.streak) || 0),
@@ -1534,6 +1599,196 @@ export default {
         }))
       };
     };
+
+    // 充值商品是服务端固定目录，客户端只能提交 productId 与幂等键，
+    // 不能提交钻石数量、价格、货币或“已支付”状态。正式支付渠道接入前，
+    // disabled 是唯一默认模式；sandbox 只允许创建待支付订单，也不会到账。
+    const premiumPaymentMode = () => {
+      const configured = String(env.PREMIUM_PAYMENT_MODE || '').trim().toLowerCase();
+      return configured === 'sandbox' ? 'sandbox' : PREMIUM_DEFAULT_PAYMENT_MODE;
+    };
+    const premiumProduct = productId => PREMIUM_PRODUCTS.find(product => product.id === String(productId || '')) || null;
+    const premiumOrderView = order => order ? ({
+      id: String(order.id || ''),
+      uid: String(order.uid || ''),
+      productId: String(order.product_id || ''),
+      diamonds: Math.max(0, Number(order.diamonds) || 0),
+      priceCents: Math.max(0, Number(order.price_cents) || 0),
+      currency: String(order.currency || 'CNY'),
+      paymentMode: String(order.payment_mode || PREMIUM_DEFAULT_PAYMENT_MODE),
+      status: String(order.status || 'disabled'),
+      clientOrderId: String(order.client_order_id || ''),
+      createdAt: Number(order.created_at) || 0,
+      updatedAt: Number(order.updated_at) || 0
+    }) : null;
+    const readPremiumWallet = async uid => {
+      const row = await env.DB.prepare('SELECT diamonds, purchased_diamonds FROM premium_wallets WHERE uid = ?').bind(uid).first();
+      return {
+        currency: PREMIUM_CURRENCY,
+        diamonds: Math.max(0, Number(row?.diamonds) || 0),
+        purchasedDiamonds: Math.max(0, Number(row?.purchased_diamonds) || 0)
+      };
+    };
+    const normalizeGameLayoutOrder = value => {
+      let candidates = value;
+      if (typeof candidates === 'string') {
+        try { candidates = JSON.parse(candidates); } catch (_) { candidates = []; }
+      }
+      if (!Array.isArray(candidates)) candidates = [];
+      const result = [];
+      const seen = new Set();
+      for (const item of candidates.slice(0, 64)) {
+        const id = typeof item === 'string' ? item.trim() : '';
+        if (GAME_LAYOUT_DEFAULT_ORDER.includes(id) && !seen.has(id)) {
+          seen.add(id);
+          result.push(id);
+        }
+      }
+      for (const id of GAME_LAYOUT_DEFAULT_ORDER) if (!seen.has(id)) result.push(id);
+      return result;
+    };
+    const storedGameLayoutOrder = row => normalizeGameLayoutOrder(row?.button_order || []);
+
+    if (url.pathname === '/api/economy/catalog' && request.method === 'GET') {
+      const paymentMode = premiumPaymentMode();
+      return json({ code: 0, data: {
+        currency: PREMIUM_CURRENCY,
+        paymentMode,
+        canCreateOrder: paymentMode === 'sandbox',
+        canCredit: false,
+        products: PREMIUM_PRODUCTS.map(product => ({
+          id: product.id,
+          name: product.name,
+          diamonds: product.diamonds,
+          priceCents: product.priceCents,
+          currency: 'CNY'
+        }))
+      }});
+    }
+
+    if (url.pathname === '/api/economy/wallet' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'premium-wallet', 60, 60000, 240)) return json({ code: 429, msg: '账户余额读取过于频繁' }, 429);
+      return json({ code: 0, data: await readPremiumWallet(uid) });
+    }
+
+    if (url.pathname === '/api/economy/orders' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'premium-order', 8, 10 * 60 * 1000, 40)) return json({ code: 429, msg: '充值订单创建过于频繁' }, 429);
+      const productId = typeof body.productId === 'string' ? body.productId.trim() : '';
+      const clientOrderId = typeof body.clientOrderId === 'string' ? body.clientOrderId.trim() : '';
+      const product = premiumProduct(productId);
+      if (!product || !/^[A-Za-z0-9_-]{8,80}$/.test(clientOrderId)) {
+        return json({ code: 400, msg: '商品或订单幂等键无效' }, 400);
+      }
+
+      // 先查幂等订单。即使部署时从 sandbox 切换为 disabled，已有订单也只能
+      // 查询/取消，不能因重试而重复创建或改变商品金额。
+      const existing = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE uid = ? AND client_order_id = ?
+      `).bind(uid, clientOrderId).first();
+      if (existing) {
+        if (String(existing.product_id) !== product.id) return json({ code: 409, msg: '订单幂等键已用于其他商品' }, 409);
+        return json({ code: 0, data: { order: premiumOrderView(existing), idempotent: true, credited: false } });
+      }
+
+      const paymentMode = premiumPaymentMode();
+      if (paymentMode !== 'sandbox') {
+        return json({ code: 503, msg: '充值渠道尚未开放', data: { paymentMode, credited: false } }, 503);
+      }
+      const now = Date.now();
+      const orderId = generateSecureHex(12);
+      const inserted = await env.DB.prepare(`
+        INSERT OR IGNORE INTO premium_orders
+          (id, uid, product_id, diamonds, price_cents, currency, payment_mode, status, client_order_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'CNY', ?, 'sandbox_pending', ?, ?, ?)
+      `).bind(orderId, uid, product.id, product.diamonds, product.priceCents, paymentMode, clientOrderId, now, now).run();
+      const order = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE uid = ? AND client_order_id = ?
+      `).bind(uid, clientOrderId).first();
+      if (!order) return json({ code: 500, msg: '充值订单创建失败，请稍后重试' }, 500);
+      if (String(order.product_id) !== product.id) return json({ code: 409, msg: '订单幂等键已用于其他商品' }, 409);
+      // 这里没有任何 wallet/ledger 写入。sandbox 仅验证订单模型，不能伪造支付成功。
+      return json({ code: 0, data: {
+        order: premiumOrderView(order),
+        idempotent: Number(inserted?.meta?.changes) !== 1,
+        credited: false
+      }});
+    }
+
+    const premiumOrderRoute = url.pathname.match(/^\/api\/economy\/orders\/([A-Fa-f0-9]{24})(?:\/(cancel))?$/);
+    if (premiumOrderRoute && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'premium-order-read', 60, 60000, 240)) return json({ code: 429, msg: '订单读取过于频繁' }, 429);
+      const order = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE id = ? AND uid = ?
+      `).bind(premiumOrderRoute[1], uid).first();
+      if (!order) return json({ code: 404, msg: '订单不存在' }, 404);
+      return json({ code: 0, data: { order: premiumOrderView(order), credited: false } });
+    }
+
+    if (premiumOrderRoute && premiumOrderRoute[2] === 'cancel' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'premium-order-cancel', 30, 60000, 120)) return json({ code: 429, msg: '订单操作过于频繁' }, 429);
+      const now = Date.now();
+      const changed = await env.DB.prepare(`
+        UPDATE premium_orders SET status = 'cancelled', updated_at = ?
+        WHERE id = ? AND uid = ? AND status IN ('pending', 'sandbox_pending')
+      `).bind(now, premiumOrderRoute[1], uid).run();
+      const order = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE id = ? AND uid = ?
+      `).bind(premiumOrderRoute[1], uid).first();
+      if (!order) return json({ code: 404, msg: '订单不存在' }, 404);
+      return json({ code: 0, data: { order: premiumOrderView(order), changed: Number(changed?.meta?.changes) > 0, credited: false } });
+    }
+
+    const gameLayoutRoute = url.pathname === '/api/user/game-layout' || url.pathname === '/api/game-layout';
+    if (gameLayoutRoute && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'game-layout-read', 60, 60000, 240)) return json({ code: 429, msg: '按钮布局读取过于频繁' }, 429);
+      const row = await env.DB.prepare('SELECT button_order, updated_at FROM user_game_layouts WHERE uid = ?').bind(uid).first();
+      return json({ code: 0, data: {
+        buttonOrder: storedGameLayoutOrder(row),
+        defaultOrder: [...GAME_LAYOUT_DEFAULT_ORDER],
+        updatedAt: Number(row?.updated_at) || 0
+      }});
+    }
+
+    if (gameLayoutRoute && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'game-layout-write', 30, 60000, 120)) return json({ code: 429, msg: '按钮布局保存过于频繁' }, 429);
+      const requestedOrder = body.buttonOrder ?? body.order ?? body.layout;
+      const buttonOrder = normalizeGameLayoutOrder(requestedOrder);
+      const now = Date.now();
+      await env.DB.prepare(`
+        INSERT INTO user_game_layouts (uid, button_order, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET button_order = excluded.button_order, updated_at = excluded.updated_at
+      `).bind(uid, JSON.stringify(buttonOrder), now).run();
+      return json({ code: 0, data: { buttonOrder, defaultOrder: [...GAME_LAYOUT_DEFAULT_ORDER], updatedAt: now } });
+    }
 
     if (url.pathname === '/api/economy/summary' && request.method === 'GET') {
       const uid = String(url.searchParams.get('uid') || '').trim();
@@ -1574,8 +1829,11 @@ export default {
       const auth = await requireRegisteredUser(uid, getRequestToken(request));
       if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(uid, 'search', 30, 3600000, 120)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
-      const username = String(url.searchParams.get('username') || '').trim().slice(0, 32);
-      if (!username) return json({ code: 400, msg: '请输入完整账号名' }, 400);
+      const username = String(url.searchParams.get('username') || '').trim();
+      // 不静默截断搜索词：否则超长输入可能被截断成另一个真实账号，
+      // 也会让客户端误以为支持模糊/前缀搜索。注册账号上限为 32 字符，
+      // 搜索必须使用完整、大小写敏感的账号名。
+      if (!username || username.length > 32) return json({ code: 400, msg: '请输入完整账号名（最多 32 个字符）' }, 400);
       const target = await env.DB.prepare(`
         SELECT uid, username, nickname, avatar, score FROM users
         WHERE username = ? AND username IS NOT NULL AND username != ''

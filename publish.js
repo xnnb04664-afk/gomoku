@@ -245,7 +245,7 @@ function formatDisplayVersionName(versionName) {
   if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch) || patch < 100) {
     return `v${match[1]}.${match[2]}.${match[3]}`;
   }
-  return `v${major}.${minor + Math.floor(patch / 100)}.${patch % 10}`;
+  return `v${major}.${Math.max(0, Math.floor(patch / 10) - 10)}.${patch % 10}`;
 }
 const displayVersionTag = formatDisplayVersionName(newName);
 const htmlFiles = [
@@ -262,6 +262,7 @@ htmlFiles.forEach(f => {
     let c = fs.readFileSync(fp, 'utf8');
     c = c.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
     c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/(?:div|span)>/g, `id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">${displayVersionTag}</div>`);
+    c = c.replace(/id="feedbackAppVer">v[\d\.]+<\/span>/g, `id="feedbackAppVer">${displayVersionTag}</span>`);
     fs.writeFileSync(fp, c, 'utf8');
   }
 });
@@ -290,7 +291,11 @@ const releaseHighlights = [
   `✚ 【十字棋实验】十字轴十连获胜、每方每回合两次行动、缩放/拖拽、提示与干扰牌；对方落子自动跟随视角`,
   `✨ 【Android 开屏】原生棋盘动画与 WebView 并行启动，支持减少动画、轻触跳过和后台暂停`,
   `📊 【匿名质量统计】只采样启动区间、画质档位、入口、链路类型、RTT 和重连结果，不上传账号、房号、聊天或棋盘，可关闭`,
-  `📱 【Android 内存治理】内存回收只清理特效、Canvas 和空闲 AI Worker，不再强制清 WebView 缓存或调用 System.gc()`
+  `📱 【Android 内存治理】内存回收只清理特效、Canvas 和空闲 AI Worker，不再强制清 WebView 缓存或调用 System.gc()`,
+  `💎 【钱包与充值入口】活动/钱包面板支持独立钻石余额和充值商品展示；未配置支付渠道时保持沙盒/关闭状态，不伪造到账`,
+  `🧭 【八按钮自定义】设置中可拖动或用上移/下移调整八宫格顺序，支持恢复默认和本地持久化，始终保持八个按钮`,
+  `🔎 【游戏好友搜索】好友中心支持精确账号名搜索和加好友，沿用正式账号、黑名单、防枚举与限频保护`,
+  `🛠️ 【代码质量优化】减少社交重复请求和过期刷新，增强移动端无障碍操作与页面重建后的状态恢复`
 ];
 const releaseUpdateLog = [
   `五子棋 v${newName} 官方正式版更新说明：`,

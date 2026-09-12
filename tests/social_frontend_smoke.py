@@ -33,6 +33,9 @@ def main():
     test_url = os.environ.get("GOMOKU_TEST_URL", "http://127.0.0.1:3000/index.html")
     source = (Path(__file__).resolve().parents[1] / "js" / "social.js").read_text(encoding="utf-8")
     assert "[0, 1000, 2000, 4000, 8000, 12000]" in source, "社交重连退避表不完整"
+    assert "SEARCH_DEBOUNCE_MS = 320" in source, "好友搜索没有稳定的输入防抖"
+    assert "searchGeneration" in source and "AbortController" in source, "好友搜索缺少过期请求隔离"
+    assert "removeEventListener('input', onSearchInput)" in source, "社交停止时未清理搜索监听器"
 
     requests = [
         {"id": REQUEST_ACCEPT, "direction": "incoming", "uid": "user_in_accept", "username": "in.accept", "nickname": "待同意"},
@@ -193,6 +196,14 @@ def main():
         page.wait_for_selector("#friendsModal.show")
         page.wait_for_selector("#socialFriendsList >> text=云端棋友")
 
+        # 输入变化只允许最后一次精确账号查找发出请求，避免移动端键入时刷接口。
+        search_calls_before_debounce = len([call for call in calls if call["path"] == "/api/friends/search"])
+        page.locator("#socialSearchInput").fill("Auto.Partial")
+        page.locator("#socialSearchInput").fill("Auto.Final")
+        page.wait_for_timeout(650)
+        debounced_calls = [call for call in calls if call["path"] == "/api/friends/search"][search_calls_before_debounce:]
+        debounced_search = len(debounced_calls) == 1 and debounced_calls[0]["query"].get("username") == ["Auto.Final"]
+
         # 精确账号搜索与申请。
         page.locator("#socialSearchInput").fill("Exact.Target")
         page.locator("#socialSearchInput").press("Enter")
@@ -284,6 +295,16 @@ def main():
         reconnect_times = socket_ticket_times[reconnect_start_index:]
         reconnect_intervals = [round(reconnect_times[i] - reconnect_times[i - 1], 1) for i in range(1, len(reconnect_times))]
 
+        # 登出/账号切换会清理搜索和社交 DOM 监听器，避免重新登录后重复触发请求。
+        page.evaluate("window.GomokuSocial.stop()")
+        dom_cleanup = page.evaluate("""
+          () => ({
+            friendsBound: document.querySelector('#friendsModal')?.dataset.socialBound || '',
+            searchBound: document.querySelector('#socialSearchInput')?.dataset.socialBound || '',
+            chatBound: document.querySelector('#socialChatInput')?.dataset.socialBound || ''
+          })
+        """)
+
         # 请求契约检查。
         exact_search = next(call for call in calls if call["path"] == "/api/friends/search" and call["query"].get("username") == ["Exact.Target"])
         sent_message = next(call for call in calls if call["path"] == "/api/messages" and call["method"] == "POST")
@@ -291,6 +312,7 @@ def main():
         read_call = next(call for call in calls if call["path"] == "/api/messages/read")
         checks = {
             "registeredGate": all(gate.values()),
+            "debouncedSearch": debounced_search,
             "exactSearch": exact_search["query"].get("uid") == [UID],
             "authorization": exact_search["authorization"] == f"Bearer {TOKEN}",
             "requestActions": all(not any(item["id"] == value for item in requests) for value in (REQUEST_ACCEPT, REQUEST_REJECT, REQUEST_CANCEL)),
@@ -303,6 +325,7 @@ def main():
             "socketTicketOnly": socket_security["hasTicket"] and not socket_security["leaksToken"],
             "reconnectBackoff": len(reconnect_times) >= 3 and reconnect_intervals[:2] == [1.0, 2.0],
             "settingsLocal": page.evaluate("localStorage.getItem('gomoku_metrics_enabled')") == "0",
+            "domCleanup": not any(dom_cleanup.values()),
             "noPageErrors": not page_errors,
         }
         print(json.dumps({

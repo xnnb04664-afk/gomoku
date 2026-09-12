@@ -49,6 +49,25 @@ const SOCIAL_INVITE_TTL_MS = 2 * 60 * 1000;
 const SOCIAL_MAX_FRIENDS = 200;
 const SOCIAL_MAX_MESSAGE_CHARS = 500;
 const SOCIAL_MAX_PAGE_SIZE = 50;
+// 社交轻量经济数据：签到奖励只作为可消费的客户端展示余额，不影响积分榜。
+// 上限和增量都在服务端固定，客户端不能提交金币数量或签到日期。
+const CHECKIN_BASE_COINS = 10;
+const CHECKIN_STREAK_BONUS = 2;
+const CHECKIN_STREAK_CAP = 7;
+const SOCIAL_AFFINITY_MAX_POINTS = 10000;
+// 付费货币只保留服务端账本模型。当前没有接入支付渠道，因此默认关闭；
+// 只有部署到明确的沙盒环境时才允许创建 sandbox_pending 订单，任何模式都
+// 不会因为客户端请求直接增加 diamonds。正式支付回调接入前不要新增“模拟到账”接口。
+const PREMIUM_CURRENCY = 'diamonds';
+const PREMIUM_DEFAULT_PAYMENT_MODE = 'disabled';
+const PREMIUM_PRODUCTS = Object.freeze([
+  Object.freeze({ id: 'diamonds_60', diamonds: 60, priceCents: 600, name: '60 钻石' }),
+  Object.freeze({ id: 'diamonds_300', diamonds: 300, priceCents: 3000, name: '300 钻石' }),
+  Object.freeze({ id: 'diamonds_680', diamonds: 680, priceCents: 6800, name: '680 钻石' })
+]);
+const GAME_LAYOUT_DEFAULT_ORDER = Object.freeze([
+  'friends', 'recent', 'rank', 'bag', 'tasks', 'achievements', 'activity', 'settings'
+]);
 const socialRateLimitBuckets = new Map();
 
 // 官网与游戏 API 分属不同的 Cloudflare Pages 项目。只信任官网项目的
@@ -924,6 +943,96 @@ export default {
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_invites_receiver_status ON game_invites(receiver_uid, status, expires_at DESC)`).run();
+        // 轻量签到奖励与好友亲密度使用独立表，避免改写 users 主表并兼容已有 D1。
+        // 这三张表会在首次请求时自动 IF NOT EXISTS 创建；正式发布前仍应先备份 D1。
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS user_wallets (
+            uid TEXT PRIMARY KEY,
+            coins INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS daily_checkins (
+            uid TEXT PRIMARY KEY,
+            checkin_day TEXT NOT NULL,
+            streak INTEGER NOT NULL DEFAULT 1,
+            total_days INTEGER NOT NULL DEFAULT 1,
+            last_reward INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_daily_checkins_day ON daily_checkins(checkin_day)`).run();
+        // 每日唯一领取记录用于抵御并发重复签到；daily_checkins 只保存当前汇总状态。
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS daily_checkin_claims (
+            uid TEXT NOT NULL,
+            checkin_day TEXT NOT NULL,
+            reward INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (uid, checkin_day)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_daily_checkin_claims_day ON daily_checkin_claims(checkin_day)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS social_affinity (
+            pair_key TEXT PRIMARY KEY,
+            user_a_uid TEXT NOT NULL,
+            user_b_uid TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_affinity_users ON social_affinity(user_a_uid, user_b_uid)`).run();
+        // 付费货币与订单只做不可伪造的服务端账本骨架。当前支付模式为
+        // disabled（生产默认）或 sandbox；没有支付回调时绝不写入 diamonds。
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS premium_wallets (
+            uid TEXT PRIMARY KEY,
+            diamonds INTEGER NOT NULL DEFAULT 0 CHECK (diamonds >= 0),
+            purchased_diamonds INTEGER NOT NULL DEFAULT 0 CHECK (purchased_diamonds >= 0),
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS premium_orders (
+            id TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            diamonds INTEGER NOT NULL CHECK (diamonds > 0),
+            price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+            currency TEXT NOT NULL DEFAULT 'CNY',
+            payment_mode TEXT NOT NULL DEFAULT 'disabled',
+            status TEXT NOT NULL DEFAULT 'disabled',
+            client_order_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE (uid, client_order_id)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_premium_orders_uid_time ON premium_orders(uid, created_at DESC)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_premium_orders_status_time ON premium_orders(status, updated_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS premium_ledger (
+            id TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            order_id TEXT,
+            currency TEXT NOT NULL DEFAULT 'diamonds',
+            delta INTEGER NOT NULL,
+            balance_after INTEGER NOT NULL CHECK (balance_after >= 0),
+            reason TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE (order_id)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_premium_ledger_uid_time ON premium_ledger(uid, created_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS user_game_layouts (
+            uid TEXT PRIMARY KEY,
+            button_order TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS metrics_daily (
             day TEXT NOT NULL,
@@ -1435,14 +1544,296 @@ export default {
       return requireRegisteredUser(uid, getRequestToken(request, body || {}));
     }
 
+    // ── 轻量经济与亲密关系 ─────────────────────────────────
+    // 日期统一按北京时间结算，客户端不能提交日期或奖励数值。
+    const beijingDay = (timestamp = Date.now()) => new Date(Number(timestamp) + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const previousBeijingDay = (day) => {
+      const parsed = new Date(`${String(day)}T00:00:00Z`);
+      return new Date(parsed.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    };
+    const readEconomySummary = async (uid) => {
+      const day = beijingDay();
+      const [wallet, checkin, friendRows, premiumWallet] = await Promise.all([
+        env.DB.prepare('SELECT coins FROM user_wallets WHERE uid = ?').bind(uid).first(),
+        env.DB.prepare('SELECT checkin_day, streak, total_days, last_reward FROM daily_checkins WHERE uid = ?').bind(uid).first(),
+        env.DB.prepare(`
+          SELECT
+            CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END AS friend_uid,
+            u.username, u.nickname, u.avatar,
+            COALESCE(a.points, 0) AS affinity_points
+          FROM friendships f
+          JOIN users u ON u.uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
+          LEFT JOIN social_affinity a ON a.pair_key = CASE
+            WHEN f.user_a_uid < f.user_b_uid THEN f.user_a_uid || ':' || f.user_b_uid
+            ELSE f.user_b_uid || ':' || f.user_a_uid
+          END
+          WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)
+            AND NOT EXISTS (
+              SELECT 1 FROM user_blocks b
+              WHERE (b.blocker_uid = ? AND b.blocked_uid = u.uid)
+                 OR (b.blocker_uid = u.uid AND b.blocked_uid = ?)
+            )
+          ORDER BY affinity_points DESC, u.username ASC
+          LIMIT ${SOCIAL_MAX_FRIENDS}
+        `).bind(uid, uid, uid, uid, uid, uid).all(),
+        env.DB.prepare('SELECT diamonds, purchased_diamonds FROM premium_wallets WHERE uid = ?').bind(uid).first()
+      ]);
+      const row = checkin || {};
+      return {
+        coins: Math.max(0, Number(wallet?.coins) || 0),
+        diamonds: Math.max(0, Number(premiumWallet?.diamonds) || 0),
+        purchasedDiamonds: Math.max(0, Number(premiumWallet?.purchased_diamonds) || 0),
+        checkinDay: String(row.checkin_day || ''),
+        checkedIn: String(row.checkin_day || '') === day,
+        streak: Math.max(0, Number(row.streak) || 0),
+        totalDays: Math.max(0, Number(row.total_days) || 0),
+        lastReward: Math.max(0, Number(row.last_reward) || 0),
+        day,
+        affinity: (friendRows.results || []).map(friend => ({
+          uid: String(friend.friend_uid || ''),
+          username: String(friend.username || ''),
+          nickname: String(friend.nickname || friend.username || '棋友').slice(0, 32),
+          avatar: compactAvatar(friend.avatar),
+          points: Math.min(SOCIAL_AFFINITY_MAX_POINTS, Math.max(0, Number(friend.affinity_points) || 0)),
+          level: Math.min(100, 1 + Math.floor(Math.max(0, Number(friend.affinity_points) || 0) / 100))
+        }))
+      };
+    };
+
+    // 充值商品是服务端固定目录，客户端只能提交 productId 与幂等键，
+    // 不能提交钻石数量、价格、货币或“已支付”状态。正式支付渠道接入前，
+    // disabled 是唯一默认模式；sandbox 只允许创建待支付订单，也不会到账。
+    const premiumPaymentMode = () => {
+      const configured = String(env.PREMIUM_PAYMENT_MODE || '').trim().toLowerCase();
+      return configured === 'sandbox' ? 'sandbox' : PREMIUM_DEFAULT_PAYMENT_MODE;
+    };
+    const premiumProduct = productId => PREMIUM_PRODUCTS.find(product => product.id === String(productId || '')) || null;
+    const premiumOrderView = order => order ? ({
+      id: String(order.id || ''),
+      uid: String(order.uid || ''),
+      productId: String(order.product_id || ''),
+      diamonds: Math.max(0, Number(order.diamonds) || 0),
+      priceCents: Math.max(0, Number(order.price_cents) || 0),
+      currency: String(order.currency || 'CNY'),
+      paymentMode: String(order.payment_mode || PREMIUM_DEFAULT_PAYMENT_MODE),
+      status: String(order.status || 'disabled'),
+      clientOrderId: String(order.client_order_id || ''),
+      createdAt: Number(order.created_at) || 0,
+      updatedAt: Number(order.updated_at) || 0
+    }) : null;
+    const readPremiumWallet = async uid => {
+      const row = await env.DB.prepare('SELECT diamonds, purchased_diamonds FROM premium_wallets WHERE uid = ?').bind(uid).first();
+      return {
+        currency: PREMIUM_CURRENCY,
+        diamonds: Math.max(0, Number(row?.diamonds) || 0),
+        purchasedDiamonds: Math.max(0, Number(row?.purchased_diamonds) || 0)
+      };
+    };
+    const normalizeGameLayoutOrder = value => {
+      let candidates = value;
+      if (typeof candidates === 'string') {
+        try { candidates = JSON.parse(candidates); } catch (_) { candidates = []; }
+      }
+      if (!Array.isArray(candidates)) candidates = [];
+      const result = [];
+      const seen = new Set();
+      for (const item of candidates.slice(0, 64)) {
+        const id = typeof item === 'string' ? item.trim() : '';
+        if (GAME_LAYOUT_DEFAULT_ORDER.includes(id) && !seen.has(id)) {
+          seen.add(id);
+          result.push(id);
+        }
+      }
+      for (const id of GAME_LAYOUT_DEFAULT_ORDER) if (!seen.has(id)) result.push(id);
+      return result;
+    };
+    const storedGameLayoutOrder = row => normalizeGameLayoutOrder(row?.button_order || []);
+
+    if (url.pathname === '/api/economy/catalog' && request.method === 'GET') {
+      const paymentMode = premiumPaymentMode();
+      return json({ code: 0, data: {
+        currency: PREMIUM_CURRENCY,
+        paymentMode,
+        canCreateOrder: paymentMode === 'sandbox',
+        canCredit: false,
+        products: PREMIUM_PRODUCTS.map(product => ({
+          id: product.id,
+          name: product.name,
+          diamonds: product.diamonds,
+          priceCents: product.priceCents,
+          currency: 'CNY'
+        }))
+      }});
+    }
+
+    if (url.pathname === '/api/economy/wallet' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'premium-wallet', 60, 60000, 240)) return json({ code: 429, msg: '账户余额读取过于频繁' }, 429);
+      return json({ code: 0, data: await readPremiumWallet(uid) });
+    }
+
+    if (url.pathname === '/api/economy/orders' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'premium-order', 8, 10 * 60 * 1000, 40)) return json({ code: 429, msg: '充值订单创建过于频繁' }, 429);
+      const productId = typeof body.productId === 'string' ? body.productId.trim() : '';
+      const clientOrderId = typeof body.clientOrderId === 'string' ? body.clientOrderId.trim() : '';
+      const product = premiumProduct(productId);
+      if (!product || !/^[A-Za-z0-9_-]{8,80}$/.test(clientOrderId)) {
+        return json({ code: 400, msg: '商品或订单幂等键无效' }, 400);
+      }
+
+      // 先查幂等订单。即使部署时从 sandbox 切换为 disabled，已有订单也只能
+      // 查询/取消，不能因重试而重复创建或改变商品金额。
+      const existing = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE uid = ? AND client_order_id = ?
+      `).bind(uid, clientOrderId).first();
+      if (existing) {
+        if (String(existing.product_id) !== product.id) return json({ code: 409, msg: '订单幂等键已用于其他商品' }, 409);
+        return json({ code: 0, data: { order: premiumOrderView(existing), idempotent: true, credited: false } });
+      }
+
+      const paymentMode = premiumPaymentMode();
+      if (paymentMode !== 'sandbox') {
+        return json({ code: 503, msg: '充值渠道尚未开放', data: { paymentMode, credited: false } }, 503);
+      }
+      const now = Date.now();
+      const orderId = generateSecureHex(12);
+      const inserted = await env.DB.prepare(`
+        INSERT OR IGNORE INTO premium_orders
+          (id, uid, product_id, diamonds, price_cents, currency, payment_mode, status, client_order_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'CNY', ?, 'sandbox_pending', ?, ?, ?)
+      `).bind(orderId, uid, product.id, product.diamonds, product.priceCents, paymentMode, clientOrderId, now, now).run();
+      const order = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE uid = ? AND client_order_id = ?
+      `).bind(uid, clientOrderId).first();
+      if (!order) return json({ code: 500, msg: '充值订单创建失败，请稍后重试' }, 500);
+      if (String(order.product_id) !== product.id) return json({ code: 409, msg: '订单幂等键已用于其他商品' }, 409);
+      // 这里没有任何 wallet/ledger 写入。sandbox 仅验证订单模型，不能伪造支付成功。
+      return json({ code: 0, data: {
+        order: premiumOrderView(order),
+        idempotent: Number(inserted?.meta?.changes) !== 1,
+        credited: false
+      }});
+    }
+
+    const premiumOrderRoute = url.pathname.match(/^\/api\/economy\/orders\/([A-Fa-f0-9]{24})(?:\/(cancel))?$/);
+    if (premiumOrderRoute && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'premium-order-read', 60, 60000, 240)) return json({ code: 429, msg: '订单读取过于频繁' }, 429);
+      const order = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE id = ? AND uid = ?
+      `).bind(premiumOrderRoute[1], uid).first();
+      if (!order) return json({ code: 404, msg: '订单不存在' }, 404);
+      return json({ code: 0, data: { order: premiumOrderView(order), credited: false } });
+    }
+
+    if (premiumOrderRoute && premiumOrderRoute[2] === 'cancel' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'premium-order-cancel', 30, 60000, 120)) return json({ code: 429, msg: '订单操作过于频繁' }, 429);
+      const now = Date.now();
+      const changed = await env.DB.prepare(`
+        UPDATE premium_orders SET status = 'cancelled', updated_at = ?
+        WHERE id = ? AND uid = ? AND status IN ('pending', 'sandbox_pending')
+      `).bind(now, premiumOrderRoute[1], uid).run();
+      const order = await env.DB.prepare(`
+        SELECT id, uid, product_id, diamonds, price_cents, currency, payment_mode, status,
+               client_order_id, created_at, updated_at
+        FROM premium_orders WHERE id = ? AND uid = ?
+      `).bind(premiumOrderRoute[1], uid).first();
+      if (!order) return json({ code: 404, msg: '订单不存在' }, 404);
+      return json({ code: 0, data: { order: premiumOrderView(order), changed: Number(changed?.meta?.changes) > 0, credited: false } });
+    }
+
+    const gameLayoutRoute = url.pathname === '/api/user/game-layout' || url.pathname === '/api/game-layout';
+    if (gameLayoutRoute && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'game-layout-read', 60, 60000, 240)) return json({ code: 429, msg: '按钮布局读取过于频繁' }, 429);
+      const row = await env.DB.prepare('SELECT button_order, updated_at FROM user_game_layouts WHERE uid = ?').bind(uid).first();
+      return json({ code: 0, data: {
+        buttonOrder: storedGameLayoutOrder(row),
+        defaultOrder: [...GAME_LAYOUT_DEFAULT_ORDER],
+        updatedAt: Number(row?.updated_at) || 0
+      }});
+    }
+
+    if (gameLayoutRoute && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'game-layout-write', 30, 60000, 120)) return json({ code: 429, msg: '按钮布局保存过于频繁' }, 429);
+      const requestedOrder = body.buttonOrder ?? body.order ?? body.layout;
+      const buttonOrder = normalizeGameLayoutOrder(requestedOrder);
+      const now = Date.now();
+      await env.DB.prepare(`
+        INSERT INTO user_game_layouts (uid, button_order, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET button_order = excluded.button_order, updated_at = excluded.updated_at
+      `).bind(uid, JSON.stringify(buttonOrder), now).run();
+      return json({ code: 0, data: { buttonOrder, defaultOrder: [...GAME_LAYOUT_DEFAULT_ORDER], updatedAt: now } });
+    }
+
+    if (url.pathname === '/api/economy/summary' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(uid, 'economy-summary', 60, 60000, 240)) return json({ code: 429, msg: '数据读取过于频繁' }, 429);
+      return json({ code: 0, data: await readEconomySummary(uid) });
+    }
+
+    if (url.pathname === '/api/economy/checkin' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      if (!consumeSocialRequestRate(uid, 'economy-checkin', 5, 24 * 60 * 60 * 1000, 20)) return json({ code: 429, msg: '签到请求过于频繁' }, 429);
+      const now = Date.now();
+      const day = beijingDay(now);
+      const previousDay = previousBeijingDay(day);
+      const current = await env.DB.prepare('SELECT checkin_day, streak, total_days FROM daily_checkins WHERE uid = ?').bind(uid).first();
+      const previousStreak = current && String(current.checkin_day || '') === previousDay ? Math.max(0, Number(current.streak) || 0) : 0;
+      const streak = Math.min(CHECKIN_STREAK_CAP, previousStreak + 1);
+      const reward = CHECKIN_BASE_COINS + Math.min(CHECKIN_STREAK_CAP - 1, Math.max(0, streak - 1)) * CHECKIN_STREAK_BONUS;
+      const results = await env.DB.batch([
+        env.DB.prepare('INSERT OR IGNORE INTO daily_checkin_claims (uid, checkin_day, reward, created_at) VALUES (?, ?, ?, ?)').bind(uid, day, reward, now),
+        env.DB.prepare('INSERT OR IGNORE INTO user_wallets (uid, coins, updated_at) SELECT ?, 0, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(uid, now, uid, day, now),
+        env.DB.prepare('UPDATE user_wallets SET coins = coins + ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(reward, now, uid, uid, day, now),
+        env.DB.prepare('INSERT OR IGNORE INTO daily_checkins (uid, checkin_day, streak, total_days, last_reward, updated_at) SELECT ?, ?, ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(uid, day, streak, reward, now, uid, day, now),
+        env.DB.prepare('UPDATE daily_checkins SET checkin_day = ?, streak = ?, total_days = total_days + 1, last_reward = ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(day, streak, reward, now, uid, uid, day, now)
+      ]);
+      const claimed = Number(results?.[0]?.meta?.changes) > 0;
+      const data = await readEconomySummary(uid);
+      return json({ code: 0, data: { ...data, reward: claimed ? reward : 0, alreadyCheckedIn: !claimed } });
+    }
+
     // ── 好友、私聊、在线状态与邀战 ─────────────────────────
     if (url.pathname === '/api/friends/search' && request.method === 'GET') {
       const uid = String(url.searchParams.get('uid') || '').trim();
       const auth = await requireRegisteredUser(uid, getRequestToken(request));
       if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(uid, 'search', 30, 3600000, 120)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
-      const username = String(url.searchParams.get('username') || '').trim().slice(0, 32);
-      if (!username) return json({ code: 400, msg: '请输入完整账号名' }, 400);
+      const username = String(url.searchParams.get('username') || '').trim();
+      // 不静默截断搜索词：否则超长输入可能被截断成另一个真实账号，
+      // 也会让客户端误以为支持模糊/前缀搜索。注册账号上限为 32 字符，
+      // 搜索必须使用完整、大小写敏感的账号名。
+      if (!username || username.length > 32) return json({ code: 400, msg: '请输入完整账号名（最多 32 个字符）' }, 400);
       const target = await env.DB.prepare(`
         SELECT uid, username, nickname, avatar, score FROM users
         WHERE username = ? AND username IS NOT NULL AND username != ''
@@ -1726,6 +2117,15 @@ export default {
         return json({ code: 409, msg: '客户端消息 ID 已用于另一条消息' }, 409);
       }
       if (Number(insertResult?.meta?.changes) > 0) {
+        // 私聊是双方明确的互动信号：只给真实好友关系增加固定 1 点，
+        // 不接受客户端提交的好感度数值，也不在日志中记录消息正文。
+        await env.DB.prepare(`
+          INSERT INTO social_affinity (pair_key, user_a_uid, user_b_uid, points, updated_at)
+          VALUES (?, ?, ?, 1, ?)
+          ON CONFLICT(pair_key) DO UPDATE SET
+            points = MIN(?, social_affinity.points + 1),
+            updated_at = excluded.updated_at
+        `).bind(pairKey, friendA, friendB, now, SOCIAL_AFFINITY_MAX_POINTS).run();
         await notifySocialUser(receiverUid, { kind: 'message', fromUid: uid, messageId: Number(message?.id) || 0, at: now });
       }
       return json({ code: 0, data: message });

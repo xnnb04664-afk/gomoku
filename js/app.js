@@ -41,9 +41,10 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.122';
-    // 仅用于界面显示：补丁号达到 100 后，把百位进到中间段并保留个位。
-    // 例如内部版本 v1.0.117 显示为 v1.1.7；更新比较仍使用 CURRENT_VERSION_TAG。
+    const CURRENT_VERSION_TAG = 'v1.0.123';
+    // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
+    // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.123 显示为 v1.2.3；
+    // 更新比较仍使用 CURRENT_VERSION_TAG。
     function formatDisplayVersionTag(tag) {
       const value = String(tag || '').trim();
       const match = value.match(/^v?(\d+)\.(\d+)\.(\d+)$/);
@@ -54,7 +55,7 @@
       if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch) || patch < 100) {
         return `v${match[1]}.${match[2]}.${match[3]}`;
       }
-      return `v${major}.${minor + Math.floor(patch / 100)}.${patch % 10}`;
+      return `v${major}.${Math.max(0, Math.floor(patch / 10) - 10)}.${patch % 10}`;
     }
     const DISPLAY_VERSION_TAG = formatDisplayVersionTag(CURRENT_VERSION_TAG);
     const BOARD_SIZE = 15;

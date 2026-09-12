@@ -124,6 +124,22 @@ class MemoryStatement {
       const state = this.db.messageStates.get(`${a[0]}:${a[1]}`);
       return state ? { cleared_before_id: state.cleared_before_id } : null;
     }
+    if (q.includes('from premium_wallets where uid = ?')) {
+      const wallet = this.db.premiumWallets.get(String(a[0]));
+      return wallet ? { ...wallet } : null;
+    }
+    if (q.includes('from premium_orders where uid = ? and client_order_id = ?')) {
+      const order = [...this.db.premiumOrders.values()].find(row => row.uid === String(a[0]) && row.client_order_id === String(a[1]));
+      return order ? { ...order } : null;
+    }
+    if (q.includes('from premium_orders where id = ? and uid = ?')) {
+      const order = this.db.premiumOrders.get(String(a[0]));
+      return order && order.uid === String(a[1]) ? { ...order } : null;
+    }
+    if (q.includes('from user_game_layouts where uid = ?')) {
+      const layout = this.db.gameLayouts.get(String(a[0]));
+      return layout ? { ...layout } : null;
+    }
     if (q.startsWith('select presence_hidden, metrics_enabled from user_social_settings')) return null;
     if (q.startsWith('select uid from users where uid = ? or username = ?')) return null;
     return null;
@@ -315,6 +331,29 @@ class MemoryStatement {
       invite.updated_at = Number(a[1]);
       return { meta: { changes: 1 } };
     }
+    if (q.startsWith('insert or ignore into premium_orders')) {
+      const clientKey = `${a[1]}:${a[6]}`;
+      if (this.db.premiumOrdersByClient.has(clientKey)) return { meta: { changes: 0 } };
+      const order = {
+        id: String(a[0]), uid: String(a[1]), product_id: String(a[2]), diamonds: Number(a[3]), price_cents: Number(a[4]),
+        currency: 'CNY', payment_mode: String(a[5]), status: 'sandbox_pending', client_order_id: String(a[6]),
+        created_at: Number(a[7]), updated_at: Number(a[8]),
+      };
+      this.db.premiumOrders.set(order.id, order);
+      this.db.premiumOrdersByClient.set(clientKey, order.id);
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('update premium_orders set status =')) {
+      const order = this.db.premiumOrders.get(String(a[1]));
+      if (!order || order.uid !== String(a[2]) || !['pending', 'sandbox_pending'].includes(order.status)) return { meta: { changes: 0 } };
+      order.status = 'cancelled';
+      order.updated_at = Number(a[0]);
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('insert into user_game_layouts')) {
+      this.db.gameLayouts.set(String(a[0]), { uid: String(a[0]), button_order: String(a[1]), updated_at: Number(a[2]) });
+      return { meta: { changes: 1 } };
+    }
     if (q.startsWith('insert into metrics_daily')) {
       this.db.metrics.push({ args: [...a] });
       return { meta: { changes: 1 } };
@@ -337,6 +376,10 @@ class MemoryDB {
     this.recentReports = new Map();
     this.recentOpponents = new Map();
     this.metrics = [];
+    this.premiumWallets = new Map();
+    this.premiumOrders = new Map();
+    this.premiumOrdersByClient = new Map();
+    this.gameLayouts = new Map();
     this.nextMessageId = 1;
   }
 
@@ -489,6 +532,65 @@ async function main() {
   assert.equal(result.payload.data.username, 'bob', '搜索必须按完整账号精确返回');
   result = await call(env, '/api/friends/search?uid=100001&username=bo', { token: 'token-alice' });
   assert.equal(result.response.status, 404, '账号前缀不得产生模糊搜索结果');
+  result = await call(env, `/api/friends/search?uid=100001&username=${'b'.repeat(33)}`, { token: 'token-alice' });
+  assert.equal(result.response.status, 400, '超长搜索词不得被静默截断');
+
+  // 充值目录可展示，但余额和订单必须绑定正式账号；默认生产模式关闭，
+  // 沙盒只创建 pending 订单，绝不能凭客户端请求增加钻石。
+  result = await call(env, '/api/economy/catalog');
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.data.currency, 'diamonds');
+  assert.equal(result.payload.data.paymentMode, 'disabled');
+  assert.equal(result.payload.data.canCredit, false);
+  result = await call(env, '/api/economy/wallet?uid=100001');
+  assert.ok([401, 403].includes(result.response.status), '余额接口必须要求正式登录凭证');
+  result = await call(env, '/api/economy/orders', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { productId: 'diamonds_60', clientOrderId: 'alice-order-01' },
+  });
+  assert.equal(result.response.status, 503, '没有支付渠道时不得直接创建真实充值订单');
+  env.PREMIUM_PAYMENT_MODE = 'sandbox';
+  result = await call(env, '/api/economy/orders', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { productId: 'diamonds_60', clientOrderId: 'alice-order-01' },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.data.order.status, 'sandbox_pending');
+  assert.equal(result.payload.data.credited, false);
+  const premiumOrderId = result.payload.data.order.id;
+  result = await call(env, '/api/economy/orders', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { productId: 'diamonds_60', clientOrderId: 'alice-order-01' },
+  });
+  assert.equal(result.payload.data.idempotent, true, '充值订单客户端幂等键必须复用原订单');
+  assert.equal(result.payload.data.order.id, premiumOrderId);
+  result = await call(env, '/api/economy/orders', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { productId: 'diamonds_300', clientOrderId: 'alice-order-01' },
+  });
+  assert.equal(result.response.status, 409, '幂等键不得切换到另一商品');
+  result = await call(env, `/api/economy/orders/${premiumOrderId}?uid=100001`, { token: 'token-alice' });
+  assert.equal(result.response.status, 200);
+  result = await call(env, `/api/economy/orders/${premiumOrderId}/cancel`, {
+    method: 'POST', uid: '100001', token: 'token-alice', body: {},
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.data.order.status, 'cancelled');
+  result = await call(env, '/api/economy/wallet?uid=100001', { token: 'token-alice' });
+  assert.equal(result.payload.data.diamonds, 0, '沙盒创建/取消订单不得伪造钻石到账');
+  env.PREMIUM_PAYMENT_MODE = undefined;
+
+  // 八按钮布局只接受固定 ID，服务端去重并补全缺失项；游客和伪造 uid 均不可写。
+  result = await call(env, '/api/user/game-layout?uid=100001');
+  assert.ok([401, 403].includes(result.response.status));
+  result = await call(env, '/api/user/game-layout', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { buttonOrder: ['settings', 'friends', 'friends', 'bogus', 'activity'] },
+  });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.payload.data.buttonOrder, ['settings', 'friends', 'activity', 'recent', 'rank', 'bag', 'tasks', 'achievements']);
+  result = await call(env, '/api/user/game-layout?uid=100001', { token: 'token-alice' });
+  assert.deepEqual(result.payload.data.buttonOrder, ['settings', 'friends', 'activity', 'recent', 'rank', 'bag', 'tasks', 'achievements']);
 
   result = await call(env, '/api/friends/requests', {
     method: 'POST', uid: '100001', token: 'token-alice', body: { targetUsername: 'bob' },
@@ -664,6 +766,12 @@ async function main() {
     [/url\.pathname\.startsWith\('\/api\/'\).*请求来源不受信任/s, 'API 在业务处理前拒绝跨站写请求'],
     [/consumeSocialRequestRate\(uid, 'message'/, '社交接口同时执行账号与边缘 IP 限频'],
     [/candidate\.length <= 256/, '认证令牌输入长度受限'],
+    [/PREMIUM_DEFAULT_PAYMENT_MODE = 'disabled'/, '付费货币默认关闭真实充值'],
+    [/canCredit: false/, '商品目录明确禁止客户端伪造到账'],
+    [/status = 'cancelled'.*status IN \('pending', 'sandbox_pending'\)/s, '订单取消只能作用于未完成订单'],
+    [/INSERT INTO user_game_layouts/, '八按钮布局按账号保存'],
+    [/GAME_LAYOUT_DEFAULT_ORDER\.includes\(id\)/, '布局只接受固定合法按钮 ID'],
+    [/username\.length > 32/, '精确搜索拒绝被静默截断的超长账号名'],
   ];
   for (const [pattern, messageText] of sourceChecks) assert.match(workerSource, pattern, messageText);
 
@@ -685,6 +793,8 @@ async function main() {
     invalidMetricsRejected: 5,
     graphicsQualityMetricStrict: true,
     socialHubMultiDevicePresence: true,
+    premiumCatalogAndSandboxNoCredit: true,
+    gameLayoutNormalizedAndAuthenticated: true,
   }));
 }
 
