@@ -1324,29 +1324,26 @@ node publish.js
 本轮未执行 Cloudflare/D1/Pages 部署、GitHub Release 创建或 APK 发布。发布前需在隔离测试环境补跑 Playwright（390px 与桌面视口）、Android WebView 真机/模拟器通知权限与点击回跳、签到按北京时间跨日及重复领取、好友私聊好感度幂等/封禁隐私、三端构建产物版本校验；获得明确授权前不得部署或发布。
 
 
-## 五十八、天空棋岛视觉增强与云端回归（2026-09-12）
+## 五十八、天空棋岛视觉增强最终复核（2026-09-12）
 
-本轮从远端 master 的 e4818fc 继续，仅通过 GitHub 云端接口修改并推送私有仓库，未部署 Cloudflare/D1/Pages、未创建 Release、未发布 APK。
+本节已按远端实际对象重新核对，旧的 `c91a60c`/`8cb9f9c` 叙述不再作为完成依据。本轮只通过 GitHub 云端接口修改交接文档，未改本地、未部署 Cloudflare/D1/Pages、未创建 Release、未发布 APK。
 
-- 根页面 `index.html`（9046228）与 Android WebView 资源 `android_src/assets/index.html`（e4818fc）包含天空棋岛样式/脚本：棋盘外克制金色胜利余韵、reduced-motion 与 `low-spec-mode` 降级、浮岛按钮选中态、结果/复盘星轨候选摘要，以及禁用的 `SKY_ISLAND_FEATURE_FLAGS`（`doubleStarEndgame`、`weatherSeason`）。
-- 完全离线的 `五子棋大师_单文件版.html` 已内嵌同等增强（c91a60c），不引用外部脚本；候选复盘明确标注“候选标记/结果标记”，不冒充引擎判定且不读取聊天。
-- MutationObserver 只监听必要的 class/style/ARIA/子树变化，结果弹窗从未显示到显示的边沿才触发余韵；增强节点写入后以计数签名短路，避免自触发循环；动画不阻塞结算，reduced-motion/low-spec 使用无动画短时态。
-- `tests/game_social_variants_smoke.py`（d8135f1）新增三端天空棋岛标记、未来钩子禁用、ARIA/红点、降级文案及私聊 D1 写入→好感度→通知顺序断言。Playwright 若运行环境缺少浏览器仍需在发布前补跑真实手机/桌面几何回归。
-- Android 通知仍仅为进程/WebView 存活时的通用本地桥文案；完全关闭 App 无 FCM/后台服务能力，不作送达承诺，不携带聊天正文、UID 或令牌。
+- 代码基线 HEAD：`dae9008efafe98221f35382c7e2d998fb401821a`（用户本轮核对的远端 master 头）。
+- 单文件真实同步提交：`73f877346e2804ab0bb654679d265462f69711fb`，将根页面实际使用的天空棋岛内嵌 CSS/脚本同步进 `五子棋大师_单文件版.html`，保持完全离线，不新增外部、延迟或异步资源。
+- Android 无障碍修正提交：`dae9008efafe98221f35382c7e2d998fb401821a`，对应 `android_src/assets/index.html` 的入口无障碍调整；根页面、Android、单文件三端的天空棋岛 style/script 块经云端核验逐字一致。
+- 三端实际包含：胜利后棋盘外克制金色余韵；结果显示边沿触发且不阻塞结算；`prefers-reduced-motion`/低性能档位降级；浮岛选中态、红点和 ARIA；星轨复盘的安全候选/结果降级文案；默认关闭的 `SKY_ISLAND_FEATURE_FLAGS`（`doubleStarEndgame`、`weatherSeason`），不虚构后端能力。
+- MutationObserver 审查：通过 `scheduled` 帧合并、结果 `skyGlowSeen` 边沿保护和摘要 `skySignature` 短路，增强节点自身更新不会形成持续自触发循环；复盘文案明确不是引擎判定，也不读取聊天。
 
-发布前剩余步骤：在干净环境安装依赖后运行 Python/Node 静态回归与 Playwright 手机/桌面几何测试，复核三端资源哈希与版本号，再由有权限人员评估部署/发布；本轮未执行任何部署或发布。
+### 五十九、云端静态测试证据与未运行项
 
+本轮已实际执行的云端轻量静态核验（GitHub blob 读取 + JavaScript 断言，非本地工作区）：
 
-### 五十八补充（最终云端校验）
+- 三端文件均可读取，天空棋岛 5 类核心标记齐全，八宫格入口数量均为 8。
+- 三端增强 style/script 块逐字相等。
+- 单文件增强脚本为内联资源，未发现 `src`/`defer`/`async`。
+- 检测到 reduced-motion、low-spec、结果显示边沿触发、MutationObserver 调度/签名短路和“候选标记/结果标记”文案。
+- 现有 `tests/game_social_variants_smoke.py` 已包含专项断言，但本轮未以 Python 命令执行；Node/Python 单元测试也未重跑。
+- GitHub 提交状态接口对 `dae9008` 返回空状态；本轮没有可引用的远端 CI 运行结果。
 
-- 单文件内嵌提交：c91a60c；专项静态断言最终提交：8cb9f9c（先后修正格式兼容的正则）。
-- 当前远端 master 头：8cb9f9c0a20d9ea065b49e1e3f6879e005ce54ea。GitHub 提交状态接口返回暂无已配置 CI 状态；本轮未在本地执行命令，Playwright/真实设备几何回归仍列为发布前必跑项目。
-- 审查结论：MutationObserver 的结果显示边沿保护（last）和摘要计数短路可避免自触发循环；余韵仅在结果弹窗从隐藏变为显示时触发；reduced-motion 与 low-spec 均禁用/缩短动画；复盘字段明确为候选/结果降级标记。
+尚未运行：Playwright 桌面/手机视口几何回归、Android WebView 模拟器或真机回归、完全关闭 App 的通知实测。发布前仍需在具备依赖和设备的隔离环境运行这些测试，并复核三端构建资源哈希；本轮不部署、不发布。
 
-
-### 五十九、Figma 天空棋岛概念同步（2026-09-12）
-
-- 设计源稿：Figma「五子棋 · 天空棋岛」 https://www.figma.com/design/jHHA9snuhIbR0gTEQhSwvz
-- 从远端 master a78bcd4 同步现有根页面/Android WebView 的离线天空棋岛视觉增强到 `五子棋大师_单文件版.html`：内嵌 `skyIslandEnhancementsStyle` 与 `skyIslandEnhancements`，覆盖胜利余韵、星轨候选摘要、浮岛入口选中态、ARIA/红点以及 reduced-motion/low-spec 降级。
-- 单文件保持离线约束：本次只增加内联 CSS/脚本，不新增外部或延迟执行资源；三端仍共用关闭状态的 `SKY_ISLAND_FEATURE_FLAGS`，不改变正式玩法或后端能力。
-- 本次仅修改代码与交接文档，未部署 Cloudflare/D1/Pages、未创建 Release、未发布 APK；最终 master 提交哈希以本轮 GitHub 推送返回值为准。
