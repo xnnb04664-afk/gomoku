@@ -35,6 +35,10 @@
     searchUsername: '',
     searchAt: 0,
     pendingRequests: new Set(),
+    lastUnreadTotal: 0,
+    lastNotifiedMessageId: '',
+    hasUnreadSnapshot: false,
+    lastNotifiedUnreadTotal: 0,
     dom: Object.create(null),
     domListeners: null,
     lifecycle: 0
@@ -275,12 +279,84 @@
   }
 
   function updateUnreadBadge() {
-    const badge = byId('socialUnreadBadge');
-    if (!badge) return;
     const total = state.friends.reduce((sum, friend) => sum + (Number(friend.unread) || 0), 0) + state.requests.filter(item => item.direction === 'incoming').length + state.pendingInvites.size;
-    badge.textContent = total > 99 ? '99+' : String(total || '');
-    badge.style.display = total > 0 ? '' : 'none';
-    badge.setAttribute('aria-label', total > 0 ? `${total} 条好友动态` : '没有好友动态');
+    const text = total > 99 ? '99+' : String(total || '');
+    const label = total > 0 ? `${total} 条好友动态` : '没有好友动态';
+    ['socialUnreadBadge', 'gameFriendsUnreadBadge', 'gameDockUnreadBadge'].forEach(id => {
+      const badge = byId(id);
+      if (!badge) return;
+      badge.textContent = text;
+      badge.style.display = total > 0 ? 'inline-flex' : 'none';
+      badge.setAttribute('aria-hidden', String(total <= 0));
+      badge.setAttribute('aria-label', label);
+      badge.setAttribute('title', label);
+    });
+    const friendsButton = byId('btnGameFriends');
+    if (friendsButton) {
+      const baseLabel = friendsButton.querySelector('#gameFriendsButtonLabel')?.textContent || '👥 好友';
+      friendsButton.setAttribute('aria-label', total > 0 ? `${baseLabel}，${label}` : `${baseLabel}，打开好友、私聊与亲密关系`);
+    }
+    const fab = byId('gameSocialDockFab');
+    if (fab) {
+      const fabLabel = total > 0 ? `展开八个游戏功能按钮，${label}` : '展开八个游戏功能按钮';
+      fab.setAttribute('aria-label', fabLabel);
+      fab.setAttribute('title', fabLabel);
+    }
+    state.lastUnreadTotal = total;
+  }
+
+  function requestNotificationPermission() {
+    try {
+      if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.requestSocialNotificationPermission === 'function') {
+        AndroidNativeApp.requestSocialNotificationPermission();
+      }
+    } catch (_) {}
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        const result = Notification.requestPermission();
+        if (result && typeof result.catch === 'function') result.catch(() => {});
+      }
+    } catch (_) {}
+  }
+
+  function notifyIncomingMessage(event) {
+    const fromUid = String(event?.fromUid || '');
+    const messageId = String(event?.messageId || '');
+    if (state.currentChat && fromUid && String(state.currentChat.uid) === fromUid) return;
+    if (messageId && state.lastNotifiedMessageId === messageId) return;
+    if (messageId) state.lastNotifiedMessageId = messageId;
+    const title = '五子棋 · 好友消息';
+    const body = '你有新的好友消息，打开游戏查看';
+    try {
+      if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.showSocialNotification === 'function') {
+        AndroidNativeApp.showSocialNotification();
+      }
+    } catch (_) {}
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+        const notification = new Notification(title, { body, tag: `gomoku-social-message-${messageId || 'new'}` });
+        notification.onclick = () => {
+          try { window.focus(); } catch (_) {}
+          try { window.openFriendsModal(); } catch (_) {}
+          notification.close();
+        };
+      }
+    } catch (_) {}
+  }
+
+  function notifyUnreadSnapshot(total, previousTotal) {
+    const current = Math.max(0, Number(total) || 0);
+    const previous = Math.max(0, Number(previousTotal) || 0);
+    if (!state.hasUnreadSnapshot) {
+      state.hasUnreadSnapshot = true;
+      state.lastNotifiedUnreadTotal = current;
+      if (current > 0) notifyIncomingMessage({ kind: 'message', fromUid: '', messageId: `unread-${uid()}-${current}-${Date.now()}` });
+      return;
+    }
+    if (current < state.lastNotifiedUnreadTotal) state.lastNotifiedUnreadTotal = current;
+    if (current <= previous || current <= state.lastNotifiedUnreadTotal) return;
+    state.lastNotifiedUnreadTotal = current;
+    notifyIncomingMessage({ kind: 'message', fromUid: '', messageId: `unread-${uid()}-${current}-${Date.now()}` });
   }
 
   function renderAll() {
@@ -305,6 +381,7 @@
     if (state.refreshPromise) return state.refreshPromise;
     const quiet = options && options.quiet;
     const lifecycle = state.lifecycle;
+    const previousUnreadTotal = state.lastUnreadTotal;
     const request = Promise.all([
       api('/api/friends'),
       api('/api/recent-opponents'),
@@ -326,6 +403,7 @@
       }
       syncSettings(social);
       renderAll();
+      notifyUnreadSnapshot(state.lastUnreadTotal, previousUnreadTotal);
       return true;
     }).catch(error => {
       if (!quiet) notice(error.message || '好友列表加载失败', true);
@@ -857,11 +935,13 @@
     if (event.kind === 'message' && state.currentChat && String(state.currentChat.uid) === String(event.fromUid)) {
       loadChat();
     }
+    if (event.kind === 'message') notifyIncomingMessage(event);
     refresh({ quiet: true });
   }
 
   async function open() {
     if (!requireAccount()) return false;
+    requestNotificationPermission();
     const modal = byId('friendsModal');
     if (modal) modal.classList.add('show');
     switchTab('friends');
@@ -1061,6 +1141,10 @@
     state.searchAt = 0;
     state.pendingRequests.clear();
     state.pendingInvites.clear();
+    state.lastUnreadTotal = 0;
+    state.lastNotifiedMessageId = '';
+    state.hasUnreadSnapshot = false;
+    state.lastNotifiedUnreadTotal = 0;
     unbindDom();
     closeChat();
     close();
