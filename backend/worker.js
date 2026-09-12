@@ -49,6 +49,15 @@ const SOCIAL_INVITE_TTL_MS = 2 * 60 * 1000;
 const SOCIAL_MAX_FRIENDS = 200;
 const SOCIAL_MAX_MESSAGE_CHARS = 500;
 const SOCIAL_MAX_PAGE_SIZE = 50;
+const WORLD_CHANNEL = 'world';
+const WORLD_MAX_MESSAGE_CHARS = 500;
+const WORLD_MAX_PAGE_SIZE = 50;
+const WORLD_MAX_DAILY_MESSAGES = 200;
+const WORLD_ACCOUNT_RATE_LIMIT = 30;
+const WORLD_IP_RATE_LIMIT = 120;
+const WORLD_CHANNEL_RATE_LIMIT = 600;
+const WORLD_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const WORLD_HISTORY_MAX_ID_SPAN = 5000;
 // 社交轻量经济数据：签到奖励只作为可消费的客户端展示余额，不影响积分榜。
 // 上限和增量都在服务端固定，客户端不能提交金币数量或签到日期。
 const CHECKIN_BASE_COINS = 10;
@@ -393,6 +402,7 @@ export class SocialHub {
     const url = new URL(request.url);
     const uid = String(request.headers.get('X-Gomoku-Social-Uid') || '').trim();
     if (!uid || uid.length > 64) return new Response('Unauthorized', { status: 401 });
+    const channel = request.headers.get('X-Gomoku-Social-Channel') === WORLD_CHANNEL ? WORLD_CHANNEL : 'friends';
 
     const requestOrigin = request.headers.get('Origin') || '';
     if (!isAllowedClientOrigin(requestOrigin)) {
@@ -421,20 +431,21 @@ export class SocialHub {
     const client = pair[0];
     const server = pair[1];
     if (typeof this.state.acceptWebSocket === 'function') {
-      this.state.acceptWebSocket(server, [uid]);
+      this.state.acceptWebSocket(server, [uid, channel]);
     } else {
       server.accept();
+      server.__gomokuSocialChannel = channel;
       this.fallbackSockets.add(server);
       const remove = () => {
         this.fallbackSockets.delete(server);
-        if (this.fallbackSockets.size === 0) void this._broadcastPresence(uid, false);
+        if (channel !== WORLD_CHANNEL && this.fallbackSockets.size === 0) void this._broadcastPresence(uid, false);
       };
       server.addEventListener('close', remove);
       server.addEventListener('error', remove);
       server.addEventListener('message', event => this._handleSocketMessage(server, event.data));
     }
-    try { server.send(JSON.stringify({ type: 'social_ready', uid })); } catch (_) {}
-    this.state.waitUntil(this._broadcastPresence(uid, true));
+    try { server.send(JSON.stringify({ type: 'social_ready', uid, channel })); } catch (_) {}
+    if (channel !== WORLD_CHANNEL) this.state.waitUntil(this._broadcastPresence(uid, true));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -454,8 +465,9 @@ export class SocialHub {
     try {
       const tags = typeof this.state.getTags === 'function' ? this.state.getTags(socket) : [];
       const uid = String(tags?.[0] || '');
+      const channel = String(tags?.[1] || socket?.__gomokuSocialChannel || 'friends');
       const remaining = this._sockets().filter(candidate => candidate !== socket && candidate?.readyState !== 3).length;
-      if (uid && remaining === 0) this.state.waitUntil(this._broadcastPresence(uid, false));
+      if (channel !== WORLD_CHANNEL && uid && remaining === 0) this.state.waitUntil(this._broadcastPresence(uid, false));
     } catch (_) {}
   }
 
@@ -884,6 +896,27 @@ export default {
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_private_messages_pair_id ON private_messages(pair_key, id DESC)`).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_private_messages_receiver_id ON private_messages(receiver_uid, id DESC)`).run();
         await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS world_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL DEFAULT 'world' CHECK(channel = 'world'),
+            sender_uid TEXT NOT NULL,
+            client_message_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            moderation_state TEXT NOT NULL DEFAULT 'visible' CHECK(moderation_state IN ('visible', 'hidden')),
+            created_at INTEGER NOT NULL,
+            UNIQUE(sender_uid, client_message_id)
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_world_messages_channel_id ON world_messages(channel, id DESC)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_world_messages_sender_time ON world_messages(sender_uid, created_at DESC)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS world_message_state (
+            uid TEXT PRIMARY KEY,
+            last_read_id INTEGER NOT NULL DEFAULT 0,
+            cleared_before_id INTEGER NOT NULL DEFAULT 0
+          )
+        `).run();
+        await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS message_state (
             uid TEXT NOT NULL,
             pair_key TEXT NOT NULL,
@@ -930,6 +963,7 @@ export default {
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_tickets_expiry ON social_socket_tickets(expires_at)`).run();
+        try { await env.DB.prepare(`ALTER TABLE social_socket_tickets ADD COLUMN channel TEXT NOT NULL DEFAULT 'friends'`).run(); } catch (_) {}
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS game_invites (
             id TEXT PRIMARY KEY,
@@ -1506,6 +1540,21 @@ export default {
       }
     }
 
+    async function notifySocialWorld(event) {
+      if (!env.GOMOKU_SOCIAL || !event || typeof event !== 'object') return false;
+      try {
+        const id = env.GOMOKU_SOCIAL.idFromName('social:world');
+        const response = await env.GOMOKU_SOCIAL.get(id).fetch('https://social.internal/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Gomoku-Social-Uid': 'world', 'X-Gomoku-Social-Channel': WORLD_CHANNEL },
+          body: JSON.stringify(event)
+        });
+        return response.ok;
+      } catch (_) {
+        return false;
+      }
+    }
+
     async function notifySocialFriends(uid, event) {
       const rows = await env.DB.prepare(`
         SELECT CASE WHEN user_a_uid = ? THEN user_b_uid ELSE user_a_uid END AS friend_uid
@@ -2067,6 +2116,122 @@ export default {
       return json({ code: 0 });
     }
 
+    if (url.pathname === '/api/world/messages' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      const requestedBefore = Number(url.searchParams.get('before'));
+      const before = Number.isSafeInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : Number.MAX_SAFE_INTEGER;
+      const requestedLimit = Number(url.searchParams.get('limit'));
+      const limit = Number.isSafeInteger(requestedLimit) ? Math.min(WORLD_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : WORLD_MAX_PAGE_SIZE;
+      const state = await env.DB.prepare('SELECT last_read_id, cleared_before_id FROM world_message_state WHERE uid = ?').bind(uid).first();
+      const latest = await env.DB.prepare('SELECT MAX(id) AS max_id FROM world_messages WHERE channel = ? AND created_at >= ?').bind(WORLD_CHANNEL, Date.now() - WORLD_HISTORY_WINDOW_MS).first();
+      const floorId = Math.max(Number(state?.cleared_before_id) || 0, Math.max(0, (Number(latest?.max_id) || 0) - WORLD_HISTORY_MAX_ID_SPAN));
+      const rows = await env.DB.prepare(`
+        SELECT m.id, m.sender_uid, u.username, u.nickname, u.avatar, m.body, m.created_at
+        FROM world_messages m JOIN users u ON u.uid = m.sender_uid
+        WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id < ? AND m.id > ? AND m.created_at >= ?
+          AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
+        ORDER BY m.id DESC LIMIT ?
+      `).bind(WORLD_CHANNEL, before, floorId, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, limit).all();
+      const unread = await env.DB.prepare(`
+        SELECT COUNT(*) AS cnt FROM world_messages m
+        WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id > MAX(?, ?) AND m.created_at >= ? AND m.sender_uid != ?
+          AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
+      `).bind(WORLD_CHANNEL, Number(state?.last_read_id) || 0, Number(state?.cleared_before_id) || 0, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, uid, uid).first();
+      const page = (rows.results || []).reverse().map(row => ({
+        id: Number(row.id) || 0,
+        senderUid: String(row.sender_uid || ''),
+        username: sanitizeText(row.username || '', 32),
+        nickname: sanitizeText(row.nickname || row.username || '棋友', 32),
+        avatar: compactAvatar(row.avatar),
+        body: String(row.body || ''),
+        createdAt: Number(row.created_at) || 0
+      }));
+      return json({ code: 0, data: { messages: page, hasMore: page.length >= limit, nextBefore: page.length ? page[0].id : 0, unreadCount: Math.max(0, Number(unread?.cnt) || 0), retentionDays: 30 } });
+    }
+
+    if (url.pathname === '/api/world/messages' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const text = String(body.text || '').normalize('NFC').trim();
+      const clientMessageId = String(body.clientMessageId || '').trim();
+      if (!text || Array.from(text).length > WORLD_MAX_MESSAGE_CHARS || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text) || !/^[A-Za-z0-9_-]{8,80}$/.test(clientMessageId)) {
+        return json({ code: 400, msg: `世界消息需为 1-${WORLD_MAX_MESSAGE_CHARS} 个文字或 Emoji` }, 400);
+      }
+      if (!consumeSocialRequestRate(uid, 'world-message', WORLD_ACCOUNT_RATE_LIMIT, 60000, WORLD_IP_RATE_LIMIT) ||
+          !consumeSocialRate('channel:world', 'world-message', WORLD_CHANNEL_RATE_LIMIT, 60000)) {
+        return json({ code: 429, msg: '世界频道消息发送过快，请稍后再试' }, 429);
+      }
+      const now = Date.now();
+      const dayStart = new Date(`${beijingDay(now)}T00:00:00+08:00`).getTime();
+      const daily = await env.DB.prepare('SELECT COUNT(*) AS cnt FROM world_messages WHERE sender_uid = ? AND created_at >= ?').bind(uid, dayStart).first();
+      if (Number(daily?.cnt) >= WORLD_MAX_DAILY_MESSAGES) return json({ code: 429, msg: '今日世界频道发言已达上限' }, 429);
+      const insert = await env.DB.prepare(`
+        INSERT OR IGNORE INTO world_messages (channel, sender_uid, client_message_id, body, moderation_state, created_at)
+        VALUES (?, ?, ?, ?, 'visible', ?)
+      `).bind(WORLD_CHANNEL, uid, clientMessageId, text, now).run();
+      const message = await env.DB.prepare(`
+        SELECT m.id, m.sender_uid, u.username, u.nickname, u.avatar, m.body, m.created_at
+        FROM world_messages m JOIN users u ON u.uid = m.sender_uid
+        WHERE m.sender_uid = ? AND m.client_message_id = ? AND m.channel = ?
+      `).bind(uid, clientMessageId, WORLD_CHANNEL).first();
+      if (!message) return json({ code: 409, msg: '世界消息未写入' }, 409);
+      if (Number(insert?.meta?.changes) > 0) {
+        const eventMessage = {
+          id: Number(message.id) || 0,
+          senderUid: String(message.sender_uid || ''),
+          username: sanitizeText(message.username || '', 32),
+          nickname: sanitizeText(message.nickname || message.username || '棋友', 32),
+          avatar: compactAvatar(message.avatar),
+          body: String(message.body || ''),
+          createdAt: Number(message.created_at) || now
+        };
+        await notifySocialWorld({ kind: 'world_message', channel: WORLD_CHANNEL, message: eventMessage });
+      }
+      return json({ code: 0, data: {
+        id: Number(message.id) || 0,
+        senderUid: String(message.sender_uid || ''),
+        username: sanitizeText(message.username || '', 32),
+        nickname: sanitizeText(message.nickname || message.username || '棋友', 32),
+        avatar: compactAvatar(message.avatar),
+        body: String(message.body || ''),
+        createdAt: Number(message.created_at) || now
+      }});
+    }
+
+    if (url.pathname === '/api/world/messages/read' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const lastMessageId = Number(body.lastMessageId);
+      if (!Number.isSafeInteger(lastMessageId) || lastMessageId < 0) return json({ code: 400, msg: '已读位置无效' }, 400);
+      await env.DB.prepare(`
+        INSERT INTO world_message_state (uid, last_read_id, cleared_before_id) VALUES (?, ?, 0)
+        ON CONFLICT(uid) DO UPDATE SET last_read_id = MAX(world_message_state.last_read_id, excluded.last_read_id)
+      `).bind(uid, lastMessageId).run();
+      return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/world/messages/clear' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      const uid = String(auth.user.uid);
+      const latest = await env.DB.prepare('SELECT MAX(id) AS max_id FROM world_messages WHERE channel = ?').bind(WORLD_CHANNEL).first();
+      const maxId = Number(latest?.max_id) || 0;
+      await env.DB.prepare(`
+        INSERT INTO world_message_state (uid, last_read_id, cleared_before_id) VALUES (?, ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET
+          last_read_id = MAX(world_message_state.last_read_id, excluded.cleared_before_id),
+          cleared_before_id = MAX(world_message_state.cleared_before_id, excluded.cleared_before_id)
+      `).bind(uid, maxId, maxId).run();
+      return json({ code: 0, data: { clearedBeforeId: maxId } });
+    }
+
     if (url.pathname === '/api/messages' && request.method === 'GET') {
       const uid = String(url.searchParams.get('uid') || '').trim();
       const friendUid = String(url.searchParams.get('friendUid') || '').trim();
@@ -2306,6 +2471,21 @@ export default {
       return json({ code: 0 });
     }
 
+    if (url.pathname === '/api/world/socket-ticket' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth.response;
+      if (!consumeSocialRequestRate(auth.user.uid, 'world-ticket', 60, 60000, 180)) return json({ code: 429, msg: '世界频道连接请求过于频繁' }, 429);
+      const ticket = generateSecureHex(24);
+      const ticketHash = await hashWithSalt(ticket, 'social-ticket');
+      const now = Date.now();
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM social_socket_tickets WHERE expires_at <= ? OR used != 0').bind(now),
+        env.DB.prepare('INSERT INTO social_socket_tickets (ticket_hash, uid, expires_at, used, channel) VALUES (?, ?, ?, 0, ?)').bind(ticketHash, auth.user.uid, now + SOCIAL_TICKET_TTL_MS, WORLD_CHANNEL)
+      ]);
+      return json({ code: 0, data: { ticket, expiresAt: now + SOCIAL_TICKET_TTL_MS, channel: WORLD_CHANNEL } });
+    }
+
     if (url.pathname === '/api/social/socket-ticket' && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await getSocialAuthFromBody(body);
@@ -2316,25 +2496,31 @@ export default {
       const now = Date.now();
       await env.DB.batch([
         env.DB.prepare('DELETE FROM social_socket_tickets WHERE expires_at <= ? OR used != 0').bind(now),
-        env.DB.prepare('INSERT INTO social_socket_tickets (ticket_hash, uid, expires_at, used) VALUES (?, ?, ?, 0)').bind(ticketHash, auth.user.uid, now + SOCIAL_TICKET_TTL_MS)
+        env.DB.prepare('INSERT INTO social_socket_tickets (ticket_hash, uid, expires_at, used, channel) VALUES (?, ?, ?, 0, ?)').bind(ticketHash, auth.user.uid, now + SOCIAL_TICKET_TTL_MS, 'friends')
       ]);
       return json({ code: 0, data: { ticket, expiresAt: now + SOCIAL_TICKET_TTL_MS } });
     }
 
-    if (url.pathname === '/api/social/socket' && request.method === 'GET') {
+    if ((url.pathname === '/api/social/socket' || url.pathname === '/api/world/socket') && request.method === 'GET') {
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ code: 426, msg: '需要 WebSocket 升级' }, 426);
-      if (!env.GOMOKU_SOCIAL) return json({ code: 503, msg: '好友实时服务尚未部署' }, 503);
+      if (!env.GOMOKU_SOCIAL) return json({ code: 503, msg: '实时服务尚未部署' }, 503);
+      const isWorldSocket = url.pathname === '/api/world/socket';
       const ticket = String(url.searchParams.get('ticket') || '');
-      if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) return json({ code: 401, msg: '好友连接票据无效' }, 401);
+      if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) return json({ code: 401, msg: '连接票据无效' }, 401);
       const ticketHash = await hashWithSalt(ticket, 'social-ticket');
       const now = Date.now();
-      const record = await env.DB.prepare(`SELECT uid FROM social_socket_tickets WHERE ticket_hash = ? AND used = 0 AND expires_at > ?`).bind(ticketHash, now).first();
-      if (!record) return json({ code: 401, msg: '好友连接票据已失效' }, 401);
+      const record = await env.DB.prepare(`SELECT uid, COALESCE(channel, 'friends') AS channel FROM social_socket_tickets WHERE ticket_hash = ? AND used = 0 AND expires_at > ?`).bind(ticketHash, now).first();
+      if (!record) return json({ code: 401, msg: '连接票据已失效' }, 401);
+      const ticketChannel = String(record.channel || 'friends');
+      if ((isWorldSocket && ticketChannel !== WORLD_CHANNEL) || (!isWorldSocket && ticketChannel === WORLD_CHANNEL)) {
+        return json({ code: 403, msg: '连接频道不匹配' }, 403);
+      }
       const claimed = await env.DB.prepare(`UPDATE social_socket_tickets SET used = 1 WHERE ticket_hash = ? AND used = 0 AND expires_at > ?`).bind(ticketHash, now).run();
-      if (!claimed.meta?.changes) return json({ code: 401, msg: '好友连接票据已使用' }, 401);
-      const id = env.GOMOKU_SOCIAL.idFromName(`social:${record.uid}`);
+      if (!claimed.meta?.changes) return json({ code: 401, msg: '连接票据已使用' }, 401);
+      const id = env.GOMOKU_SOCIAL.idFromName(ticketChannel === WORLD_CHANNEL ? 'social:world' : `social:${record.uid}`);
       const headers = new Headers(request.headers);
       headers.set('X-Gomoku-Social-Uid', String(record.uid));
+      headers.set('X-Gomoku-Social-Channel', ticketChannel);
       return env.GOMOKU_SOCIAL.get(id).fetch(new Request('https://social.internal/socket', { method: 'GET', headers }));
     }
 
