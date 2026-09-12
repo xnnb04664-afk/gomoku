@@ -29,6 +29,8 @@ def main():
     pages_worker = (ROOT / "pages_build" / "_worker.js").read_text(encoding="utf-8")
     for marker in ("/api/economy/summary", "/api/economy/checkin", "daily_checkin_claims", "claim_nonce", "social_affinity"):
         assert marker in backend, f"backend 缺少 {marker}"
+    for marker in ("/api/messages", "client_message_id", "SOCIAL_AFFINITY_MAX_POINTS", "social_affinity.points + 1", "requireRegisteredUser"):
+        assert marker in backend, f"好友私聊/正式账号守卫缺少 {marker}"
         assert marker in pages_worker, f"Pages Worker 缺少 {marker}"
 
     print("game social variants smoke: PASS")
