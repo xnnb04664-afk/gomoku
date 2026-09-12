@@ -1294,3 +1294,30 @@ node publish.js
 *交接文档最后更新时间：2026年9月12日*
 *当前工程正式版本为 v1.0.123 (Build 124，界面显示 v1.2.3)；已完成 D1 备份、Worker/Pages/官网部署和私有 GitHub Release。真实充值仍关闭，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+
+
+## 五十七、社交模块三端同步维护记录（2026-09-12）
+
+本次维护基于当前 master 头部继续执行，未回退或覆盖此前提交。验收时发现网页的压缩社交模块已经包含离线/未读好友通知，但 Android 内嵌版和单文件版仍引用旧压缩模块，导致三端功能不一致。已将网页现行 `js/social.min.js` 同步到 `android_src/assets/js/social.min.js`，并替换单文件版 `gomoku-inline-resource-social` 内嵌模块。通知仅使用通用提示，不读取或展示聊天正文；Android 原生通知桥仍由用户授权控制。
+
+目标功能静态验收结果：
+
+- 网页、Android 内嵌页、单文件版均包含八个入口，默认顺序为好友、最近对手、排行、背包、任务、成就、活动签到、设置；好友入口连接好友中心/亲密关系，好感度摘要可见。
+- 三端版本字段一致为 v1.0.123（Build 124）；网页与 Pages Worker 文件内容一致。
+- Worker/Pages 静态检查包含钱包、签到、订单/商品、布局和亲密关系表与接口，正式账号门禁、签到 `claim_nonce` 幂等门禁、私聊 `client_message_id` 幂等及好感度上限逻辑均存在；客户端不能提交奖励日/金币字段。
+- 游客入口、充值/签到正式账号引导、八按钮本地顺序恢复和移动端安全区样式均保留。
+
+本轮提交：
+
+- `932e501c`：同步 Android 压缩社交模块。
+- `9ad43e73`：同步单文件版内嵌社交模块。
+
+测试记录（本地工作区为早于当前 master 的候选副本）：
+
+- `node tests/worker_unit.js`：通过。
+- `node tests/social_worker_unit.js`：通过。
+- `python3 tests/game_social_dock_smoke.py`：未运行，环境缺少 Playwright Python 模块。
+- `python3 tests/social_frontend_smoke.py`：未运行，环境缺少 Playwright Python 模块。
+- 当前 master 的 `tests/game_social_variants_smoke.py` 已存在；本轮用 GitHub 头部文件执行等价静态验收，三端八按钮顺序、版本和 Worker/Pages 一致性均通过。
+
+本轮未执行 Cloudflare/D1/Pages 部署、GitHub Release 创建或 APK 发布。发布前需在隔离测试环境补跑 Playwright（390px 与桌面视口）、Android WebView 真机/模拟器通知权限与点击回跳、签到按北京时间跨日及重复领取、好友私聊好感度幂等/封禁隐私、三端构建产物版本校验；获得明确授权前不得部署或发布。
