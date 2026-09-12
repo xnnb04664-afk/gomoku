@@ -3380,6 +3380,30 @@
     }
 
 </style>
+<style id="worldChatEnhancementsStyle">
+.world-chat-tab{position:relative;display:inline-flex;align-items:center;gap:4px}
+.world-chat-tab .world-chat-tab-badge{display:none;min-width:16px;height:16px;padding:0 4px;align-items:center;justify-content:center;border-radius:999px;background:#dc2626;color:#fff;font-size:9px;line-height:16px;font-weight:900}
+.world-chat-tab.has-unread .world-chat-tab-badge{display:inline-flex}
+#worldChatPanel{z-index:100008}
+#worldChatPanel .world-chat-card{max-width:460px;width:95%;height:min(680px,90vh);display:flex;flex-direction:column;text-align:left}
+#worldChatPanel .world-chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #e2e8f0;padding-bottom:8px}
+#worldChatPanel .world-chat-title{font-weight:900;color:#0f172a}
+#worldChatPanel .world-chat-status{font-size:10px;color:#64748b;font-weight:700;margin-top:2px}
+#worldChatPanel .world-chat-retention{padding:7px 2px 3px;color:#64748b;font-size:10px;line-height:1.45;font-weight:700}
+#worldChatPanel .world-chat-messages{flex:1;min-height:160px;overflow:auto;padding:8px 2px;display:flex;flex-direction:column;gap:7px}
+#worldChatPanel .world-chat-row{display:flex;justify-content:flex-start}
+#worldChatPanel .world-chat-bubble{max-width:88%;padding:7px 9px;border-radius:12px 12px 12px 3px;background:#f1f5f9;color:#1e293b;word-break:break-word;white-space:pre-wrap}
+#worldChatPanel .world-chat-meta{font-size:10px;color:#64748b;margin-bottom:2px}
+#worldChatPanel .world-chat-body{font-size:13px;line-height:1.45}
+#worldChatPanel .world-chat-older{text-align:center;min-height:27px;padding:2px 0}
+#worldChatPanel .world-chat-quick{display:flex;gap:5px;flex-wrap:wrap;border-top:1px solid #e2e8f0;padding-top:7px}
+#worldChatPanel .world-chat-compose{display:flex;gap:6px;align-items:flex-end;padding-top:7px}
+#worldChatPanel .world-chat-compose textarea{flex:1;min-width:0;min-height:42px;max-height:100px;resize:vertical;padding:8px 9px;border:1.5px solid #93c5fd;border-radius:10px;outline:none;font:inherit;line-height:1.35;user-select:text;-webkit-user-select:text}
+#worldChatPanel .world-chat-actions{display:flex;gap:6px;justify-content:space-between;align-items:center;padding-top:7px}
+#worldChatPanel .world-chat-count{font-size:10px;color:#94a3b8;font-weight:700}
+@media (max-width:600px){#worldChatPanel .world-chat-card{width:calc(100% - 20px);height:min(680px,92vh)}#worldChatPanel .world-chat-bubble{max-width:92%}}
+@media (prefers-reduced-motion:reduce){#worldChatPanel *{scroll-behavior:auto}}
+</style>
 </head>
 <body>
 
@@ -4611,6 +4635,510 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
+})();
+</script>
+<script id="worldChatEnhancements">
+(() => {
+  'use strict';
+
+  const MAX_CHARS = 500;
+  const PAGE_SIZE = 50;
+  const RETRY_DELAYS = [1000, 3000, 8000, 15000];
+  const state = {
+    messages: [],
+    oldestId: 0,
+    hasMore: false,
+    loading: false,
+    reading: false,
+    unread: 0,
+    socket: null,
+    socketConnecting: false,
+    socketRetry: 0,
+    socketRetryTimer: null,
+    started: false,
+    panelOpen: false,
+    domObserver: null,
+    badgeScheduled: false
+  };
+
+  const byId = id => document.getElementById(id);
+  const textOf = value => String(value == null ? '' : value);
+  const registered = () => {
+    try { return typeof hasRegisteredAccountSession === 'function' && hasRegisteredAccountSession(); }
+    catch (_) { return false; }
+  };
+  const currentUid = () => {
+    try { return typeof currentUserUid !== 'undefined' ? String(currentUserUid || '') : ''; }
+    catch (_) { return ''; }
+  };
+  const notice = (message, warning = true) => {
+    try { if (typeof showGameNotice === 'function') showGameNotice(String(message || ''), warning); } catch (_) {}
+  };
+  const loginGuide = () => {
+    notice('🔑 世界聊天需要先登录正式账号', true);
+    try { if (typeof openAuthModal === 'function') openAuthModal('login'); } catch (_) {}
+  };
+  const displayName = message => textOf(message && (message.nickname || message.username || '棋友')).trim().slice(0, 32) || '棋友';
+
+  async function api(path, options = {}) {
+    if (typeof safeApiFetch !== 'function') throw new Error('云端世界频道暂不可用，单文件仍可离线对局');
+    const request = { ...options };
+    const method = String(request.method || 'GET').toUpperCase();
+    let endpoint = String(path);
+    if (method === 'GET') {
+      const url = new URL(endpoint, window.location.href);
+      url.searchParams.set('uid', currentUid());
+      endpoint = url.pathname + url.search;
+    } else {
+      let body = {};
+      try { body = request.body ? JSON.parse(request.body) : {}; } catch (_) {}
+      request.headers = { 'Content-Type': 'application/json', ...(request.headers || {}) };
+      request.body = JSON.stringify({ ...body, uid: currentUid() });
+    }
+    const response = await safeApiFetch(endpoint, request);
+    let payload = null;
+    try { payload = await response.json(); } catch (_) {}
+    if (!response.ok || !payload || payload.code !== 0) {
+      const error = new Error(payload && payload.msg ? String(payload.msg) : '世界频道请求失败');
+      error.status = response.status;
+      throw error;
+    }
+    return { data: payload.data, response };
+  }
+
+  function messageFrom(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id) || 0;
+    const body = textOf(raw.body).normalize ? textOf(raw.body).normalize('NFC') : textOf(raw.body);
+    if (!id || !body || Array.from(body).length > MAX_CHARS) return null;
+    return {
+      id,
+      senderUid: textOf(raw.senderUid || raw.sender_uid).slice(0, 64),
+      username: textOf(raw.username).slice(0, 32),
+      nickname: textOf(raw.nickname).slice(0, 32),
+      avatar: textOf(raw.avatar).slice(0, 8),
+      body: body.slice(0, MAX_CHARS),
+      createdAt: Number(raw.createdAt || raw.created_at) || 0
+    };
+  }
+
+  function setStatus(message, warning = false) {
+    const node = byId('worldChatStatus');
+    if (node) {
+      node.textContent = String(message || '');
+      node.style.color = warning ? '#b45309' : '#64748b';
+    }
+  }
+
+  function parseBadgeCount(node) {
+    const match = textOf(node && node.textContent).match(/\d+/);
+    return match ? Math.min(999, Number(match[0]) || 0) : 0;
+  }
+
+  function setIfChanged(node, key, value) {
+    if (node && node.getAttribute(key) !== String(value)) node.setAttribute(key, String(value));
+  }
+
+  function applyUnifiedUnreadBadges() {
+    state.badgeScheduled = false;
+    const totalIds = ['socialUnreadBadge', 'gameFriendsUnreadBadge', 'gameDockUnreadBadge'];
+    totalIds.forEach(id => {
+      const node = byId(id);
+      if (!node) return;
+      const rendered = Number(node.dataset.worldRenderedUnread);
+      const current = parseBadgeCount(node);
+      const base = Number.isFinite(rendered) && rendered === current
+        ? (Number(node.dataset.worldBaseUnread) || 0)
+        : current;
+      const total = Math.min(999, Math.max(0, base + state.unread));
+      node.dataset.worldBaseUnread = String(base);
+      node.dataset.worldRenderedUnread = String(total);
+      node.dataset.worldUnread = String(state.unread);
+      if (node.textContent !== (total > 99 ? '99+' : total ? String(total) : '')) node.textContent = total > 99 ? '99+' : total ? String(total) : '';
+      node.style.display = total > 0 ? 'inline-flex' : 'none';
+      setIfChanged(node, 'aria-hidden', total <= 0 ? 'true' : 'false');
+      setIfChanged(node, 'aria-label', total > 0 ? total + ' 条社交动态' : '没有社交动态');
+      setIfChanged(node, 'title', total > 0 ? total + ' 条社交动态' : '没有社交动态');
+    });
+    const friendButton = byId('btnGameFriends');
+    if (friendButton) {
+      const raw = friendButton.getAttribute('aria-label') || '打开好友、私聊与亲密关系';
+      const suffix = /，世界频道/.test(raw) ? raw.slice(0, raw.indexOf('，世界频道')) : raw;
+      friendButton.dataset.worldBaseLabel = suffix;
+      const label = state.unread > 0 ? suffix + '，世界频道 ' + state.unread + ' 条未读' : suffix;
+      setIfChanged(friendButton, 'aria-label', label);
+    }
+    const fab = byId('gameSocialDockFab');
+    if (fab) {
+      const raw = fab.getAttribute('aria-label') || '展开八个游戏功能按钮';
+      const suffix = /，世界频道/.test(raw) ? raw.slice(0, raw.indexOf('，世界频道')) : raw;
+      const label = state.unread > 0 ? suffix + '，世界频道 ' + state.unread + ' 条未读' : suffix;
+      setIfChanged(fab, 'aria-label', label);
+    }
+    const entry = byId('btnWorldChat');
+    if (entry) {
+      entry.classList.toggle('has-unread', state.unread > 0);
+      entry.setAttribute('aria-label', state.unread > 0 ? '世界聊天，' + state.unread + ' 条未读' : '世界聊天');
+      const badge = byId('worldChatUnreadBadge');
+      if (badge) {
+        badge.textContent = state.unread > 99 ? '99+' : state.unread ? String(state.unread) : '';
+        badge.style.display = state.unread > 0 ? 'inline-flex' : 'none';
+        setIfChanged(badge, 'aria-hidden', state.unread > 0 ? 'false' : 'true');
+      }
+    }
+  }
+
+  function scheduleBadges() {
+    if (state.badgeScheduled) return;
+    state.badgeScheduled = true;
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(applyUnifiedUnreadBadges);
+  }
+
+  function ensurePanel() {
+    let panel = byId('worldChatPanel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'worldChatPanel';
+    panel.className = 'online-modal-backdrop';
+    panel.setAttribute('aria-hidden', 'true');
+    panel.innerHTML =
+      '<div class="online-modal-card world-chat-card" role="dialog" aria-modal="true" aria-labelledby="worldChatTitle" onclick="event.stopPropagation()">' +
+        '<div class="world-chat-head"><div><div id="worldChatTitle" class="world-chat-title">🌐 世界聊天</div><div id="worldChatStatus" class="world-chat-status">尚未连接</div></div>' +
+          '<button type="button" id="worldChatClose" class="btn-chat-tool" aria-label="关闭世界聊天">✕</button></div>' +
+        '<div class="world-chat-retention">世界消息会持久保存在云端数据库，仅显示最近 30 天（最多 5000 条消息）；清空我的视图只改变你这一侧的已读位置，不会删除他人消息。</div>' +
+        '<div id="worldChatMessages" class="world-chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>' +
+        '<div id="worldChatOlder" class="world-chat-older"></div>' +
+        '<div class="world-chat-quick" aria-label="快捷短语">' +
+          '<button type="button" class="btn-chat-tool" data-world-quick="你好！">你好！</button>' +
+          '<button type="button" class="btn-chat-tool" data-world-quick="来一局？">来一局？</button>' +
+          '<button type="button" class="btn-chat-tool" data-world-quick="精彩对局！">精彩对局！</button>' +
+        '</div>' +
+        '<div class="world-chat-compose"><textarea id="worldChatInput" maxlength="500" aria-label="世界聊天消息" placeholder="输入文字、Emoji 或快捷短语（最多 500 字）"></textarea><button type="button" id="worldChatSend" class="btn-chat-tool" style="background:#2563eb;color:#fff;border-color:#1d4ed8;">发送</button></div>' +
+        '<div class="world-chat-actions"><span id="worldChatCount" class="world-chat-count">0/500</span><button type="button" id="worldChatClear" class="btn-chat-tool">清空我的视图</button></div>' +
+      '</div>';
+    panel.addEventListener('click', event => { if (event.target === panel) closePanel(); });
+    document.body.appendChild(panel);
+    byId('worldChatClose')?.addEventListener('click', closePanel);
+    byId('worldChatSend')?.addEventListener('click', send);
+    byId('worldChatClear')?.addEventListener('click', clearMyView);
+    byId('worldChatInput')?.addEventListener('input', updateCount);
+    byId('worldChatInput')?.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
+    });
+    document.querySelectorAll('[data-world-quick]').forEach(button => button.addEventListener('click', () => {
+      const input = byId('worldChatInput'); if (input) { input.value = button.dataset.worldQuick || ''; updateCount(); input.focus(); }
+    }));
+    return panel;
+  }
+
+  function ensureEntry() {
+    const modal = byId('friendsModal');
+    if (!modal) return;
+    const firstTab = modal.querySelector('[data-social-tab]');
+    const bar = firstTab && firstTab.parentElement;
+    if (!bar || byId('btnWorldChat')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'btnWorldChat';
+    button.className = 'btn-chat-tool social-tab world-chat-tab';
+    button.setAttribute('aria-controls', 'worldChatPanel');
+    button.setAttribute('aria-label', '世界聊天');
+    button.textContent = '🌐 世界';
+    const badge = document.createElement('span');
+    badge.id = 'worldChatUnreadBadge';
+    badge.className = 'world-chat-tab-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    button.appendChild(badge);
+    button.addEventListener('click', openPanel);
+    bar.appendChild(button);
+  }
+
+  function renderMessages(keepPosition = false) {
+    const root = byId('worldChatMessages');
+    const older = byId('worldChatOlder');
+    if (!root) return;
+    const previousHeight = root.scrollHeight;
+    root.replaceChildren();
+    if (!state.messages.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:18px 8px;text-align:center;color:#64748b;font-size:13px';
+      empty.textContent = '还没有世界消息，来打个招呼吧';
+      root.appendChild(empty);
+    } else {
+      state.messages.forEach(message => {
+        const row = document.createElement('div');
+        row.className = 'world-chat-row';
+        const bubble = document.createElement('div');
+        bubble.className = 'world-chat-bubble';
+        const meta = document.createElement('div');
+        meta.className = 'world-chat-meta';
+        meta.textContent = displayName(message) + (message.createdAt ? ' · ' + new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+        const body = document.createElement('div');
+        body.className = 'world-chat-body';
+        body.textContent = message.body;
+        bubble.append(meta, body);
+        row.appendChild(bubble);
+        root.appendChild(row);
+      });
+    }
+    if (older) {
+      older.replaceChildren();
+      if (state.hasMore) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-chat-tool';
+        button.textContent = state.loading ? '正在加载…' : '加载更早消息';
+        button.disabled = state.loading;
+        button.setAttribute('aria-label', '加载更早世界消息');
+        button.addEventListener('click', () => loadPage(true));
+        older.appendChild(button);
+      }
+    }
+    if (keepPosition) root.scrollTop = Math.max(0, root.scrollHeight - previousHeight);
+    else root.scrollTop = root.scrollHeight;
+  }
+
+  function mergeMessages(incoming, prepend = false) {
+    const known = new Set(state.messages.map(item => String(item.id)));
+    const page = incoming.map(messageFrom).filter(Boolean).filter(item => !known.has(String(item.id)));
+    state.messages = prepend ? page.concat(state.messages) : page;
+    state.messages.sort((a, b) => a.id - b.id);
+    if (state.messages.length > 200) state.messages = state.messages.slice(-200);
+    state.oldestId = state.messages.reduce((min, item) => min && min < item.id ? min : item.id, 0);
+    return page.length;
+  }
+
+  async function loadPage(older = false) {
+    if (!registered() || state.loading || (older && (!state.hasMore || !state.oldestId))) return;
+    state.loading = true;
+    renderMessages(true);
+    try {
+      let path = '/api/world/messages?limit=' + PAGE_SIZE;
+      if (older) path += '&before=' + encodeURIComponent(state.oldestId);
+      const result = await api(path);
+      const data = result.data || {};
+      mergeMessages(Array.isArray(data.messages) ? data.messages : [], older);
+      state.hasMore = data.hasMore === true;
+      if (Number.isFinite(Number(data.unreadCount))) state.unread = Math.max(0, Number(data.unreadCount));
+      renderMessages(older);
+      scheduleBadges();
+      if (!older && state.panelOpen) await markRead();
+      setStatus('世界频道已同步 · 最近 30 天', false);
+    } catch (error) {
+      setStatus(error.message || '世界频道暂不可用', true);
+      notice(error.message || '世界频道暂不可用', true);
+    } finally {
+      state.loading = false;
+      renderMessages(true);
+    }
+  }
+
+  async function markRead() {
+    if (!state.panelOpen || state.reading || !state.messages.length || !registered()) return;
+    const last = state.messages[state.messages.length - 1].id;
+    if (!last) return;
+    state.reading = true;
+    try {
+      await api('/api/world/messages/read', { method: 'POST', body: JSON.stringify({ lastMessageId: last }) });
+      state.unread = 0;
+      scheduleBadges();
+    } catch (_) {
+      // 下一次恢复或打开面板时重试；不把正文写入日志。
+    } finally {
+      state.reading = false;
+    }
+  }
+
+  function appendMessage(raw) {
+    const message = messageFrom(raw);
+    if (!message || state.messages.some(item => item.id === message.id)) return false;
+    state.messages.push(message);
+    state.messages.sort((a, b) => a.id - b.id);
+    if (state.messages.length > 200) state.messages.shift();
+    if (state.panelOpen) {
+      renderMessages(false);
+      markRead();
+    } else if (message.senderUid !== currentUid()) {
+      state.unread += 1;
+      scheduleBadges();
+    }
+    return true;
+  }
+
+  function socketOrigin(response) {
+    try { return response && response.url ? new URL(response.url).origin : (typeof activeApiHost !== 'undefined' ? String(activeApiHost || '') : window.location.origin); }
+    catch (_) { return window.location.origin; }
+  }
+
+  function scheduleReconnect() {
+    if (!state.started || !registered() || state.socketRetryTimer) return;
+    const delay = RETRY_DELAYS[Math.min(state.socketRetry, RETRY_DELAYS.length - 1)];
+    state.socketRetry += 1;
+    state.socketRetryTimer = window.setTimeout(() => { state.socketRetryTimer = null; connectSocket(); }, delay);
+  }
+
+  async function connectSocket() {
+    if (!state.started || !registered() || state.socketConnecting) return;
+    if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) return;
+    if (typeof WebSocket !== 'function') { setStatus('实时连接不可用，列表仍可使用', true); return; }
+    state.socketConnecting = true;
+    try {
+      const result = await api('/api/world/socket-ticket', { method: 'POST' });
+      const ticket = textOf(result.data && result.data.ticket);
+      if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) throw new Error('世界频道连接票据无效');
+      const url = new URL('/api/world/socket', socketOrigin(result.response));
+      url.searchParams.set('ticket', ticket);
+      const socket = new WebSocket(url.href);
+      state.socket = socket;
+      socket.onopen = () => { state.socketRetry = 0; setStatus('世界频道实时连接已建立', false); };
+      socket.onmessage = event => {
+        let packet = null;
+        try { packet = JSON.parse(String(event.data || '')); } catch (_) { return; }
+        const item = packet && packet.event && packet.event.kind === 'world_message' ? packet.event.message : null;
+        if (packet && packet.event && packet.event.channel && packet.event.channel !== 'world') return;
+        if (item) appendMessage(item);
+      };
+      socket.onerror = () => {};
+      socket.onclose = () => {
+        if (state.socket === socket) state.socket = null;
+        setStatus('世界频道已断开，正在恢复…', true);
+        scheduleReconnect();
+      };
+    } catch (error) {
+      setStatus(error.message || '世界频道暂不可用', true);
+      scheduleReconnect();
+    } finally {
+      state.socketConnecting = false;
+    }
+  }
+
+  async function start() {
+    if (state.started || !registered()) return;
+    state.started = true;
+    state.socketRetry = 0;
+    await loadPage(false);
+    await connectSocket();
+  }
+
+  async function openPanel() {
+    if (!registered()) { loginGuide(); return; }
+    const panel = ensurePanel();
+    ensureEntry();
+    state.panelOpen = true;
+    panel.classList.add('show');
+    panel.setAttribute('aria-hidden', 'false');
+    await start();
+    renderMessages(false);
+    await markRead();
+    byId('worldChatInput')?.focus();
+  }
+
+  function closePanel() {
+    const panel = byId('worldChatPanel');
+    state.panelOpen = false;
+    if (panel) {
+      panel.classList.remove('show');
+      panel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  async function clearMyView() {
+    if (!registered()) { loginGuide(); return; }
+    let confirmed = false;
+    try {
+      confirmed = typeof confirmAction === 'function'
+        ? await confirmAction('只会清空你这一侧看到的世界消息，不会删除他人消息。', { title: '清空我的视图', icon: '🗑️', okText: '确认清空' })
+        : window.confirm('只会清空你这一侧看到的世界消息，不会删除他人消息。');
+    } catch (_) {}
+    if (!confirmed) return;
+    try {
+      await api('/api/world/messages/clear', { method: 'POST', body: '{}' });
+      state.messages = [];
+      state.oldestId = 0;
+      state.hasMore = false;
+      state.unread = 0;
+      renderMessages(false);
+      scheduleBadges();
+      setStatus('已清空你的视图（不会删除他人消息）', false);
+    } catch (error) {
+      notice(error.message || '清空失败', true);
+    }
+  }
+
+  function newMessageId() {
+    try {
+      const bytes = new Uint8Array(12);
+      crypto.getRandomValues(bytes);
+      return 'wmsg_' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    } catch (_) {
+      return 'wmsg_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+    }
+  }
+
+  async function send(text) {
+    if (!registered()) { loginGuide(); return; }
+    const input = byId('worldChatInput');
+    const value = textOf(text == null ? input && input.value : text).normalize ? textOf(text == null ? input && input.value : text).normalize('NFC').trim() : textOf(text == null ? input && input.value : text).trim();
+    if (!value) return;
+    if (Array.from(value).length > MAX_CHARS) { notice('世界消息最多 500 个文字或 Emoji', true); return; }
+    const sendButton = byId('worldChatSend');
+    if (sendButton) sendButton.disabled = true;
+    try {
+      const result = await api('/api/world/messages', { method: 'POST', body: JSON.stringify({ text: value, clientMessageId: newMessageId() }) });
+      appendMessage(result.data);
+      if (input && !text) input.value = '';
+      updateCount();
+      setStatus('消息已发送；内容会保存在云端', false);
+    } catch (error) {
+      notice(error.message || '世界消息发送失败', true);
+    } finally {
+      if (sendButton) sendButton.disabled = false;
+      if (input) input.focus();
+    }
+  }
+
+  function updateCount() {
+    const input = byId('worldChatInput');
+    const count = byId('worldChatCount');
+    if (count) count.textContent = Array.from(textOf(input && input.value)).length + '/500';
+  }
+
+  async function resume() {
+    if (!registered()) return;
+    ensureEntry();
+    if (!state.started) return;
+    await loadPage(false);
+    await connectSocket();
+  }
+
+  function observe() {
+    ensureEntry();
+    ensurePanel();
+    scheduleBadges();
+    const observer = new MutationObserver(() => {
+      ensureEntry();
+      scheduleBadges();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label', 'aria-hidden', 'style', 'class'] });
+    state.domObserver = observer;
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
+    window.addEventListener('beforeunload', () => {
+      state.started = false;
+      if (state.socket) { try { state.socket.close(1000, 'page-close'); } catch (_) {} }
+    }, { once: true });
+  }
+
+  window.GomokuWorldChat = Object.freeze({
+    open: openPanel,
+    close: closePanel,
+    refresh: resume,
+    getUnreadCount: () => state.unread,
+    send
+  });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
+  else observe();
 })();
 </script>
 </body>
