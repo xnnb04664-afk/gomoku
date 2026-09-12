@@ -1269,7 +1269,20 @@ node publish.js
 - **本地回归**：`tests/game_social_dock_smoke.py`、`node tests/social_worker_unit.js`、Worker/页面脚本语法检查、`git diff --check` 已通过；官方站静态版本文字已同步到 v1.2.2 / Build 123。
 - **发布边界**：当前仅为本地候选，尚未备份/部署 D1、Worker 或官网 Pages，尚未创建 GitHub Release；云端接续任务必须先读取本节并在生产部署前按既有流程备份 D1。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
 
+## 五十五、八宫格社交与经济系统正式发布（2026-09-12，v1.0.123）
+
+- **正式版本**：内部版本 `v1.0.123 (Build 124)`，界面显示 `v1.2.3`；提交 `244e81f` 已推送私有仓库 `master`。云端接续任务未作为生产发布依据，本轮由本地主线完成集成、部署和验收。
+- **游戏页八按钮**：默认顺序为好友、最近对手、排行、背包、任务、成就、活动、设置；设置支持拖动/移动端上移下移、恢复默认和本地持久化，并保留正式账号的服务端布局偏好接口。好友中心内承载亲密关系/好感度摘要，活动中心承载每日签到金币。
+- **经济与充值边界**：新增金币签到与独立钻石目录/钱包/订单接口。生产 `/api/economy/catalog` 返回 `paymentMode=disabled`、`canCreateOrder=false`、`canCredit=false`；充值入口只做沙盒/关闭状态展示，不接真实支付、不扣款、不伪造到账。
+- **好友搜索与性能**：精确账号名搜索拒绝超长输入，前端增加 320ms 防抖、AbortController、过期响应隔离、15 秒短缓存和重复申请保护；社交模块停止时清理计时器、请求、WebSocket 状态和 DOM 监听器。
+- **生产部署**：D1 备份保存于仓库外 `C:\Users\ZhuanZ1\Documents\GomokuBackups\gomoku-db-2026-09-12T03-56-45-676Z.sql`；已部署 `gomoku-backend` Worker（版本 ID `33f13a81-90db-4cff-9c10-7262afbfe146`）、`gomoku-api` Pages（预览 `https://d5a009cb.gomoku-api.pages.dev`）和官网 Pages（预览 `https://4c8478e5.gomoku-home.pages.dev`，稳定域名 `https://gomoku-home.pages.dev`）。VPS 不参与联机或部署。
+- **线上验收**：生产 `https://gomoku-api.pages.dev/api/version` 返回 `tag=v1.0.123`；官网 `https://gomoku-home.pages.dev/api/site-version` 返回 `tag=v1.0.123、build=124`；生产经济目录 HTTP 200 且支付关闭。短时票据 APK/HTML 下载均 HTTP 200，固定 Release 资产名为 `gomoku.apk` 与 `gomoku.html`，更新链路已恢复。Worker 直接域名的 `/api/version` 在未配置 GitHub 读取密钥时返回 503，客户端主出口仍使用 Pages，不输出或补录任何密钥。
+- **GitHub Release**：<https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.123>，正式版、非草稿，包含 `gomoku.apk` 与 `gomoku.html`。
+- **产物**：APK 1,760,382 bytes，SHA-256 `40C7FD356254D9FD29D71BAACAADEAE8661FDF975F795C8DF8A915761E4ED83F`；根页面 175,269 bytes，SHA-256 `FFD49142AD9445B82271B2FDF71805D10444297CF181FE6502C4FB0A48BF3892`；Android 内嵌页面 222,956 bytes，SHA-256 `E4FFCDC3E0DA192792C84AE718C1B556ACFE8D45F9EF23E92C3450018969A3BD`；单文件版 1,127,570 bytes，SHA-256 `3930CE36851011DEEDA2F829D957BFFE3D1D50DCDC808C4FE2C806C312F30152`。APK v1/v2/v3 签名通过，单签名者数量为 1，原签名证书 SHA-256 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **回归**：`node tests/social_worker_unit.js`、`python tests/game_social_dock_smoke.py`、`python tests/social_frontend_smoke.py`、`python tests/game_social_variants_smoke.py`、`python tests/official_site_smoke.py`、Worker/页面脚本语法检查、APK 签名校验和 `git diff --check` 通过；`pages_build/_worker.js` 与 `backend/worker.js` SHA-256 一致。
+- **后续约束**：真实充值仍需后续接入合规支付服务和服务端回调后才能打开；在此之前不得把沙盒订单当成到账。修改 Worker/D1/Pages 前继续先备份 D1，再显式部署；普通客户端发版不重复部署 Cloudflare。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
 ---
 *交接文档最后更新时间：2026年9月12日*
-*当前工程正式版本仍为 v1.0.121 (Build 122，界面显示 v1.2.1)；v1.0.122 (Build 123，界面显示 v1.2.2) 为本地候选，包含“五十四”的游戏页八宫格、签到金币和好友亲密关系改动，尚未部署或创建 Release，VPS 不参与联机。*
+*当前工程正式版本为 v1.0.123 (Build 124，界面显示 v1.2.3)；已完成 D1 备份、Worker/Pages/官网部署和私有 GitHub Release。真实充值仍关闭，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
