@@ -135,6 +135,7 @@
       // 底部活动区先提供入口；签到/亲密关系仅在用户点击后访问云端，避免拖慢首屏。
       const GAME_ECONOMY_LOCAL_KEY = 'gomoku_economy_preview_v1';
       const GAME_DOCK_ORDER_KEY = 'gomoku_game_dock_order_v1';
+      const GAME_DOCK_COLLAPSED_KEY = 'gomoku_game_dock_collapsed_v1';
       const GAME_DOCK_DEFAULT_ORDER = Object.freeze([
         'btnGameFriends', 'btnGameRecent', 'btnGameRank', 'btnGameBag',
         'btnGameTasks', 'btnGameAchievements', 'btnGameActivity', 'btnGameSettings'
@@ -151,6 +152,49 @@
       });
       let gameEconomyState = { coins: 0, diamonds: 0, checkedIn: false, streak: 0, totalDays: 0, affinity: [], day: '' };
       let gameDockDragId = '';
+
+      function readGameDockCollapsed() {
+        try {
+          const value = localStorage.getItem(GAME_DOCK_COLLAPSED_KEY);
+          return value === '1' || value === 'true';
+        } catch (_) {
+          return false;
+        }
+      }
+      function applyGameDockCollapsed(collapsed) {
+        const next = Boolean(collapsed);
+        const activeElement = document.activeElement;
+        const dock = document.getElementById('gameSocialDock');
+        const fab = document.getElementById('gameSocialDockFab');
+        const toggle = document.getElementById('btnGameDockToggle');
+        try { localStorage.setItem(GAME_DOCK_COLLAPSED_KEY, next ? '1' : '0'); } catch (_) {}
+        if (dock) {
+          dock.classList.toggle('is-collapsed', next);
+          dock.dataset.collapsed = String(next);
+          dock.setAttribute('aria-hidden', String(next));
+        }
+        if (fab) {
+          fab.classList.toggle('is-visible', next);
+          fab.setAttribute('aria-hidden', String(!next));
+          fab.setAttribute('aria-expanded', String(!next));
+          fab.tabIndex = next ? 0 : -1;
+        }
+        if (toggle) {
+          toggle.setAttribute('aria-expanded', String(!next));
+          toggle.setAttribute('aria-label', next ? '展开八个游戏功能按钮' : '收起八个游戏功能按钮');
+          toggle.textContent = next ? '⌃' : '⌄';
+        }
+        // 收起会把 dock 从布局中移除，避免焦点落在不可见控件上；展开后把焦点还给原来的小按钮。
+        if (next && fab && dock && (activeElement === toggle || dock.contains(activeElement))) {
+          fab.focus({ preventScroll: true });
+        } else if (!next && toggle && activeElement === fab) {
+          toggle.focus({ preventScroll: true });
+        }
+        return next;
+      }
+      window.getGameDockCollapsed = readGameDockCollapsed;
+      window.setGameDockCollapsed = applyGameDockCollapsed;
+      window.toggleGameDockCollapsed = () => applyGameDockCollapsed(!readGameDockCollapsed());
 
       function normalizeGameDockOrder(value) {
         const source = Array.isArray(value) ? value : [];
@@ -263,7 +307,9 @@
           checkin.setAttribute('aria-label', gameEconomyState.checkedIn ? '今日已签到' : '每日签到，领取金币');
         }
         const friendsButton = document.getElementById('btnGameFriends');
-        if (friendsButton) friendsButton.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
+        const friendsLabel = document.getElementById('gameFriendsButtonLabel');
+        if (friendsLabel) friendsLabel.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
+        else if (friendsButton) friendsButton.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
         if (status) status.textContent = gameEconomyRegistered() ? (gameEconomyState.checkedIn ? `今日已签到 · 连续 ${Number(gameEconomyState.streak) || 1} 天 · 钻石仅可充值获得` : '今日签到可领 10 金币 · 钻石仅可充值获得') : '登录正式账号后可云端保存金币与亲密度';
         const activityCoins = document.getElementById('gameActivityCoins');
         const activityDiamonds = document.getElementById('gameActivityDiamonds');
@@ -407,7 +453,10 @@
         if (typeof window.openThemeModal === 'function') return window.openThemeModal();
         return window.openGameFeaturePlaceholder('设置');
       };
-      document.addEventListener('DOMContentLoaded', () => applyGameDockOrder(readGameDockOrder()), { once: true });
+      document.addEventListener('DOMContentLoaded', () => {
+        applyGameDockOrder(readGameDockOrder());
+        applyGameDockCollapsed(readGameDockCollapsed());
+      }, { once: true });
       window.openCrossChess = function() {
         return ensure('cross').then(() => window.GomokuCross.open()).catch(error => {
           if (typeof window.showGameNotice === 'function') window.showGameNotice('十字棋实验模块加载失败，请刷新后重试', true);
@@ -1966,6 +2015,85 @@
       flex-shrink: 0;
       touch-action: manipulation;
     }
+    .game-social-dock.is-collapsed { display: none; }
+    .game-social-dock-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-height: 18px;
+      padding: 0 2px;
+    }
+    .game-social-dock-title {
+      color: #64748b;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: .04em;
+      line-height: 1.1;
+    }
+    .game-social-dock-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 20px;
+      padding: 0;
+      border: 1px solid rgba(90, 56, 24, .22);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, .86);
+      color: #64748b;
+      font-size: 14px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .game-social-dock-toggle:hover { background: #fff; color: #334155; }
+    .game-social-dock-toggle:focus-visible {
+      outline: 2px solid rgba(14, 165, 233, .55);
+      outline-offset: 1px;
+    }
+    .game-social-dock-fab {
+      position: fixed;
+      right: max(8px, calc(50% - 260px));
+      /* 底部操作区可能因十字棋/退出房间出现第二行，入口固定在其上方留出安全间距。 */
+      bottom: calc(116px + env(safe-area-inset-bottom, 0px));
+      z-index: 40;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      min-width: 34px;
+      min-height: 34px;
+      padding: 0;
+      border: 1.5px solid rgba(90, 56, 24, .28);
+      border-radius: 50%;
+      background: rgba(255, 253, 245, .94);
+      box-shadow: 0 3px 12px rgba(90, 56, 24, .2);
+      color: #475569;
+      font-size: 17px;
+      font-weight: 900;
+      line-height: 1.1;
+      cursor: pointer;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(6px) scale(.94);
+      transition: opacity .18s ease, transform .18s ease, background .15s ease;
+      touch-action: manipulation;
+    }
+    .game-social-dock-fab.is-visible {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+    .game-social-dock-fab:hover { background: #fff; }
+    .game-social-dock-fab:focus-visible {
+      outline: 3px solid rgba(14, 165, 233, .5);
+      outline-offset: 2px;
+    }
     .game-social-dock-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1994,6 +2122,30 @@
       outline: 3px solid rgba(14, 165, 233, .42);
       outline-offset: 1px;
     }
+    .game-social-unread-badge {
+      position: absolute;
+      top: -6px;
+      right: -5px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border: 2px solid #fffdf5;
+      border-radius: 999px;
+      background: #ef4444;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 900;
+      line-height: 1;
+      white-space: nowrap;
+      box-shadow: 0 1px 4px rgba(127, 29, 29, .35);
+      pointer-events: none;
+      z-index: 2;
+    }
+    #btnGameFriends { position: relative; overflow: visible; background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
+    .game-social-dock-fab .game-social-unread-badge { top: -7px; right: -7px; border-color: #fffdf5; }
     #btnGameFriends { background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
     #btnGameActivity { background: linear-gradient(135deg, #fff7ed, #ffedd5); border-color: #fdba74; color: #c2410c; }
     #btnGameSettings { background: linear-gradient(135deg, #f1f5f9, #e2e8f0); border-color: #cbd5e1; color: #475569; }
@@ -3387,9 +3539,13 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" data-collapsed="false" aria-label="社交、签到与活动入口">
+    <div class="game-social-dock-head">
+      <span class="game-social-dock-title">游戏功能</span>
+      <button type="button" class="game-social-dock-toggle" id="btnGameDockToggle" onclick="toggleGameDockCollapsed()" aria-controls="gameSocialDock" aria-expanded="true" aria-label="收起八个游戏功能按钮">⌄</button>
+    </div>
     <div class="game-social-dock-grid" id="gameSocialDockGrid" role="list" aria-label="游戏功能八宫格">
-      <button type="button" id="btnGameFriends" role="listitem" onclick="openGameAffinity()" aria-label="打开好友、私聊与亲密关系">👥 好友</button>
+      <button type="button" id="btnGameFriends" role="listitem" onclick="openGameAffinity()" aria-label="打开好友、私聊与亲密关系"><span id="gameFriendsButtonLabel">👥 好友</span><span id="gameFriendsUnreadBadge" class="game-social-unread-badge" aria-hidden="true">0</span></button>
       <button type="button" id="btnGameRecent" role="listitem" onclick="openGameFeaturePlaceholder('最近对手')">🧑‍🤝‍🧑 最近</button>
       <button type="button" id="btnGameRank" role="listitem" onclick="openLeaderboardModal()">🏆 排行</button>
       <button type="button" id="btnGameBag" role="listitem" onclick="openGameFeaturePlaceholder('背包')">🎒 背包</button>
@@ -3400,6 +3556,7 @@
     </div>
     <div class="game-social-dock-status"><span><strong id="gameCoinBalance">🪙 0 金币</strong><strong id="gameDiamondBalance" style="margin-left:6px; color:#7c3aed;">💎 0 钻石</strong></span><span id="gameEconomyStatus">登录正式账号后可云端保存金币与亲密度</span></div>
   </section>
+  <button type="button" class="game-social-dock-fab" id="gameSocialDockFab" onclick="setGameDockCollapsed(false)" aria-controls="gameSocialDock" aria-expanded="false" aria-label="展开八个游戏功能按钮" title="展开八个游戏功能按钮" aria-hidden="true" tabindex="-1"><span aria-hidden="true">⌃</span><span id="gameDockUnreadBadge" class="game-social-unread-badge" aria-hidden="true">0</span></button>
 
   <!-- 🎁 活动中心：签到与付费钻石入口。当前仅展示沙盒入口，绝不触发真实扣款。 -->
   <div class="online-modal-backdrop" id="gameActivityModal" aria-hidden="true" onclick="if(event.target===this)closeGameActivity()">
