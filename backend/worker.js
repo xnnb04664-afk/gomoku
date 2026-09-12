@@ -956,11 +956,14 @@ export default {
             uid TEXT NOT NULL,
             checkin_day TEXT NOT NULL,
             reward INTEGER NOT NULL DEFAULT 0,
+            claim_nonce TEXT NOT NULL DEFAULT '',
             created_at INTEGER NOT NULL,
             PRIMARY KEY (uid, checkin_day)
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_daily_checkin_claims_day ON daily_checkin_claims(checkin_day)`).run();
+        // 领取请求使用随机 nonce 作为本次批处理的写入闸门；兼容旧表时默认空串不会放行新请求。
+        try { await env.DB.prepare(`ALTER TABLE daily_checkin_claims ADD COLUMN claim_nonce TEXT NOT NULL DEFAULT ''`).run(); } catch (_) {}
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS social_affinity (
             pair_key TEXT PRIMARY KEY,
@@ -1551,17 +1554,18 @@ export default {
       if (!consumeSocialRequestRate(uid, 'economy-checkin', 5, 24 * 60 * 60 * 1000, 20)) return json({ code: 429, msg: '签到请求过于频繁' }, 429);
       const now = Date.now();
       const day = beijingDay(now);
+      const claimNonce = generateSecureHex(16);
       const previousDay = previousBeijingDay(day);
       const current = await env.DB.prepare('SELECT checkin_day, streak, total_days FROM daily_checkins WHERE uid = ?').bind(uid).first();
       const previousStreak = current && String(current.checkin_day || '') === previousDay ? Math.max(0, Number(current.streak) || 0) : 0;
       const streak = Math.min(CHECKIN_STREAK_CAP, previousStreak + 1);
       const reward = CHECKIN_BASE_COINS + Math.min(CHECKIN_STREAK_CAP - 1, Math.max(0, streak - 1)) * CHECKIN_STREAK_BONUS;
       const results = await env.DB.batch([
-        env.DB.prepare('INSERT OR IGNORE INTO daily_checkin_claims (uid, checkin_day, reward, created_at) VALUES (?, ?, ?, ?)').bind(uid, day, reward, now),
-        env.DB.prepare('INSERT OR IGNORE INTO user_wallets (uid, coins, updated_at) SELECT ?, 0, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(uid, now, uid, day, now),
-        env.DB.prepare('UPDATE user_wallets SET coins = coins + ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(reward, now, uid, uid, day, now),
-        env.DB.prepare('INSERT OR IGNORE INTO daily_checkins (uid, checkin_day, streak, total_days, last_reward, updated_at) SELECT ?, ?, ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(uid, day, streak, reward, now, uid, day, now),
-        env.DB.prepare('UPDATE daily_checkins SET checkin_day = ?, streak = ?, total_days = total_days + 1, last_reward = ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND created_at = ?)').bind(day, streak, reward, now, uid, uid, day, now)
+        env.DB.prepare('INSERT OR IGNORE INTO daily_checkin_claims (uid, checkin_day, reward, claim_nonce, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid, day, reward, claimNonce, now),
+        env.DB.prepare('INSERT OR IGNORE INTO user_wallets (uid, coins, updated_at) SELECT ?, 0, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND claim_nonce = ?)').bind(uid, now, uid, day, claimNonce),
+        env.DB.prepare('UPDATE user_wallets SET coins = coins + ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND claim_nonce = ?)').bind(reward, now, uid, uid, day, claimNonce),
+        env.DB.prepare('INSERT OR IGNORE INTO daily_checkins (uid, checkin_day, streak, total_days, last_reward, updated_at) SELECT ?, ?, ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND claim_nonce = ?)').bind(uid, day, streak, reward, now, uid, day, claimNonce),
+        env.DB.prepare('UPDATE daily_checkins SET checkin_day = ?, streak = ?, total_days = total_days + 1, last_reward = ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND claim_nonce = ?)').bind(day, streak, reward, now, uid, uid, day, claimNonce)
       ]);
       const claimed = Number(results?.[0]?.meta?.changes) > 0;
       const data = await readEconomySummary(uid);

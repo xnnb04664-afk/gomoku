@@ -94,7 +94,12 @@
       window.ensureGomokuResource = ensure;
       window.ensureGomokuFeature = ensure;
       window.openFriendsModal = function() {
-        return ensure('social').then(() => window.GomokuSocial.open());
+        return ensure('social').then(async () => {
+          const opened = await window.GomokuSocial.open();
+          // 任何好友中心入口都同步云端好感度摘要，避免仅从游戏八宫格进入时才显示。
+          if (typeof refreshGameEconomy === 'function') await refreshGameEconomy({ quiet: true });
+          return opened;
+        });
       };
       // 官网使用 /play/#friends 作为好友中心深链接。社交模块是延迟加载的，
       // 因此等核心脚本完成后再打开；游客会自然进入登录引导。
@@ -160,7 +165,15 @@
         if (friendsButton) friendsButton.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
         if (status) status.textContent = gameEconomyRegistered() ? (gameEconomyState.checkedIn ? `今日已签到 · 连续 ${Number(gameEconomyState.streak) || 1} 天` : '今日签到可领 10 金币') : '登录正式账号后可云端保存金币与亲密度';
       }
-      function saveGameEconomyPreview() {
+            function renderGameAffinityPanel() {
+        const panel = document.getElementById('socialAffinitySummary');
+        if (!panel) return;
+        const affinity = Array.isArray(gameEconomyState.affinity) ? gameEconomyState.affinity : [];
+        panel.innerHTML = affinity.length
+          ? `<div style="display:flex;flex-direction:column;gap:5px;">${affinity.slice(0, 8).map(item => `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;border:1px solid #fbcfe8;border-radius:9px;background:#fff7fb;font-size:11px;font-weight:800;color:#475569;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">💞 ${gameEconomyDisplayName(item)}</span><span style="color:#db2777;white-space:nowrap;">Lv.${Number(item.level) || 1} · ${Number(item.points) || 0}</span></div>`).join('')}</div>`
+          : '<div style="padding:8px;color:#94a3b8;font-size:11px;font-weight:800;">先添加好友并聊几句，好感度会从 0 点慢慢累积。</div>';
+      }
+function saveGameEconomyPreview() {
         try {
           const uid = typeof currentUserUid !== 'undefined' ? String(currentUserUid || 'guest') : 'guest';
           localStorage.setItem(`${GAME_ECONOMY_LOCAL_KEY}_${uid}`, JSON.stringify(gameEconomyState));
@@ -173,6 +186,7 @@
           if (value && typeof value === 'object') gameEconomyState = { ...gameEconomyState, ...value };
         } catch (_) {}
         renderGameEconomyDock();
+        renderGameAffinityPanel();
       }
       async function refreshGameEconomy({ quiet = true } = {}) {
         loadGameEconomyPreview();
@@ -184,6 +198,7 @@
           gameEconomyState = { ...gameEconomyState, ...payload.data };
           saveGameEconomyPreview();
           renderGameEconomyDock();
+          renderGameAffinityPanel();
           return gameEconomyState;
         } catch (error) {
           if (!quiet) gameEconomyNotice(error?.message || '金币数据同步失败，请稍后重试', true);
@@ -211,6 +226,7 @@
           gameEconomyState = { ...gameEconomyState, ...payload.data };
           saveGameEconomyPreview();
           renderGameEconomyDock();
+          renderGameAffinityPanel();
           gameEconomyNotice(payload.data.alreadyCheckedIn ? '✅ 今天已经签到过啦' : `🎉 签到成功，获得 ${Number(payload.data.reward) || 0} 金币！`, false);
           return true;
         } catch (error) {
@@ -228,13 +244,7 @@
         }
         const opened = typeof window.openFriendsModal === 'function' ? await window.openFriendsModal() : false;
         await refreshGameEconomy({ quiet: false });
-        const panel = document.getElementById('socialAffinitySummary');
-        if (panel) {
-          const affinity = Array.isArray(gameEconomyState.affinity) ? gameEconomyState.affinity : [];
-          panel.innerHTML = affinity.length
-            ? `<div style="display:flex;flex-direction:column;gap:5px;">${affinity.slice(0, 8).map(item => `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;border:1px solid #fbcfe8;border-radius:9px;background:#fff7fb;font-size:11px;font-weight:800;color:#475569;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">💞 ${gameEconomyDisplayName(item)}</span><span style="color:#db2777;white-space:nowrap;">Lv.${Number(item.level) || 1} · ${Number(item.points) || 0}</span></div>`).join('')}</div>`
-            : '<div style="padding:8px;color:#94a3b8;font-size:11px;font-weight:800;">先添加好友并聊几句，好感度会从 0 点慢慢累积。</div>';
-        }
+                renderGameAffinityPanel();
         return opened;
       };
       window.refreshGameEconomy = refreshGameEconomy;

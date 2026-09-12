@@ -1269,6 +1269,15 @@ node publish.js
 - **本地回归**：`tests/game_social_dock_smoke.py`、`node tests/social_worker_unit.js`、Worker/页面脚本语法检查、`git diff --check` 已通过；官方站静态版本文字已同步到 v1.2.2 / Build 123。
 - **发布边界**：当前仅为本地候选，尚未备份/部署 D1、Worker 或官网 Pages，尚未创建 GitHub Release；云端接续任务必须先读取本节并在生产部署前按既有流程备份 D1。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
 
+
+## 五十五、八宫格云端出口与好友中心摘要修复（2026-09-12，代码已提交，云端待验收）
+
+- **发现并修复**：基于 `7d4a837` 的 `pages_build/_worker.js` 是候选经济改动前的 Worker 副本，缺少 `/api/economy/summary`、`/api/economy/checkin`、四张 D1 表初始化以及私聊好感度写入。已将其同步到 `backend/worker.js` 的候选实现；未部署 Cloudflare、未执行 D1 迁移。
+- **签到幂等加固**：每日领取记录增加服务端随机 `claim_nonce` 写入闸门；即使并发请求落在同一毫秒，也只有成功插入领取记录的请求能够更新钱包和连续签到，不接受客户端提交日期、奖励或好感度数值。
+- **好友中心入口统一**：根网页、Android 内嵌页和单文件版的所有好友中心入口现在都会在社交层打开后刷新云端好感度摘要；游客仍只进入正式账号登录引导。
+- **验收覆盖**：新增 `tests/game_social_variants_smoke.py`，锁定三种客户端的八按钮顺序（好友、最近对手、排行、背包、任务、成就、活动签到、设置）、好感度摘要、经济接口、版本文字和 backend/Pages Worker 一致性。
+- **本地测试记录**：此前已运行 `node tests/worker_unit.js` 与 `node tests/social_worker_unit.js`，均通过；本轮因执行环境断开，Playwright 页面冒烟和新增静态测试尚未执行，不能视为云端验收通过。
+- **发布边界**：本次仅提交源码、测试和交接文档；没有备份或修改生产 D1，没有部署 Worker/Pages，没有创建 GitHub Release，也没有发布 APK。下一步须在可用环境运行完整回归，并在任何生产部署前按既有流程备份 D1。
 ---
 *交接文档最后更新时间：2026年9月12日*
 *当前工程正式版本仍为 v1.0.121 (Build 122，界面显示 v1.2.1)；v1.0.122 (Build 123，界面显示 v1.2.2) 为本地候选，包含“五十四”的游戏页八宫格、签到金币和好友亲密关系改动，尚未部署或创建 Release，VPS 不参与联机。*
