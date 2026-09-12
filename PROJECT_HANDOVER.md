@@ -1282,6 +1282,14 @@ node publish.js
 - **回归**：`node tests/social_worker_unit.js`、`python tests/game_social_dock_smoke.py`、`python tests/social_frontend_smoke.py`、`python tests/game_social_variants_smoke.py`、`python tests/official_site_smoke.py`、Worker/页面脚本语法检查、APK 签名校验和 `git diff --check` 通过；`pages_build/_worker.js` 与 `backend/worker.js` SHA-256 一致。
 - **后续约束**：真实充值仍需后续接入合规支付服务和服务端回调后才能打开；在此之前不得把沙盒订单当成到账。修改 Worker/D1/Pages 前继续先备份 D1，再显式部署；普通客户端发版不重复部署 Cloudflare。不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
 
+## 五十六、官网内容与游戏功能对齐（2026-09-12，已部署官网）
+
+- **对齐范围**：官网首页、帮助页、好友中心和隐私页已按当前游戏实际能力更新；首页新增与游戏完全同名的八宫格预览（好友、最近、排行、背包、任务、成就、活动、设置），并明确签到 `+10 金币`、钻石充值入口当前关闭/沙盒展示、不扣款不伪造到账。
+- **功能说明**：官网补充好友亲密度/好感度、完整账号名精确搜索、在线状态与黑名单边界；帮助页补充游客可浏览公开榜单但正式账号才能参与排行榜、房间语音和十字棋实验模式；隐私页披露金币/签到、钻石订单账本、亲密度和八按钮布局偏好等云端数据范围。
+- **版本回退**：官网首页所有静态 Build 回退值已从 122 改为 124；`site.js` 版本折叠注释同步到 `v1.0.123 -> v1.2.3`。API 动态版本仍以 `https://gomoku-home.pages.dev/api/site-version` 为准。
+- **部署与验收**：官网最新生产部署预览为 `https://f83efb29.gomoku-home.pages.dev`，稳定域名 `https://gomoku-home.pages.dev` 已返回 `/api/site-version = v1.0.123 / Build 124`；首页静态回退包含 8 个八宫格卡片，帮助/好友/隐私页均返回 HTTP 200。`python tests/official_site_smoke.py`、320px 窄屏检查、`node --check official-site/site.js` 和 `git diff --check` 通过。
+- **边界**：官网只是当前游戏的说明和入口，不虚构已开放的支付功能；真实充值仍关闭。官网 API 仍通过 `gomoku-api.pages.dev`，独立 Worker 版本接口未配置 GitHub 读取密钥时的 503 不影响 Pages 主出口。
+
 ---
 *交接文档最后更新时间：2026年9月12日*
 *当前工程正式版本为 v1.0.123 (Build 124，界面显示 v1.2.3)；已完成 D1 备份、Worker/Pages/官网部署和私有 GitHub Release。真实充值仍关闭，VPS 不参与联机。*
