@@ -3150,6 +3150,84 @@
       }
     }
   </style>
+<style id="skyIslandEnhancementsStyle">
+
+    /* 天空棋岛视觉增强：棋盘外余韵、星轨摘要和轻量浮岛选中态 */
+    .island-wrapper.sky-victory-afterglow::before {
+      content: "";
+      position: absolute;
+      inset: -10px;
+      border-radius: 24px;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0;
+      background: conic-gradient(from 210deg, rgba(250,204,21,0), rgba(250,204,21,.52), rgba(253,224,71,.18), rgba(250,204,21,0));
+      box-shadow: 0 0 18px rgba(245,158,11,.46), 0 0 42px rgba(250,204,21,.2);
+      filter: blur(4px);
+      animation: skyVictoryAfterglow .98s ease-out both;
+    }
+    .island-wrapper.sky-victory-afterglow canvas { position: relative; z-index: 1; }
+    @keyframes skyVictoryAfterglow {
+      0% { opacity: 0; transform: scale(.97) rotate(-1deg); }
+      28% { opacity: .58; transform: scale(1.005) rotate(0deg); }
+      100% { opacity: 0; transform: scale(1.02) rotate(1deg); }
+    }
+    body.low-spec-mode .island-wrapper.sky-victory-afterglow::before {
+      animation: none;
+      opacity: .24;
+      filter: none;
+      box-shadow: 0 0 14px rgba(245,158,11,.25);
+    }
+    .sky-replay-insights {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 8px;
+      padding: 7px 8px;
+      border: 1px solid rgba(250,204,21,.42);
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(255,251,235,.96), rgba(254,249,195,.72));
+      color: #713f12;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.35;
+      text-align: left;
+    }
+    .sky-replay-insights-title {
+      color: #92400e;
+      font-size: 10.5px;
+      font-weight: 900;
+      letter-spacing: .03em;
+      margin-bottom: 4px;
+    }
+    .sky-replay-insights-row {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      min-width: 0;
+    }
+    .sky-replay-insights-row strong { min-width: 48px; color: #b45309; }
+    .game-social-dock-grid button.sky-island-selected {
+      transform: translateY(-1px);
+      box-shadow: 0 3px 0 rgba(14,116,144,.16), 0 0 0 2px rgba(250,204,21,.5);
+      filter: saturate(1.06);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .island-wrapper.sky-victory-afterglow::before {
+        animation: none;
+        opacity: .3;
+        filter: none;
+      }
+      .game-social-dock-grid button.sky-island-selected {
+        transform: none;
+        transition: none;
+      }
+    }
+    @media (max-width: 600px) {
+      .island-wrapper.sky-victory-afterglow::before { inset: -6px; border-radius: 18px; }
+      .sky-replay-insights { font-size: 9.5px; padding: 6px 7px; }
+    }
+
+</style>
 </head>
 <body>
 
@@ -4231,5 +4309,152 @@
   </div>
 
   <script defer src="js/app.min.js"></script>
+<script id="skyIslandEnhancements">
+(() => {
+  'use strict';
+  // 仅作为未来 UI 实验开关，默认关闭；不调用、不声明任何后端能力。
+  window.SKY_ISLAND_FEATURE_FLAGS = Object.freeze({
+    doubleStarEndgame: false,
+    weatherSeason: false
+  });
+
+  const byId = id => document.getElementById(id);
+  const textOf = node => node ? String(node.textContent || '').trim() : '';
+  const reducedMotion = () => {
+    try { return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+    catch (_) { return false; }
+  };
+  const lowSpec = () => Boolean(document.body && document.body.classList.contains('low-spec-mode'));
+
+  function playVictoryAfterglow() {
+    const wrapper = byId('islandWrapper');
+    if (!wrapper) return;
+    wrapper.classList.remove('sky-victory-afterglow');
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => wrapper.classList.add('sky-victory-afterglow'));
+    window.setTimeout(() => wrapper.classList.remove('sky-victory-afterglow'), reducedMotion() || lowSpec() ? 300 : 1050);
+  }
+
+  function replayMoves() {
+    try {
+      if (typeof replayAllMoves !== 'undefined' && Array.isArray(replayAllMoves)) {
+        return replayAllMoves.filter(move => move && Number.isFinite(Number(move.r)) && Number.isFinite(Number(move.c)) && !move.action);
+      }
+    } catch (_) {}
+    try {
+      if (Array.isArray(window.replayAllMoves)) return window.replayAllMoves.filter(move => move && !move.action);
+    } catch (_) {}
+    return [];
+  }
+
+  function replayCount() {
+    const moves = replayMoves();
+    const label = textOf(byId('replayStepLabel'));
+    const match = label.match(/(\d+)\s*\/\s*(\d+)/);
+    return Math.max(moves.length, match ? Number(match[2]) : 0);
+  }
+
+  function isWinningResult() {
+    const icon = textOf(byId('resultModalIcon'));
+    const title = textOf(byId('resultModalTitle'));
+    const badge = textOf(byId('replayBadgeLabel'));
+    return icon.includes('👑') || title.includes('获胜') || badge.includes('胜利');
+  }
+
+  function renderInsights(host, mode) {
+    if (!host) return;
+    let panel = host.querySelector('.sky-replay-insights');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'sky-replay-insights';
+      panel.setAttribute('role', 'status');
+      panel.setAttribute('aria-live', 'polite');
+      host.appendChild(panel);
+    }
+    const total = replayCount();
+    const moves = replayMoves();
+    const fallback = moves.length < 3;
+    const winning = isWinningResult();
+    const signature = [mode, total, fallback ? 1 : 0, winning ? 1 : 0].join('|');
+    if (panel.dataset.skySignature === signature) return;
+    panel.dataset.skySignature = signature;
+    const pivot = total > 0 ? Math.max(1, total - 2) : 0;
+    const mistake = total > 0 ? Math.max(1, total - 1) : 0;
+    const fallbackText = fallback ? '最近落子降级标记' : '候选标记（非引擎判定）';
+    const winningText = winning && total > 0 ? '第 ' + total + ' 手 · 终局标记' : '本局无胜者 · 结果标记';
+    panel.innerHTML =
+      '<div class="sky-replay-insights-title">✦ 星轨复盘 · ' + (fallback ? '安全降级' : '候选分析') + '</div>' +
+      '<div class="sky-replay-insights-row"><strong>转折手</strong><span>' + (pivot ? '第 ' + pivot + ' 手 · ' + fallbackText : fallbackText) + '</span></div>' +
+      '<div class="sky-replay-insights-row"><strong>失误手</strong><span>' + (mistake ? '第 ' + mistake + ' 手 · ' + fallbackText : fallbackText) + '</span></div>' +
+      '<div class="sky-replay-insights-row"><strong>制胜手</strong><span>' + winningText + '</span></div>';
+  }
+
+  function syncSelectedButton() {
+    const grid = byId('gameSocialDockGrid');
+    if (!grid || grid.dataset.skyBound === '1') return;
+    grid.dataset.skyBound = '1';
+    const buttons = () => [...grid.querySelectorAll('button[id^="btnGame"]')];
+    const mark = button => {
+      buttons().forEach(item => {
+        const selected = item === button;
+        item.classList.toggle('sky-island-selected', selected);
+        if (selected) item.setAttribute('aria-current', 'true');
+        else item.removeAttribute('aria-current');
+      });
+    };
+    const initial = buttons()[0];
+    if (initial) mark(initial);
+    grid.addEventListener('click', event => {
+      const button = event.target.closest('button[id^="btnGame"]');
+      if (button) mark(button);
+    });
+  }
+
+  function refresh() {
+    syncSelectedButton();
+    const result = byId('gameResultModal');
+    if (result && result.classList.contains('show')) {
+      const winning = isWinningResult();
+      if (winning && result.dataset.skyGlowSeen !== '1') {
+        result.dataset.skyGlowSeen = '1';
+        playVictoryAfterglow();
+      }
+      renderInsights(result.querySelector('.custom-confirm-card') || result, 'result');
+    } else if (result) {
+      result.dataset.skyGlowSeen = '0';
+    }
+    const replay = byId('replayControlDock');
+    if (replay && getComputedStyle(replay).display !== 'none') renderInsights(replay, 'replay');
+  }
+
+  function init() {
+    if (!document.body) return;
+    let scheduled = false;
+    const schedule = () => {
+      if (scheduled) return;
+      scheduled = true;
+      const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+      raf(() => { scheduled = false; refresh(); });
+    };
+    if (typeof MutationObserver === 'function') {
+      const observer = new MutationObserver(schedule);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['class', 'style', 'aria-expanded', 'aria-hidden']
+      });
+    }
+    document.addEventListener('click', event => {
+      if (event.target.closest('#gameSocialDockGrid button')) schedule();
+    }, true);
+    schedule();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+  else init();
+})();
+</script>
 </body>
 </html>
