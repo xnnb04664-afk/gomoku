@@ -1342,3 +1342,11 @@ node publish.js
 - 单文件内嵌提交：c91a60c；专项静态断言最终提交：8cb9f9c（先后修正格式兼容的正则）。
 - 当前远端 master 头：8cb9f9c0a20d9ea065b49e1e3f6879e005ce54ea。GitHub 提交状态接口返回暂无已配置 CI 状态；本轮未在本地执行命令，Playwright/真实设备几何回归仍列为发布前必跑项目。
 - 审查结论：MutationObserver 的结果显示边沿保护（last）和摘要计数短路可避免自触发循环；余韵仅在结果弹窗从隐藏变为显示时触发；reduced-motion 与 low-spec 均禁用/缩短动画；复盘字段明确为候选/结果降级标记。
+
+
+### 五十九、Figma 天空棋岛概念同步（2026-09-12）
+
+- 设计源稿：Figma「五子棋 · 天空棋岛」 https://www.figma.com/design/jHHA9snuhIbR0gTEQhSwvz
+- 从远端 master a78bcd4 同步现有根页面/Android WebView 的离线天空棋岛视觉增强到 `五子棋大师_单文件版.html`：内嵌 `skyIslandEnhancementsStyle` 与 `skyIslandEnhancements`，覆盖胜利余韵、星轨候选摘要、浮岛入口选中态、ARIA/红点以及 reduced-motion/low-spec 降级。
+- 单文件保持离线约束：本次只增加内联 CSS/脚本，不新增外部或延迟执行资源；三端仍共用关闭状态的 `SKY_ISLAND_FEATURE_FLAGS`，不改变正式玩法或后端能力。
+- 本次仅修改代码与交接文档，未部署 Cloudflare/D1/Pages、未创建 Release、未发布 APK；最终 master 提交哈希以本轮 GitHub 推送返回值为准。
