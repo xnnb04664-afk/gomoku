@@ -39,6 +39,14 @@ def main():
         assert "openGameCheckIn" in source and "openGameAffinity" in source, f"{path}: 签到/好友入口缺失"
         assert "gameRechargeStatus" in source and "gameFeatureOrderList" in source, f"{path}: 充值或排序设置缺失"
         assert internal in source and display in source, f"{path}: 版本文字未同步"
+        # Sky Island visual layer is embedded in every offline-capable variant.
+        for marker in ("skyIslandEnhancementsStyle", "skyIslandEnhancements", "sky-victory-afterglow", "sky-replay-insights", "SKY_ISLAND_FEATURE_FLAGS"):
+            assert marker in source, f"{path}: 天空棋岛增强缺失 {marker}"
+        assert "doubleStarEndgame:false" in source and "weatherSeason:false" in source, f"{path}: 未启用未来功能钩子"
+        assert "prefers-reduced-motion:reduce" in source, f"{path}: reduced-motion 降级缺失"
+        assert "low-spec-mode" in source, f"{path}: low-spec 降级缺失"
+        assert "候选标记" in source and "结果标记" in source, f"{path}: 复盘候选文案未声明降级"
+        assert 'aria-current' in source and 'gameDockUnreadBadge' in source, f"{path}: 浮岛 aria/红点缺失"
 
     backend = (ROOT / "backend" / "worker.js").read_text(encoding="utf-8")
     pages_worker = (ROOT / "pages_build" / "_worker.js").read_text(encoding="utf-8")
@@ -53,6 +61,12 @@ def main():
         assert marker in backend, f"好友私聊/正式账号守卫缺少 {marker}"
         assert marker in pages_worker, f"Pages Worker 缺少 {marker}"
 
+    # Offline private messages are inserted before affinity/notification work.
+    post = backend.index("/api/messages")
+    ins = backend.find("INSERT OR IGNORE INTO private_messages", post)
+    affinity = backend.find("social_affinity", ins)
+    notify = backend.find("notifySocialUser", affinity)
+    assert post >= 0 and ins > post and affinity > ins and notify > affinity
     print("game social variants smoke: PASS")
 
 
