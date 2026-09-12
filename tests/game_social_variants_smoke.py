@@ -42,8 +42,8 @@ def main():
         # Sky Island visual layer is embedded in every offline-capable variant.
         for marker in ("skyIslandEnhancementsStyle", "skyIslandEnhancements", "sky-victory-afterglow", "sky-replay-insights", "SKY_ISLAND_FEATURE_FLAGS"):
             assert marker in source, f"{path}: 天空棋岛增强缺失 {marker}"
-        assert "doubleStarEndgame:false" in source and "weatherSeason:false" in source, f"{path}: 未启用未来功能钩子"
-        assert "prefers-reduced-motion:reduce" in source, f"{path}: reduced-motion 降级缺失"
+        assert re.search(r"doubleStarEndgame\\s*:\\s*false", source) and re.search(r"weatherSeason\\s*:\\s*false", source), f"{path}: 未启用未来功能钩子"
+        assert re.search(r"prefers-reduced-motion\\s*:\\s*reduce", source), f"{path}: reduced-motion 降级缺失"
         assert "low-spec-mode" in source, f"{path}: low-spec 降级缺失"
         assert "候选标记" in source and "结果标记" in source, f"{path}: 复盘候选文案未声明降级"
         assert 'aria-current' in source and 'gameDockUnreadBadge' in source, f"{path}: 浮岛 aria/红点缺失"
