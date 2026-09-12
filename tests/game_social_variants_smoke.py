@@ -16,7 +16,11 @@ BUTTON_IDS = (
 
 
 def extract_button_ids(source):
-    return tuple(re.findall(r'<button[^>]*id="(btnGame[^"]+)"', source))
+    # 收放入口也使用 btnGame 前缀，但它不属于八宫格；只提取八个固定功能按钮。
+    return tuple(re.findall(
+        r'<button[^>]*id="(btnGame(?:Friends|Recent|Rank|Bag|Tasks|Achievements|Activity|Settings))"',
+        source,
+    ))
 
 
 def main():

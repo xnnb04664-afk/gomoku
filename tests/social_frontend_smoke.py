@@ -182,6 +182,12 @@ def main():
               send(value) {{ this.sent.push(String(value)); }}
               close() {{ this.readyState = 3; if (this.onclose) this.onclose({{}}); }}
               serverClose() {{ this.readyState = 3; if (this.onclose) this.onclose({{}}); }}
+              serverMessage(value) {{ if (this.onmessage) this.onmessage({{ data: String(value) }}); }}
+            }};
+            window.__nativeNotificationCalls = 0;
+            window.AndroidNativeApp = {{
+              requestSocialNotificationPermission() {{}},
+              showSocialNotification() {{ window.__nativeNotificationCalls += 1; }}
             }};
             """
         )
@@ -195,6 +201,31 @@ def main():
         page.evaluate("window.openFriendsModal()")
         page.wait_for_selector("#friendsModal.show")
         page.wait_for_selector("#socialFriendsList >> text=云端棋友")
+
+        # 未读总数要同时出现在弹窗入口、底部好友按钮和收起后的悬浮入口。
+        # 这里的 2 条私聊 + 2 条好友申请 + 1 条邀战来自同一份 /api/friends 快照。
+        for badge_id in ("socialUnreadBadge", "gameFriendsUnreadBadge", "gameDockUnreadBadge"):
+            page.wait_for_function(
+                "id => getComputedStyle(document.getElementById(id)).display !== 'none' && document.getElementById(id).textContent === '5'",
+                arg=badge_id,
+            )
+        assert "5 条好友动态" in (page.locator("#btnGameFriends").get_attribute("aria-label") or "")
+        assert page.locator("#gameFriendsUnreadBadge").get_attribute("aria-hidden") == "false"
+        assert "5 条好友动态" in (page.locator("#gameSocialDockFab").get_attribute("aria-label") or "")
+        page.wait_for_function("window.__nativeNotificationCalls === 1")
+
+        # WebSocket 收到新私聊时，红点保留并触发原生通知桥；消息正文不下发到通知。
+        page.wait_for_function("window.__mockSockets.length > 0 && window.__mockSockets.some(socket => socket.readyState === 1)")
+        page.evaluate("""
+          () => {
+            const socket = [...window.__mockSockets].reverse().find(item => item.readyState === 1);
+            socket.serverMessage(JSON.stringify({ type: 'social_event', event: {
+              kind: 'message', fromUid: 'user_friend_2', messageId: 777, body: '不应进入系统通知正文'
+            }}));
+          }
+        """)
+        page.wait_for_function("window.__nativeNotificationCalls === 2")
+        assert page.locator("#gameFriendsUnreadBadge").inner_text() == "5"
 
         # 输入变化只允许最后一次精确账号查找发出请求，避免移动端键入时刷接口。
         search_calls_before_debounce = len([call for call in calls if call["path"] == "/api/friends/search"])

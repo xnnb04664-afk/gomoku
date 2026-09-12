@@ -1,7 +1,12 @@
 package com.gomoku.master;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -16,6 +21,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.pm.PackageManager;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -197,7 +203,13 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> mFilePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
     private static final int CHAT_EXPORT_REQUEST_CODE = 1002;
+    private static final int SOCIAL_NOTIFICATION_PERMISSION_REQUEST_CODE = 1003;
+    private static final int SOCIAL_NOTIFICATION_ID = 4101;
+    private static final String SOCIAL_NOTIFICATION_CHANNEL_ID = "social_events";
+    private static final String SOCIAL_NOTIFICATION_OPEN_ACTION = "com.gomoku.master.OPEN_FRIENDS";
+    private static final String SOCIAL_NOTIFICATION_OPEN_EXTRA = "open_friends";
     private String mPendingChatExportContent;
+    private boolean mOpenFriendsAfterNotification;
     private ConnectivityManager mConnectivityManager;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
     private long mNetworkEventSequence = 0L;
@@ -237,6 +249,101 @@ public class MainActivity extends Activity {
         if (mSplashView != null) {
             mMainHandler.post(this::dismissNativeSplash);
         }
+        openFriendsAfterNotificationIfReady();
+    }
+
+    private void ensureSocialNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null || manager.getNotificationChannel(SOCIAL_NOTIFICATION_CHANNEL_ID) != null) return;
+        NotificationChannel channel = new NotificationChannel(
+                SOCIAL_NOTIFICATION_CHANNEL_ID,
+                "好友消息",
+                NotificationManager.IMPORTANCE_DEFAULT
+        );
+        channel.setDescription("五子棋好友申请、私聊和邀战提醒");
+        channel.setShowBadge(true);
+        manager.createNotificationChannel(channel);
+    }
+
+    private void requestSocialNotificationPermissionOnUiThread() {
+        ensureSocialNotificationChannel();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    SOCIAL_NOTIFICATION_PERMISSION_REQUEST_CODE
+            );
+        }
+    }
+
+    private boolean canShowSocialNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            return manager != null && manager.areNotificationsEnabled();
+        }
+        return true;
+    }
+
+    private void showSocialNotificationOnUiThread() {
+        ensureSocialNotificationChannel();
+        if (!canShowSocialNotification()) return;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+
+        Intent intent = new Intent(this, MainActivity.class)
+                .setAction(SOCIAL_NOTIFICATION_OPEN_ACTION)
+                .putExtra(SOCIAL_NOTIFICATION_OPEN_EXTRA, true)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            pendingIntentFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                this,
+                SOCIAL_NOTIFICATION_ID,
+                intent,
+                pendingIntentFlags
+        );
+
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, SOCIAL_NOTIFICATION_CHANNEL_ID)
+                : new Notification.Builder(this);
+        Notification notification = builder
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle("五子棋 · 好友消息")
+                .setContentText("你有新的好友动态，打开游戏查看")
+                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build();
+        try {
+            manager.notify(SOCIAL_NOTIFICATION_ID, notification);
+        } catch (SecurityException ignored) {
+            // Android 13 用户拒绝通知权限时，不能影响 WebView 游戏本身。
+        }
+    }
+
+    private void consumeSocialNotificationIntent(Intent intent) {
+        if (intent == null || !intent.getBooleanExtra(SOCIAL_NOTIFICATION_OPEN_EXTRA, false)) return;
+        mOpenFriendsAfterNotification = true;
+        intent.removeExtra(SOCIAL_NOTIFICATION_OPEN_EXTRA);
+    }
+
+    private void openFriendsAfterNotificationIfReady() {
+        if (!mOpenFriendsAfterNotification || mWebView == null) return;
+        mOpenFriendsAfterNotification = false;
+        mWebView.postDelayed(() -> mWebView.evaluateJavascript(
+                "if (typeof window.openFriendsModal === 'function') window.openFriendsModal();",
+                null
+        ), 180L);
     }
 
     private void registerNetworkMonitor() {
@@ -294,6 +401,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        consumeSocialNotificationIntent(getIntent());
 
         // 1. 无标题栏 + Window 硬件加速
         requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -374,6 +482,14 @@ public class MainActivity extends Activity {
             android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
             mWebView.loadUrl("file:///android_asset/index.html");
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        consumeSocialNotificationIntent(intent);
+        openFriendsAfterNotificationIfReady();
     }
 
     private void applyImmersiveSticky() {
@@ -760,6 +876,17 @@ public class MainActivity extends Activity {
                 try {
                     getSharedPreferences("app_user_login", MODE_PRIVATE).edit().clear().apply();
                 } catch (Exception ignored) {}
+            }
+
+            // 社交通知只由用户主动开启；通知内容不接收聊天正文、UID 或登录令牌。
+            @android.webkit.JavascriptInterface
+            public void requestSocialNotificationPermission() {
+                runOnUiThread(MainActivity.this::requestSocialNotificationPermissionOnUiThread);
+            }
+
+            @android.webkit.JavascriptInterface
+            public void showSocialNotification() {
+                runOnUiThread(MainActivity.this::showSocialNotificationOnUiThread);
             }
         }, "AndroidNativeApp");
 
