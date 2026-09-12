@@ -1322,3 +1322,16 @@ node publish.js
 - 当前 master 的 `tests/game_social_variants_smoke.py` 已存在；本轮用 GitHub 头部文件执行等价静态验收，三端八按钮顺序、版本和 Worker/Pages 一致性均通过。
 
 本轮未执行 Cloudflare/D1/Pages 部署、GitHub Release 创建或 APK 发布。发布前需在隔离测试环境补跑 Playwright（390px 与桌面视口）、Android WebView 真机/模拟器通知权限与点击回跳、签到按北京时间跨日及重复领取、好友私聊好感度幂等/封禁隐私、三端构建产物版本校验；获得明确授权前不得部署或发布。
+
+
+## 五十八、天空棋岛视觉增强与云端回归（2026-09-12）
+
+本轮从远端 master 的 e4818fc 继续，仅通过 GitHub 云端接口修改并推送私有仓库，未部署 Cloudflare/D1/Pages、未创建 Release、未发布 APK。
+
+- 根页面 `index.html`（9046228）与 Android WebView 资源 `android_src/assets/index.html`（e4818fc）包含天空棋岛样式/脚本：棋盘外克制金色胜利余韵、reduced-motion 与 `low-spec-mode` 降级、浮岛按钮选中态、结果/复盘星轨候选摘要，以及禁用的 `SKY_ISLAND_FEATURE_FLAGS`（`doubleStarEndgame`、`weatherSeason`）。
+- 完全离线的 `五子棋大师_单文件版.html` 已内嵌同等增强（c91a60c），不引用外部脚本；候选复盘明确标注“候选标记/结果标记”，不冒充引擎判定且不读取聊天。
+- MutationObserver 只监听必要的 class/style/ARIA/子树变化，结果弹窗从未显示到显示的边沿才触发余韵；增强节点写入后以计数签名短路，避免自触发循环；动画不阻塞结算，reduced-motion/low-spec 使用无动画短时态。
+- `tests/game_social_variants_smoke.py`（d8135f1）新增三端天空棋岛标记、未来钩子禁用、ARIA/红点、降级文案及私聊 D1 写入→好感度→通知顺序断言。Playwright 若运行环境缺少浏览器仍需在发布前补跑真实手机/桌面几何回归。
+- Android 通知仍仅为进程/WebView 存活时的通用本地桥文案；完全关闭 App 无 FCM/后台服务能力，不作送达承诺，不携带聊天正文、UID 或令牌。
+
+发布前剩余步骤：在干净环境安装依赖后运行 Python/Node 静态回归与 Playwright 手机/桌面几何测试，复核三端资源哈希与版本号，再由有权限人员评估部署/发布；本轮未执行任何部署或发布。
