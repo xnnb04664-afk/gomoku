@@ -58,6 +58,12 @@ const WORLD_IP_RATE_LIMIT = 120;
 const WORLD_CHANNEL_RATE_LIMIT = 600;
 const WORLD_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const WORLD_HISTORY_MAX_ID_SPAN = 5000;
+const ANNOUNCEMENT_MAX_PAGE_SIZE = 20;
+const ANNOUNCEMENT_TITLE_CHARS = 120;
+const ANNOUNCEMENT_BODY_CHARS = 10000;
+const ANNOUNCEMENT_ACTION_URL_CHARS = 512;
+const ANNOUNCEMENT_HISTORY_WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
+const ANNOUNCEMENT_ADMIN_UIDS_ENV = 'ANNOUNCEMENT_ADMIN_UIDS';
 // 社交轻量经济数据：签到奖励只作为可消费的客户端展示余额，不影响积分榜。
 // 上限和增量都在服务端固定，客户端不能提交金币数量或签到日期。
 const CHECKIN_BASE_COINS = 10;
@@ -917,6 +923,30 @@ export default {
           )
         `).run();
         await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            published_at INTEGER NOT NULL DEFAULT 0,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            expires_at INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'published', 'withdrawn')),
+            action_url TEXT NOT NULL DEFAULT '',
+            created_by_uid TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_announcements_public ON announcements(status, pinned DESC, published_at DESC, id DESC)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_announcements_expiry ON announcements(expires_at, status)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS announcement_state (
+            uid TEXT PRIMARY KEY,
+            last_read_id INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS message_state (
             uid TEXT NOT NULL,
             pair_key TEXT NOT NULL,
@@ -1591,6 +1621,40 @@ export default {
       return Number(results?.[1]?.meta?.changes) > 0;
     }
 
+    function cleanAnnouncementText(value, maxChars) {
+      const text = String(value == null ? '' : value).normalize('NFC')
+        .replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]/g, '').trim();
+      return Array.from(text).length <= maxChars ? text : '';
+    }
+
+    function safeAnnouncementActionUrl(value) {
+      const raw = String(value == null ? '' : value).trim();
+      if (!raw) return '';
+      if (raw.length > ANNOUNCEMENT_ACTION_URL_CHARS || /[\\u0000-\\u0020]/.test(raw)) return '';
+      if (raw.startsWith('/') && !raw.startsWith('//')) return raw;
+      try {
+        const parsed = new URL(raw);
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) return '';
+        return parsed.href;
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function announcementAdminUidAllowed(uid) {
+      const configured = String(env[ANNOUNCEMENT_ADMIN_UIDS_ENV] || '').split(',').map(item => item.trim()).filter(Boolean);
+      return configured.length > 0 && configured.includes(String(uid));
+    }
+
+    async function requireAnnouncementAdmin(body) {
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth;
+      if (!announcementAdminUidAllowed(auth.user.uid)) {
+        return { response: json({ code: 403, msg: '公告管理权限不足' }, 403) };
+      }
+      return auth;
+    }
+
     async function getSocialAuthFromBody(body) {
       const uid = typeof body?.uid === 'string' ? body.uid.trim() : '';
       return requireRegisteredUser(uid, getRequestToken(request, body || {}));
@@ -2114,6 +2178,143 @@ export default {
       if (auth.response) return auth.response;
       await env.DB.prepare('DELETE FROM user_blocks WHERE blocker_uid = ? AND blocked_uid = ?').bind(auth.user.uid, String(body.targetUid || '')).run();
       return json({ code: 0 });
+    }
+
+    if (url.pathname === '/api/announcements' && request.method === 'GET') {
+      const requestedBefore = Number(url.searchParams.get('before'));
+      const before = Number.isSafeInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : Number.MAX_SAFE_INTEGER;
+      const requestedLimit = Number(url.searchParams.get('limit'));
+      const limit = Number.isSafeInteger(requestedLimit) ? Math.min(ANNOUNCEMENT_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : ANNOUNCEMENT_MAX_PAGE_SIZE;
+      const now = Date.now();
+      const rows = await env.DB.prepare(`
+        SELECT id, title, published_at, pinned, expires_at, action_url
+        FROM announcements
+        WHERE status = 'published' AND published_at > 0 AND published_at <= ?
+          AND (expires_at = 0 OR expires_at > ?) AND id < ?
+        ORDER BY pinned DESC, published_at DESC, id DESC LIMIT ?
+      `).bind(now, now, before, limit).all();
+      const items = (rows.results || []).map(row => ({
+        id: Number(row.id) || 0,
+        title: cleanAnnouncementText(row.title, ANNOUNCEMENT_TITLE_CHARS),
+        publishedAt: Number(row.published_at) || 0,
+        pinned: Number(row.pinned) === 1,
+        expiresAt: Number(row.expires_at) || 0,
+        actionUrl: safeAnnouncementActionUrl(row.action_url)
+      })).filter(item => item.id && item.title);
+      return json({ code: 0, data: { items, hasMore: items.length >= limit, nextBefore: items.length ? items[items.length - 1].id : 0 } });
+    }
+
+    const announcementDetail = url.pathname.match(/^\/api\/announcements\/(\\d+)$/);
+    if (announcementDetail && request.method === 'GET') {
+      const now = Date.now();
+      const row = await env.DB.prepare(`
+        SELECT id, title, body, published_at, pinned, expires_at, action_url
+        FROM announcements
+        WHERE id = ? AND status = 'published' AND published_at > 0 AND published_at <= ?
+          AND (expires_at = 0 OR expires_at > ?)
+      `).bind(Number(announcementDetail[1]), now, now).first();
+      if (!row) return json({ code: 404, msg: '公告不存在或已下线' }, 404);
+      return json({ code: 0, data: {
+        id: Number(row.id) || 0,
+        title: cleanAnnouncementText(row.title, ANNOUNCEMENT_TITLE_CHARS),
+        body: cleanAnnouncementText(row.body, ANNOUNCEMENT_BODY_CHARS),
+        publishedAt: Number(row.published_at) || 0,
+        pinned: Number(row.pinned) === 1,
+        expiresAt: Number(row.expires_at) || 0,
+        actionUrl: safeAnnouncementActionUrl(row.action_url)
+      }});
+    }
+
+    if (url.pathname === '/api/announcements/unread' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      const state = await env.DB.prepare('SELECT last_read_id FROM announcement_state WHERE uid = ?').bind(uid).first();
+      const now = Date.now();
+      const row = await env.DB.prepare(`
+        SELECT COUNT(*) AS cnt FROM announcements
+        WHERE status = 'published' AND published_at > 0 AND published_at <= ?
+          AND (expires_at = 0 OR expires_at > ?) AND id > ?
+      `).bind(now, now, Number(state?.last_read_id) || 0).first();
+      return json({ code: 0, data: { unreadCount: Math.max(0, Number(row?.cnt) || 0) } });
+    }
+
+    if (url.pathname === '/api/announcements/read' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await getSocialAuthFromBody(body);
+      if (auth.response) return auth;
+      const requested = Number(body.announcementId || body.lastSeenId);
+      if (!Number.isSafeInteger(requested) || requested < 0) return json({ code: 400, msg: '公告已读位置无效' }, 400);
+      const latest = await env.DB.prepare(`
+        SELECT MAX(id) AS max_id FROM announcements
+        WHERE status = 'published' AND published_at > 0 AND published_at <= ?
+          AND (expires_at = 0 OR expires_at > ?)
+      `).bind(Date.now(), Date.now()).first();
+      const lastRead = Math.min(requested, Math.max(0, Number(latest?.max_id) || 0));
+      await env.DB.prepare(`
+        INSERT INTO announcement_state (uid, last_read_id, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(uid) DO UPDATE SET last_read_id = MAX(announcement_state.last_read_id, excluded.last_read_id), updated_at = excluded.updated_at
+      `).bind(auth.user.uid, lastRead, Date.now()).run();
+      return json({ code: 0, data: { lastReadId: lastRead } });
+    }
+
+    if (url.pathname === '/api/admin/announcements' && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await requireAnnouncementAdmin(body);
+      if (auth.response) return auth;
+      if (!consumeSocialRequestRate(auth.user.uid, 'announcement-admin', 20, 60000, 80)) return json({ code: 429, msg: '公告管理操作过于频繁' }, 429);
+      const title = cleanAnnouncementText(body.title, ANNOUNCEMENT_TITLE_CHARS);
+      const messageBody = cleanAnnouncementText(body.body, ANNOUNCEMENT_BODY_CHARS);
+      const actionUrl = safeAnnouncementActionUrl(body.actionUrl);
+      const requestedStatus = String(body.status || 'draft');
+      const status = ['draft', 'published'].includes(requestedStatus) ? requestedStatus : '';
+      const publishedAt = Number(body.publishedAt) || (status === 'published' ? Date.now() : 0);
+      const expiresAt = Number(body.expiresAt) || 0;
+      if (!title || !messageBody || !status || (body.actionUrl && !actionUrl) || (expiresAt > 0 && publishedAt > 0 && expiresAt <= publishedAt)) {
+        return json({ code: 400, msg: '公告字段无效' }, 400);
+      }
+      const now = Date.now();
+      const result = await env.DB.prepare(`
+        INSERT INTO announcements (title, body, published_at, pinned, expires_at, status, action_url, created_by_uid, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(title, messageBody, status === 'published' ? publishedAt : 0, body.pinned === true ? 1 : 0, expiresAt, status, actionUrl, auth.user.uid, now, now).run();
+      return json({ code: 0, data: { id: Number(result?.meta?.last_row_id) || 0 } });
+    }
+
+    const announcementAdminEdit = url.pathname.match(/^\/api\/admin\/announcements\/(\\d+)$/);
+    if (announcementAdminEdit && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await requireAnnouncementAdmin(body);
+      if (auth.response) return auth;
+      if (!consumeSocialRequestRate(auth.user.uid, 'announcement-admin', 20, 60000, 80)) return json({ code: 429, msg: '公告管理操作过于频繁' }, 429);
+      const title = cleanAnnouncementText(body.title, ANNOUNCEMENT_TITLE_CHARS);
+      const messageBody = cleanAnnouncementText(body.body, ANNOUNCEMENT_BODY_CHARS);
+      const actionUrl = safeAnnouncementActionUrl(body.actionUrl);
+      const status = ['draft', 'published', 'withdrawn'].includes(String(body.status)) ? String(body.status) : '';
+      const publishedAt = Number(body.publishedAt) || (status === 'published' ? Date.now() : 0);
+      const expiresAt = Number(body.expiresAt) || 0;
+      const id = Number(announcementAdminEdit[1]);
+      if (!id || !title || !messageBody || !status || (body.actionUrl && !actionUrl) || (expiresAt > 0 && publishedAt > 0 && expiresAt <= publishedAt)) {
+        return json({ code: 400, msg: '公告字段无效' }, 400);
+      }
+      const result = await env.DB.prepare(`
+        UPDATE announcements SET title = ?, body = ?, published_at = ?, pinned = ?, expires_at = ?, status = ?, action_url = ?, updated_at = ?
+        WHERE id = ?
+      `).bind(title, messageBody, status === 'published' ? publishedAt : 0, body.pinned === true ? 1 : 0, expiresAt, status, actionUrl, Date.now(), id).run();
+      if (!Number(result?.meta?.changes)) return json({ code: 404, msg: '公告不存在' }, 404);
+      return json({ code: 0, data: { id } });
+    }
+
+    const announcementWithdraw = url.pathname.match(/^\/api\/admin\/announcements\/(\\d+)\/withdraw$/);
+    if (announcementWithdraw && request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const auth = await requireAnnouncementAdmin(body);
+      if (auth.response) return auth;
+      if (!consumeSocialRequestRate(auth.user.uid, 'announcement-admin', 20, 60000, 80)) return json({ code: 429, msg: '公告管理操作过于频繁' }, 429);
+      const id = Number(announcementWithdraw[1]);
+      const result = await env.DB.prepare('UPDATE announcements SET status = \'withdrawn\', updated_at = ? WHERE id = ?').bind(Date.now(), id).run();
+      if (!Number(result?.meta?.changes)) return json({ code: 404, msg: '公告不存在' }, 404);
+      return json({ code: 0, data: { id, status: 'withdrawn' } });
     }
 
     if (url.pathname === '/api/world/messages' && request.method === 'GET') {
