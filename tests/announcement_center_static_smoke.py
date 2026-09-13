@@ -15,7 +15,7 @@ BUTTON_IDS = (
 
 
 def block(source, tag, ident):
-    pattern = rf"<{tag} id="{re.escape(ident)}">.*?</{tag}>"
+    pattern = rf'<{tag} id="{re.escape(ident)}">.*?</{tag}>'
     match = re.search(pattern, source, re.S)
     assert match, f"{ident} block missing"
     return match.group(0)
