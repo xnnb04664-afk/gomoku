@@ -2246,7 +2246,7 @@ export default {
     if (url.pathname === '/api/announcements/read' && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await getSocialAuthFromBody(body);
-      if (auth.response) return auth;
+      if (auth.response) return auth.response;
       const requested = Number(body.announcementId || body.lastSeenId);
       if (!Number.isSafeInteger(requested) || requested < 0) return json({ code: 400, msg: '公告已读位置无效' }, 400);
       const readNow = Date.now();
@@ -2267,7 +2267,7 @@ export default {
     if (url.pathname === '/api/admin/announcements' && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await requireAnnouncementAdmin(body);
-      if (auth.response) return auth;
+      if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(auth.user.uid, 'announcement-admin', 20, 60000, 80)) return json({ code: 429, msg: '公告管理操作过于频繁' }, 429);
       const title = cleanAnnouncementText(body.title, ANNOUNCEMENT_TITLE_CHARS);
       const messageBody = cleanAnnouncementText(body.body, ANNOUNCEMENT_BODY_CHARS);
@@ -2291,7 +2291,7 @@ export default {
     if (announcementAdminEdit && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await requireAnnouncementAdmin(body);
-      if (auth.response) return auth;
+      if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(auth.user.uid, 'announcement-admin', 20, 60000, 80)) return json({ code: 429, msg: '公告管理操作过于频繁' }, 429);
       const title = cleanAnnouncementText(body.title, ANNOUNCEMENT_TITLE_CHARS);
       const messageBody = cleanAnnouncementText(body.body, ANNOUNCEMENT_BODY_CHARS);
@@ -2315,7 +2315,7 @@ export default {
     if (announcementWithdraw && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await requireAnnouncementAdmin(body);
-      if (auth.response) return auth;
+      if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(auth.user.uid, 'announcement-admin', 20, 60000, 80)) return json({ code: 429, msg: '公告管理操作过于频繁' }, 429);
       const id = Number(announcementWithdraw[1]);
       const result = await env.DB.prepare('UPDATE announcements SET status = \'withdrawn\', updated_at = ? WHERE id = ?').bind(Date.now(), id).run();
