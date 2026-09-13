@@ -1415,3 +1415,16 @@ node publish.js
 - **本地验证**：`python tests/apk_asset_manifest_smoke.py`、`python tests/android_lifecycle_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/game_social_variants_smoke.py`、`python tests/announcement_center_static_smoke.py`、`python tests/game_social_dock_smoke.py`、`python tests/social_frontend_smoke.py`、`python tests/online_transport_smoke.py`、`python tests/online_reconnect_smoke.py`、`python tests/online_relay_smoke.py`、`python tests/online_no_public_mqtt_smoke.py`、`python tests/lazy_feature_smoke.py`、`python tests/optimization_smoke.py`、`python tests/online_match_race_smoke.py`、`python tests/ai_worker_smoke.py`、`python tests/avatar_asset_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、`node tests/worker_unit.js`、`node tests/turn_worker_unit.js`、`node tests/auth_refresh_unit.js`、`node tests/social_worker_unit.js` 均通过；`node --check build_apk.js`、`node --check build_ai_worker.js` 和 `git diff --check` 通过。浏览器 4 倍 CPU 降速下的启动/联机冒烟通过，但尚未取得真机/MuMu 的 10 次冷启动中位数，因此不能宣称达到计划中的 35% 实测改善。
 
 本轮改动待最终审查后提交私有仓库；默认不上传或发布 APK。后续若需正式发版，仍须先在手机和 MuMu 安装验收，再使用原签名构建、校验 v1/v2/v3、创建 Release，并按授权决定是否部署后端；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
+
+## 六十三、AI 与 Canvas 热路径性能优化（2026-09-13，本地候选）
+
+本轮继续按“先 JavaScript/TypedArray，再依据剖析决定 Rust/WASM，最后才考虑 NEON/汇编，并保留 JavaScript 回退”的顺序实施。基于当前隔离分支 `fix/social-audit` 的 `2ee4cf4`，只接入已完成并行审查的 AI 与 Canvas 改动；正式版本仍为 `v1.0.123 (Build 124)`，没有创建 Release、没有部署 Cloudflare/D1/Pages，也没有安装到手机或 MuMu。
+
+- **AI 热路径**：`js/ai_fast.js` 为每种棋盘尺寸建立并复用行列、中心位置权值和四方向 11 格线索引的 `TypedArray` 几何缓存，候选生成、落点分析、方向扫描和局面评估不再反复做除法与边界乘法；旧的 `lineCode` 坐标回退仍保留，外部调试结构兼容不变。固定 80ms 的微基准中搜索节点约由 90 提升到 330（仅代表该受限场景的热路径吞吐，不外推为整局 3–4 倍）；实际 AI 仍受约 520ms 时间预算控制，因此暂不引入 Rust/WASM/汇编。
+- **Canvas/VFX**：`js/app.js` 将普通 `draw()` 请求合并到下一次 `requestAnimationFrame`，`draw(true)` 继续作为尺寸/主题切换的同步路径；流畅画质把 VFX 限制在约 30fps，后台停止粒子与非必要绘制并在恢复时补绘，同时暴露帧调度统计。`js/app.min.js`、Android 内嵌资源和离线单文件版均由当前源重新生成，三端行为保持一致。
+- **性能标记与结果**：在 4 倍 CPU 降速的 Chromium 模拟环境取 5 次中位数，最新诊断基准 FCP `1416ms`、`gomoku_interactive` `2368.7ms`，Canvas 稳态绘制 P95 `0.2ms`、帧间隔 P95 `16.8ms`；启动预算冒烟同样通过（FCP `1404ms`、交互 `2276.5ms`，低于 `1600/2500ms` 且相对脚本基线改善超过 35%）。这些是浏览器仿真数据，不能替代手机/MuMu 的 10 次冷/热启动实测。
+- **候选 APK**：重新构建 `versionName=1.0.123`、`versionCode=124`，大小 `1,633,016 bytes`，SHA-256 `72992BD04DD1B803F7BD27C21CDC8A317C700E37435FD13EF7BC625B24560513`。`apksigner` 验证 v1/v2/v3 均通过、单签名者为 1，证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **回归**：`tests/ai_hotpath_smoke.py`、`tests/canvas_frame_smoke.py`、`tests/performance_benchmark.py`、`tests/startup_performance_smoke.py`、`tests/ai_worker_smoke.py`、`tests/lazy_feature_smoke.py`、`tests/optimization_smoke.py`，以及现有联机、好友/公告、Android 和 Node Worker 单元回归均通过；性能基准脚本主动阻断外部请求，输出的少量网络错误属于测试隔离信号，不是页面未处理异常。
+
+本节改动在最终审查后提交私有仓库，仍未发布 APK 或 GitHub Release。下一步如需正式上架，先在手机和 MuMu 验收冷启动、后台恢复、画质档位、联机和通知，再使用原签名执行发布流程；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。

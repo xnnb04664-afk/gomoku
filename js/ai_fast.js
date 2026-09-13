@@ -40,6 +40,7 @@
   const MATE_DISTANCE = 32;
   const lineStatsCache = new Map();
   const linesCache = new Map();
+  const geometryCache = new Map();
 
   const now = () => (typeof performance !== 'undefined' && performance.now)
     ? performance.now()
@@ -169,6 +170,45 @@
     return lines;
   }
 
+  // 棋盘大小在实际游戏中通常固定为 15，但 Worker 也支持测试/变体棋盘。
+  // 将每个格子的四条 11 格局部线和静态坐标一次性缓存，避免搜索热路径反复
+  // 做除法、边界判断和行列乘法。棋盘内容仍从 position.board 实时读取，因而
+  // 不会缓存会随落子变化的结果。
+  function buildBoardGeometry(size) {
+    const cellCount = size * size;
+    const rows = new Uint16Array(cellCount);
+    const cols = new Uint16Array(cellCount);
+    const positionValues = new Float64Array(cellCount);
+    const lineIndexes = new Int32Array(cellCount * DIRECTIONS.length * LOCAL_LINE_LENGTH);
+    lineIndexes.fill(-1);
+    const center = (size - 1) / 2;
+
+    for (let index = 0; index < cellCount; index++) {
+      const r = Math.floor(index / size);
+      const c = index % size;
+      rows[index] = r;
+      cols[index] = c;
+      positionValues[index] = Math.max(0, size * 2 - Math.abs(r - center) - Math.abs(c - center));
+      for (let direction = 0; direction < DIRECTIONS.length; direction++) {
+        const dr = DIRECTIONS[direction][0];
+        const dc = DIRECTIONS[direction][1];
+        const base = (index * DIRECTIONS.length + direction) * LOCAL_LINE_LENGTH;
+        for (let offset = -5; offset <= 5; offset++) {
+          if (offset === 0) continue;
+          const nr = r + offset * dr;
+          const nc = c + offset * dc;
+          if (isValid(size, nr, nc)) lineIndexes[base + offset + 5] = nr * size + nc;
+        }
+      }
+    }
+    return { rows, cols, positionValues, lineIndexes };
+  }
+
+  function getBoardGeometry(size) {
+    if (!geometryCache.has(size)) geometryCache.set(size, buildBoardGeometry(size));
+    return geometryCache.get(size);
+  }
+
   function nextRandom(seedState) {
     let seed = seedState.value >>> 0;
     seed = Math.imul(seed ^ (seed >>> 16), 0x21f0aaad);
@@ -181,6 +221,7 @@
     constructor(boardInput, size, zobristA, zobristB) {
       this.size = size;
       this.cellCount = size * size;
+      this.geometry = getBoardGeometry(size);
       this.board = new Uint8Array(this.cellCount);
       const wordCount = Math.ceil(this.cellCount / 32);
       this.occupiedBits = new Uint32Array(wordCount);
@@ -392,8 +433,9 @@
     }
 
     static isNearStone(position, index, radius = 2) {
-      const r = Math.floor(index / position.size);
-      const c = index % position.size;
+      const geometry = position.geometry;
+      const r = geometry ? geometry.rows[index] : Math.floor(index / position.size);
+      const c = geometry ? geometry.cols[index] : index % position.size;
       for (let dr = -radius; dr <= radius; dr++) {
         for (let dc = -radius; dc <= radius; dc++) {
           if (dr === 0 && dc === 0) continue;
@@ -412,6 +454,7 @@
 
     static getGlobalStrategicMoves(position, color, opponent, enableFoul = false, forbidden = null, limit = MAX_GLOBAL_STRATEGIC_CANDIDATES) {
       const center = Math.floor(position.size / 2);
+      const geometry = position.geometry;
       const points = [];
       const seen = new Set();
       const addPoint = (r, c) => {
@@ -420,7 +463,7 @@
         if (seen.has(index) || !position.isEmpty(index) || (forbidden && forbidden[index])) return;
         if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) return;
         seen.add(index);
-        points.push({ index, r, c, score: this.positionValue(r, c, position.size) });
+        points.push({ index, r, c, score: geometry.positionValues[index] });
       };
 
       // 固定的中心环和稀疏全盘锚点，让安静局面不会永远被限制在已有棋子两格内。
@@ -464,10 +507,11 @@
       const raw = [];
       const opponent = color === BLACK ? WHITE : BLACK;
       const center = Math.floor(position.size / 2);
+      const geometry = position.geometry;
       const nearRadius = position.stones <= 12 ? 3 : 2;
       for (let index = 0; index < position.cellCount; index++) {
-        const r = Math.floor(index / position.size);
-        const c = index % position.size;
+        const r = geometry.rows[index];
+        const c = geometry.cols[index];
         // 开局若对手落在角落，单纯的“邻近两格”候选会把中心战略完全裁掉；
         // 前四手同时保留中心 7×7，普通局面则扩大到三格邻域。
         const openingAnchor = position.stones <= 4 && Math.abs(r - center) <= 3 && Math.abs(c - center) <= 3;
@@ -487,15 +531,15 @@
           own,
           opp,
           tactical: Boolean(tactical),
-          score: this.moveOrderingScore(own, opp) + this.positionValue(r, c, position.size)
+          score: this.moveOrderingScore(own, opp) + geometry.positionValues[index]
         });
       }
       if (!raw.length) {
         for (let index = 0; index < position.cellCount; index++) {
           if (position.isEmpty(index) && (!forbidden || !forbidden[index]) && (!enableFoul || !this.isForbiddenMove(position, index, color, forbidden))) {
-            const r = Math.floor(index / position.size);
-            const c = index % position.size;
-            raw.push({ index, r, c, own: null, opp: null, tactical: false, score: this.positionValue(r, c, position.size) });
+            const r = geometry.rows[index];
+            const c = geometry.cols[index];
+            raw.push({ index, r, c, own: null, opp: null, tactical: false, score: geometry.positionValues[index] });
           }
         }
       }
@@ -528,13 +572,14 @@
 
     static getRootCandidates(position, color, opponent, legal, enableFoul = false, forbidden = null, rootLimit = 22, candidateLimit = 64) {
       const selected = new Map();
+      const geometry = position.geometry;
       const add = (index, source = null) => {
         if (!Number.isInteger(index) || index < 0 || index >= position.cellCount || !position.isEmpty(index)) return;
         if (forbidden && forbidden[index]) return;
         if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) return;
         if (selected.has(index)) return;
-        const r = Math.floor(index / position.size);
-        const c = index % position.size;
+        const r = geometry.rows[index];
+        const c = geometry.cols[index];
         const own = this.analyzeMove(position, index, color);
         const opp = this.analyzeMove(position, index, opponent);
         selected.set(index, {
@@ -546,7 +591,7 @@
           tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
           score: source && Number.isFinite(source.score)
             ? source.score
-            : this.moveOrderingScore(own, opp) + this.positionValue(r, c, position.size)
+            : this.moveOrderingScore(own, opp) + geometry.positionValues[index]
         });
       };
 
@@ -600,6 +645,14 @@
     }
 
     static lineCode(position, index, color, dr, dc) {
+      let direction = -1;
+      if (dr === 0 && dc === 1) direction = 0;
+      else if (dr === 1 && dc === 0) direction = 1;
+      else if (dr === 1 && dc === 1) direction = 2;
+      else if (dr === 1 && dc === -1) direction = 3;
+      if (direction >= 0 && position.geometry) return this.lineCodeByDirection(position, index, color, direction);
+
+      // 保留对外部调试调用和旧测试用 position 结构的兼容路径。
       const r = Math.floor(index / position.size);
       const c = index % position.size;
       let code = 0;
@@ -610,6 +663,23 @@
         if (offset === 0) value = 1;
         else if (isValid(position.size, nr, nc)) {
           const cell = position.board[nr * position.size + nc];
+          value = cell === EMPTY ? 0 : (cell === color ? 1 : 2);
+        }
+        code = code * 3 + value;
+      }
+      return code;
+    }
+
+    static lineCodeByDirection(position, index, color, direction) {
+      const lineIndexes = position.geometry.lineIndexes;
+      const base = (index * DIRECTIONS.length + direction) * LOCAL_LINE_LENGTH;
+      let code = 0;
+      for (let offset = 0; offset < LOCAL_LINE_LENGTH; offset++) {
+        const cellIndex = lineIndexes[base + offset];
+        let value = 2;
+        if (offset === 5) value = 1;
+        else if (cellIndex >= 0) {
+          const cell = position.board[cellIndex];
           value = cell === EMPTY ? 0 : (cell === color ? 1 : 2);
         }
         code = code * 3 + value;
@@ -628,8 +698,8 @@
       let openThree = 0;
       let brokenThree = 0;
       let openTwo = 0;
-      for (const [dr, dc] of DIRECTIONS) {
-        const code = this.lineCode(position, index, color, dr, dc);
+      for (let direction = 0; direction < DIRECTIONS.length; direction++) {
+        const code = this.lineCodeByDirection(position, index, color, direction);
         five += stats.five[code];
         openFour += stats.openFour[code];
         four += stats.four[code];
@@ -650,8 +720,9 @@
     }
 
     static countDirection(position, index, dr, dc, color) {
-      let r = Math.floor(index / position.size) + dr;
-      let c = index % position.size + dc;
+      const geometry = position.geometry;
+      let r = (geometry ? geometry.rows[index] : Math.floor(index / position.size)) + dr;
+      let c = (geometry ? geometry.cols[index] : index % position.size) + dc;
       let count = 0;
       while (isValid(position.size, r, c) && position.board[r * position.size + c] === color) {
         count++;
@@ -732,8 +803,8 @@
         const opp = this.analyzeMove(position, move.index, opponent);
         const normalized = {
           index: move.index,
-          r: Math.floor(move.index / position.size),
-          c: move.index % position.size,
+          r: position.geometry.rows[move.index],
+          c: position.geometry.cols[move.index],
           own,
           opp,
           tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
@@ -873,14 +944,11 @@
         opponentScore += this.evaluateLine(position.board, line, opponent);
       }
       let positionScore = 0;
+      const positionValues = position.geometry.positionValues;
       for (let index = 0; index < position.cellCount; index++) {
         const cell = position.board[index];
         if (cell === EMPTY) continue;
-        const r = Math.floor(index / position.size);
-        const c = index % position.size;
-        positionScore += cell === aiColor
-          ? this.positionValue(r, c, position.size)
-          : -this.positionValue(r, c, position.size);
+        positionScore += cell === aiColor ? positionValues[index] : -positionValues[index];
       }
       return aiScore - opponentScore * 1.12 + positionScore;
     }
