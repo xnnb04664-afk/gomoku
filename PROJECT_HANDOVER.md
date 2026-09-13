@@ -1377,5 +1377,5 @@ node publish.js
 
 ### 当前 HEAD 与发布前步骤
 
-- 本节写入前远端 master 实际 HEAD：3bef5bf2c5c63c0a176d7908ef08566deb76ccc9；写入交接文档后会产生新的文档提交，需以该提交返回的 SHA 作为最终 HEAD。
+- 本次文档校准前远端 master 实际 HEAD：2cbc425d0e32a6e29ed0345e555cce883f4be5c6；本次文档提交完成后，以 GitHub 返回的提交 SHA 作为最终 HEAD。
 - 发布前在隔离环境执行上述 Python/Node 测试，补跑 Playwright（桌面、390px/320px）、Android WebView 真机/模拟器三端资源哈希与 ARIA/底部几何回归；单独验证正式账号公告管理员 allowlist、D1 migration dry-run、跨页恢复已读位置和公告过期/撤下审计。获得明确授权前继续禁止 Cloudflare/D1/Pages 部署、Release、APK 发布。
