@@ -779,9 +779,9 @@ async function main() {
     [/safeAnnouncementActionUrl/, '公告行动链接经过 HTTPS/站内路径校验'],
     [/announcementAdminUidAllowed/, '管理员由服务端 UID 允许列表判定'],
     [/requireAnnouncementAdmin/, '公告写入接口要求正式账号和管理员认证'],
-    [/published_at >= \\?/, '公告读取遵守历史窗口'],
+    [/published_at >= \?/, '公告读取遵守历史窗口'],
     [/status = 'withdrawn'/, '撤下状态保留审计而不公开展示'],
-    [/ON CONFLICT\\(uid\\) DO UPDATE SET last_read_id = MAX/, '公告已读写入幂等且只前进'],
+    [/ON CONFLICT\(uid\) DO UPDATE SET last_read_id = MAX/, '公告已读写入幂等且只前进'],
     [/lastReadId/, '公告未读响应返回已读游标'],
     [/nextBefore/, '公告分页返回继续游标'],
   ];
