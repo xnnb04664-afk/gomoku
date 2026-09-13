@@ -1397,7 +1397,7 @@ node publish.js
 - `node tests/social_worker_unit.js`：通过，包含一次性社交票据、好友/黑名单/消息幂等和 SocialHub 多设备检查。
 - `online_transport_smoke.py`、`online_reconnect_smoke.py`、`online_relay_smoke.py`、`online_no_public_mqtt_smoke.py`、`lazy_feature_smoke.py`、`optimization_smoke.py`：通过，页面无未处理错误。
 - Playwright 本地三端及预览 `320px/390px`：公告按钮可见，弹层具有 `.show` 且计算透明度为 1，八宫格固定 8 个、收起后悬浮按钮可用、无横向溢出和页面错误。
-- 预览仅部署到 `https://preview-e491946.gomoku-home.pages.dev/play/`（本次部署 `https://5e8986c3.gomoku-home.pages.dev`），HTTP 200；稳定官网和生产 API 未替换。
+- 预览仅部署到 `https://preview-e491946.gomoku-home.pages.dev/play/`（最终部署 `https://38cb0fd7.gomoku-home.pages.dev`），HTTP 200；稳定官网和生产 API 未替换。
 
 ### 后续边界
 
