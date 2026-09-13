@@ -2301,6 +2301,33 @@
 @media (max-width:600px){#worldChatPanel .world-chat-card{width:calc(100% - 20px);height:min(680px,92vh)}#worldChatPanel .world-chat-bubble{max-width:92%}}
 @media (prefers-reduced-motion:reduce){#worldChatPanel *{scroll-behavior:auto}}
 </style>
+<style id="announcementCenterEnhancementsStyle">
+.announcement-center-tab{position:relative;display:inline-flex;align-items:center;gap:4px}
+.announcement-center-tab .announcement-center-tab-badge{display:none;min-width:16px;height:16px;padding:0 4px;align-items:center;justify-content:center;border-radius:999px;background:#d97706;color:#fff;font-size:9px;line-height:16px;font-weight:900}
+.announcement-center-tab.has-unread .announcement-center-tab-badge{display:inline-flex}
+#announcementCenterPanel{z-index:100009}
+#announcementCenterPanel .announcement-center-card{max-width:460px;width:95%;height:min(680px,90vh);display:flex;flex-direction:column;text-align:left}
+#announcementCenterPanel .announcement-center-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #e2e8f0;padding-bottom:8px}
+#announcementCenterPanel .announcement-center-title{font-weight:900;color:#0f172a}
+#announcementCenterPanel .announcement-center-status{font-size:10px;color:#64748b;font-weight:700;margin-top:2px}
+#announcementCenterPanel .announcement-center-note{padding:7px 2px 3px;color:#64748b;font-size:10px;line-height:1.45;font-weight:700}
+#announcementCenterPanel .announcement-center-list{flex:1;min-height:160px;overflow:auto;padding:8px 2px}
+#announcementCenterPanel .announcement-center-item{width:100%;display:flex;align-items:flex-start;gap:8px;padding:10px 4px;border:0;border-bottom:1px solid rgba(148,163,184,.28);background:transparent;color:#1e293b;text-align:left;cursor:pointer}
+#announcementCenterPanel .announcement-center-item:hover,#announcementCenterPanel .announcement-center-item:focus-visible{background:rgba(219,234,254,.5);outline:2px solid #93c5fd;outline-offset:-2px}
+#announcementCenterPanel .announcement-center-icon{flex:0 0 auto;font-size:17px;line-height:1.2}
+#announcementCenterPanel .announcement-center-item-title{font-weight:900;line-height:1.35;word-break:break-word}
+#announcementCenterPanel .announcement-center-item-meta{margin-top:3px;font-size:10px;color:#64748b}
+#announcementCenterPanel .announcement-center-unread{margin-left:auto;flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.14)}
+#announcementCenterPanel .announcement-center-pager{text-align:center;min-height:30px;padding:2px 0}
+#announcementCenterPanel .announcement-center-detail{padding:10px 4px;color:#1e293b;white-space:pre-wrap;word-break:break-word;line-height:1.55;overflow:auto}
+#announcementCenterPanel .announcement-center-detail-title{font-size:17px;font-weight:900;line-height:1.35;color:#0f172a}
+#announcementCenterPanel .announcement-center-detail-meta{margin:5px 0 12px;font-size:10px;color:#64748b}
+#announcementCenterPanel .announcement-center-detail-body{font-size:13px}
+#announcementCenterPanel .announcement-center-detail-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+#announcementCenterPanel .announcement-center-foot{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #e2e8f0;padding-top:7px}
+@media (max-width:600px){#announcementCenterPanel .announcement-center-card{width:calc(100% - 20px);height:min(680px,92vh)}}
+@media (prefers-reduced-motion:reduce){#announcementCenterPanel *{scroll-behavior:auto}}
+</style>
 </head>
 <body>
 
@@ -3529,14 +3556,25 @@
       raf(() => { scheduled = false; refresh(); });
     };
     if (typeof MutationObserver === 'function') {
-      const observer = new MutationObserver(schedule);
-      observer.observe(document.body, {
-        subtree: true,
-        childList: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['class', 'style', 'aria-expanded', 'aria-hidden']
+      let resultObserverAttached = false;
+      const attachResultObservers = () => {
+        let attached = false;
+        ['gameResultModal', 'replayControlDock'].forEach(id => {
+          const target = byId(id);
+          if (!target || target.dataset.skyObserverBound === '1') return;
+          const targetObserver = new MutationObserver(schedule);
+          targetObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
+          target.dataset.skyObserverBound = '1';
+          attached = true;
+        });
+        return attached;
+      };
+      resultObserverAttached = attachResultObservers();
+      const bodyObserver = new MutationObserver(() => {
+        if (attachResultObservers()) schedule();
       });
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
+      if (resultObserverAttached) schedule();
     }
     document.addEventListener('click', event => {
       if (event.target.closest('#gameSocialDockGrid button')) schedule();
@@ -4039,7 +4077,7 @@
       ensureEntry();
       scheduleBadges();
     });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label', 'aria-hidden', 'style', 'class'] });
+    observer.observe(document.body, { childList: true, subtree: true });
     state.domObserver = observer;
     document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
     window.addEventListener('beforeunload', () => {
@@ -4054,6 +4092,417 @@
     refresh: resume,
     getUnreadCount: () => state.unread,
     send
+  });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
+  else observe();
+})();
+</script>
+<script id="announcementCenterEnhancements">
+(() => {
+  'use strict';
+
+  const PAGE_SIZE = 20;
+  const MAX_TITLE = 120;
+  const MAX_BODY = 10000;
+  const CACHE_KEY = 'gomoku_announcements_cache_v1';
+  const sharedUnread = window.GomokuSocialUnreadState || { world: 0, announcements: 0 };
+  window.GomokuSocialUnreadState = sharedUnread;
+  const state = {
+    items: [],
+    hasMore: false,
+    nextBefore: null,
+    detail: null,
+    loading: false,
+    unread: 0,
+    lastReadId: 0,
+    panelOpen: false,
+    listMode: true,
+    badgeScheduled: false
+  };
+
+  const byId = id => document.getElementById(id);
+  const textOf = value => String(value == null ? '' : value);
+  const registered = () => {
+    try { return typeof hasRegisteredAccountSession === 'function' && hasRegisteredAccountSession(); }
+    catch (_) { return false; }
+  };
+  const uid = () => {
+    try { return typeof currentUserUid !== 'undefined' ? String(currentUserUid || '') : ''; }
+    catch (_) { return ''; }
+  };
+  const notice = message => {
+    try { if (typeof showGameNotice === 'function') showGameNotice(textOf(message), true); } catch (_) {}
+  };
+  const safeActionUrl = raw => {
+    const value = textOf(raw).trim();
+    if (!value || value.length > 512 || /[\u0000-\u0020]/.test(value)) return '';
+    if (value.startsWith('/') && !value.startsWith('//')) return value;
+    try {
+      const parsed = new URL(value, window.location.href);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) return '';
+      return parsed.href;
+    } catch (_) {
+      return '';
+    }
+  };
+  const cleanTitle = value => textOf(value).normalize ? textOf(value).normalize('NFC').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, MAX_TITLE) : textOf(value).slice(0, MAX_TITLE);
+  const cleanBody = value => textOf(value).normalize ? textOf(value).normalize('NFC').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, MAX_BODY) : textOf(value).slice(0, MAX_BODY);
+  const formatTime = value => {
+    const stamp = Number(value) || 0;
+    if (!stamp) return '时间待定';
+    try { return new Date(stamp).toLocaleString(); } catch (_) { return new Date(stamp).toISOString(); }
+  };
+  const publicItem = raw => {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id) || 0;
+    const title = cleanTitle(raw.title);
+    if (!id || !title) return null;
+    return {
+      id,
+      title,
+      publishedAt: Number(raw.publishedAt) || 0,
+      pinned: Boolean(raw.pinned),
+      expiresAt: Number(raw.expiresAt) || 0,
+      actionUrl: safeActionUrl(raw.actionUrl)
+    };
+  };
+  const publicDetail = raw => {
+    const item = publicItem(raw);
+    if (!item) return null;
+    const body = cleanBody(raw.body);
+    return { ...item, body };
+  };
+  const readCache = () => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.map(publicItem).filter(Boolean).slice(0, 100) : [];
+    } catch (_) { return []; }
+  };
+  const writeCache = () => {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(state.items.slice(0, 100))); } catch (_) {}
+  };
+
+  async function api(path, options = {}) {
+    if (typeof safeApiFetch !== 'function') throw new Error('offline');
+    const request = { ...options };
+    const method = String(request.method || 'GET').toUpperCase();
+    let endpoint = String(path);
+    if (method === 'GET') {
+      const url = new URL(endpoint, window.location.href);
+      if (request.includeUid === true && registered()) url.searchParams.set('uid', uid());
+      delete request.includeUid;
+      endpoint = url.pathname + (url.search || '');
+    } else {
+      let body = {};
+      try { body = request.body ? JSON.parse(request.body) : {}; } catch (_) {}
+      delete request.includeUid;
+      if (registered()) body.uid = uid();
+      request.headers = { 'Content-Type': 'application/json', ...(request.headers || {}) };
+      request.body = JSON.stringify(body);
+    }
+    const response = await safeApiFetch(endpoint, request);
+    let payload = null;
+    try { payload = await response.json(); } catch (_) {}
+    if (!response.ok || !payload || payload.code !== 0) {
+      const error = new Error(payload && payload.msg ? textOf(payload.msg) : 'request failed');
+      error.status = response.status;
+      throw error;
+    }
+    return payload.data || {};
+  }
+
+  function setStatus(message) {
+    const node = byId('announcementCenterStatus');
+    if (node) node.textContent = textOf(message);
+  }
+
+  function applyEntryBadge() {
+    const entry = byId('btnAnnouncements');
+    if (!entry) return;
+    const count = Math.max(0, Number(state.unread) || 0);
+    entry.classList.toggle('has-unread', count > 0);
+    entry.setAttribute('aria-label', count > 0 ? '公告中心，' + count + ' 条未读' : '公告中心');
+    const badge = byId('announcementCenterUnreadBadge');
+    if (badge) {
+      badge.textContent = count > 99 ? '99+' : count ? String(count) : '';
+      badge.style.display = count > 0 ? 'inline-flex' : 'none';
+      badge.setAttribute('aria-hidden', count > 0 ? 'false' : 'true');
+      badge.setAttribute('aria-label', count > 0 ? count + ' 条公告未读' : '没有公告未读');
+    }
+  }
+
+  function scheduleBadges() {
+    if (state.badgeScheduled) return;
+    state.badgeScheduled = true;
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => { state.badgeScheduled = false; applyEntryBadge(); });
+  }
+
+  function setUnread(value, lastReadId) {
+    state.unread = Math.max(0, Math.min(999, Number(value) || 0));
+    if (Number.isFinite(Number(lastReadId))) state.lastReadId = Math.max(0, Number(lastReadId));
+    sharedUnread.announcements = state.unread;
+    try {
+      if (typeof window.GomokuSocialUnreadRefresh === 'function') window.GomokuSocialUnreadRefresh();
+    } catch (_) {}
+    scheduleBadges();
+  }
+
+  function ensurePanel() {
+    let panel = byId('announcementCenterPanel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'announcementCenterPanel';
+    panel.className = 'online-modal-backdrop';
+    panel.setAttribute('aria-hidden', 'true');
+    panel.style.display = 'none';
+    panel.innerHTML =
+      '<div class="online-modal-card announcement-center-card" role="dialog" aria-modal="true" aria-labelledby="announcementCenterTitle" onclick="event.stopPropagation()">' +
+        '<div class="announcement-center-head"><div><div id="announcementCenterTitle" class="announcement-center-title">📣 公告中心</div><div id="announcementCenterStatus" class="announcement-center-status">准备加载</div></div>' +
+          '<button type="button" id="announcementCenterClose" class="btn-chat-tool" aria-label="关闭公告中心">✕</button></div>' +
+        '<div class="announcement-center-note">公告会保留在云端数据库；列表默认隐藏已过期或撤下内容，仅按需加载正文。星光标记表示置顶，不代表额外玩法。</div>' +
+        '<div id="announcementCenterList" class="announcement-center-list" role="list" aria-live="polite"></div>' +
+        '<div id="announcementCenterDetail" class="announcement-center-detail" hidden></div>' +
+        '<div id="announcementCenterPager" class="announcement-center-pager"></div>' +
+        '<div class="announcement-center-foot"><span id="announcementCenterReadStatus" class="announcement-center-status"></span><button type="button" id="announcementCenterBack" class="btn-chat-tool" hidden>返回列表</button></div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    panel.addEventListener('click', event => { if (event.target === panel) closeCenter(); });
+    byId('announcementCenterClose')?.addEventListener('click', closeCenter);
+    byId('announcementCenterBack')?.addEventListener('click', () => { state.detail = null; state.listMode = true; render(); });
+    return panel;
+  }
+
+  function ensureEntry() {
+    const modal = byId('friendsModal');
+    if (!modal || byId('btnAnnouncements')) return;
+    const firstTab = modal.querySelector('[data-social-tab]');
+    const bar = firstTab && firstTab.parentElement;
+    if (!bar) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'btnAnnouncements';
+    button.className = 'btn-chat-tool social-tab announcement-center-tab';
+    button.setAttribute('aria-controls', 'announcementCenterPanel');
+    button.setAttribute('aria-label', '公告中心');
+    button.textContent = '📣 公告';
+    const badge = document.createElement('span');
+    badge.id = 'announcementCenterUnreadBadge';
+    badge.className = 'announcement-center-tab-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    button.appendChild(badge);
+    button.addEventListener('click', openCenter);
+    const world = byId('btnWorldChat');
+    if (world && world.parentElement === bar) bar.insertBefore(button, world.nextSibling);
+    else bar.appendChild(button);
+  }
+
+  function renderList() {
+    const list = byId('announcementCenterList');
+    const detail = byId('announcementCenterDetail');
+    const pager = byId('announcementCenterPager');
+    const back = byId('announcementCenterBack');
+    if (!list || !detail || !pager || !back) return;
+    list.hidden = !state.listMode;
+    detail.hidden = state.listMode;
+    back.hidden = state.listMode;
+    pager.hidden = !state.listMode;
+    if (!state.listMode) return;
+    list.replaceChildren();
+    if (!state.items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'announcement-center-status';
+      empty.textContent = '暂无公开公告；网络恢复后会自动刷新。';
+      list.appendChild(empty);
+    } else {
+      state.items.forEach(item => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'announcement-center-item';
+        button.setAttribute('role', 'listitem');
+        button.dataset.announcementId = String(item.id);
+        const icon = document.createElement('span');
+        icon.className = 'announcement-center-icon';
+        icon.textContent = item.pinned ? '✦' : '✉';
+        const body = document.createElement('span');
+        const title = document.createElement('span');
+        title.className = 'announcement-center-item-title';
+        title.textContent = item.title;
+        const meta = document.createElement('span');
+        meta.className = 'announcement-center-item-meta';
+        meta.textContent = formatTime(item.publishedAt) + (item.expiresAt ? ' · 有效至 ' + formatTime(item.expiresAt) : '');
+        body.append(title, meta);
+        button.append(icon, body);
+        if (state.unread > 0 && item.id > state.lastReadId) {
+          const dot = document.createElement('span');
+          dot.className = 'announcement-center-unread';
+          dot.setAttribute('aria-label', '未读');
+          button.appendChild(dot);
+        }
+        button.addEventListener('click', () => openDetail(item.id));
+        list.appendChild(button);
+      });
+    }
+    pager.replaceChildren();
+    if (state.hasMore) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'btn-chat-tool';
+      more.textContent = '加载更早公告';
+      more.addEventListener('click', () => loadList(true));
+      pager.appendChild(more);
+    }
+  }
+
+  function renderDetail() {
+    const detail = byId('announcementCenterDetail');
+    if (!detail || !state.detail) return;
+    detail.replaceChildren();
+    const title = document.createElement('div');
+    title.className = 'announcement-center-detail-title';
+    title.textContent = state.detail.title;
+    const meta = document.createElement('div');
+    meta.className = 'announcement-center-detail-meta';
+    meta.textContent = formatTime(state.detail.publishedAt) + (state.detail.pinned ? ' · 置顶' : '') + (state.detail.expiresAt ? ' · 有效至 ' + formatTime(state.detail.expiresAt) : '');
+    const body = document.createElement('div');
+    body.className = 'announcement-center-detail-body';
+    body.textContent = state.detail.body;
+    const actions = document.createElement('div');
+    actions.className = 'announcement-center-detail-actions';
+    const actionUrl = safeActionUrl(state.detail.actionUrl);
+    if (actionUrl) {
+      const link = document.createElement('a');
+      link.className = 'btn-chat-tool';
+      link.href = actionUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = '打开相关页面';
+      actions.appendChild(link);
+    }
+    detail.append(title, meta, body, actions);
+  }
+
+  function render() {
+    renderList();
+    if (!state.listMode) renderDetail();
+  }
+
+  async function loadList(older) {
+    if (state.loading) return;
+    state.loading = true;
+    setStatus('正在同步公告…');
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(PAGE_SIZE));
+      if (older && state.nextBefore) params.set('before', String(state.nextBefore));
+      const data = await api('/api/announcements?' + params.toString());
+      const incoming = Array.isArray(data.items) ? data.items.map(publicItem).filter(Boolean) : [];
+      if (older) {
+        const seen = new Set(state.items.map(item => item.id));
+        state.items = state.items.concat(incoming.filter(item => !seen.has(item.id)));
+      } else {
+        state.items = incoming;
+      }
+      state.hasMore = Boolean(data.hasMore);
+      state.nextBefore = data.nextBefore == null ? (state.items.length ? state.items[state.items.length - 1].id : null) : Number(data.nextBefore) || null;
+      writeCache();
+      setStatus(state.items.length ? '已同步 · 公开公告' : '暂无公开公告');
+    } catch (_) {
+      if (!state.items.length) state.items = readCache();
+      state.hasMore = false;
+      state.nextBefore = null;
+      setStatus(state.items.length ? '当前离线 · 显示最近缓存（只读）' : '公告暂不可用 · 稍后重试');
+    } finally {
+      state.loading = false;
+      render();
+    }
+  }
+
+  async function refreshUnread() {
+    if (!registered()) {
+      setUnread(0, 0);
+      return;
+    }
+    try {
+      const data = await api('/api/announcements/unread', { includeUid: true });
+      setUnread(data.unreadCount, data.lastReadId);
+    } catch (_) {
+      setStatus(state.items.length ? '未读状态暂不可用' : '公告暂不可用 · 稍后重试');
+    }
+  }
+
+  async function openDetail(id) {
+    const numericId = Number(id);
+    if (!Number.isSafeInteger(numericId) || numericId <= 0) return;
+    ensurePanel();
+    state.listMode = false;
+    state.detail = publicDetail(state.items.find(item => item.id === numericId));
+    setStatus('正在加载公告正文…');
+    render();
+    try {
+      const data = await api('/api/announcements/' + numericId);
+      state.detail = publicDetail(data.item || data.announcement || data);
+      if (!state.detail) throw new Error('invalid');
+      setStatus('已加载 · 公告正文按需读取');
+      render();
+      if (registered()) {
+        await api('/api/announcements/read', { method: 'POST', body: JSON.stringify({ announcementId: numericId }) });
+        state.lastReadId = Math.max(state.lastReadId, numericId);
+        await refreshUnread();
+      } else {
+        byId('announcementCenterReadStatus').textContent = '游客阅读不写入账号状态';
+      }
+    } catch (_) {
+      setStatus(state.detail ? '当前离线 · 仅显示已缓存摘要' : '公告正文暂不可用');
+      render();
+    }
+  }
+
+  async function openCenter() {
+    ensurePanel();
+    state.panelOpen = true;
+    state.listMode = true;
+    state.detail = null;
+    const panel = byId('announcementCenterPanel');
+    panel.setAttribute('aria-hidden', 'false');
+    panel.style.display = 'flex';
+    render();
+    await Promise.all([loadList(false), refreshUnread()]);
+  }
+
+  function closeCenter() {
+    const panel = byId('announcementCenterPanel');
+    if (!panel) return;
+    state.panelOpen = false;
+    panel.setAttribute('aria-hidden', 'true');
+    panel.style.display = 'none';
+  }
+
+  async function refresh() {
+    if (!state.panelOpen) {
+      await refreshUnread();
+      return;
+    }
+    await Promise.all([loadList(false), refreshUnread()]);
+  }
+
+  function observe() {
+    ensurePanel();
+    ensureEntry();
+    scheduleBadges();
+    if (typeof MutationObserver === 'function') {
+      const observer = new MutationObserver(() => ensureEntry());
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  }
+
+  window.GomokuAnnouncements = Object.freeze({
+    open: openCenter,
+    close: closeCenter,
+    refresh,
+    getUnreadCount: () => state.unread
   });
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
