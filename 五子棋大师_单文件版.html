@@ -7170,7 +7170,7 @@ function openThemeModal(){document.getElementById("themeModal").classList.add("s
     panel.dataset.skySignature = signature;
     const pivot = total > 0 ? Math.max(1, total - 2) : 0;
     const mistake = total > 0 ? Math.max(1, total - 1) : 0;
-    const fallbackText = fallback ? '最近落子降级标记' : '候选标记（非引擎判定）';
+    const fallbackText = fallback ? '最近落子降级标记（非引擎判定）' : '候选标记（非引擎判定）';
     const winningText = winning && total > 0 ? '第 ' + total + ' 手 · 终局标记' : '本局无胜者 · 结果标记';
     panel.innerHTML =
       '<div class="sky-replay-insights-title">✦ 星轨复盘 · ' + (fallback ? '安全降级' : '候选分析') + '</div>' +
@@ -7227,14 +7227,25 @@ function openThemeModal(){document.getElementById("themeModal").classList.add("s
       raf(() => { scheduled = false; refresh(); });
     };
     if (typeof MutationObserver === 'function') {
-      const observer = new MutationObserver(schedule);
-      observer.observe(document.body, {
-        subtree: true,
-        childList: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['class', 'style', 'aria-expanded', 'aria-hidden']
+      let resultObserverAttached = false;
+      const attachResultObservers = () => {
+        let attached = false;
+        ['gameResultModal', 'replayControlDock'].forEach(id => {
+          const target = byId(id);
+          if (!target || target.dataset.skyObserverBound === '1') return;
+          const targetObserver = new MutationObserver(schedule);
+          targetObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
+          target.dataset.skyObserverBound = '1';
+          attached = true;
+        });
+        return attached;
+      };
+      resultObserverAttached = attachResultObservers();
+      const bodyObserver = new MutationObserver(() => {
+        if (attachResultObservers()) schedule();
       });
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
+      if (resultObserverAttached) schedule();
     }
     document.addEventListener('click', event => {
       if (event.target.closest('#gameSocialDockGrid button')) schedule();
