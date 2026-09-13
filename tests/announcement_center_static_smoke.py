@@ -97,7 +97,7 @@ def main():
         "requireAnnouncementAdmin", "/api/announcements",
         "/api/announcements/unread", "/api/announcements/read",
         "/api/admin/announcements", "published_at >= ?",
-        "expires_at = 0 OR expires_at > ?", "status = 'withdrawn'",
+        "expires_at = 0 OR expires_at > ?", "withdrawn",
         "INSERT INTO announcements", "UPDATE announcements",
         "ON CONFLICT(uid) DO UPDATE SET last_read_id = MAX",
         "lastReadId", "nextBefore",
