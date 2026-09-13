@@ -1402,3 +1402,16 @@ node publish.js
 ### 后续边界
 
 本轮未在 Android 真机/MuMu 上重新安装候选 APK，未做完全关闭 App 的系统通知实测；也未执行生产 D1/Worker/Pages 部署。若要让 APK 或正式域名包含本轮修复，应另行明确授权并按“先备份 D1、再构建签名 APK、最后发布”的流程执行；不得提交或输出任何密钥、长期令牌、聊天正文或短时票据。
+
+
+## 六十二、APK 启动、资源与本地服务性能优化（2026-09-13，本地候选）
+
+本轮按 APK 优化方向并行完成 Android 生命周期、本地资源服务和安装包资源裁剪，基于远端 master `101fbca` 的隔离工作区 `fix/social-audit` 实施。正式版本仍为 `v1.0.123 (Build 124)`，本轮没有创建 GitHub Release、没有部署 Cloudflare/D1/Pages、没有安装到手机或 MuMu，也没有改变现有联机、P2P/TURN/WebSocket、安全和热更新协议。
+
+- **本地 WebView 服务**：`LocalWebServer` 改用固定 4 线程、32 请求有界队列和拒绝后主动关连接；跟踪并关闭活动 Socket，停止时最多等待 500ms；JS/MJS/CSS 使用上限 8 MiB 的线程安全 LRU 缓存，单文件超过 4 MiB 不缓存；ETag 预计算并支持多值 `If-None-Match`，输出增加 16 KiB 缓冲和 TCP 参数优化。原有热更新 `index.html`、`file://` 回退、路径校验和端口回退保持不变。
+- **Android 生命周期**：Android N+ 使用默认网络回调，旧 API 保留兼容回调；网络事件 250ms 去抖并在后台暂停，前台恢复时重新注册并主动同步；销毁时取消网络和好友通知延迟任务，避免 WebView 销毁后的回调与重复重连。
+- **APK 资源**：`build_apk.js` 默认采用 `minimal` 清单，当前 staging 复制 25 个 Web 资源（另含入口 `index.html`），移除未压缩开发副本；保留五套离线主题及其仍被主题页直接引用的 MQTT/P2P/PeerJS 适配层。`conservative` 可恢复旧版未压缩兼容副本，`all` 可恢复完整 Web 资源；`--print-resource-manifest` 可在不读取签名信息时审计清单。AI Worker 内嵌源统一换行，避免 Windows/Unix 生成差异。
+- **构建产物**：候选 APK 为 1,628,920 bytes，SHA-256 `12F8949178075BB60CB52F865EF70B1D36B66819B1AD66C36BD59D54F17B84C9`；相对上一正式 APK 1,760,382 bytes 减少 131,462 bytes（约 7.47%）。`aapt dump badging` 为 `versionName=1.0.123`、`versionCode=124`；`apksigner` v1/v2/v3 均通过、单签名者和原签名证书保持不变。
+- **本地验证**：`python tests/apk_asset_manifest_smoke.py`、`python tests/android_lifecycle_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/game_social_variants_smoke.py`、`python tests/announcement_center_static_smoke.py`、`python tests/game_social_dock_smoke.py`、`python tests/social_frontend_smoke.py`、`python tests/online_transport_smoke.py`、`python tests/online_reconnect_smoke.py`、`python tests/online_relay_smoke.py`、`python tests/online_no_public_mqtt_smoke.py`、`python tests/lazy_feature_smoke.py`、`python tests/optimization_smoke.py`、`python tests/online_match_race_smoke.py`、`python tests/ai_worker_smoke.py`、`python tests/avatar_asset_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、`node tests/worker_unit.js`、`node tests/turn_worker_unit.js`、`node tests/auth_refresh_unit.js`、`node tests/social_worker_unit.js` 均通过；`node --check build_apk.js`、`node --check build_ai_worker.js` 和 `git diff --check` 通过。浏览器 4 倍 CPU 降速下的启动/联机冒烟通过，但尚未取得真机/MuMu 的 10 次冷启动中位数，因此不能宣称达到计划中的 35% 实测改善。
+
+本轮改动待最终审查后提交私有仓库；默认不上传或发布 APK。后续若需正式发版，仍须先在手机和 MuMu 安装验收，再使用原签名构建、校验 v1/v2/v3、创建 Release，并按授权决定是否部署后端；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。

@@ -210,8 +210,23 @@ public class MainActivity extends Activity {
     private static final String SOCIAL_NOTIFICATION_OPEN_EXTRA = "open_friends";
     private String mPendingChatExportContent;
     private boolean mOpenFriendsAfterNotification;
-    private ConnectivityManager mConnectivityManager;
+    private volatile ConnectivityManager mConnectivityManager;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
+    private boolean mNetworkMonitorRegistered;
+    private volatile boolean mUsingDefaultNetworkCallback;
+    private volatile boolean mActivityResumed;
+    private volatile boolean mDestroyed;
+    private String mPendingNetworkReason;
+    private static final long NETWORK_EVENT_DEBOUNCE_MS = 250L;
+    private final Runnable mDispatchNetworkChange = this::dispatchPendingNetworkChange;
+    private final Runnable mOpenFriendsAfterNotificationTask = () -> {
+        if (mDestroyed || mWebView == null) return;
+        mWebView.evaluateJavascript(
+                "if (typeof window.openFriendsModal === 'function') window.openFriendsModal();",
+                null
+        );
+    };
+    // 只在主线程递增；原生网络回调可能来自 ConnectivityService 的 Binder 线程。
     private long mNetworkEventSequence = 0L;
 
     /**
@@ -340,10 +355,8 @@ public class MainActivity extends Activity {
     private void openFriendsAfterNotificationIfReady() {
         if (!mOpenFriendsAfterNotification || mWebView == null) return;
         mOpenFriendsAfterNotification = false;
-        mWebView.postDelayed(() -> mWebView.evaluateJavascript(
-                "if (typeof window.openFriendsModal === 'function') window.openFriendsModal();",
-                null
-        ), 180L);
+        mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);
+        mMainHandler.postDelayed(mOpenFriendsAfterNotificationTask, 180L);
     }
 
     private void registerNetworkMonitor() {
@@ -357,45 +370,99 @@ public class MainActivity extends Activity {
             mNetworkCallback = new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onAvailable(Network network) {
-                    notifyWebNetworkChanged("network_available");
+                    notifyWebNetworkChanged("network_available", network);
                 }
 
                 @Override
                 public void onLost(Network network) {
-                    notifyWebNetworkChanged("network_lost");
+                    notifyWebNetworkChanged("network_lost", network);
                 }
 
                 @Override
                 public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
-                    notifyWebNetworkChanged("network_capabilities_changed");
+                    notifyWebNetworkChanged("network_capabilities_changed", network);
                 }
             };
-            mConnectivityManager.registerNetworkCallback(request, mNetworkCallback);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                // Android N+ 直接监听系统默认网络，避免 Wi-Fi、移动网络和 VPN
+                // 同时存在时为每个候选网络都触发一次页面重连。
+                mUsingDefaultNetworkCallback = true;
+                mConnectivityManager.registerDefaultNetworkCallback(mNetworkCallback);
+            } else {
+                // Lollipop/Marshmallow 没有默认网络回调，只能使用能力请求；
+                // notifyWebNetworkChanged 会在 M+ 过滤掉非活动网络，并统一去抖。
+                mUsingDefaultNetworkCallback = false;
+                mConnectivityManager.registerNetworkCallback(request, mNetworkCallback);
+            }
+            mNetworkMonitorRegistered = true;
         } catch (Exception e) {
             android.util.Log.w("MainActivity", "Network monitor unavailable: " + e.getMessage());
             mNetworkCallback = null;
+            mNetworkMonitorRegistered = false;
+            mUsingDefaultNetworkCallback = false;
         }
     }
 
     private void unregisterNetworkMonitor() {
-        if (mConnectivityManager == null || mNetworkCallback == null) return;
-        try {
-            mConnectivityManager.unregisterNetworkCallback(mNetworkCallback);
-        } catch (Exception ignored) {}
+        mMainHandler.removeCallbacks(mDispatchNetworkChange);
+        mPendingNetworkReason = null;
+        ConnectivityManager manager = mConnectivityManager;
+        ConnectivityManager.NetworkCallback callback = mNetworkCallback;
+        boolean registered = mNetworkMonitorRegistered;
         mNetworkCallback = null;
         mConnectivityManager = null;
+        mNetworkMonitorRegistered = false;
+        mUsingDefaultNetworkCallback = false;
+        if (!registered || manager == null || callback == null) return;
+        try {
+            manager.unregisterNetworkCallback(callback);
+        } catch (Exception ignored) {}
     }
 
     private void notifyWebNetworkChanged(final String reason) {
-        final long sequence = ++mNetworkEventSequence;
-        runOnUiThread(() -> {
-            if (mWebView == null) return;
-            String safeReason = org.json.JSONObject.quote(reason == null ? "network_changed" : reason);
-            String safeSequence = org.json.JSONObject.quote("android-network-" + sequence);
-            mWebView.evaluateJavascript(
-                    "if (window.__gomokuNativeNetworkChanged) window.__gomokuNativeNetworkChanged(" +
-                            safeReason + "," + safeSequence + ");", null);
+        scheduleWebNetworkChanged(reason);
+    }
+
+    private boolean isRelevantNetwork(Network network) {
+        if (mDestroyed || network == null || mUsingDefaultNetworkCallback) return !mDestroyed;
+        // API 23 起可以精确识别当前活动网络。API 21-22 没有对应的
+        // ConnectivityManager API，仍使用请求回调，但由下面的去抖兜底。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && mConnectivityManager != null) {
+            Network active = mConnectivityManager.getActiveNetwork();
+            return active == null || active.equals(network);
+        }
+        return true;
+    }
+
+    private void notifyWebNetworkChanged(final String reason, Network network) {
+        if (!isRelevantNetwork(network)) return;
+        scheduleWebNetworkChanged(reason);
+    }
+
+    private void scheduleWebNetworkChanged(final String reason) {
+        if (mDestroyed) return;
+        mMainHandler.post(() -> {
+            if (mDestroyed || !mActivityResumed || mWebView == null) return;
+            mPendingNetworkReason = reason == null ? "network_changed" : reason;
+            mMainHandler.removeCallbacks(mDispatchNetworkChange);
+            mMainHandler.postDelayed(mDispatchNetworkChange, NETWORK_EVENT_DEBOUNCE_MS);
         });
+    }
+
+    private void dispatchPendingNetworkChange() {
+        if (mDestroyed || !mActivityResumed || mWebView == null) {
+            mPendingNetworkReason = null;
+            return;
+        }
+        String reason = mPendingNetworkReason;
+        mPendingNetworkReason = null;
+        if (reason == null) return;
+        long sequence = ++mNetworkEventSequence;
+        String safeReason = org.json.JSONObject.quote(reason);
+        String safeSequence = org.json.JSONObject.quote("android-network-" + sequence);
+        mWebView.evaluateJavascript(
+                "if (window.__gomokuNativeNetworkChanged) window.__gomokuNativeNetworkChanged(" +
+                        safeReason + "," + safeSequence + ");", null);
     }
 
     @Override
@@ -1094,12 +1161,16 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        mActivityResumed = true;
         if (mSplashView != null) {
             mSplashView.resumeAnimation();
         }
         if (mWebView != null) {
             mWebView.onResume();
             mWebView.resumeTimers();
+            if (!mNetworkMonitorRegistered || mNetworkCallback == null) {
+                registerNetworkMonitor();
+            }
             notifyWebNetworkChanged("android_resume");
         }
         // 如果是从系统授权页面返回且已获得安装权限，立即呼起安装已下载好的安装包
@@ -1135,6 +1206,9 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        mActivityResumed = false;
+        mMainHandler.removeCallbacks(mDispatchNetworkChange);
+        mPendingNetworkReason = null;
         super.onPause();
         if (mSplashView != null) {
             mSplashView.pauseAnimation();
@@ -1143,6 +1217,9 @@ public class MainActivity extends Activity {
             mWebView.onPause();
             mWebView.pauseTimers();
         }
+        // 页面进入后台后不需要继续接收多网络能力变化；恢复时重新注册默认
+        // 网络回调并主动同步一次，避免后台回调堆积和回前台重复重连。
+        unregisterNetworkMonitor();
     }
 
     private static volatile boolean sIsDownloading = false;
@@ -1337,7 +1414,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mDestroyed = true;
+        mActivityResumed = false;
         mMainHandler.removeCallbacks(mSplashFailSafe);
+        mMainHandler.removeCallbacks(mDispatchNetworkChange);
+        mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);
         if (mSplashView != null) {
             mSplashView.stopAnimation();
             mSplashView = null;
