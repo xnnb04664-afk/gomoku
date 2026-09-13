@@ -4661,6 +4661,9 @@
     badgeScheduled: false
   };
 
+  const socialUnreadState = window.GomokuSocialUnreadState || { world: 0, announcements: 0 };
+  window.GomokuSocialUnreadState = socialUnreadState;
+
   const byId = id => document.getElementById(id);
   const textOf = value => String(value == null ? '' : value);
   const registered = () => {
@@ -4741,19 +4744,22 @@
 
   function applyUnifiedUnreadBadges() {
     state.badgeScheduled = false;
+    socialUnreadState.world = state.unread;
     const totalIds = ['socialUnreadBadge', 'gameFriendsUnreadBadge', 'gameDockUnreadBadge'];
     totalIds.forEach(id => {
       const node = byId(id);
       if (!node) return;
-      const rendered = Number(node.dataset.worldRenderedUnread);
+      const rendered = Number(node.dataset.socialUnreadRendered);
       const current = parseBadgeCount(node);
+      const extras = (Number(node.dataset.socialUnreadWorld) || 0) + (Number(node.dataset.socialUnreadAnnouncements) || 0);
       const base = Number.isFinite(rendered) && rendered === current
-        ? (Number(node.dataset.worldBaseUnread) || 0)
-        : current;
-      const total = Math.min(999, Math.max(0, base + state.unread));
-      node.dataset.worldBaseUnread = String(base);
-      node.dataset.worldRenderedUnread = String(total);
-      node.dataset.worldUnread = String(state.unread);
+        ? (Number(node.dataset.socialUnreadBase) || 0)
+        : Math.max(0, current - extras);
+      const total = Math.min(999, Math.max(0, base + socialUnreadState.world + socialUnreadState.announcements));
+      node.dataset.socialUnreadBase = String(base);
+      node.dataset.socialUnreadRendered = String(total);
+      node.dataset.socialUnreadWorld = String(socialUnreadState.world);
+      node.dataset.socialUnreadAnnouncements = String(socialUnreadState.announcements);
       if (node.textContent !== (total > 99 ? '99+' : total ? String(total) : '')) node.textContent = total > 99 ? '99+' : total ? String(total) : '';
       node.style.display = total > 0 ? 'inline-flex' : 'none';
       setIfChanged(node, 'aria-hidden', total <= 0 ? 'true' : 'false');
@@ -4794,6 +4800,8 @@
     const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
     raf(applyUnifiedUnreadBadges);
   }
+
+  window.GomokuSocialUnreadRefresh = scheduleBadges;
 
   function ensurePanel() {
     let panel = byId('worldChatPanel');
