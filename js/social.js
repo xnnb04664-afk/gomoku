@@ -279,12 +279,24 @@
   }
 
   function updateUnreadBadge() {
-    const total = state.friends.reduce((sum, friend) => sum + (Number(friend.unread) || 0), 0) + state.requests.filter(item => item.direction === 'incoming').length + state.pendingInvites.size;
+    const friendTotal = state.friends.reduce((sum, friend) => sum + (Number(friend.unread) || 0), 0) + state.requests.filter(item => item.direction === 'incoming').length + state.pendingInvites.size;
+    const shared = window.GomokuSocialUnreadState || (window.GomokuSocialUnreadState = { world: 0, announcements: 0 });
+    // 让世界频道/公告的统一刷新知道好友基数，避免它们刷新时重复叠加或覆盖好友未读。
+    shared.friends = Math.max(0, friendTotal);
+    const worldTotal = Math.max(0, Number(shared.world) || 0);
+    const announcementTotal = Math.max(0, Number(shared.announcements) || 0);
+    const total = Math.min(999, friendTotal + worldTotal + announcementTotal);
     const text = total > 99 ? '99+' : String(total || '');
-    const label = total > 0 ? `${total} 条好友动态` : '没有好友动态';
+    const label = total > 0
+      ? `${total} 条${worldTotal > 0 || announcementTotal > 0 ? '社交' : '好友'}动态`
+      : '没有好友动态';
     ['socialUnreadBadge', 'gameFriendsUnreadBadge', 'gameDockUnreadBadge'].forEach(id => {
       const badge = byId(id);
       if (!badge) return;
+      badge.dataset.socialUnreadBase = String(friendTotal);
+      badge.dataset.socialUnreadRendered = String(total);
+      badge.dataset.socialUnreadWorld = String(worldTotal);
+      badge.dataset.socialUnreadAnnouncements = String(announcementTotal);
       badge.textContent = text;
       badge.style.display = total > 0 ? 'inline-flex' : 'none';
       badge.setAttribute('aria-hidden', String(total <= 0));
@@ -303,6 +315,9 @@
       fab.setAttribute('title', fabLabel);
     }
     state.lastUnreadTotal = total;
+    try {
+      if (typeof window.GomokuSocialUnreadRefresh === 'function') window.GomokuSocialUnreadRefresh();
+    } catch (_) {}
   }
 
   function requestNotificationPermission() {

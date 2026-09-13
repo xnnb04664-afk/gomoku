@@ -58,6 +58,7 @@ def main():
             "GomokuSocialUnreadState", "GomokuSocialUnreadRefresh",
             "gomoku_announcements_cache_v1", "/api/announcements",
             "safeActionUrl", "游客阅读不写入账号状态",
+            "btnGameAnnouncementsPublic", "openPublicGameAnnouncements",
         ):
             assert marker in source, f"{path}: 天空/公告增强缺失 {marker}"
         assert re.search(r"doubleStarEndgame\s*:\s*false", source) and re.search(r"weatherSeason\s*:\s*false", source), f"{path}: 未启用未来功能钩子"
@@ -73,6 +74,8 @@ def main():
         assert "gomoku_announcements_cache_v1" in announcement
         assert "加载更早公告" in announcement and "已过期或撤下" in announcement
         assert "公告会保留在云端数据库" in announcement
+        assert "panel.classList.add('show')" in announcement
+        assert "panel.classList.remove('show')" in announcement
         assert "attributes: true" not in announcement
         announcement_tag = re.search(r'<script id="announcementCenterEnhancements"[^>]*>', source).group(0)
         assert "defer" not in announcement_tag and "async" not in announcement_tag
@@ -85,6 +88,10 @@ def main():
         result_gate = sky.index("result.classList.contains('show')")
         assert sky.index("playVictoryAfterglow()", result_gate) > result_gate
         assert "doubleStarEndgame: false" in sky and "weatherSeason: false" in sky
+
+        world = extract_block(source, "script", "worldChatEnhancements")
+        assert re.search(r"RETRY_DELAYS\s*=\s*\[0,\s*1000,\s*2000,\s*4000,\s*8000,\s*12000\]", world)
+        assert "url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'" in world
 
     for tag, ident in (
         ("style", "skyIslandEnhancementsStyle"),
@@ -124,6 +131,15 @@ def main():
     for marker in ("CREATE TABLE IF NOT EXISTS announcements", "CREATE TABLE IF NOT EXISTS announcement_state", "idx_announcements_public"):
         assert marker in migration, f"迁移缺少 {marker}"
     assert "DELETE FROM announcements" not in migration
+
+    social = (ROOT / "js" / "social.js").read_text(encoding="utf-8")
+    android_social = (ROOT / "android_src" / "assets" / "js" / "social.js").read_text(encoding="utf-8")
+    assert social == android_social, "Android 社交源文件必须与网页同步"
+    assert "window.GomokuSocialUnreadState" in social
+    assert "shared.world" in social and "shared.announcements" in social
+    assert "friendTotal + worldTotal + announcementTotal" in social
+    assert "shared.friends = Math.max(0, friendTotal)" in social
+    assert "socialUnreadBase" in social and "GomokuSocialUnreadRefresh" in social
 
     # Offline private messages are inserted before affinity/notification work.
     post = backend.index("/api/messages")

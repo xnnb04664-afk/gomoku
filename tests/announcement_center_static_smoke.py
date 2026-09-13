@@ -40,6 +40,7 @@ def main():
             "GomokuSocialUnreadRefresh", "gomoku_announcements_cache_v1",
             "/api/announcements", "safeActionUrl", "textContent",
             "游客阅读不写入账号状态", "公告会保留在云端数据库",
+            "btnGameAnnouncementsPublic", "openPublicGameAnnouncements",
         ):
             assert marker in source, f"{path}: missing announcement marker {marker}"
         announcement_tag = re.search(
@@ -62,6 +63,12 @@ def main():
         assert "javascript:" not in announcement.lower()
         assert "data:" not in announcement.lower()
         assert "公告中心，" in announcement and "条未读" in announcement
+        assert "panel.classList.add('show')" in announcement
+        assert "panel.classList.remove('show')" in announcement
+
+        world = block(source, "script", "worldChatEnhancements")
+        assert re.search(r"RETRY_DELAYS\s*=\s*\[0,\s*1000,\s*2000,\s*4000,\s*8000,\s*12000\]", world)
+        assert "url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'" in world
 
         sky = block(source, "script", "skyIslandEnhancements")
         assert "skyObserverBound" in sky
@@ -115,6 +122,14 @@ def main():
     ):
         assert marker in migration, f"migration missing {marker}"
     assert "DELETE FROM announcements" not in migration
+    social = (ROOT / "js" / "social.js").read_text(encoding="utf-8")
+    android_social = (ROOT / "android_src" / "assets" / "js" / "social.js").read_text(encoding="utf-8")
+    assert social == android_social, "Android social source must stay in sync"
+    assert "window.GomokuSocialUnreadState" in social
+    assert "shared.world" in social and "shared.announcements" in social
+    assert "friendTotal + worldTotal + announcementTotal" in social
+    assert "shared.friends = Math.max(0, friendTotal)" in social
+    assert "socialUnreadBase" in social and "GomokuSocialUnreadRefresh" in social
     print("announcement center static smoke: PASS")
 
 

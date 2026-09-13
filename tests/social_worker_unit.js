@@ -108,9 +108,9 @@ class MemoryStatement {
       const message = this.db.messages.find(row => row.sender_uid === a[0] && row.client_message_id === a[1]);
       return message ? this.db.publicMessage(message) : null;
     }
-    if (q.includes('select uid from social_socket_tickets')) {
+    if (q.includes('from social_socket_tickets') && q.includes('ticket_hash = ?')) {
       const row = this.db.tickets.get(String(a[0]));
-      return row && row.used === 0 && row.expires_at > Number(a[1]) ? { uid: row.uid } : null;
+      return row && row.used === 0 && row.expires_at > Number(a[1]) ? { uid: row.uid, channel: row.channel || 'friends' } : null;
     }
     if (q.includes('select * from game_invites where id = ? and receiver_uid = ?')) {
       const invite = this.db.gameInvites.get(String(a[0]));
@@ -259,7 +259,7 @@ class MemoryStatement {
       return { meta: { changes: 1 } };
     }
     if (q.startsWith('insert into social_socket_tickets')) {
-      this.db.tickets.set(String(a[0]), { uid: String(a[1]), expires_at: Number(a[2]), used: 0 });
+      this.db.tickets.set(String(a[0]), { uid: String(a[1]), expires_at: Number(a[2]), used: 0, channel: String(a[3] || 'friends') });
       return { meta: { changes: 1 } };
     }
     if (q.startsWith('update social_socket_tickets set used = 1')) {

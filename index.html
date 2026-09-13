@@ -440,6 +440,17 @@
         }
         return opened;
       };
+      // 公告是公开内容，游客也可以从游戏页直接阅读；正式账号仍会在好友中心看到同一入口。
+      window.openPublicGameAnnouncements = function() {
+        const open = window.GomokuAnnouncements && window.GomokuAnnouncements.open;
+        if (typeof open === 'function') return open();
+        // 公告脚本在页面底部注册，极早点击时给它一个短暂的加载机会。
+        window.setTimeout(() => {
+          const retry = window.GomokuAnnouncements && window.GomokuAnnouncements.open;
+          if (typeof retry === 'function') retry();
+        }, 0);
+        return false;
+      };
       window.refreshGameEconomy = refreshGameEconomy;
       document.addEventListener('DOMContentLoaded', () => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200), { once: true });
       const GAME_FEATURE_PANEL_CONFIG = Object.freeze({
@@ -926,6 +937,30 @@
       outline: 2px solid rgba(14, 165, 233, .55);
       outline-offset: 1px;
     }
+    .game-social-dock-public-announcement {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 20px;
+      padding: 2px 8px;
+      border: 1px solid rgba(217, 119, 6, .28);
+      border-radius: 999px;
+      background: rgba(255, 247, 237, .92);
+      color: #b45309;
+      font-size: 10px;
+      font-weight: 900;
+      line-height: 1.1;
+      cursor: pointer;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+    .game-social-dock-public-announcement:hover { background: #fff7ed; }
+    .game-social-dock-public-announcement:focus-visible {
+      outline: 2px solid rgba(245, 158, 11, .55);
+      outline-offset: 1px;
+    }
+    .game-social-dock-public-announcement .game-social-unread-badge { top: -7px; right: -7px; }
     .game-social-dock-fab {
       position: fixed;
       right: max(8px, calc(50% - 260px));
@@ -2490,6 +2525,7 @@
   <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
+      <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
       <button type="button" class="game-social-dock-toggle" id="btnGameDockToggle" onclick="toggleGameDockCollapsed()" aria-controls="gameSocialDock" aria-expanded="true" aria-label="收起八个游戏功能按钮">⌄</button>
     </div>
     <div class="game-social-dock-grid" id="gameSocialDockGrid" role="list" aria-label="游戏功能八宫格">
@@ -3592,7 +3628,8 @@
 
   const MAX_CHARS = 500;
   const PAGE_SIZE = 50;
-  const RETRY_DELAYS = [1000, 3000, 8000, 15000];
+  // 与好友社交模块统一：立即重试后按 1/2/4/8/12 秒退避。
+  const RETRY_DELAYS = [0, 1000, 2000, 4000, 8000, 12000];
   const state = {
     messages: [],
     oldestId: 0,
@@ -3945,6 +3982,8 @@
       const ticket = textOf(result.data && result.data.ticket);
       if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) throw new Error('世界频道连接票据无效');
       const url = new URL('/api/world/socket', socketOrigin(result.response));
+      // fetch 探针返回 HTTPS，但 WebSocket 必须使用 WSS（本地 HTTP 则保持 WS）。
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       url.searchParams.set('ticket', ticket);
       const socket = new WebSocket(url.href);
       state.socket = socket;
@@ -4218,18 +4257,21 @@
   }
 
   function applyEntryBadge() {
-    const entry = byId('btnAnnouncements');
-    if (!entry) return;
     const count = Math.max(0, Number(state.unread) || 0);
-    entry.classList.toggle('has-unread', count > 0);
-    entry.setAttribute('aria-label', count > 0 ? '公告中心，' + count + ' 条未读' : '公告中心');
-    const badge = byId('announcementCenterUnreadBadge');
-    if (badge) {
+    const label = count > 0 ? '公告中心，' + count + ' 条未读' : '公告中心';
+    [
+      { entry: byId('btnAnnouncements'), badge: byId('announcementCenterUnreadBadge') },
+      { entry: byId('btnGameAnnouncementsPublic'), badge: byId('gameAnnouncementUnreadBadge') }
+    ].forEach(({ entry, badge }) => {
+      if (!entry) return;
+      entry.classList.toggle('has-unread', count > 0);
+      entry.setAttribute('aria-label', label);
+      if (!badge) return;
       badge.textContent = count > 99 ? '99+' : count ? String(count) : '';
       badge.style.display = count > 0 ? 'inline-flex' : 'none';
       badge.setAttribute('aria-hidden', count > 0 ? 'false' : 'true');
       badge.setAttribute('aria-label', count > 0 ? count + ' 条公告未读' : '没有公告未读');
-    }
+    });
   }
 
   function scheduleBadges() {
@@ -4467,6 +4509,7 @@
     const panel = byId('announcementCenterPanel');
     panel.setAttribute('aria-hidden', 'false');
     panel.style.display = 'flex';
+    panel.classList.add('show');
     render();
     await Promise.all([loadList(false), refreshUnread()]);
   }
@@ -4475,6 +4518,7 @@
     const panel = byId('announcementCenterPanel');
     if (!panel) return;
     state.panelOpen = false;
+    panel.classList.remove('show');
     panel.setAttribute('aria-hidden', 'true');
     panel.style.display = 'none';
   }

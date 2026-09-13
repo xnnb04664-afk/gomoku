@@ -440,13 +440,70 @@
         }
         return opened;
       };
+      // 公告是公开内容，游客也可以从游戏页直接阅读；正式账号仍会在好友中心看到同一入口。
+      window.openPublicGameAnnouncements = function() {
+        const open = window.GomokuAnnouncements && window.GomokuAnnouncements.open;
+        if (typeof open === 'function') return open();
+        // 公告脚本在页面底部注册，极早点击时给它一个短暂的加载机会。
+        window.setTimeout(() => {
+          const retry = window.GomokuAnnouncements && window.GomokuAnnouncements.open;
+          if (typeof retry === 'function') retry();
+        }, 0);
+        return false;
+      };
       window.refreshGameEconomy = refreshGameEconomy;
       document.addEventListener('DOMContentLoaded', () => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200), { once: true });
+      const GAME_FEATURE_PANEL_CONFIG = Object.freeze({
+        recent: { icon: '🧑‍🤝‍🧑', title: '最近对手', subtitle: '最近 30 个完成身份确认的正式账号对手' },
+        bag: { icon: '🎒', title: '背包', subtitle: '棋盘、棋子和活动道具都从这里查看' },
+        tasks: { icon: '🗓️', title: '任务中心', subtitle: '完成对局和签到，逐步解锁活动奖励' },
+        achievements: { icon: '🏅', title: '成就墙', subtitle: '记录你的五连珠、联机和社交里程碑' }
+      });
+      function gameFeaturePanelAction(action) {
+        const close = () => window.closeGameFeaturePanel();
+        if (action === 'friend') { close(); return window.openGameAffinity(); }
+        if (action === 'activity') { close(); return window.openGameActivity(); }
+        if (action === 'online') { close(); return typeof window.openOnlineModal === 'function' ? window.openOnlineModal('match') : false; }
+        if (action === 'settings') { close(); return window.openGameSettings(); }
+        if (action === 'login') { close(); return typeof window.openAuthModal === 'function' ? window.openAuthModal('login') : false; }
+        return false;
+      }
+      function renderGameFeaturePanel(type) {
+        const config = GAME_FEATURE_PANEL_CONFIG[type];
+        const body = document.getElementById('gameFeaturePanelBody');
+        const icon = document.getElementById('gameFeaturePanelIcon');
+        const title = document.getElementById('gameFeaturePanelTitle');
+        const subtitle = document.getElementById('gameFeaturePanelSubtitle');
+        if (!config || !body || !icon || !title || !subtitle) return false;
+        icon.textContent = config.icon;
+        title.textContent = config.title;
+        subtitle.textContent = config.subtitle;
+        if (type === 'recent') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>棋局结束后，棋友不会丢</strong><span>好友房、房间码和全服匹配的正式账号对手会进入这里。可直接申请好友或拉黑。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>林间听雨</strong><small>刚刚对局 · 直连 18ms · 白方</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">加好友</button></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🪵</span><span class="game-feature-panel-row-main"><strong>MuMu-棋友</strong><small>昨天对局 · WebSocket 中继 · 黑方</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">加好友</button></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="online">⚡ 邀请下一局</button><button type="button" class="btn-chat-tool" data-game-panel-action="friend">👥 搜索好友</button></div><div class="game-feature-panel-foot">只有完成身份确认的正式账号对手会记录；被拉黑的用户不会再次出现在这里。</div>`;
+        } else if (type === 'bag') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>把喜欢的棋盘留在手边</strong><span>当前版本先展示你的装扮位置，主题切换仍在“设置”里完成。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>晴空浮岛草坪版</strong><small>当前使用 · 官方默认棋盘</small></span><span style="color:#16a34a;font-size:10px;font-weight:900;">已装备</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🎨</span><span class="game-feature-panel-row-main"><strong>更多主题与棋子</strong><small>后续活动和装扮会在这里统一管理</small></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">预留</span></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="settings">🎨 打开设置换装</button></div><div class="game-feature-panel-foot">背包入口已经固定在八宫格中，后续新增装扮无需改动底部布局。</div>`;
+        } else if (type === 'tasks') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>今天做三件小事</strong><span>签到奖励和任务状态只对正式账号云端保存；游客可以先查看入口。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🎁</span><span class="game-feature-panel-row-main"><strong>每日签到</strong><small>领取 10 金币 · 今日待签到</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><button type="button" class="btn-chat-tool" data-game-panel-action="activity">去签到</button></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">⚫</span><span class="game-feature-panel-row-main"><strong>完成 1 局对弈</strong><small>完成本地 AI、好友房或匹配对局</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">0 / 1</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">👥</span><span class="game-feature-panel-row-main"><strong>和棋友说句话</strong><small>好友私聊成功发送一条文字消息</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">0 / 1</span></div></div><div class="game-feature-panel-foot">任务奖励规则会随活动开放逐步接入；当前签到按钮已经可以使用。</div>`;
+        } else if (type === 'achievements') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>每一手都算数</strong><span>这里记录棋局、联机和社交里的长期里程碑，不影响普通对弈。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🏁</span><span class="game-feature-panel-row-main"><strong>第一手</strong><small>完成一次本地对弈</small></span><span style="color:#16a34a;font-size:10px;font-weight:900;">已解锁</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🏆</span><span class="game-feature-panel-row-main"><strong>五连珠</strong><small>在棋盘上完成一次五子连珠</small></span><span style="color:#f59e0b;font-size:10px;font-weight:900;">进行中</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">💞</span><span class="game-feature-panel-row-main"><strong>棋友相逢</strong><small>添加好友并完成一次私聊</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">去完成</button></div></div><div class="game-feature-panel-foot">成就入口先提供统一承载面，后续会接入完整进度和奖励明细。</div>`;
+        }
+        body.querySelectorAll('[data-game-panel-action]').forEach(button => button.addEventListener('click', () => gameFeaturePanelAction(button.dataset.gamePanelAction)));
+        return true;
+      }
+      window.openGameFeaturePanel = function(type) {
+        const modal = document.getElementById('gameFeaturePanelModal');
+        if (!modal || !renderGameFeaturePanel(type)) return false;
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+        return true;
+      };
+      window.closeGameFeaturePanel = function() {
+        const modal = document.getElementById('gameFeaturePanelModal');
+        if (modal) { modal.classList.remove('show'); modal.setAttribute('aria-hidden', 'true'); }
+      };
       window.openGameFeaturePlaceholder = function(label) {
-        const name = String(label || '该功能').slice(0, 24);
-        const message = `🧪 ${name}正在准备中，先把这一局下完吧！`;
-        if (typeof window.showGameNotice === 'function') window.showGameNotice(message, false);
-        else console.info('[game feature placeholder]', name);
+        const key = ({ '最近对手': 'recent', '背包': 'bag', '任务中心': 'tasks', '成就': 'achievements' })[String(label || '')] || 'recent';
+        return window.openGameFeaturePanel(key);
       };
       window.openGameSettings = function() {
         applyGameDockOrder(readGameDockOrder());
@@ -2053,6 +2110,30 @@
       outline: 2px solid rgba(14, 165, 233, .55);
       outline-offset: 1px;
     }
+    .game-social-dock-public-announcement {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 20px;
+      padding: 2px 8px;
+      border: 1px solid rgba(217, 119, 6, .28);
+      border-radius: 999px;
+      background: rgba(255, 247, 237, .92);
+      color: #b45309;
+      font-size: 10px;
+      font-weight: 900;
+      line-height: 1.1;
+      cursor: pointer;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+    .game-social-dock-public-announcement:hover { background: #fff7ed; }
+    .game-social-dock-public-announcement:focus-visible {
+      outline: 2px solid rgba(245, 158, 11, .55);
+      outline-offset: 1px;
+    }
+    .game-social-dock-public-announcement .game-social-unread-badge { top: -7px; right: -7px; }
     .game-social-dock-fab {
       position: fixed;
       right: max(8px, calc(50% - 260px));
@@ -2146,7 +2227,6 @@
     }
     #btnGameFriends { position: relative; overflow: visible; background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
     .game-social-dock-fab .game-social-unread-badge { top: -7px; right: -7px; border-color: #fffdf5; }
-    #btnGameFriends { background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
     #btnGameActivity { background: linear-gradient(135deg, #fff7ed, #ffedd5); border-color: #fdba74; color: #c2410c; }
     #btnGameSettings { background: linear-gradient(135deg, #f1f5f9, #e2e8f0); border-color: #cbd5e1; color: #475569; }
     .game-social-dock-grid button:nth-child(2),
@@ -2188,6 +2268,27 @@
     .game-recharge-package:hover { background: #f3e8ff; }
     .game-recharge-package span:last-child { padding: 3px 6px; border-radius: 6px; background: #ede9fe; color: #7c3aed; font-size: 10px; white-space: nowrap; }
     .game-activity-muted { color: #94a3b8; font-size: 10px; font-weight: 800; line-height: 1.35; }
+    .game-feature-panel-card { max-width:420px; width:94%; max-height:88vh; overflow-y:auto; padding:15px; text-align:left; }
+    .game-feature-panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-bottom:9px; border-bottom:1.5px solid rgba(0,0,0,.08); }
+    .game-feature-panel-title { display:flex; align-items:center; gap:7px; min-width:0; color:#1e293b; font-size:16px; font-weight:900; }
+    .game-feature-panel-subtitle { margin-top:2px; color:#64748b; font-size:10.5px; font-weight:800; }
+    .game-feature-panel-close { border:0; background:transparent; color:#64748b; font-size:18px; font-weight:900; cursor:pointer; padding:2px 5px; }
+    .game-feature-panel-hero { margin:11px 0; padding:12px; border:1.5px solid #dbeafe; border-radius:13px; background:linear-gradient(135deg,#eff6ff,#f8fafc); }
+    .game-feature-panel-hero strong { display:block; color:#1e3a8a; font-size:15px; }
+    .game-feature-panel-hero span { display:block; margin-top:3px; color:#64748b; font-size:10.5px; font-weight:800; line-height:1.5; }
+    .game-feature-panel-list { display:flex; flex-direction:column; gap:7px; }
+    .game-feature-panel-row { display:flex; align-items:center; gap:9px; min-height:54px; padding:8px 9px; border:1.5px solid #e2e8f0; border-radius:11px; background:#fff; }
+    .game-feature-panel-row-icon { display:grid; place-items:center; width:34px; height:34px; flex:none; border-radius:10px; background:#f1f5f9; font-size:19px; }
+    .game-feature-panel-row-main { min-width:0; flex:1; }
+    .game-feature-panel-row-main strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#334155; font-size:12px; }
+    .game-feature-panel-row-main small { display:block; margin-top:2px; color:#94a3b8; font-size:10px; font-weight:700; line-height:1.35; }
+    .game-feature-panel-row .btn-chat-tool { flex:none; padding:5px 8px; font-size:10px; }
+    .game-feature-panel-progress { height:6px; margin-top:5px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
+    .game-feature-panel-progress span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#38bdf8,#818cf8); }
+    .game-feature-panel-empty { padding:21px 12px; border:1.5px dashed #cbd5e1; border-radius:12px; background:#f8fafc; color:#64748b; font-size:11px; font-weight:800; line-height:1.6; text-align:center; }
+    .game-feature-panel-foot { margin-top:11px; color:#94a3b8; font-size:10px; font-weight:800; line-height:1.45; text-align:center; }
+    .game-feature-panel-actions { display:flex; gap:6px; margin-top:11px; }
+    .game-feature-panel-actions > button { flex:1; }
     .game-social-dock-note {
       color: #94a3b8;
       font-size: 9px;
@@ -2781,7 +2882,7 @@
     /* --- 🌐 在线联机大厅弹窗 --- */
     /* 普通弹窗统一浮于个人资料层之上；认证/改密层在更高层独立显示。 */
     #phraseManageModal, #onlineModal, #gameReplayModal,
-    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal, #feedbackModal, #gameActivityModal {
+    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal, #feedbackModal, #gameActivityModal, #gameFeaturePanelModal {
       z-index: 300 !important;
     }
 
@@ -3228,6 +3329,10 @@
         border-radius: 10px !important;
         gap: 3px !important;
       }
+      .game-social-dock-head { min-height: 16px !important; }
+      .game-social-dock-title { font-size: 8px !important; }
+      .game-social-dock-toggle { width: 22px !important; height: 18px !important; font-size: 13px !important; }
+      .game-social-dock-fab { right: 8px; bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
       .game-social-dock-grid { gap: 3px !important; }
       .game-social-dock-grid button {
         min-height: 28px !important;
@@ -3593,6 +3698,7 @@
   <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
+      <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
       <button type="button" class="game-social-dock-toggle" id="btnGameDockToggle" onclick="toggleGameDockCollapsed()" aria-controls="gameSocialDock" aria-expanded="true" aria-label="收起八个游戏功能按钮">⌄</button>
     </div>
     <div class="game-social-dock-grid" id="gameSocialDockGrid" role="list" aria-label="游戏功能八宫格">
@@ -3638,6 +3744,20 @@
         <div id="gameRechargeStatus" aria-live="polite" style="margin-top:7px; padding:7px 8px; border-radius:8px; background:#f8fafc; color:#64748b; font-size:10px; font-weight:800; line-height:1.35;">当前没有可用支付渠道，不会扣款；正式支付接入后会在此完成订单校验。</div>
       </div>
       <button type="button" class="btn-chat-tool" onclick="closeGameActivity()" style="width:100%; margin-top:12px; padding:8px;">关闭</button>
+    </div>
+  </div>
+
+  <!-- 🧩 游戏功能面板：最近、背包、任务、成就均从底部八宫格进入。 -->
+  <div class="online-modal-backdrop" id="gameFeaturePanelModal" aria-hidden="true" onclick="if(event.target===this)closeGameFeaturePanel()">
+    <div class="online-modal-card game-feature-panel-card" onclick="event.stopPropagation()">
+      <div class="game-feature-panel-head">
+        <div>
+          <div class="game-feature-panel-title"><span id="gameFeaturePanelIcon" aria-hidden="true">🧩</span><span id="gameFeaturePanelTitle">游戏功能</span></div>
+          <div class="game-feature-panel-subtitle" id="gameFeaturePanelSubtitle">从底部八宫格进入</div>
+        </div>
+        <button type="button" class="game-feature-panel-close" onclick="closeGameFeaturePanel()" aria-label="关闭功能面板">✕</button>
+      </div>
+      <div id="gameFeaturePanelBody"></div>
     </div>
   </div>
 
@@ -4681,7 +4801,8 @@
 
   const MAX_CHARS = 500;
   const PAGE_SIZE = 50;
-  const RETRY_DELAYS = [1000, 3000, 8000, 15000];
+  // 与好友社交模块统一：立即重试后按 1/2/4/8/12 秒退避。
+  const RETRY_DELAYS = [0, 1000, 2000, 4000, 8000, 12000];
   const state = {
     messages: [],
     oldestId: 0,
@@ -5034,6 +5155,8 @@
       const ticket = textOf(result.data && result.data.ticket);
       if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) throw new Error('世界频道连接票据无效');
       const url = new URL('/api/world/socket', socketOrigin(result.response));
+      // fetch 探针返回 HTTPS，但 WebSocket 必须使用 WSS（本地 HTTP 则保持 WS）。
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       url.searchParams.set('ticket', ticket);
       const socket = new WebSocket(url.href);
       state.socket = socket;
@@ -5307,18 +5430,21 @@
   }
 
   function applyEntryBadge() {
-    const entry = byId('btnAnnouncements');
-    if (!entry) return;
     const count = Math.max(0, Number(state.unread) || 0);
-    entry.classList.toggle('has-unread', count > 0);
-    entry.setAttribute('aria-label', count > 0 ? '公告中心，' + count + ' 条未读' : '公告中心');
-    const badge = byId('announcementCenterUnreadBadge');
-    if (badge) {
+    const label = count > 0 ? '公告中心，' + count + ' 条未读' : '公告中心';
+    [
+      { entry: byId('btnAnnouncements'), badge: byId('announcementCenterUnreadBadge') },
+      { entry: byId('btnGameAnnouncementsPublic'), badge: byId('gameAnnouncementUnreadBadge') }
+    ].forEach(({ entry, badge }) => {
+      if (!entry) return;
+      entry.classList.toggle('has-unread', count > 0);
+      entry.setAttribute('aria-label', label);
+      if (!badge) return;
       badge.textContent = count > 99 ? '99+' : count ? String(count) : '';
       badge.style.display = count > 0 ? 'inline-flex' : 'none';
       badge.setAttribute('aria-hidden', count > 0 ? 'false' : 'true');
       badge.setAttribute('aria-label', count > 0 ? count + ' 条公告未读' : '没有公告未读');
-    }
+    });
   }
 
   function scheduleBadges() {
@@ -5556,6 +5682,7 @@
     const panel = byId('announcementCenterPanel');
     panel.setAttribute('aria-hidden', 'false');
     panel.style.display = 'flex';
+    panel.classList.add('show');
     render();
     await Promise.all([loadList(false), refreshUnread()]);
   }
@@ -5564,6 +5691,7 @@
     const panel = byId('announcementCenterPanel');
     if (!panel) return;
     state.panelOpen = false;
+    panel.classList.remove('show');
     panel.setAttribute('aria-hidden', 'true');
     panel.style.display = 'none';
   }
