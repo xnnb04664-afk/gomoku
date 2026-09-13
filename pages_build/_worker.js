@@ -2186,13 +2186,14 @@ export default {
       const requestedLimit = Number(url.searchParams.get('limit'));
       const limit = Number.isSafeInteger(requestedLimit) ? Math.min(ANNOUNCEMENT_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : ANNOUNCEMENT_MAX_PAGE_SIZE;
       const now = Date.now();
+      const publicSince = now - ANNOUNCEMENT_HISTORY_WINDOW_MS;
       const rows = await env.DB.prepare(`
         SELECT id, title, published_at, pinned, expires_at, action_url
         FROM announcements
-        WHERE status = 'published' AND published_at > 0 AND published_at <= ?
+        WHERE status = 'published' AND published_at >= ? AND published_at <= ?
           AND (expires_at = 0 OR expires_at > ?) AND id < ?
         ORDER BY pinned DESC, published_at DESC, id DESC LIMIT ?
-      `).bind(now, now, before, limit).all();
+      `).bind(publicSince, now, now, before, limit).all();
       const items = (rows.results || []).map(row => ({
         id: Number(row.id) || 0,
         title: cleanAnnouncementText(row.title, ANNOUNCEMENT_TITLE_CHARS),
@@ -2207,12 +2208,13 @@ export default {
     const announcementDetail = url.pathname.match(/^\/api\/announcements\/(\\d+)$/);
     if (announcementDetail && request.method === 'GET') {
       const now = Date.now();
+      const publicSince = now - ANNOUNCEMENT_HISTORY_WINDOW_MS;
       const row = await env.DB.prepare(`
         SELECT id, title, body, published_at, pinned, expires_at, action_url
         FROM announcements
-        WHERE id = ? AND status = 'published' AND published_at > 0 AND published_at <= ?
+        WHERE id = ? AND status = 'published' AND published_at >= ? AND published_at <= ?
           AND (expires_at = 0 OR expires_at > ?)
-      `).bind(Number(announcementDetail[1]), now, now).first();
+      `).bind(Number(announcementDetail[1]), publicSince, now, now).first();
       if (!row) return json({ code: 404, msg: '公告不存在或已下线' }, 404);
       return json({ code: 0, data: {
         id: Number(row.id) || 0,
@@ -2231,12 +2233,14 @@ export default {
       if (auth.response) return auth.response;
       const state = await env.DB.prepare('SELECT last_read_id FROM announcement_state WHERE uid = ?').bind(uid).first();
       const now = Date.now();
+      const publicSince = now - ANNOUNCEMENT_HISTORY_WINDOW_MS;
+      const lastReadId = Math.max(0, Number(state?.last_read_id) || 0);
       const row = await env.DB.prepare(`
         SELECT COUNT(*) AS cnt FROM announcements
-        WHERE status = 'published' AND published_at > 0 AND published_at <= ?
+        WHERE status = 'published' AND published_at >= ? AND published_at <= ?
           AND (expires_at = 0 OR expires_at > ?) AND id > ?
-      `).bind(now, now, Number(state?.last_read_id) || 0).first();
-      return json({ code: 0, data: { unreadCount: Math.max(0, Number(row?.cnt) || 0) } });
+      `).bind(publicSince, now, now, lastReadId).first();
+      return json({ code: 0, data: { unreadCount: Math.max(0, Number(row?.cnt) || 0), lastReadId } });
     }
 
     if (url.pathname === '/api/announcements/read' && request.method === 'POST') {
@@ -2245,11 +2249,13 @@ export default {
       if (auth.response) return auth;
       const requested = Number(body.announcementId || body.lastSeenId);
       if (!Number.isSafeInteger(requested) || requested < 0) return json({ code: 400, msg: '公告已读位置无效' }, 400);
+      const readNow = Date.now();
+      const publicSince = readNow - ANNOUNCEMENT_HISTORY_WINDOW_MS;
       const latest = await env.DB.prepare(`
         SELECT MAX(id) AS max_id FROM announcements
-        WHERE status = 'published' AND published_at > 0 AND published_at <= ?
+        WHERE status = 'published' AND published_at >= ? AND published_at <= ?
           AND (expires_at = 0 OR expires_at > ?)
-      `).bind(Date.now(), Date.now()).first();
+      `).bind(publicSince, readNow, readNow).first();
       const lastRead = Math.min(requested, Math.max(0, Number(latest?.max_id) || 0));
       await env.DB.prepare(`
         INSERT INTO announcement_state (uid, last_read_id, updated_at) VALUES (?, ?, ?)
