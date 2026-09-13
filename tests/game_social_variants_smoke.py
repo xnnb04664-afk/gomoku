@@ -108,7 +108,7 @@ def main():
         "ANNOUNCEMENT_ADMIN_UIDS_ENV", "requireAnnouncementAdmin",
         "safeAnnouncementActionUrl", "/api/announcements/unread",
         "/api/announcements/read", "/api/admin/announcements",
-        "published_at >= ?", "status = 'withdrawn'",
+        "published_at >= ?", "withdrawn",
         "ON CONFLICT(uid) DO UPDATE SET last_read_id = MAX",
     ):
         assert marker in backend, f"backend 缺少 {marker}"
