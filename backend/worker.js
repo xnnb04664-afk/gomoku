@@ -2182,7 +2182,7 @@ export default {
 
     if (url.pathname === '/api/announcements' && request.method === 'GET') {
       const requestedBefore = Number(url.searchParams.get('before'));
-      const before = Number.isSafeInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : Number.MAX_SAFE_INTEGER;
+      const offset = Number.isSafeInteger(requestedBefore) && requestedBefore >= 0 ? Math.min(5000, requestedBefore) : 0;
       const requestedLimit = Number(url.searchParams.get('limit'));
       const limit = Number.isSafeInteger(requestedLimit) ? Math.min(ANNOUNCEMENT_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : ANNOUNCEMENT_MAX_PAGE_SIZE;
       const now = Date.now();
@@ -2191,9 +2191,9 @@ export default {
         SELECT id, title, published_at, pinned, expires_at, action_url
         FROM announcements
         WHERE status = 'published' AND published_at >= ? AND published_at <= ?
-          AND (expires_at = 0 OR expires_at > ?) AND id < ?
-        ORDER BY pinned DESC, published_at DESC, id DESC LIMIT ?
-      `).bind(publicSince, now, now, before, limit).all();
+          AND (expires_at = 0 OR expires_at > ?)
+        ORDER BY pinned DESC, published_at DESC, id DESC LIMIT ? OFFSET ?
+      `).bind(publicSince, now, now, limit, offset).all();
       const items = (rows.results || []).map(row => ({
         id: Number(row.id) || 0,
         title: cleanAnnouncementText(row.title, ANNOUNCEMENT_TITLE_CHARS),
@@ -2202,10 +2202,10 @@ export default {
         expiresAt: Number(row.expires_at) || 0,
         actionUrl: safeAnnouncementActionUrl(row.action_url)
       })).filter(item => item.id && item.title);
-      return json({ code: 0, data: { items, hasMore: items.length >= limit, nextBefore: items.length ? items[items.length - 1].id : 0 } });
+      return json({ code: 0, data: { items, hasMore: items.length >= limit, nextBefore: items.length ? offset + items.length : offset } });
     }
 
-    const announcementDetail = url.pathname.match(/^\/api\/announcements\/(\\d+)$/);
+    const announcementDetail = url.pathname.match(/^\/api\/announcements\/(\d+)$/);
     if (announcementDetail && request.method === 'GET') {
       const now = Date.now();
       const publicSince = now - ANNOUNCEMENT_HISTORY_WINDOW_MS;
@@ -2287,7 +2287,7 @@ export default {
       return json({ code: 0, data: { id: Number(result?.meta?.last_row_id) || 0 } });
     }
 
-    const announcementAdminEdit = url.pathname.match(/^\/api\/admin\/announcements\/(\\d+)$/);
+    const announcementAdminEdit = url.pathname.match(/^\/api\/admin\/announcements\/(\d+)$/);
     if (announcementAdminEdit && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await requireAnnouncementAdmin(body);
@@ -2311,7 +2311,7 @@ export default {
       return json({ code: 0, data: { id } });
     }
 
-    const announcementWithdraw = url.pathname.match(/^\/api\/admin\/announcements\/(\\d+)\/withdraw$/);
+    const announcementWithdraw = url.pathname.match(/^\/api\/admin\/announcements\/(\d+)\/withdraw$/);
     if (announcementWithdraw && request.method === 'POST') {
       const body = await readJsonBody(request);
       const auth = await requireAnnouncementAdmin(body);
