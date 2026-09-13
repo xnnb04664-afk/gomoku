@@ -1347,3 +1347,35 @@ node publish.js
 
 尚未运行：Playwright 桌面/手机视口几何回归、Android WebView 模拟器或真机回归、完全关闭 App 的通知实测。发布前仍需在具备依赖和设备的隔离环境运行这些测试，并复核三端构建资源哈希；本轮不部署、不发布。
 
+
+## 六十、游戏内公告中心云端实现与三端验收（2026-09-13）
+
+本节以远端 master 的实际对象为准，覆盖用户核对的 dae9008 之后提交；不以更早章节中的旧 HEAD 或“已部署/已发布”文字作为本轮完成依据。本轮仅通过 GitHub 云端接口修改代码、测试和交接文档，未修改本地工作区，未部署 Cloudflare/D1/Pages，未创建 Release，未打包或发布 APK。
+
+### 实际代码
+
+- 根页面 index.html、android_src/assets/index.html、五子棋大师_单文件版.html 三端都内嵌同一份天空棋岛、世界聊天和公告中心 style/script。公告入口插入好友/社交中心，位于世界聊天入口之后；既有八宫格顺序仍为好友、最近对手、排行、背包、任务、成就、活动签到、设置，收起态与底部对局控制区未改动。
+- 公告列表允许游客公开阅读；正文按需读取，标题/正文在客户端使用 textContent；无后端时使用安全空状态或本地摘要缓存，不因 safeApiFetch 缺失而阻塞离线对局。界面如实说明公告正文会持久保存在云端数据库，公开列表默认只展示最近 180 天且隐藏过期/撤下记录；撤下记录仍保留审计，不提供删除他人公告的“清空”操作。
+- Worker 与 Pages Worker 保持字节一致：公开列表/详情、180 天历史窗口、最多 20 条分页（受限 offset）、正式账号已读游标查询与 MAX 幂等写入；管理员新增/编辑/撤下仅由服务端 ANNOUNCEMENT_ADMIN_UIDS 允许列表和正式账号认证决定，客户端不能伪造管理员字段。行动链接只接受 HTTPS 或单斜杠站内路径，拒绝危险协议、凭据、片段和控制字符；公告路由不广播世界频道、不触发私聊通知，日志路径不输出正文、票据或密钥。
+- migrations/0003_world_chat.sql 同时包含公告表、索引和 announcement_state；状态只前进，不删除他人消息或公告。
+- 未读使用既有 GomokuSocialUnreadState 聚合器同步好友、世界聊天和公告；公告入口、好友入口、底部按钮和收起悬浮入口保留 ARIA/红点语义。游客不写入账号已读位置。
+- MutationObserver 已收窄：公告/世界只监听 body 子节点变化；天空棋岛用 body 子节点观察器发现结果节点，再对结果/复盘节点单独监听 class/style/aria 属性，增强节点自身渲染不会形成持续自触发循环。胜利余韵只在结果模态 .show 且胜利判定后触发；prefers-reduced-motion、low-spec-mode 均降级。星轨复盘在数据不足时明确使用“最近落子降级标记（非引擎判定）”，不冒充引擎分析；双星残局/天气赛季钩子继续关闭。
+
+### 本轮关键提交（均已进入远端 master）
+
+- c81e60e8eef375eae6238ac3d93c2ec781167f47：根/Android 公告中心入口与客户端。
+- 8dd246de0d00b3fa506360279e729675bc51c9e8、4974f92c0aba0208c91961756d7e27a0bd942938：公告公开历史窗口、已读游标并同步 Pages Worker。
+- 4aba66b383bc72d1dcfeb8a61b7e2ccb49ce24a9、ede7d2166a276fade119e4d612d14ddb293ae756：离线单文件实际内嵌三端增强及天空棋岛观察器/复盘文案对齐。
+- ed7f0491fa86ad9e493c9880239b9fd3b8541cbb、8921f6185c8fd5372caa4b25e182f76714839ac3：修复公告数字路由正则、分页游标和 Worker/Pages 认证失败响应。
+- 59b331b567f1c31cbc4419903de4e1becb657459、ed8a32f7588b058922da64220f68bc905ab06c35、27d9abb03bfe1b5ffcdfc4f6d6014fb735fb279d 及后续测试修正：公告静态三端、Worker 安全与旧八宫格回归断言。
+
+### 测试证据
+
+- 已在云端执行 GitHub blob 读取后的 JavaScript 静态/语法 harness：三端 6 个增强块逐字一致、八宫格顺序为 8 个固定入口、公告未读聚合/ARIA/离线缓存/危险链接过滤标记齐全；公告和天空脚本 new Function 语法检查通过；Worker 转换后语法检查通过；backend 与 Pages Worker 字节一致；迁移无公告删除语句。结果：PASS，执行时远端 HEAD 为 f224ed2a9739252043a98b3df148e47c4357b61f。
+- 已补入 tests/announcement_center_static_smoke.py，并扩展 tests/game_social_variants_smoke.py、tests/social_worker_unit.js，覆盖游客读取门禁、管理员服务端认证、分页/已读幂等、置顶/有效期/撤下、XSS/危险链接、WebSocket/世界频道隔离标记、三端入口/ARIA/红点、旧布局顺序和 MutationObserver/胜利触发约束。
+- 本轮未在本地或远程 CI 执行 python3 tests/announcement_center_static_smoke.py、python3 tests/game_social_variants_smoke.py、node tests/social_worker_unit.js；仓库当前无可用 GitHub Actions runner。Playwright 桌面/手机视口、Android WebView 模拟器/真机和完全关闭 App 的通知边界也未运行，不能据此宣称 FCM 或真机通知能力。
+
+### 当前 HEAD 与发布前步骤
+
+- 本节写入前远端 master 实际 HEAD：3bef5bf2c5c63c0a176d7908ef08566deb76ccc9；写入交接文档后会产生新的文档提交，需以该提交返回的 SHA 作为最终 HEAD。
+- 发布前在隔离环境执行上述 Python/Node 测试，补跑 Playwright（桌面、390px/320px）、Android WebView 真机/模拟器三端资源哈希与 ARIA/底部几何回归；单独验证正式账号公告管理员 allowlist、D1 migration dry-run、跨页恢复已读位置和公告过期/撤下审计。获得明确授权前继续禁止 Cloudflare/D1/Pages 部署、Release、APK 发布。
