@@ -1379,3 +1379,26 @@ node publish.js
 
 - 本次文档校准前远端 master 实际 HEAD：2cbc425d0e32a6e29ed0345e555cce883f4be5c6；本次文档提交完成后，以 GitHub 返回的提交 SHA 作为最终 HEAD。
 - 发布前在隔离环境执行上述 Python/Node 测试，补跑 Playwright（桌面、390px/320px）、Android WebView 真机/模拟器三端资源哈希与 ARIA/底部几何回归；单独验证正式账号公告管理员 allowlist、D1 migration dry-run、跨页恢复已读位置和公告过期/撤下审计。获得明确授权前继续禁止 Cloudflare/D1/Pages 部署、Release、APK 发布。
+
+## 六十一、公告公开入口与世界聊天实时链路修复（2026-09-13，已推送，预览验收）
+
+本轮接管远端任务后在独立工作区完成修复，主工作区未改写。提交 `d4a90a6` 已推送私有仓库 `master`；当前正式版本号仍为 v1.0.123 (Build 124)，没有创建新 Release、没有打包/发布 APK，也没有修改或部署 Worker、D1、TURN Secret、生产 Pages。
+
+- **公告入口**：公告弹层打开时同时设置 `.show`、`display:flex` 和 `aria-hidden=false`，关闭时移除 `.show`；游戏页八宫格上方新增公开“📣 公告”入口，游客无需经过好友登录门禁即可阅读，正式账号原好友中心入口仍保留。公告入口含独立未读 ARIA 红点，不增加八宫格数量。
+- **三端一致**：根页面、`android_src/assets/index.html` 和 `五子棋大师_单文件版.html` 已由同一母本重新生成；单文件版恢复八宫格收放按钮、悬浮展开按钮和 ARIA 未读标记。Android 社交源文件和压缩文件与网页同步。
+- **世界聊天**：三端世界频道 WebSocket 在 HTTPS 入口自动改用 `wss:`（本地 HTTP 保持 `ws:`），重连退避统一为 `0/1/2/4/8/12` 秒；长期登录令牌仍不放入 URL。
+- **好友红点**：社交模块现在把好友未读基数写入统一刷新元数据，并触发 `GomokuSocialUnreadRefresh`，与世界频道/公告未读合并时不会重复叠加或被覆盖；无共享刷新器的旧页面仍保留直接更新回退。
+- **测试修正**：社交 Worker 单元测试的内存 D1 模拟器已按实际 `SELECT uid, COALESCE(channel, ...)` 查询匹配，并保留票据频道字段；这修复了测试自身误报的 401，不放宽生产票据一次性消费规则。
+
+### 验收证据
+
+- `node --check js/social.js`、`js/social.min.js`、`backend/worker.js`、`pages_build/_worker.js`：通过。
+- `python tests/announcement_center_static_smoke.py`、`game_social_variants_smoke.py`、`game_social_dock_smoke.py`、`social_frontend_smoke.py`：通过。
+- `node tests/social_worker_unit.js`：通过，包含一次性社交票据、好友/黑名单/消息幂等和 SocialHub 多设备检查。
+- `online_transport_smoke.py`、`online_reconnect_smoke.py`、`online_relay_smoke.py`、`online_no_public_mqtt_smoke.py`、`lazy_feature_smoke.py`、`optimization_smoke.py`：通过，页面无未处理错误。
+- Playwright 本地三端及预览 `320px/390px`：公告按钮可见，弹层具有 `.show` 且计算透明度为 1，八宫格固定 8 个、收起后悬浮按钮可用、无横向溢出和页面错误。
+- 预览仅部署到 `https://preview-e491946.gomoku-home.pages.dev/play/`（本次部署 `https://5e8986c3.gomoku-home.pages.dev`），HTTP 200；稳定官网和生产 API 未替换。
+
+### 后续边界
+
+本轮未在 Android 真机/MuMu 上重新安装候选 APK，未做完全关闭 App 的系统通知实测；也未执行生产 D1/Worker/Pages 部署。若要让 APK 或正式域名包含本轮修复，应另行明确授权并按“先备份 D1、再构建签名 APK、最后发布”的流程执行；不得提交或输出任何密钥、长期令牌、聊天正文或短时票据。
