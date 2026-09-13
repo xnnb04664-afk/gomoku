@@ -92,6 +92,8 @@ def main():
     assert backend == pages, "backend and Pages Worker must stay byte-identical"
     for marker in (
         "ANNOUNCEMENT_MAX_PAGE_SIZE", "ANNOUNCEMENT_HISTORY_WINDOW_MS",
+        "ANNOUNCEMENT_TITLE_CHARS", "ANNOUNCEMENT_BODY_CHARS",
+        "ANNOUNCEMENT_ACTION_URL_CHARS", "consumeSocialRequestRate",
         "ANNOUNCEMENT_ADMIN_UIDS_ENV", "cleanAnnouncementText",
         "safeAnnouncementActionUrl", "announcementAdminUidAllowed",
         "requireAnnouncementAdmin", "/api/announcements",
