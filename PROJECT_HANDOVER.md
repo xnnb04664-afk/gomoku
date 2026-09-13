@@ -1371,7 +1371,7 @@ node publish.js
 
 ### 测试证据
 
-- 已在云端执行 GitHub blob 读取后的 JavaScript 静态/语法 harness：三端 6 个增强块逐字一致、八宫格顺序为 8 个固定入口、公告未读聚合/ARIA/离线缓存/危险链接过滤标记齐全；公告和天空脚本 new Function 语法检查通过；Worker 转换后语法检查通过；backend 与 Pages Worker 字节一致；迁移无公告删除语句。结果：PASS，执行时远端 HEAD 为 f224ed2a9739252043a98b3df148e47c4357b61f。
+- 已在云端执行 GitHub blob 读取后的 JavaScript 静态/语法 harness：三端 6 个增强块逐字一致、八宫格顺序为 8 个固定入口、公告未读聚合/ARIA/离线缓存/危险链接过滤标记齐全；公告和天空脚本 new Function 语法检查通过；Worker 转换后语法检查通过；backend 与 Pages Worker 字节一致；迁移无公告删除语句。结果：PASS；最终云端复核时远端 HEAD 为 7f755768910f3a2d43c2069a54d2fb78f6cf4549。
 - 已补入 tests/announcement_center_static_smoke.py，并扩展 tests/game_social_variants_smoke.py、tests/social_worker_unit.js，覆盖游客读取门禁、管理员服务端认证、分页/已读幂等、置顶/有效期/撤下、XSS/危险链接、WebSocket/世界频道隔离标记、三端入口/ARIA/红点、旧布局顺序和 MutationObserver/胜利触发约束。
 - 本轮未在本地或远程 CI 执行 python3 tests/announcement_center_static_smoke.py、python3 tests/game_social_variants_smoke.py、node tests/social_worker_unit.js；仓库当前无可用 GitHub Actions runner。Playwright 桌面/手机视口、Android WebView 模拟器/真机和完全关闭 App 的通知边界也未运行，不能据此宣称 FCM 或真机通知能力。
 
