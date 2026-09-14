@@ -1428,3 +1428,17 @@ node publish.js
 - **回归**：`tests/ai_hotpath_smoke.py`、`tests/canvas_frame_smoke.py`、`tests/performance_benchmark.py`、`tests/startup_performance_smoke.py`、`tests/ai_worker_smoke.py`、`tests/lazy_feature_smoke.py`、`tests/optimization_smoke.py`，以及现有联机、好友/公告、Android 和 Node Worker 单元回归均通过；性能基准脚本主动阻断外部请求，输出的少量网络错误属于测试隔离信号，不是页面未处理异常。
 
 本节改动在最终审查后提交私有仓库，仍未发布 APK 或 GitHub Release。下一步如需正式上架，先在手机和 MuMu 验收冷启动、后台恢复、画质档位、联机和通知，再使用原签名执行发布流程；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
+
+## 六十四、AI 与 Canvas 热路径优化正式发布（2026-09-14，v1.0.124）
+
+本轮以隔离分支 `fix/social-audit` 的性能改动为基础完成正式客户端发布。原性能候选使用 `v1.0.123 (Build 124)`，发布时按既有版本规则递增为内部版本 `v1.0.124 (Build 125)`，界面显示 `v1.2.4`。
+
+- **发布内容**：`js/ai_fast.js` 的 TypedArray 几何缓存与 JavaScript 回退、`js/app.js` 的 Canvas 合帧/后台暂停/VFX 画质限帧，以及对应 Android 资源、压缩资源和单文件版已完成构建同步；AI 仍采用约 520ms 移动端预算，暂不引入未经必要剖析验证的 Rust/WASM/NEON/汇编。
+- **GitHub Release**：提交 `8af96de` 已推送私有 `origin/master`；正式 Release 为 [`v1.0.124`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.124)，非草稿、非预发布，包含固定资产名 `gomoku.apk` 与 `gomoku.html`。
+- **产物与签名**：APK `1,633,016 bytes`，SHA-256 `D873F5134EEB6776ACD2D9E6FD13D4D989DC9AA9C0B0B8297F72E0D40AE5CFE9`；单文件 HTML `1,218,628 bytes`，SHA-256 `BB0088CBD9F280D61812F5C9D721E9C75140D01D2485C0CF46615D84EF9523A2`。APK v1/v2/v3 校验通过，单签名者为 1，继续使用原正式签名证书。
+- **线上验收**：生产 `https://gomoku-api.pages.dev/api/version` 返回 HTTP 200、`code=0`、`tag=v1.0.124`，APK/HTML 短时票据均存在且不返回可复用下载直链；生产返回的 HTML SHA-256 与 Release/本地产物一致。此次为客户端发版，未部署 Cloudflare Worker、D1 或 Pages。
+- **本轮回归**：`tests/ai_hotpath_smoke.py`、`tests/canvas_frame_smoke.py`、`tests/performance_benchmark.py`、`tests/startup_performance_smoke.py`、`tests/ai_worker_smoke.py`、`tests/lazy_feature_smoke.py`、`tests/optimization_smoke.py`、`tests/game_social_dock_smoke.py`、`tests/game_social_variants_smoke.py`、`tests/social_frontend_smoke.py`、`tests/android_lifecycle_smoke.py`、`tests/android_splash_smoke.py`、`node tests/worker_unit.js`、`node tests/social_worker_unit.js`、AI 强度回归、脚本语法检查和 `git diff --check` 均通过。性能诊断主动阻断外部请求，少量网络 console 信号不属于页面未处理错误。
+- **未完成项**：尚未在真机/MuMu 安装验收本版本，也未重新部署后端/官网；如后续修改 Worker、D1、Pages、票据逻辑，仍须先备份 D1 再显式部署。主目录本地 `master` 未合入本次隔离分支，后续如需同步主目录必须另行确认。
+
+本版本已发布；后续普通客户端发版继续使用 `node publish.js`，不要提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
