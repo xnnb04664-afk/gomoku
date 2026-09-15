@@ -1442,3 +1442,17 @@ node publish.js
 - **未完成项**：尚未在真机/MuMu 安装验收本版本，也未重新部署后端/官网；如后续修改 Worker、D1、Pages、票据逻辑，仍须先备份 D1 再显式部署。主目录本地 `master` 未合入本次隔离分支，后续如需同步主目录必须另行确认。
 
 本版本已发布；后续普通客户端发版继续使用 `node publish.js`，不要提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
+
+## 六十五、首屏时序修复与 MuMu 验收正式发布（2026-09-15，v1.0.125）
+
+本轮在 v1.0.124 的 AI/Canvas 优化基础上修复首屏延迟加载时序、首次棋盘绘制和官网版本同步问题，并完成 MuMu 覆盖安装验收。内部版本为 `v1.0.125 (Build 126)`，界面显示 `v1.2.5`。
+
+- **修复内容**：非关键增强延迟到首帧后执行；资源加载器增加 DOM ready/早期调用队列；核心脚本预加载；首次冷启动使用轻量棋盘绘制后补齐高质量绘制；根页面、Android 资源、单文件版和官网版本回退值同步。
+- **GitHub Release**：提交 `a843d10` 已推送私有 `origin/master`；正式 Release 为 [`v1.0.125`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.125)，非草稿、非预发布，包含固定资产名 `gomoku.apk` 与 `gomoku.html`。
+- **产物与签名**：APK `1,633,016 bytes`，SHA-256 `2BB96DE3D4DD8102239454D48C052578065CF95DBA6598B628664B1A33D313D3`；HTML `1,222,829 bytes`，SHA-256 `80F5E442515DDD84169CD60240AA760757AECDB4CB977D9031A90CC30F8C5F56`（GitHub 资产摘要）。APK v1/v2/v3 校验通过，单签名者为 1，原正式签名证书保持不变。
+- **MuMu 验收**：同一 SHA-256 APK 覆盖安装成功，`com.gomoku.master` 显示 `versionName=1.0.125`、`versionCode=126`，首次安装时间和应用数据保持，启动 Activity 正常且无应用崩溃异常。
+- **回归**：公告、AI、十字棋、联机/重连/relay/竞态/P2P 恢复、头像、懒加载、Canvas、Android 生命周期/开屏和官网静态 smoke 均通过；4× CPU 浏览器启动冒烟中位 FCP `1468ms`、interactive `2369.4ms`。
+- **发布边界**：本轮为客户端与 GitHub Release 发布，未部署 Cloudflare Worker、D1 或 Pages；本机对生产版本接口的 HTTPS 探测超时，因此不将生产 API 版本接口视为本轮已验收项。发布脚本已改为显式文件清单暂存，禁止 `git add .` 混入截图或临时诊断文件。
+
+后续若需部署 Cloudflare 或同步官网 Pages，必须单独执行并记录 D1 备份、部署地址和线上版本接口；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
