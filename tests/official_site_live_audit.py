@@ -37,7 +37,7 @@ def mock_local_api(page):
             lambda route: route.fulfill(
                 status=200,
                 content_type="application/json",
-                body='{"code":0,"tag":"v1.0.122","build":123}',
+                body='{"code":0,"tag":"v1.0.125","build":126}',
             ),
         )
 
@@ -53,7 +53,7 @@ def main():
         mock_local_api(home)
         home.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=30000)
         settle_page(home)
-        assert home.locator("h1").inner_text().startswith("一盘棋")
+        assert home.locator("h1").inner_text().startswith("落子有声")
         assert home.locator('a[href="/play/"]').count() >= 1
         assert home.locator('a[href="/social/"]').count() >= 1
         assert home.locator('a[href="/help/"]').count() >= 1
