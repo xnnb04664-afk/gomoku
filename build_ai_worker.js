@@ -12,8 +12,11 @@ function escapeInlineScript(source) {
 function readAiWorkerSource(rootDir = __dirname) {
   const fastEnginePath = path.join(rootDir, 'js', 'ai_fast.js');
   const workerPath = path.join(rootDir, 'js', 'ai_worker.js');
-  const fastEngine = fs.readFileSync(fastEnginePath, 'utf8');
-  const worker = fs.readFileSync(workerPath, 'utf8');
+  // Keep the generated inline worker deterministic across Windows and Unix
+  // checkouts.  A CR left immediately before the import replacement can make
+  // the tracked Android asset differ by more than a line-ending change.
+  const fastEngine = fs.readFileSync(fastEnginePath, 'utf8').replace(/\r\n?/g, '\n');
+  const worker = fs.readFileSync(workerPath, 'utf8').replace(/\r\n?/g, '\n');
   const importPattern = /^\s*importScripts\(['"]ai_fast\.js['"]\);\s*/m;
   if (!importPattern.test(worker)) {
     throw new Error('ai_worker.js 缺少 ai_fast.js 导入标记，无法生成内嵌 Worker');

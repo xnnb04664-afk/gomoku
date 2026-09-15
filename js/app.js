@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.123';
+    const CURRENT_VERSION_TAG = 'v1.0.124';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.123 显示为 v1.2.3；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -615,7 +615,7 @@
     }
 
     // --- 自定义昵称与相册头像弹窗交互 ---
-    
+
     function initAnimeThumbnails() {
       const apply = () => {
         const b = document.getElementById('animeImgBoy');
@@ -705,7 +705,7 @@
     }
 
     // 选 Emoji 头像 → 立即更新预览 + 保存 + 同步
-    
+
         const RANDOM_NICK_PREFIXES = ["逍遥", "灵动", "悠然", "天元", "太极", "青云", "星月", "清风", "傲雪", "弈心", "落子", "指尖", "妙手", "执白", "弈仙", "玄武", "朱雀", "白虎", "青龙", "昆仑"];
     const RANDOM_NICK_SUFFIXES = ["弈客", "先锋", "棋王", "行者", "少侠", "剑客", "棋神", "大师", "隐士", "居士", "仙友", "棋圣", "游侠", "国手", "棋尊", "神童", "棋痴", "高足"];
     const RANDOM_DEFAULT_AVATARS = ["👦", "👧", "🐱", "🐶", "🦊", "🐼", "🦁", "🐯", "🦄", "🐲", "🧙‍♂️", "🥷", "👑", "🐧", "🐰", "🦉", "🦋"];
@@ -729,7 +729,7 @@
       selectedAvatarData = newAvatar;
       localStorage.setItem('gomoku_p1Name', p1Name);
       localStorage.setItem('gomoku_p1Avatar', p1Avatar);
-      
+
       const inputEl = document.getElementById('inputProfileName');
       if (inputEl) inputEl.value = newName;
       const prevEl = document.getElementById('bigAvatarPreview');
@@ -1087,7 +1087,7 @@
       if (pat.block4 >= 2) return 1800000;
       if (pat.block4 > 0 && pat.flex3 > 0) return 1600000;
       if (pat.flex3 >= 2) return 1200000;
-      
+
       // ⚡ 极强抗干扰复合结构：活三带双活二 或 冲四带双活二
       if (pat.flex3 > 0 && pat.flex2 >= 2) return 800000;
       if (pat.block4 > 0 && pat.flex2 >= 2) return 750000;
@@ -1118,10 +1118,10 @@
 
     function getPointScore(boardState, r, c, aiColor) {
       const oppColor = aiColor === BLACK ? WHITE : BLACK;
-      
+
       const myPat = countPointPatterns(boardState, r, c, aiColor);
       const myScore = evaluateMoveScore(myPat);
-      
+
       const oppPat = countPointPatterns(boardState, r, c, oppColor);
       const oppScore = evaluateMoveScore(oppPat);
 
@@ -1149,7 +1149,7 @@
       for (let r = 0; r < 15; r++) {
         for (let c = 0; c < 15; c++) {
           if (boardState[r][c] !== EMPTY) continue;
-          
+
           let near = false;
           for (let dr = -2; dr <= 2 && !near; dr++) {
             for (let dc = -2; dc <= 2 && !near; dc++) {
@@ -2279,9 +2279,9 @@
       // 手机端直接占满全屏宽度（保留极细 2px 边缘缓冲）
       const availW = isMobile ? (screenW - 2) : Math.min(islandWrapper.clientWidth || screenW, 580);
       const availH = islandWrapper.clientHeight || (window.innerHeight - 150);
-      
+
       const maxSide = Math.min(availW, availH);
-      cWidth = Math.floor(maxSide); 
+      cWidth = Math.floor(maxSide);
       cHeight = Math.floor(maxSide);
 
       dpr = getEffectiveCanvasDpr();
@@ -2294,15 +2294,17 @@
       ctx.scale(dpr, dpr);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      
+
       // 手机端将内边距压缩到 2.2%（原 4.5%），棋盘网格扩展铺满 96% 屏幕宽！
-      paddingX = cWidth * (isMobile ? 0.022 : 0.038); 
+      paddingX = cWidth * (isMobile ? 0.022 : 0.038);
       paddingY = cHeight * (isMobile ? 0.022 : 0.038);
-      gridX = (cWidth - 2 * paddingX) / 15; 
+      gridX = (cWidth - 2 * paddingX) / 15;
       gridY = (cHeight - 2 * paddingY) / 15;
       radius = gridX * 0.44; // 棋子饱满大号，触摸体验极佳
       invalidateBoardCache();
-      draw();
+      // 尺寸变化后立即完成一次首帧，保证 gomoku_board_ready/交互标记仍对应
+      // 已经可见的棋盘；后续 resize 事件由 scheduleBoardResize 合并。
+      draw(true);
     }
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
@@ -2356,7 +2358,7 @@
 
       let raw = String(message || '').trim();
       let icon = '🌟';
-      
+
       // 智能识别前导 emoji，单独作为高亮弹性图标
       const emojiMatch = raw.match(/^(\p{Extended_Pictographic}|\p{Emoji}|[\uD800-\uDBFF][\uDC00-\uDFFF])/u);
       if (emojiMatch) {
@@ -2752,7 +2754,7 @@
       // 否则登录/匹配可能被导向一个“能预检、业务不完整”的节点。
       const primaryHost = CLOUDFLARE_API_HOSTS[0];
       const preferredHost = !isApiHostCoolingDown(primaryHost)
-        ? primaryHost
+        ? primaryHos
         : (isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost) ? activeApiHost : '');
       const preferred = preferredHost ? [preferredHost] : [];
       const healthy = CLOUDFLARE_API_HOSTS.filter(host => !preferred.includes(host) && !isApiHostCoolingDown(host));
@@ -3268,7 +3270,7 @@
       });
     }
 
-    
+
     let selectedSecurityQValue = '❤️ 你最喜欢的人是谁？';
 
     function toggleQDropdown(e) {
@@ -3768,7 +3770,7 @@
           const oldScore = (typeof data.data.oldScore === 'number') ? data.data.oldScore : activeMatchStartingScore;
           const newScore = data.data.newScore;
           const delta = typeof data.data.scoreDelta === 'number' ? data.data.scoreDelta : (isWin ? 25 : -15);
-          
+
           currentUserScore = newScore;
           localStorage.setItem('gomoku_user_score', currentUserScore);
           updateLadderBadgeUI(currentUserScore);
@@ -4107,7 +4109,7 @@
       } catch(e) {}
     }
 
-    
+
 // ═════════════════════════════════════════════════════════════════════════
     // 🎯 主棋盘专业复盘引擎 (点击查看棋局直接跳转主棋盘，大屏带手数动态推演)
     // ═════════════════════════════════════════════════════════════════════════
@@ -4337,7 +4339,7 @@
       activeVFX.push({
         type: 'stone_drop', tx, ty, p, particles, startTime, duration: 420
       });
-      if (!vfxRAF) vfxAnimLoop();
+      ensureVfxLoop();
     }
 
     function triggerVictoryVFX() {
@@ -4362,7 +4364,7 @@
       activeVFX.push({
         type: 'victory_confetti', particles, startTime, duration: 2000
       });
-      if (!vfxRAF) vfxAnimLoop();
+      ensureVfxLoop();
     }
 
     function triggerUndoVFX(r, c) {
@@ -4385,7 +4387,7 @@
       activeVFX.push({
         type: 'undo_vortex', tx, ty, particles, startTime, duration: 480
       });
-      if (!vfxRAF) vfxAnimLoop();
+      ensureVfxLoop();
     }
 
     function triggerRestartVFX() {
@@ -4406,7 +4408,7 @@
       activeVFX.push({
         type: 'restart_wave', tx, ty, particles, startTime, duration: 680
       });
-      if (!vfxRAF) vfxAnimLoop();
+      ensureVfxLoop();
     }
 
     function triggerSkillVFX(type, targetR, targetC, srcR, srcC) {
@@ -4518,21 +4520,47 @@
         particles, startTime, duration: type === 'mega_bomb' ? 1000 : (type === 'invalid_click' ? 400 : 750)
       });
 
-      if (!vfxRAF) {
-        vfxAnimLoop();
-      }
+      ensureVfxLoop();
     }
 
-    function vfxAnimLoop() {
-      const now = performance.now();
+    function ensureVfxLoop() {
+      if (vfxRAF !== null || activeVFX.length === 0 || document.visibilityState === 'hidden') return;
+      // 技能处理可能刚请求过普通棋盘帧；让 VFX 帧承载最新棋盘状态，避免
+      // 同一刷新周期先画静态棋盘、再画一次带特效棋盘。
+      cancelScheduledBoardDraw();
+      vfxRAF = requestCanvasFrame(vfxAnimLoop);
+    }
+
+    function vfxAnimLoop(timestamp) {
+      // 浏览器切到后台后 rAF 可能还有一个已入队回调；不在隐藏页面继续清屏、
+      // 计算粒子或申请下一帧。visibilitychange/内存回收路径会负责清理特效。
+      if (document.visibilityState === 'hidden') {
+        vfxRAF = null;
+        activeVFX = [];
+        vfxLastRenderAt = 0;
+        return;
+      }
+
+      const now = Number.isFinite(timestamp) ? timestamp : performance.now();
       activeVFX = activeVFX.filter(vfx => now - vfx.startTime < vfx.duration);
-      draw();
+      const frameBudget = getCanvasFrameBudgetMs();
+      const shouldRender = vfxLastRenderAt === 0 || now - vfxLastRenderAt >= frameBudget;
+      if (shouldRender) {
+        vfxLastRenderAt = now;
+        canvasFrameStats.vfxRendered++;
+        canvasFrameStats.lastVfxRenderAt = now;
+        // VFX 帧同时承载棋盘状态贴图，直接复用 drawNow，避免 vfx rAF 与
+        // 普通 draw() 的待执行帧重复绘制。
+        drawNow();
+      }
+
       if (activeVFX.length > 0) {
-        const raf = window.requestAnimationFrame || function(fn){ return setTimeout(fn, 16); };
-        vfxRAF = raf(vfxAnimLoop);
+        vfxRAF = requestCanvasFrame(vfxAnimLoop);
       } else {
         vfxRAF = null;
-        draw();
+        vfxLastRenderAt = 0;
+        // 若上一帧刚好跨过结束时间，补一帧清掉已结束特效。
+        if (!shouldRender) drawNow();
       }
     }
 
@@ -4685,7 +4713,7 @@
         if (c2) c2.style.opacity = '0.9';
         return;
       }
-      
+
       // 判断当前是否属于左侧 p1 (本地玩家/黑方) 的回合
       const isP1Turn = (gameMode === 'online')
         ? (turn === myOnlineColor)
@@ -4727,7 +4755,7 @@
       activeThemeKey = 'default';
       closeThemeModal();
       invalidateBoardCache();
-      draw();
+      draw(true);
       showGameNotice('当前使用官方晴空浮岛草坪视觉', false);
       updateUI();
     }
@@ -4751,12 +4779,12 @@
         for (let c = 0; c < 15; c++) {
           const gx = paddingX + c * gridX, gy = paddingY + r * gridY;
           const isLight = (r + c) % 2 === 0;
-          
+
           ctx.fillStyle = isLight ? '#8cd63e' : '#77c42b';
           ctx.fillRect(gx, gy, gridX, gridY);
 
           ctx.fillStyle = isLight ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.06)';
-          ctx.fillRect(gx, gy, gridX, 1); 
+          ctx.fillRect(gx, gy, gridX, 1);
           ctx.fillRect(gx, gy, 1, gridY);
 
           ctx.strokeStyle = 'rgba(76, 139, 22, 0.25)';
@@ -4806,7 +4834,7 @@
     function drawSweetRomanceBoard() {
       const bx = paddingX - 4, by = paddingY - 4;
       const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
-      
+
       // 阴影与奶茶烤漆木盘
       ctx.save();
       ctx.shadowColor = 'rgba(255,117,140,0.3)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 8;
@@ -5251,6 +5279,51 @@
     let boardPreviewPoint = null;
     let boardPointerId = null;
 
+    // Canvas 绘制调度：游戏状态可能在同一事件循环内连续变化（例如技能牌同时
+    // 触发多颗棋子特效），所有普通 draw() 请求只合并到下一帧执行一次。保留
+    // draw(true) 作为 resize/主题切换等需要立即反映的同步路径，避免影响现有
+    // 模块对 draw() 的调用约定。
+    let boardDrawFrame = null;
+    let boardDrawPending = false;
+    let boardDrawLastAt = 0;
+    let vfxLastRenderAt = 0;
+    const canvasFrameStats = {
+      requested: 0,
+      rendered: 0,
+      coalesced: 0,
+      vfxRendered: 0,
+      lastRenderAt: 0,
+      lastVfxRenderAt: 0
+    };
+    window.__gomokuCanvasFrameStats = canvasFrameStats;
+
+    function requestCanvasFrame(callback) {
+      const raf = window.requestAnimationFrame;
+      if (typeof raf === 'function') return raf.call(window, callback);
+      return setTimeout(() => callback(performance.now()), 16);
+    }
+
+    function cancelCanvasFrame(frame) {
+      if (frame === null || frame === undefined) return;
+      if (typeof window.cancelAnimationFrame === 'function') {
+        try { window.cancelAnimationFrame(frame); return; } catch (_) {}
+      }
+      clearTimeout(frame);
+    }
+
+    function getCanvasFrameBudgetMs() {
+      // 流畅档优先稳定触控与温度，把特效锁到约 30fps；标准/高清档仍跟随
+      // 浏览器刷新率，不改变棋盘静态绘制的清晰度。
+      return getEffectiveGraphicsTier() === 'smooth' ? 1000 / 30 : 1000 / 60;
+    }
+
+    function cancelScheduledBoardDraw() {
+      if (boardDrawFrame !== null) {
+        cancelCanvasFrame(boardDrawFrame);
+        boardDrawFrame = null;
+      }
+    }
+
     function invalidateBoardCache() {
       cachedBoardKey = '';
       cachedPiecesKey = '';
@@ -5369,7 +5442,14 @@
       return cachedPiecesCanvas;
     }
 
-    function draw() {
+    function drawNow() {
+      // VFX 的 rAF 可能与普通状态绘制同时排队；立即绘制时取消待执行的普通
+      // 帧，避免同一刷新周期重复清屏、贴图和重建缓存。
+      cancelScheduledBoardDraw();
+      boardDrawPending = false;
+      boardDrawLastAt = performance.now();
+      canvasFrameStats.rendered++;
+      canvasFrameStats.lastRenderAt = boardDrawLastAt;
       ctx.clearRect(0, 0, cWidth, cHeight);
 
       // 1. 硬件加速单次贴图：极速离屏底盘位图 (GPU Blit 零回流零重绘，高分屏1:1超采样)
@@ -5534,8 +5614,31 @@
         ctx.restore();
       }
 
-      // 8. 实时渲染全屏高能粒子与技能动画特效 (60fps Canvas 特效)
+      // 8. 实时渲染全屏高能粒子与技能动画特效（帧率由画质档位控制）
       renderActiveVFX(ctx);
+    }
+
+    function draw(immediate = false) {
+      canvasFrameStats.requested++;
+      if (immediate) {
+        cancelScheduledBoardDraw();
+        boardDrawPending = false;
+        drawNow();
+        return;
+      }
+
+      boardDrawPending = true;
+      if (document.visibilityState === 'hidden') return;
+      if (boardDrawFrame !== null) {
+        canvasFrameStats.coalesced++;
+        return;
+      }
+      boardDrawFrame = requestCanvasFrame(() => {
+        boardDrawFrame = null;
+        if (document.visibilityState === 'hidden' || !boardDrawPending) return;
+        boardDrawPending = false;
+        drawNow();
+      });
     }
 
     let winningLine = null;
@@ -5980,7 +6083,8 @@
       activeOnlineRestartId = '';
       activeVFX = [];
       undoStack = [];
-      if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelAnimationFrame(vfxRAF); vfxRAF = null; }
+      if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelCanvasFrame(vfxRAF); vfxRAF = null; }
+      vfxLastRenderAt = 0;
       drawRandomThreeCards();
       playSkillSound('dice');
       draw();
@@ -6059,9 +6163,10 @@
 
       activeVFX = [];
       if (typeof vfxRAF !== 'undefined' && vfxRAF) {
-        cancelAnimationFrame(vfxRAF);
+        cancelCanvasFrame(vfxRAF);
         vfxRAF = null;
       }
+      vfxLastRenderAt = 0;
 
       // 💫 粒子反馈：检测被撤销的棋子，触发金色倒流粒子动效
       for (let r = 0; r < 15; r++) {
@@ -6594,10 +6699,9 @@
 
     window.__gomokuTrimMemory = function(level = 0) {
       const pressure = Number(level) || 0;
-      if (vfxRAF && typeof cancelAnimationFrame === 'function') {
-        try { cancelAnimationFrame(vfxRAF); } catch (_) {}
-      }
+      if (vfxRAF) cancelCanvasFrame(vfxRAF);
       vfxRAF = null;
+      vfxLastRenderAt = 0;
       activeVFX = [];
       cachedBoardCanvas = null;
       cachedPiecesCanvas = null;
@@ -6615,7 +6719,7 @@
         if (window.GomokuSocial?.resume) window.GomokuSocial.resume();
       }
     });
-    
+
     // 初始化：只锁定官方视觉，不覆盖大厅/棋局等页面状态 class。
     activeThemeKey = 'default';
     restoreGameStateIfAny();
@@ -6957,7 +7061,7 @@
         if (notesTitle) notesTitle.textContent = "🚀 本次更新内容说明：";
         const incomingNotes = versionData.updateLog || versionData.notes || CURRENT_UPDATE_NOTES.join("\n\n");
         if (notesEl) notesEl.textContent = incomingNotes;
-        
+
         if (btnFast) {
           btnFast.style.display = "flex";
           // 🌟 核心革新：如果处于原生 App 环境，首推免安装秒级在线热更新！
@@ -7064,7 +7168,7 @@
         }
         if (notesTitle) notesTitle.textContent = "📜 当前版本更新说明：";
         if (notesEl) notesEl.textContent = `恭喜！您的游戏已处于最新正式版本 (${DISPLAY_VERSION_TAG})。\n\n` + CURRENT_UPDATE_NOTES.join("\n\n");
-        
+
         if (btnFast) btnFast.style.display = "none";
         if (btnCancel) {
           btnCancel.textContent = "✅ 我知道了 (当前已是最新)";
@@ -7080,7 +7184,7 @@
       openUpdateModal();
     }
 
-    
+
     // 🌟 自动检查：如果是刚更新后的首次打开，主动弹出新版本更新内容公告
     function checkPostUpdateAnnouncement() {
       try {

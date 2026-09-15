@@ -1310,3 +1310,151 @@ node publish.js
 *交接文档最后更新时间：2026年9月15日*
 *当前工程正式版本为 v1.0.123 (Build 124，界面显示 v1.2.3)；已完成 D1 备份、Worker/Pages/官网部署和私有 GitHub Release。真实充值仍关闭，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
+
+
+## 五十七、社交模块三端同步维护记录（2026-09-12）
+
+本次维护基于当前 master 头部继续执行，未回退或覆盖此前提交。验收时发现网页的压缩社交模块已经包含离线/未读好友通知，但 Android 内嵌版和单文件版仍引用旧压缩模块，导致三端功能不一致。已将网页现行 `js/social.min.js` 同步到 `android_src/assets/js/social.min.js`，并替换单文件版 `gomoku-inline-resource-social` 内嵌模块。通知仅使用通用提示，不读取或展示聊天正文；Android 原生通知桥仍由用户授权控制。
+
+目标功能静态验收结果：
+
+- 网页、Android 内嵌页、单文件版均包含八个入口，默认顺序为好友、最近对手、排行、背包、任务、成就、活动签到、设置；好友入口连接好友中心/亲密关系，好感度摘要可见。
+- 三端版本字段一致为 v1.0.123（Build 124）；网页与 Pages Worker 文件内容一致。
+- Worker/Pages 静态检查包含钱包、签到、订单/商品、布局和亲密关系表与接口，正式账号门禁、签到 `claim_nonce` 幂等门禁、私聊 `client_message_id` 幂等及好感度上限逻辑均存在；客户端不能提交奖励日/金币字段。
+- 游客入口、充值/签到正式账号引导、八按钮本地顺序恢复和移动端安全区样式均保留。
+
+本轮提交：
+
+- `932e501c`：同步 Android 压缩社交模块。
+- `9ad43e73`：同步单文件版内嵌社交模块。
+- `73b6e116`：同步 Android 未压缩社交源文件，保证后续构建不会回退。
+
+测试记录（本地工作区为早于当前 master 的候选副本）：
+
+- `node tests/worker_unit.js`：通过。
+- `node tests/social_worker_unit.js`：通过。
+- `python3 tests/game_social_dock_smoke.py`：未运行，环境缺少 Playwright Python 模块。
+- `python3 tests/social_frontend_smoke.py`：未运行，环境缺少 Playwright Python 模块。
+- 当前 master 的 `tests/game_social_variants_smoke.py` 已存在；本轮用 GitHub 头部文件执行等价静态验收，三端八按钮顺序、版本和 Worker/Pages 一致性均通过。
+
+本轮未执行 Cloudflare/D1/Pages 部署、GitHub Release 创建或 APK 发布。发布前需在隔离测试环境补跑 Playwright（390px 与桌面视口）、Android WebView 真机/模拟器通知权限与点击回跳、签到按北京时间跨日及重复领取、好友私聊好感度幂等/封禁隐私、三端构建产物版本校验；获得明确授权前不得部署或发布。
+
+
+## 五十八、天空棋岛视觉增强最终复核（2026-09-12）
+
+本节已按远端实际对象重新核对，此前过时的单文件与测试提交叙述不再作为完成依据。本轮只通过 GitHub 云端接口修改交接文档，未改本地、未部署 Cloudflare/D1/Pages、未创建 Release、未发布 APK。
+
+- 代码基线 HEAD：`dae9008efafe98221f35382c7e2d998fb401821a`（用户本轮核对的远端 master 头）。
+- 单文件真实同步提交：`73f877346e2804ab0bb654679d265462f69711fb`，将根页面实际使用的天空棋岛内嵌 CSS/脚本同步进 `五子棋大师_单文件版.html`，保持完全离线，不新增外部、延迟或异步资源。
+- Android 无障碍修正提交：`dae9008efafe98221f35382c7e2d998fb401821a`，对应 `android_src/assets/index.html` 的入口无障碍调整；根页面、Android、单文件三端的天空棋岛 style/script 块经云端核验逐字一致。
+- 三端实际包含：胜利后棋盘外克制金色余韵；结果显示边沿触发且不阻塞结算；`prefers-reduced-motion`/低性能档位降级；浮岛选中态、红点和 ARIA；星轨复盘的安全候选/结果降级文案；默认关闭的 `SKY_ISLAND_FEATURE_FLAGS`（`doubleStarEndgame`、`weatherSeason`），不虚构后端能力。
+- MutationObserver 审查：通过 `scheduled` 帧合并、结果 `skyGlowSeen` 边沿保护和摘要 `skySignature` 短路，增强节点自身更新不会形成持续自触发循环；复盘文案明确不是引擎判定，也不读取聊天。
+
+### 五十九、云端静态测试证据与未运行项
+
+本轮已实际执行的云端轻量静态核验（GitHub blob 读取 + JavaScript 断言，非本地工作区）：
+
+- 三端文件均可读取，天空棋岛 5 类核心标记齐全，八宫格入口数量均为 8。
+- 三端增强 style/script 块逐字相等。
+- 单文件增强脚本为内联资源，未发现 `src`/`defer`/`async`。
+- 检测到 reduced-motion、low-spec、结果显示边沿触发、MutationObserver 调度/签名短路和“候选标记/结果标记”文案。
+- 现有 `tests/game_social_variants_smoke.py` 已包含专项断言，但本轮未以 Python 命令执行；Node/Python 单元测试也未重跑。
+- GitHub 提交状态接口对 `dae9008` 返回空状态；本轮没有可引用的远端 CI 运行结果。
+
+尚未运行：Playwright 桌面/手机视口几何回归、Android WebView 模拟器或真机回归、完全关闭 App 的通知实测。发布前仍需在具备依赖和设备的隔离环境运行这些测试，并复核三端构建资源哈希；本轮不部署、不发布。
+
+
+## 六十、游戏内公告中心云端实现与三端验收（2026-09-13）
+
+本节以远端 master 的实际对象为准，覆盖用户核对的 dae9008 之后提交；不以更早章节中的旧 HEAD 或“已部署/已发布”文字作为本轮完成依据。本轮仅通过 GitHub 云端接口修改代码、测试和交接文档，未修改本地工作区，未部署 Cloudflare/D1/Pages，未创建 Release，未打包或发布 APK。
+
+### 实际代码
+
+- 根页面 index.html、android_src/assets/index.html、五子棋大师_单文件版.html 三端都内嵌同一份天空棋岛、世界聊天和公告中心 style/script。公告入口插入好友/社交中心，位于世界聊天入口之后；既有八宫格顺序仍为好友、最近对手、排行、背包、任务、成就、活动签到、设置，收起态与底部对局控制区未改动。
+- 公告列表允许游客公开阅读；正文按需读取，标题/正文在客户端使用 textContent；无后端时使用安全空状态或本地摘要缓存，不因 safeApiFetch 缺失而阻塞离线对局。界面如实说明公告正文会持久保存在云端数据库，公开列表默认只展示最近 180 天且隐藏过期/撤下记录；撤下记录仍保留审计，不提供删除他人公告的“清空”操作。
+- Worker 与 Pages Worker 保持字节一致：公开列表/详情、180 天历史窗口、最多 20 条分页（受限 offset）、正式账号已读游标查询与 MAX 幂等写入；管理员新增/编辑/撤下仅由服务端 ANNOUNCEMENT_ADMIN_UIDS 允许列表和正式账号认证决定，客户端不能伪造管理员字段。行动链接只接受 HTTPS 或单斜杠站内路径，拒绝危险协议、凭据、片段和控制字符；公告路由不广播世界频道、不触发私聊通知，日志路径不输出正文、票据或密钥。
+- migrations/0003_world_chat.sql 同时包含公告表、索引和 announcement_state；状态只前进，不删除他人消息或公告。
+- 未读使用既有 GomokuSocialUnreadState 聚合器同步好友、世界聊天和公告；公告入口、好友入口、底部按钮和收起悬浮入口保留 ARIA/红点语义。游客不写入账号已读位置。
+- MutationObserver 已收窄：公告/世界只监听 body 子节点变化；天空棋岛用 body 子节点观察器发现结果节点，再对结果/复盘节点单独监听 class/style/aria 属性，增强节点自身渲染不会形成持续自触发循环。胜利余韵只在结果模态 .show 且胜利判定后触发；prefers-reduced-motion、low-spec-mode 均降级。星轨复盘在数据不足时明确使用“最近落子降级标记（非引擎判定）”，不冒充引擎分析；双星残局/天气赛季钩子继续关闭。
+
+### 本轮关键提交（均已进入远端 master）
+
+- c81e60e8eef375eae6238ac3d93c2ec781167f47：根/Android 公告中心入口与客户端。
+- 8dd246de0d00b3fa506360279e729675bc51c9e8、4974f92c0aba0208c91961756d7e27a0bd942938：公告公开历史窗口、已读游标并同步 Pages Worker。
+- 4aba66b383bc72d1dcfeb8a61b7e2ccb49ce24a9、ede7d2166a276fade119e4d612d14ddb293ae756：离线单文件实际内嵌三端增强及天空棋岛观察器/复盘文案对齐。
+- ed7f0491fa86ad9e493c9880239b9fd3b8541cbb、8921f6185c8fd5372caa4b25e182f76714839ac3：修复公告数字路由正则、分页游标和 Worker/Pages 认证失败响应。
+- 59b331b567f1c31cbc4419903de4e1becb657459、ed8a32f7588b058922da64220f68bc905ab06c35、27d9abb03bfe1b5ffcdfc4f6d6014fb735fb279d 及后续测试修正：公告静态三端、Worker 安全与旧八宫格回归断言。
+
+### 测试证据
+
+- 已在云端执行 GitHub blob 读取后的 JavaScript 静态/语法 harness：三端 6 个增强块逐字一致、八宫格顺序为 8 个固定入口、公告未读聚合/ARIA/离线缓存/危险链接过滤标记齐全；公告和天空脚本 new Function 语法检查通过；Worker 转换后语法检查通过；backend 与 Pages Worker 字节一致；迁移无公告删除语句。结果：PASS；最终云端复核时远端 HEAD 为 7f755768910f3a2d43c2069a54d2fb78f6cf4549。
+- 已补入 tests/announcement_center_static_smoke.py，并扩展 tests/game_social_variants_smoke.py、tests/social_worker_unit.js，覆盖游客读取门禁、管理员服务端认证、分页/已读幂等、置顶/有效期/撤下、XSS/危险链接、WebSocket/世界频道隔离标记、三端入口/ARIA/红点、旧布局顺序和 MutationObserver/胜利触发约束。
+- 本轮未在本地或远程 CI 执行 python3 tests/announcement_center_static_smoke.py、python3 tests/game_social_variants_smoke.py、node tests/social_worker_unit.js；仓库当前无可用 GitHub Actions runner。Playwright 桌面/手机视口、Android WebView 模拟器/真机和完全关闭 App 的通知边界也未运行，不能据此宣称 FCM 或真机通知能力。
+
+### 当前 HEAD 与发布前步骤
+
+- 本次文档校准前远端 master 实际 HEAD：2cbc425d0e32a6e29ed0345e555cce883f4be5c6；本次文档提交完成后，以 GitHub 返回的提交 SHA 作为最终 HEAD。
+- 发布前在隔离环境执行上述 Python/Node 测试，补跑 Playwright（桌面、390px/320px）、Android WebView 真机/模拟器三端资源哈希与 ARIA/底部几何回归；单独验证正式账号公告管理员 allowlist、D1 migration dry-run、跨页恢复已读位置和公告过期/撤下审计。获得明确授权前继续禁止 Cloudflare/D1/Pages 部署、Release、APK 发布。
+
+## 六十一、公告公开入口与世界聊天实时链路修复（2026-09-13，已推送，预览验收）
+
+本轮接管远端任务后在独立工作区完成修复，主工作区未改写。提交 `d4a90a6` 已推送私有仓库 `master`；当前正式版本号仍为 v1.0.123 (Build 124)，没有创建新 Release、没有打包/发布 APK，也没有修改或部署 Worker、D1、TURN Secret、生产 Pages。
+
+- **公告入口**：公告弹层打开时同时设置 `.show`、`display:flex` 和 `aria-hidden=false`，关闭时移除 `.show`；游戏页八宫格上方新增公开“📣 公告”入口，游客无需经过好友登录门禁即可阅读，正式账号原好友中心入口仍保留。公告入口含独立未读 ARIA 红点，不增加八宫格数量。
+- **三端一致**：根页面、`android_src/assets/index.html` 和 `五子棋大师_单文件版.html` 已由同一母本重新生成；单文件版恢复八宫格收放按钮、悬浮展开按钮和 ARIA 未读标记。Android 社交源文件和压缩文件与网页同步。
+- **世界聊天**：三端世界频道 WebSocket 在 HTTPS 入口自动改用 `wss:`（本地 HTTP 保持 `ws:`），重连退避统一为 `0/1/2/4/8/12` 秒；长期登录令牌仍不放入 URL。
+- **好友红点**：社交模块现在把好友未读基数写入统一刷新元数据，并触发 `GomokuSocialUnreadRefresh`，与世界频道/公告未读合并时不会重复叠加或被覆盖；无共享刷新器的旧页面仍保留直接更新回退。
+- **测试修正**：社交 Worker 单元测试的内存 D1 模拟器已按实际 `SELECT uid, COALESCE(channel, ...)` 查询匹配，并保留票据频道字段；这修复了测试自身误报的 401，不放宽生产票据一次性消费规则。
+
+### 验收证据
+
+- `node --check js/social.js`、`js/social.min.js`、`backend/worker.js`、`pages_build/_worker.js`：通过。
+- `python tests/announcement_center_static_smoke.py`、`game_social_variants_smoke.py`、`game_social_dock_smoke.py`、`social_frontend_smoke.py`：通过。
+- `node tests/social_worker_unit.js`：通过，包含一次性社交票据、好友/黑名单/消息幂等和 SocialHub 多设备检查。
+- `online_transport_smoke.py`、`online_reconnect_smoke.py`、`online_relay_smoke.py`、`online_no_public_mqtt_smoke.py`、`lazy_feature_smoke.py`、`optimization_smoke.py`：通过，页面无未处理错误。
+- Playwright 本地三端及预览 `320px/390px`：公告按钮可见，弹层具有 `.show` 且计算透明度为 1，八宫格固定 8 个、收起后悬浮按钮可用、无横向溢出和页面错误。
+- 预览仅部署到 `https://preview-e491946.gomoku-home.pages.dev/play/`（最终部署 `https://38cb0fd7.gomoku-home.pages.dev`），HTTP 200；稳定官网和生产 API 未替换。
+
+### 后续边界
+
+本轮未在 Android 真机/MuMu 上重新安装候选 APK，未做完全关闭 App 的系统通知实测；也未执行生产 D1/Worker/Pages 部署。若要让 APK 或正式域名包含本轮修复，应另行明确授权并按“先备份 D1、再构建签名 APK、最后发布”的流程执行；不得提交或输出任何密钥、长期令牌、聊天正文或短时票据。
+
+
+## 六十二、APK 启动、资源与本地服务性能优化（2026-09-13，本地候选）
+
+本轮按 APK 优化方向并行完成 Android 生命周期、本地资源服务和安装包资源裁剪，基于远端 master `101fbca` 的隔离工作区 `fix/social-audit` 实施。正式版本仍为 `v1.0.123 (Build 124)`，本轮没有创建 GitHub Release、没有部署 Cloudflare/D1/Pages、没有安装到手机或 MuMu，也没有改变现有联机、P2P/TURN/WebSocket、安全和热更新协议。
+
+- **本地 WebView 服务**：`LocalWebServer` 改用固定 4 线程、32 请求有界队列和拒绝后主动关连接；跟踪并关闭活动 Socket，停止时最多等待 500ms；JS/MJS/CSS 使用上限 8 MiB 的线程安全 LRU 缓存，单文件超过 4 MiB 不缓存；ETag 预计算并支持多值 `If-None-Match`，输出增加 16 KiB 缓冲和 TCP 参数优化。原有热更新 `index.html`、`file://` 回退、路径校验和端口回退保持不变。
+- **Android 生命周期**：Android N+ 使用默认网络回调，旧 API 保留兼容回调；网络事件 250ms 去抖并在后台暂停，前台恢复时重新注册并主动同步；销毁时取消网络和好友通知延迟任务，避免 WebView 销毁后的回调与重复重连。
+- **APK 资源**：`build_apk.js` 默认采用 `minimal` 清单，当前 staging 复制 25 个 Web 资源（另含入口 `index.html`），移除未压缩开发副本；保留五套离线主题及其仍被主题页直接引用的 MQTT/P2P/PeerJS 适配层。`conservative` 可恢复旧版未压缩兼容副本，`all` 可恢复完整 Web 资源；`--print-resource-manifest` 可在不读取签名信息时审计清单。AI Worker 内嵌源统一换行，避免 Windows/Unix 生成差异。
+- **构建产物**：候选 APK 为 1,628,920 bytes，SHA-256 `12F8949178075BB60CB52F865EF70B1D36B66819B1AD66C36BD59D54F17B84C9`；相对上一正式 APK 1,760,382 bytes 减少 131,462 bytes（约 7.47%）。`aapt dump badging` 为 `versionName=1.0.123`、`versionCode=124`；`apksigner` v1/v2/v3 均通过、单签名者和原签名证书保持不变。
+- **本地验证**：`python tests/apk_asset_manifest_smoke.py`、`python tests/android_lifecycle_smoke.py`、`python tests/android_splash_smoke.py`、`python tests/game_social_variants_smoke.py`、`python tests/announcement_center_static_smoke.py`、`python tests/game_social_dock_smoke.py`、`python tests/social_frontend_smoke.py`、`python tests/online_transport_smoke.py`、`python tests/online_reconnect_smoke.py`、`python tests/online_relay_smoke.py`、`python tests/online_no_public_mqtt_smoke.py`、`python tests/lazy_feature_smoke.py`、`python tests/optimization_smoke.py`、`python tests/online_match_race_smoke.py`、`python tests/ai_worker_smoke.py`、`python tests/avatar_asset_smoke.py`、`python tests/cross_chess_smoke.py`、`python tests/voice_smoke.py`、`node tests/worker_unit.js`、`node tests/turn_worker_unit.js`、`node tests/auth_refresh_unit.js`、`node tests/social_worker_unit.js` 均通过；`node --check build_apk.js`、`node --check build_ai_worker.js` 和 `git diff --check` 通过。浏览器 4 倍 CPU 降速下的启动/联机冒烟通过，但尚未取得真机/MuMu 的 10 次冷启动中位数，因此不能宣称达到计划中的 35% 实测改善。
+
+本轮改动待最终审查后提交私有仓库；默认不上传或发布 APK。后续若需正式发版，仍须先在手机和 MuMu 安装验收，再使用原签名构建、校验 v1/v2/v3、创建 Release，并按授权决定是否部署后端；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
+
+## 六十三、AI 与 Canvas 热路径性能优化（2026-09-13，本地候选）
+
+本轮继续按“先 JavaScript/TypedArray，再依据剖析决定 Rust/WASM，最后才考虑 NEON/汇编，并保留 JavaScript 回退”的顺序实施。基于当前隔离分支 `fix/social-audit` 的 `2ee4cf4`，只接入已完成并行审查的 AI 与 Canvas 改动；正式版本仍为 `v1.0.123 (Build 124)`，没有创建 Release、没有部署 Cloudflare/D1/Pages，也没有安装到手机或 MuMu。
+
+- **AI 热路径**：`js/ai_fast.js` 为每种棋盘尺寸建立并复用行列、中心位置权值和四方向 11 格线索引的 `TypedArray` 几何缓存，候选生成、落点分析、方向扫描和局面评估不再反复做除法与边界乘法；旧的 `lineCode` 坐标回退仍保留，外部调试结构兼容不变。固定 80ms 的微基准中搜索节点约由 90 提升到 330（仅代表该受限场景的热路径吞吐，不外推为整局 3–4 倍）；实际 AI 仍受约 520ms 时间预算控制，因此暂不引入 Rust/WASM/汇编。
+- **Canvas/VFX**：`js/app.js` 将普通 `draw()` 请求合并到下一次 `requestAnimationFrame`，`draw(true)` 继续作为尺寸/主题切换的同步路径；流畅画质把 VFX 限制在约 30fps，后台停止粒子与非必要绘制并在恢复时补绘，同时暴露帧调度统计。`js/app.min.js`、Android 内嵌资源和离线单文件版均由当前源重新生成，三端行为保持一致。
+- **性能标记与结果**：在 4 倍 CPU 降速的 Chromium 模拟环境取 5 次中位数，最新诊断基准 FCP `1416ms`、`gomoku_interactive` `2368.7ms`，Canvas 稳态绘制 P95 `0.2ms`、帧间隔 P95 `16.8ms`；启动预算冒烟同样通过（FCP `1404ms`、交互 `2276.5ms`，低于 `1600/2500ms` 且相对脚本基线改善超过 35%）。这些是浏览器仿真数据，不能替代手机/MuMu 的 10 次冷/热启动实测。
+- **候选 APK**：重新构建 `versionName=1.0.123`、`versionCode=124`，大小 `1,633,016 bytes`，SHA-256 `72992BD04DD1B803F7BD27C21CDC8A317C700E37435FD13EF7BC625B24560513`。`apksigner` 验证 v1/v2/v3 均通过、单签名者为 1，证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **回归**：`tests/ai_hotpath_smoke.py`、`tests/canvas_frame_smoke.py`、`tests/performance_benchmark.py`、`tests/startup_performance_smoke.py`、`tests/ai_worker_smoke.py`、`tests/lazy_feature_smoke.py`、`tests/optimization_smoke.py`，以及现有联机、好友/公告、Android 和 Node Worker 单元回归均通过；性能基准脚本主动阻断外部请求，输出的少量网络错误属于测试隔离信号，不是页面未处理异常。
+
+本节改动在最终审查后提交私有仓库，仍未发布 APK 或 GitHub Release。下一步如需正式上架，先在手机和 MuMu 验收冷启动、后台恢复、画质档位、联机和通知，再使用原签名执行发布流程；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
+
+## 六十四、AI 与 Canvas 热路径优化正式发布（2026-09-14，v1.0.124）
+
+本轮以隔离分支 `fix/social-audit` 的性能改动为基础完成正式客户端发布。原性能候选使用 `v1.0.123 (Build 124)`，发布时按既有版本规则递增为内部版本 `v1.0.124 (Build 125)`，界面显示 `v1.2.4`。
+
+- **发布内容**：`js/ai_fast.js` 的 TypedArray 几何缓存与 JavaScript 回退、`js/app.js` 的 Canvas 合帧/后台暂停/VFX 画质限帧，以及对应 Android 资源、压缩资源和单文件版已完成构建同步；AI 仍采用约 520ms 移动端预算，暂不引入未经必要剖析验证的 Rust/WASM/NEON/汇编。
+- **GitHub Release**：提交 `8af96de` 已推送私有 `origin/master`；正式 Release 为 [`v1.0.124`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.124)，非草稿、非预发布，包含固定资产名 `gomoku.apk` 与 `gomoku.html`。
+- **产物与签名**：APK `1,633,016 bytes`，SHA-256 `D873F5134EEB6776ACD2D9E6FD13D4D989DC9AA9C0B0B8297F72E0D40AE5CFE9`；单文件 HTML `1,218,628 bytes`，SHA-256 `BB0088CBD9F280D61812F5C9D721E9C75140D01D2485C0CF46615D84EF9523A2`。APK v1/v2/v3 校验通过，单签名者为 1，继续使用原正式签名证书。
+- **线上验收**：生产 `https://gomoku-api.pages.dev/api/version` 返回 HTTP 200、`code=0`、`tag=v1.0.124`，APK/HTML 短时票据均存在且不返回可复用下载直链；生产返回的 HTML SHA-256 与 Release/本地产物一致。此次为客户端发版，未部署 Cloudflare Worker、D1 或 Pages。
+- **本轮回归**：`tests/ai_hotpath_smoke.py`、`tests/canvas_frame_smoke.py`、`tests/performance_benchmark.py`、`tests/startup_performance_smoke.py`、`tests/ai_worker_smoke.py`、`tests/lazy_feature_smoke.py`、`tests/optimization_smoke.py`、`tests/game_social_dock_smoke.py`、`tests/game_social_variants_smoke.py`、`tests/social_frontend_smoke.py`、`tests/android_lifecycle_smoke.py`、`tests/android_splash_smoke.py`、`node tests/worker_unit.js`、`node tests/social_worker_unit.js`、AI 强度回归、脚本语法检查和 `git diff --check` 均通过。性能诊断主动阻断外部请求，少量网络 console 信号不属于页面未处理错误。
+- **未完成项**：尚未在真机/MuMu 安装验收本版本，也未重新部署后端/官网；如后续修改 Worker、D1、Pages、票据逻辑，仍须先备份 D1 再显式部署。主目录本地 `master` 未合入本次隔离分支，后续如需同步主目录必须另行确认。
+
+本版本已发布；后续普通客户端发版继续使用 `node publish.js`，不要提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。

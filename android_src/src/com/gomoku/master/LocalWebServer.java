@@ -4,7 +4,14 @@ import android.content.res.AssetManager;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 内嵌轻量 HTTP 服务器 —— 从 assets 目录提供游戏文件
@@ -21,14 +28,58 @@ public class LocalWebServer extends Thread {
 
     private final AssetManager  assets;
     private final File          updateDir;
-    // APK 内的静态资源在一次启动期间不会变化，缓存小资源可减少 WebView 首屏连续打开文件的 I/O。
-    private final Map<String, byte[]> assetCache = new ConcurrentHashMap<>();
-    private       ServerSocket  serverSocket;
-    private volatile boolean    running  = false;
-    private boolean              startRequested = false;
+    // APK 内的静态 JS/CSS 在一次启动期间不会变化，缓存可减少 WebView 重载时的 I/O。
+    // 使用有界 LRU，避免主题、图片或未来新增资源把 Android 进程内存无限占满。
+    private static final int MAX_CACHED_ASSET_BYTES = 4 * 1024 * 1024;
+    private static final long MAX_ASSET_CACHE_BYTES = 8L * 1024L * 1024L;
+    private final Object assetCacheLock = new Object();
+    private final LinkedHashMap<String, CachedAsset> assetCache =
+            new LinkedHashMap<>(16, 0.75f, true);
+    private long assetCacheBytes = 0L;
+
+    // 本地 WebView 请求数量有限；固定线程数 + 有界队列可防止异常连接耗尽进程线程资源。
+    private static final int REQUEST_WORKER_THREADS = 4;
+    private static final int REQUEST_QUEUE_CAPACITY = 32;
+    private final AtomicInteger requestThreadSequence = new AtomicInteger();
+    private final ThreadPoolExecutor requestExecutor = new ThreadPoolExecutor(
+            REQUEST_WORKER_THREADS,
+            REQUEST_WORKER_THREADS,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<Runnable>(REQUEST_QUEUE_CAPACITY),
+            new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable runnable) {
+                    Thread thread = new Thread(runnable,
+                            "LocalWebServer-" + requestThreadSequence.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            },
+            new ThreadPoolExecutor.AbortPolicy()
+    );
+
+    // stopServer 会关闭所有已接收连接，确保 shutdownNow 不会留下阻塞中的 Socket。
+    private final Set<Socket> openClients =
+            Collections.newSetFromMap(new ConcurrentHashMap<Socket, Boolean>());
+    private final CountDownLatch readyLatch = new CountDownLatch(1);
+    private final CountDownLatch stoppedLatch = new CountDownLatch(1);
+    private volatile ServerSocket serverSocket;
+    private volatile boolean running = false;
+    private volatile boolean stopRequested = false;
+    private boolean startRequested = false;
     private static final int MAX_REQUEST_LINE = 8192;
     private static final int MAX_HEADER_LINES = 64;
-    private static final int MAX_CACHED_ASSET_BYTES = 4 * 1024 * 1024;
+
+    private static final class CachedAsset {
+        final byte[] body;
+        final String etag;
+
+        CachedAsset(byte[] body) {
+            this.body = body;
+            this.etag = buildEtag(body);
+        }
+    }
 
     // ── MIME 映射表 ─────────────────────────────────────────────────
     private static final Map<String, String> MIME = new HashMap<>();
@@ -64,7 +115,7 @@ public class LocalWebServer extends Thread {
 
     /** 启动服务线程；调用方可在创建 WebView 的同时让端口后台绑定。 */
     public synchronized void startAsync() {
-        if (startRequested) return;
+        if (startRequested || stopRequested) return;
         startRequested = true;
         start();
     }
@@ -73,14 +124,13 @@ public class LocalWebServer extends Thread {
     public boolean awaitReady(long timeoutMs) {
         startAsync();
         if (running) return true;
+        if (stopRequested) return false;
         long safeTimeout = Math.max(0L, timeoutMs);
-        long deadline = System.currentTimeMillis() + safeTimeout;
-        while (System.currentTimeMillis() < deadline) {
-            if (running) return true;
-            try { Thread.sleep(10); } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+        try {
+            readyLatch.await(safeTimeout, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
         return running;
     }
@@ -92,8 +142,31 @@ public class LocalWebServer extends Thread {
 
     /** 安全停止服务器 */
     public void stopServer() {
-        running = false;
-        try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
+        final boolean wasStarted;
+        synchronized (this) {
+            stopRequested = true;
+            running = false;
+            wasStarted = startRequested;
+        }
+        ServerSocket socket = serverSocket;
+        if (socket != null) {
+            try { socket.close(); } catch (IOException ignored) {}
+        }
+        // 关闭排队和执行中的客户端，避免 shutdownNow 后仍有 Socket 阻塞到超时。
+        for (Socket client : openClients) {
+            try { client.close(); } catch (IOException ignored) {}
+        }
+        requestExecutor.shutdownNow();
+        clearAssetCache();
+        if (wasStarted && Thread.currentThread() != this) {
+            try {
+                // 有界等待让 Activity 销毁后不遗留服务线程；Socket 已先关闭，
+                // 这里只是生命周期收尾，不会等待网络超时。
+                stoppedLatch.await(500L, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     public static int getPort() { return sActualPort; }
@@ -103,41 +176,81 @@ public class LocalWebServer extends Thread {
     public void run() {
         int[] candidatePorts = {8080, 8081, 8082, 8088, 8888, 8989, 0};
         for (int p : candidatePorts) {
+            if (stopRequested) break;
+            ServerSocket candidate = null;
             try {
-                serverSocket = new ServerSocket();
-                serverSocket.setReuseAddress(true);
-                serverSocket.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), p));
-                sActualPort = serverSocket.getLocalPort();
+                candidate = new ServerSocket();
+                candidate.setReuseAddress(true);
+                serverSocket = candidate;
+                candidate.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), p));
+                if (stopRequested) {
+                    candidate.close();
+                    break;
+                }
+                sActualPort = candidate.getLocalPort();
                 running = true;
                 break;
             } catch (IOException e) {
-                try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+                try { if (candidate != null) candidate.close(); } catch (Exception ignored) {}
+                if (serverSocket == candidate) serverSocket = null;
             }
         }
         if (!running) {
-            android.util.Log.e(TAG, "Server error: could not bind to any port");
+            readyLatch.countDown();
+            if (!stopRequested) {
+                android.util.Log.e(TAG, "Server error: could not bind to any port");
+            }
+            requestExecutor.shutdownNow();
+            stoppedLatch.countDown();
             return;
         }
+        readyLatch.countDown();
 
-        while (running) {
-            try {
-                final Socket client = serverSocket.accept();
-                // 每个请求用独立线程处理，避免阻塞
-                Thread t = new Thread(() -> handleRequest(client));
-                t.setDaemon(true);
-                t.start();
-            } catch (IOException e) {
-                if (!running) break;
+        try {
+            while (running && !stopRequested) {
+                Socket client = null;
+                try {
+                    client = serverSocket.accept();
+                    openClients.add(client);
+                    if (!running || stopRequested) {
+                        openClients.remove(client);
+                        try { client.close(); } catch (IOException ignored) {}
+                        break;
+                    }
+                    final Socket acceptedClient = client;
+                    try {
+                        requestExecutor.execute(() -> handleRequest(acceptedClient));
+                    } catch (RejectedExecutionException rejected) {
+                        openClients.remove(acceptedClient);
+                        try { acceptedClient.close(); } catch (IOException ignored) {}
+                    }
+                } catch (IOException e) {
+                    if (!running || stopRequested) break;
+                }
             }
+        } finally {
+            running = false;
+            ServerSocket socket = serverSocket;
+            serverSocket = null;
+            if (socket != null) {
+                try { socket.close(); } catch (IOException ignored) {}
+            }
+            for (Socket client : openClients) {
+                try { client.close(); } catch (IOException ignored) {}
+            }
+            requestExecutor.shutdown();
+            stoppedLatch.countDown();
         }
     }
 
     // ── 请求处理 ─────────────────────────────────────────────────
     private void handleRequest(Socket client) {
         try {
+            client.setTcpNoDelay(true);
+            client.setKeepAlive(false);
             client.setSoTimeout(8000);
             InputStream  rawIn  = client.getInputStream();
-            OutputStream rawOut = client.getOutputStream();
+            OutputStream rawOut = new BufferedOutputStream(client.getOutputStream(), 16 * 1024);
 
             // 读取请求行
             String requestLine = readLine(rawIn, MAX_REQUEST_LINE);
@@ -213,7 +326,9 @@ public class LocalWebServer extends Thread {
                     } catch (Exception ignored) {
                     }
                 }
-                byte[] body = fromHotUpdate ? null : assetCache.get(path);
+                CachedAsset cachedAsset = fromHotUpdate ? null : getCachedAsset(path);
+                byte[] body = cachedAsset == null ? null : cachedAsset.body;
+                String etag = cachedAsset == null ? null : cachedAsset.etag;
                 if (body == null && assetIn == null) {
                     try {
                         assetIn = assets.open(path);
@@ -237,15 +352,16 @@ public class LocalWebServer extends Thread {
                             try { assetIn.close(); } catch (IOException ignored) {}
                         }
                     }
-                    if (!fromHotUpdate && body.length <= MAX_CACHED_ASSET_BYTES) {
-                        assetCache.putIfAbsent(path, body);
+                    etag = buildEtag(body);
+                    if (!fromHotUpdate && isCacheableAsset(ext)) {
+                        cacheAsset(path, body);
                     }
                 }
 
                 // 本地资源通常不会变化；ETag 可让 WebView 在回到前台或重载时直接收到 304，
                 // 减少重复传输与首屏等待。弱校验值只用于缓存协商，不承担安全校验职责。
-                String etag = "W/\"" + body.length + "-" + Integer.toHexString(Arrays.hashCode(body)) + "\"";
-                if ("*".equals(ifNoneMatch) || etag.equals(ifNoneMatch)) {
+                if (etag == null) etag = buildEtag(body);
+                if (matchesIfNoneMatch(ifNoneMatch, etag)) {
                     PrintWriter pw = new PrintWriter(new OutputStreamWriter(rawOut, "UTF-8"), false);
                     pw.print("HTTP/1.1 304 Not Modified\r\n");
                     pw.print("ETag: " + etag + "\r\n");
@@ -282,11 +398,62 @@ public class LocalWebServer extends Thread {
 
         } catch (IOException ignored) {
         } finally {
+            openClients.remove(client);
             try { client.close(); } catch (IOException ignored) {}
         }
     }
 
     // ── 工具方法 ─────────────────────────────────────────────────
+
+    private CachedAsset getCachedAsset(String path) {
+        synchronized (assetCacheLock) {
+            return assetCache.get(path);
+        }
+    }
+
+    private void cacheAsset(String path, byte[] body) {
+        if (body == null || body.length > MAX_CACHED_ASSET_BYTES) return;
+        CachedAsset entry = new CachedAsset(body);
+        synchronized (assetCacheLock) {
+            CachedAsset previous = assetCache.put(path, entry);
+            if (previous != null) assetCacheBytes -= previous.body.length;
+            assetCacheBytes += body.length;
+
+            Iterator<Map.Entry<String, CachedAsset>> iterator = assetCache.entrySet().iterator();
+            while (assetCacheBytes > MAX_ASSET_CACHE_BYTES && iterator.hasNext()) {
+                Map.Entry<String, CachedAsset> eldest = iterator.next();
+                assetCacheBytes -= eldest.getValue().body.length;
+                iterator.remove();
+            }
+        }
+    }
+
+    private void clearAssetCache() {
+        synchronized (assetCacheLock) {
+            assetCache.clear();
+            assetCacheBytes = 0L;
+        }
+    }
+
+    private static boolean isCacheableAsset(String extension) {
+        // 图片/字体/音频可能较大且首屏并不一定需要，交给 WebView 自身缓存；
+        // 只缓存 APK 内最常重复读取的脚本和样式，避免本地服务重复持有媒体资源。
+        return "js".equals(extension) || "mjs".equals(extension) || "css".equals(extension);
+    }
+
+    private static String buildEtag(byte[] body) {
+        return "W/\"" + body.length + "-" + Integer.toHexString(Arrays.hashCode(body)) + "\"";
+    }
+
+    private static boolean matchesIfNoneMatch(String header, String etag) {
+        if (header == null || header.isEmpty()) return false;
+        String[] candidates = header.split(",");
+        for (String candidate : candidates) {
+            String value = candidate.trim();
+            if ("*".equals(value) || etag.equals(value)) return true;
+        }
+        return false;
+    }
 
     private static String readLine(InputStream in, int maxLength) throws IOException {
         StringBuilder sb = new StringBuilder();

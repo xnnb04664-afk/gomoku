@@ -108,9 +108,9 @@ class MemoryStatement {
       const message = this.db.messages.find(row => row.sender_uid === a[0] && row.client_message_id === a[1]);
       return message ? this.db.publicMessage(message) : null;
     }
-    if (q.includes('select uid from social_socket_tickets')) {
+    if (q.includes('from social_socket_tickets') && q.includes('ticket_hash = ?')) {
       const row = this.db.tickets.get(String(a[0]));
-      return row && row.used === 0 && row.expires_at > Number(a[1]) ? { uid: row.uid } : null;
+      return row && row.used === 0 && row.expires_at > Number(a[1]) ? { uid: row.uid, channel: row.channel || 'friends' } : null;
     }
     if (q.includes('select * from game_invites where id = ? and receiver_uid = ?')) {
       const invite = this.db.gameInvites.get(String(a[0]));
@@ -259,7 +259,7 @@ class MemoryStatement {
       return { meta: { changes: 1 } };
     }
     if (q.startsWith('insert into social_socket_tickets')) {
-      this.db.tickets.set(String(a[0]), { uid: String(a[1]), expires_at: Number(a[2]), used: 0 });
+      this.db.tickets.set(String(a[0]), { uid: String(a[1]), expires_at: Number(a[2]), used: 0, channel: String(a[3] || 'friends') });
       return { meta: { changes: 1 } };
     }
     if (q.startsWith('update social_socket_tickets set used = 1')) {
@@ -772,8 +772,25 @@ async function main() {
     [/INSERT INTO user_game_layouts/, '八按钮布局按账号保存'],
     [/GAME_LAYOUT_DEFAULT_ORDER\.includes\(id\)/, '布局只接受固定合法按钮 ID'],
     [/username\.length > 32/, '精确搜索拒绝被静默截断的超长账号名'],
+    [/ANNOUNCEMENT_MAX_PAGE_SIZE/, '公告分页上限受控'],
+    [/ANNOUNCEMENT_HISTORY_WINDOW_MS/, '公告公开历史窗口受控'],
+    [/CREATE TABLE IF NOT EXISTS announcements/, '公告记录使用独立持久化表'],
+    [/CREATE TABLE IF NOT EXISTS announcement_state/, '公告已读位置按账号持久化'],
+    [/safeAnnouncementActionUrl/, '公告行动链接经过 HTTPS/站内路径校验'],
+    [/announcementAdminUidAllowed/, '管理员由服务端 UID 允许列表判定'],
+    [/requireAnnouncementAdmin/, '公告写入接口要求正式账号和管理员认证'],
+    [/published_at >= \?/, '公告读取遵守历史窗口'],
+    [/withdrawn/, '撤下状态保留审计而不公开展示'],
+    [/ON CONFLICT\(uid\) DO UPDATE SET last_read_id = MAX/, '公告已读写入幂等且只前进'],
+    [/lastReadId/, '公告未读响应返回已读游标'],
+    [/nextBefore/, '公告分页返回继续游标'],
   ];
   for (const [pattern, messageText] of sourceChecks) assert.match(workerSource, pattern, messageText);
+  assert.equal(workerSource.includes('body.admin') || workerSource.includes('body.isAdmin'), false, '客户端不能伪造管理员字段');
+  const announcementStart = workerSource.indexOf("if (url.pathname === '/api/announcements'");
+  const announcementAdminStart = workerSource.indexOf("if (url.pathname === '/api/admin/announcements'");
+  assert(announcementStart >= 0 && announcementAdminStart > announcementStart, '公告路由顺序有效');
+  assert.equal(workerSource.slice(announcementStart, announcementAdminStart).includes('notifySocialWorld'), false, '公告不广播到世界频道');
 
   const duplicateNotifications = notifications.filter(item => item.event.kind === 'message' && item.event.messageId === firstMessage.payload.data.id).length;
   assert.equal(duplicateNotifications, 1, '幂等消息重试不得重复推送实时通知');

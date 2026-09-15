@@ -450,6 +450,17 @@
         }
         return opened;
       };
+      // 公告是公开内容，游客也可以从游戏页直接阅读；正式账号仍会在好友中心看到同一入口。
+      window.openPublicGameAnnouncements = function() {
+        const open = window.GomokuAnnouncements && window.GomokuAnnouncements.open;
+        if (typeof open === 'function') return open();
+        // 公告脚本在页面底部注册，极早点击时给它一个短暂的加载机会。
+        window.setTimeout(() => {
+          const retry = window.GomokuAnnouncements && window.GomokuAnnouncements.open;
+          if (typeof retry === 'function') retry();
+        }, 0);
+        return false;
+      };
       window.refreshGameEconomy = refreshGameEconomy;
       document.addEventListener('DOMContentLoaded', () => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200), { once: true });
       const GAME_FEATURE_PANEL_CONFIG = Object.freeze({
@@ -567,6 +578,7 @@
   const MATE_DISTANCE = 32;
   const lineStatsCache = new Map();
   const linesCache = new Map();
+  const geometryCache = new Map();
 
   const now = () => (typeof performance !== 'undefined' && performance.now)
     ? performance.now()
@@ -696,6 +708,45 @@
     return lines;
   }
 
+  // 棋盘大小在实际游戏中通常固定为 15，但 Worker 也支持测试/变体棋盘。
+  // 将每个格子的四条 11 格局部线和静态坐标一次性缓存，避免搜索热路径反复
+  // 做除法、边界判断和行列乘法。棋盘内容仍从 position.board 实时读取，因而
+  // 不会缓存会随落子变化的结果。
+  function buildBoardGeometry(size) {
+    const cellCount = size * size;
+    const rows = new Uint16Array(cellCount);
+    const cols = new Uint16Array(cellCount);
+    const positionValues = new Float64Array(cellCount);
+    const lineIndexes = new Int32Array(cellCount * DIRECTIONS.length * LOCAL_LINE_LENGTH);
+    lineIndexes.fill(-1);
+    const center = (size - 1) / 2;
+
+    for (let index = 0; index < cellCount; index++) {
+      const r = Math.floor(index / size);
+      const c = index % size;
+      rows[index] = r;
+      cols[index] = c;
+      positionValues[index] = Math.max(0, size * 2 - Math.abs(r - center) - Math.abs(c - center));
+      for (let direction = 0; direction < DIRECTIONS.length; direction++) {
+        const dr = DIRECTIONS[direction][0];
+        const dc = DIRECTIONS[direction][1];
+        const base = (index * DIRECTIONS.length + direction) * LOCAL_LINE_LENGTH;
+        for (let offset = -5; offset <= 5; offset++) {
+          if (offset === 0) continue;
+          const nr = r + offset * dr;
+          const nc = c + offset * dc;
+          if (isValid(size, nr, nc)) lineIndexes[base + offset + 5] = nr * size + nc;
+        }
+      }
+    }
+    return { rows, cols, positionValues, lineIndexes };
+  }
+
+  function getBoardGeometry(size) {
+    if (!geometryCache.has(size)) geometryCache.set(size, buildBoardGeometry(size));
+    return geometryCache.get(size);
+  }
+
   function nextRandom(seedState) {
     let seed = seedState.value >>> 0;
     seed = Math.imul(seed ^ (seed >>> 16), 0x21f0aaad);
@@ -708,6 +759,7 @@
     constructor(boardInput, size, zobristA, zobristB) {
       this.size = size;
       this.cellCount = size * size;
+      this.geometry = getBoardGeometry(size);
       this.board = new Uint8Array(this.cellCount);
       const wordCount = Math.ceil(this.cellCount / 32);
       this.occupiedBits = new Uint32Array(wordCount);
@@ -919,8 +971,9 @@
     }
 
     static isNearStone(position, index, radius = 2) {
-      const r = Math.floor(index / position.size);
-      const c = index % position.size;
+      const geometry = position.geometry;
+      const r = geometry ? geometry.rows[index] : Math.floor(index / position.size);
+      const c = geometry ? geometry.cols[index] : index % position.size;
       for (let dr = -radius; dr <= radius; dr++) {
         for (let dc = -radius; dc <= radius; dc++) {
           if (dr === 0 && dc === 0) continue;
@@ -939,6 +992,7 @@
 
     static getGlobalStrategicMoves(position, color, opponent, enableFoul = false, forbidden = null, limit = MAX_GLOBAL_STRATEGIC_CANDIDATES) {
       const center = Math.floor(position.size / 2);
+      const geometry = position.geometry;
       const points = [];
       const seen = new Set();
       const addPoint = (r, c) => {
@@ -947,7 +1001,7 @@
         if (seen.has(index) || !position.isEmpty(index) || (forbidden && forbidden[index])) return;
         if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) return;
         seen.add(index);
-        points.push({ index, r, c, score: this.positionValue(r, c, position.size) });
+        points.push({ index, r, c, score: geometry.positionValues[index] });
       };
 
       // 固定的中心环和稀疏全盘锚点，让安静局面不会永远被限制在已有棋子两格内。
@@ -991,10 +1045,11 @@
       const raw = [];
       const opponent = color === BLACK ? WHITE : BLACK;
       const center = Math.floor(position.size / 2);
+      const geometry = position.geometry;
       const nearRadius = position.stones <= 12 ? 3 : 2;
       for (let index = 0; index < position.cellCount; index++) {
-        const r = Math.floor(index / position.size);
-        const c = index % position.size;
+        const r = geometry.rows[index];
+        const c = geometry.cols[index];
         // 开局若对手落在角落，单纯的“邻近两格”候选会把中心战略完全裁掉；
         // 前四手同时保留中心 7×7，普通局面则扩大到三格邻域。
         const openingAnchor = position.stones <= 4 && Math.abs(r - center) <= 3 && Math.abs(c - center) <= 3;
@@ -1014,15 +1069,15 @@
           own,
           opp,
           tactical: Boolean(tactical),
-          score: this.moveOrderingScore(own, opp) + this.positionValue(r, c, position.size)
+          score: this.moveOrderingScore(own, opp) + geometry.positionValues[index]
         });
       }
       if (!raw.length) {
         for (let index = 0; index < position.cellCount; index++) {
           if (position.isEmpty(index) && (!forbidden || !forbidden[index]) && (!enableFoul || !this.isForbiddenMove(position, index, color, forbidden))) {
-            const r = Math.floor(index / position.size);
-            const c = index % position.size;
-            raw.push({ index, r, c, own: null, opp: null, tactical: false, score: this.positionValue(r, c, position.size) });
+            const r = geometry.rows[index];
+            const c = geometry.cols[index];
+            raw.push({ index, r, c, own: null, opp: null, tactical: false, score: geometry.positionValues[index] });
           }
         }
       }
@@ -1055,13 +1110,14 @@
 
     static getRootCandidates(position, color, opponent, legal, enableFoul = false, forbidden = null, rootLimit = 22, candidateLimit = 64) {
       const selected = new Map();
+      const geometry = position.geometry;
       const add = (index, source = null) => {
         if (!Number.isInteger(index) || index < 0 || index >= position.cellCount || !position.isEmpty(index)) return;
         if (forbidden && forbidden[index]) return;
         if (enableFoul && this.isForbiddenMove(position, index, color, forbidden)) return;
         if (selected.has(index)) return;
-        const r = Math.floor(index / position.size);
-        const c = index % position.size;
+        const r = geometry.rows[index];
+        const c = geometry.cols[index];
         const own = this.analyzeMove(position, index, color);
         const opp = this.analyzeMove(position, index, opponent);
         selected.set(index, {
@@ -1073,7 +1129,7 @@
           tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
           score: source && Number.isFinite(source.score)
             ? source.score
-            : this.moveOrderingScore(own, opp) + this.positionValue(r, c, position.size)
+            : this.moveOrderingScore(own, opp) + geometry.positionValues[index]
         });
       };
 
@@ -1127,6 +1183,14 @@
     }
 
     static lineCode(position, index, color, dr, dc) {
+      let direction = -1;
+      if (dr === 0 && dc === 1) direction = 0;
+      else if (dr === 1 && dc === 0) direction = 1;
+      else if (dr === 1 && dc === 1) direction = 2;
+      else if (dr === 1 && dc === -1) direction = 3;
+      if (direction >= 0 && position.geometry) return this.lineCodeByDirection(position, index, color, direction);
+
+      // 保留对外部调试调用和旧测试用 position 结构的兼容路径。
       const r = Math.floor(index / position.size);
       const c = index % position.size;
       let code = 0;
@@ -1137,6 +1201,23 @@
         if (offset === 0) value = 1;
         else if (isValid(position.size, nr, nc)) {
           const cell = position.board[nr * position.size + nc];
+          value = cell === EMPTY ? 0 : (cell === color ? 1 : 2);
+        }
+        code = code * 3 + value;
+      }
+      return code;
+    }
+
+    static lineCodeByDirection(position, index, color, direction) {
+      const lineIndexes = position.geometry.lineIndexes;
+      const base = (index * DIRECTIONS.length + direction) * LOCAL_LINE_LENGTH;
+      let code = 0;
+      for (let offset = 0; offset < LOCAL_LINE_LENGTH; offset++) {
+        const cellIndex = lineIndexes[base + offset];
+        let value = 2;
+        if (offset === 5) value = 1;
+        else if (cellIndex >= 0) {
+          const cell = position.board[cellIndex];
           value = cell === EMPTY ? 0 : (cell === color ? 1 : 2);
         }
         code = code * 3 + value;
@@ -1155,8 +1236,8 @@
       let openThree = 0;
       let brokenThree = 0;
       let openTwo = 0;
-      for (const [dr, dc] of DIRECTIONS) {
-        const code = this.lineCode(position, index, color, dr, dc);
+      for (let direction = 0; direction < DIRECTIONS.length; direction++) {
+        const code = this.lineCodeByDirection(position, index, color, direction);
         five += stats.five[code];
         openFour += stats.openFour[code];
         four += stats.four[code];
@@ -1177,8 +1258,9 @@
     }
 
     static countDirection(position, index, dr, dc, color) {
-      let r = Math.floor(index / position.size) + dr;
-      let c = index % position.size + dc;
+      const geometry = position.geometry;
+      let r = (geometry ? geometry.rows[index] : Math.floor(index / position.size)) + dr;
+      let c = (geometry ? geometry.cols[index] : index % position.size) + dc;
       let count = 0;
       while (isValid(position.size, r, c) && position.board[r * position.size + c] === color) {
         count++;
@@ -1259,8 +1341,8 @@
         const opp = this.analyzeMove(position, move.index, opponent);
         const normalized = {
           index: move.index,
-          r: Math.floor(move.index / position.size),
-          c: move.index % position.size,
+          r: position.geometry.rows[move.index],
+          c: position.geometry.cols[move.index],
           own,
           opp,
           tactical: Boolean(own.five || opp.five || own.openFour || opp.openFour || own.four || opp.four || own.openThree || opp.openThree || own.brokenThree || opp.brokenThree),
@@ -1400,14 +1482,11 @@
         opponentScore += this.evaluateLine(position.board, line, opponent);
       }
       let positionScore = 0;
+      const positionValues = position.geometry.positionValues;
       for (let index = 0; index < position.cellCount; index++) {
         const cell = position.board[index];
         if (cell === EMPTY) continue;
-        const r = Math.floor(index / position.size);
-        const c = index % position.size;
-        positionScore += cell === aiColor
-          ? this.positionValue(r, c, position.size)
-          : -this.positionValue(r, c, position.size);
+        positionScore += cell === aiColor ? positionValues[index] : -positionValues[index];
       }
       return aiScore - opponentScore * 1.12 + positionScore;
     }
@@ -2072,6 +2151,30 @@
       outline: 2px solid rgba(14, 165, 233, .55);
       outline-offset: 1px;
     }
+    .game-social-dock-public-announcement {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 20px;
+      padding: 2px 8px;
+      border: 1px solid rgba(217, 119, 6, .28);
+      border-radius: 999px;
+      background: rgba(255, 247, 237, .92);
+      color: #b45309;
+      font-size: 10px;
+      font-weight: 900;
+      line-height: 1.1;
+      cursor: pointer;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+    .game-social-dock-public-announcement:hover { background: #fff7ed; }
+    .game-social-dock-public-announcement:focus-visible {
+      outline: 2px solid rgba(245, 158, 11, .55);
+      outline-offset: 1px;
+    }
+    .game-social-dock-public-announcement .game-social-unread-badge { top: -7px; right: -7px; }
     .game-social-dock-fab {
       position: fixed;
       right: max(8px, calc(50% - 260px));
@@ -3345,6 +3448,135 @@
       }
     }
   </style>
+<style id="skyIslandEnhancementsStyle">
+
+    /* 天空棋岛视觉增强：棋盘外余韵、星轨摘要和轻量浮岛选中态 */
+    .island-wrapper.sky-victory-afterglow::before {
+      content: "";
+      position: absolute;
+      inset: -10px;
+      border-radius: 24px;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0;
+      background: conic-gradient(from 210deg, rgba(250,204,21,0), rgba(250,204,21,.52), rgba(253,224,71,.18), rgba(250,204,21,0));
+      box-shadow: 0 0 18px rgba(245,158,11,.46), 0 0 42px rgba(250,204,21,.2);
+      filter: blur(4px);
+      animation: skyVictoryAfterglow .98s ease-out both;
+    }
+    .island-wrapper.sky-victory-afterglow canvas { position: relative; z-index: 1; }
+    @keyframes skyVictoryAfterglow {
+      0% { opacity: 0; transform: scale(.97) rotate(-1deg); }
+      28% { opacity: .58; transform: scale(1.005) rotate(0deg); }
+      100% { opacity: 0; transform: scale(1.02) rotate(1deg); }
+    }
+    body.low-spec-mode .island-wrapper.sky-victory-afterglow::before {
+      animation: none;
+      opacity: .24;
+      filter: none;
+      box-shadow: 0 0 14px rgba(245,158,11,.25);
+    }
+    .sky-replay-insights {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 8px;
+      padding: 7px 8px;
+      border: 1px solid rgba(250,204,21,.42);
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(255,251,235,.96), rgba(254,249,195,.72));
+      color: #713f12;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.35;
+      text-align: left;
+    }
+    .sky-replay-insights-title {
+      color: #92400e;
+      font-size: 10.5px;
+      font-weight: 900;
+      letter-spacing: .03em;
+      margin-bottom: 4px;
+    }
+    .sky-replay-insights-row {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      min-width: 0;
+    }
+    .sky-replay-insights-row strong { min-width: 48px; color: #b45309; }
+    .game-social-dock-grid button.sky-island-selected {
+      transform: translateY(-1px);
+      box-shadow: 0 3px 0 rgba(14,116,144,.16), 0 0 0 2px rgba(250,204,21,.5);
+      filter: saturate(1.06);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .island-wrapper.sky-victory-afterglow::before {
+        animation: none;
+        opacity: .3;
+        filter: none;
+      }
+      .game-social-dock-grid button.sky-island-selected {
+        transform: none;
+        transition: none;
+      }
+    }
+    @media (max-width: 600px) {
+      .island-wrapper.sky-victory-afterglow::before { inset: -6px; border-radius: 18px; }
+      .sky-replay-insights { font-size: 9.5px; padding: 6px 7px; }
+    }
+
+</style>
+<style id="worldChatEnhancementsStyle">
+.world-chat-tab{position:relative;display:inline-flex;align-items:center;gap:4px}
+.world-chat-tab .world-chat-tab-badge{display:none;min-width:16px;height:16px;padding:0 4px;align-items:center;justify-content:center;border-radius:999px;background:#dc2626;color:#fff;font-size:9px;line-height:16px;font-weight:900}
+.world-chat-tab.has-unread .world-chat-tab-badge{display:inline-flex}
+#worldChatPanel{z-index:100008}
+#worldChatPanel .world-chat-card{max-width:460px;width:95%;height:min(680px,90vh);display:flex;flex-direction:column;text-align:left}
+#worldChatPanel .world-chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #e2e8f0;padding-bottom:8px}
+#worldChatPanel .world-chat-title{font-weight:900;color:#0f172a}
+#worldChatPanel .world-chat-status{font-size:10px;color:#64748b;font-weight:700;margin-top:2px}
+#worldChatPanel .world-chat-retention{padding:7px 2px 3px;color:#64748b;font-size:10px;line-height:1.45;font-weight:700}
+#worldChatPanel .world-chat-messages{flex:1;min-height:160px;overflow:auto;padding:8px 2px;display:flex;flex-direction:column;gap:7px}
+#worldChatPanel .world-chat-row{display:flex;justify-content:flex-start}
+#worldChatPanel .world-chat-bubble{max-width:88%;padding:7px 9px;border-radius:12px 12px 12px 3px;background:#f1f5f9;color:#1e293b;word-break:break-word;white-space:pre-wrap}
+#worldChatPanel .world-chat-meta{font-size:10px;color:#64748b;margin-bottom:2px}
+#worldChatPanel .world-chat-body{font-size:13px;line-height:1.45}
+#worldChatPanel .world-chat-older{text-align:center;min-height:27px;padding:2px 0}
+#worldChatPanel .world-chat-quick{display:flex;gap:5px;flex-wrap:wrap;border-top:1px solid #e2e8f0;padding-top:7px}
+#worldChatPanel .world-chat-compose{display:flex;gap:6px;align-items:flex-end;padding-top:7px}
+#worldChatPanel .world-chat-compose textarea{flex:1;min-width:0;min-height:42px;max-height:100px;resize:vertical;padding:8px 9px;border:1.5px solid #93c5fd;border-radius:10px;outline:none;font:inherit;line-height:1.35;user-select:text;-webkit-user-select:text}
+#worldChatPanel .world-chat-actions{display:flex;gap:6px;justify-content:space-between;align-items:center;padding-top:7px}
+#worldChatPanel .world-chat-count{font-size:10px;color:#94a3b8;font-weight:700}
+@media (max-width:600px){#worldChatPanel .world-chat-card{width:calc(100% - 20px);height:min(680px,92vh)}#worldChatPanel .world-chat-bubble{max-width:92%}}
+@media (prefers-reduced-motion:reduce){#worldChatPanel *{scroll-behavior:auto}}
+</style>
+<style id="announcementCenterEnhancementsStyle">
+.announcement-center-tab{position:relative;display:inline-flex;align-items:center;gap:4px}
+.announcement-center-tab .announcement-center-tab-badge{display:none;min-width:16px;height:16px;padding:0 4px;align-items:center;justify-content:center;border-radius:999px;background:#d97706;color:#fff;font-size:9px;line-height:16px;font-weight:900}
+.announcement-center-tab.has-unread .announcement-center-tab-badge{display:inline-flex}
+#announcementCenterPanel{z-index:100009}
+#announcementCenterPanel .announcement-center-card{max-width:460px;width:95%;height:min(680px,90vh);display:flex;flex-direction:column;text-align:left}
+#announcementCenterPanel .announcement-center-head{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #e2e8f0;padding-bottom:8px}
+#announcementCenterPanel .announcement-center-title{font-weight:900;color:#0f172a}
+#announcementCenterPanel .announcement-center-status{font-size:10px;color:#64748b;font-weight:700;margin-top:2px}
+#announcementCenterPanel .announcement-center-note{padding:7px 2px 3px;color:#64748b;font-size:10px;line-height:1.45;font-weight:700}
+#announcementCenterPanel .announcement-center-list{flex:1;min-height:160px;overflow:auto;padding:8px 2px}
+#announcementCenterPanel .announcement-center-item{width:100%;display:flex;align-items:flex-start;gap:8px;padding:10px 4px;border:0;border-bottom:1px solid rgba(148,163,184,.28);background:transparent;color:#1e293b;text-align:left;cursor:pointer}
+#announcementCenterPanel .announcement-center-item:hover,#announcementCenterPanel .announcement-center-item:focus-visible{background:rgba(219,234,254,.5);outline:2px solid #93c5fd;outline-offset:-2px}
+#announcementCenterPanel .announcement-center-icon{flex:0 0 auto;font-size:17px;line-height:1.2}
+#announcementCenterPanel .announcement-center-item-title{font-weight:900;line-height:1.35;word-break:break-word}
+#announcementCenterPanel .announcement-center-item-meta{margin-top:3px;font-size:10px;color:#64748b}
+#announcementCenterPanel .announcement-center-unread{margin-left:auto;flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.14)}
+#announcementCenterPanel .announcement-center-pager{text-align:center;min-height:30px;padding:2px 0}
+#announcementCenterPanel .announcement-center-detail{padding:10px 4px;color:#1e293b;white-space:pre-wrap;word-break:break-word;line-height:1.55;overflow:auto}
+#announcementCenterPanel .announcement-center-detail-title{font-size:17px;font-weight:900;line-height:1.35;color:#0f172a}
+#announcementCenterPanel .announcement-center-detail-meta{margin:5px 0 12px;font-size:10px;color:#64748b}
+#announcementCenterPanel .announcement-center-detail-body{font-size:13px}
+#announcementCenterPanel .announcement-center-detail-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+#announcementCenterPanel .announcement-center-foot{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #e2e8f0;padding-top:7px}
+@media (max-width:600px){#announcementCenterPanel .announcement-center-card{width:calc(100% - 20px);height:min(680px,92vh)}}
+@media (prefers-reduced-motion:reduce){#announcementCenterPanel *{scroll-behavior:auto}}
+</style>
 </head>
 <body>
 
@@ -3507,6 +3739,7 @@
   <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
+      <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
       <button type="button" class="game-social-dock-toggle" id="btnGameDockToggle" onclick="toggleGameDockCollapsed()" aria-controls="gameSocialDock" aria-expanded="true" aria-label="收起八个游戏功能按钮">⌄</button>
     </div>
     <div class="game-social-dock-grid" id="gameSocialDockGrid" role="list" aria-label="游戏功能八宫格">
@@ -3717,7 +3950,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.3</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.4</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -4231,7 +4464,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.3</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.4</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
@@ -4372,5 +4605,1094 @@
 
   <script defer src="js/sky-hub.js"></script>
   <script defer src="js/app.min.js"></script>
+<script id="skyIslandEnhancements">
+(() => {
+  'use strict';
+  // 仅作为未来 UI 实验开关，默认关闭；不调用、不声明任何后端能力。
+  window.SKY_ISLAND_FEATURE_FLAGS = Object.freeze({
+    doubleStarEndgame: false,
+    weatherSeason: false
+  });
+
+  const byId = id => document.getElementById(id);
+  const textOf = node => node ? String(node.textContent || '').trim() : '';
+  const reducedMotion = () => {
+    try { return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+    catch (_) { return false; }
+  };
+  const lowSpec = () => Boolean(document.body && document.body.classList.contains('low-spec-mode'));
+
+  function playVictoryAfterglow() {
+    const wrapper = byId('islandWrapper');
+    if (!wrapper) return;
+    wrapper.classList.remove('sky-victory-afterglow');
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => wrapper.classList.add('sky-victory-afterglow'));
+    window.setTimeout(() => wrapper.classList.remove('sky-victory-afterglow'), reducedMotion() || lowSpec() ? 300 : 1050);
+  }
+
+  function replayMoves() {
+    try {
+      if (typeof replayAllMoves !== 'undefined' && Array.isArray(replayAllMoves)) {
+        return replayAllMoves.filter(move => move && Number.isFinite(Number(move.r)) && Number.isFinite(Number(move.c)) && !move.action);
+      }
+    } catch (_) {}
+    try {
+      if (Array.isArray(window.replayAllMoves)) return window.replayAllMoves.filter(move => move && !move.action);
+    } catch (_) {}
+    return [];
+  }
+
+  function replayCount() {
+    const moves = replayMoves();
+    const label = textOf(byId('replayStepLabel'));
+    const match = label.match(/(\d+)\s*\/\s*(\d+)/);
+    return Math.max(moves.length, match ? Number(match[2]) : 0);
+  }
+
+  function isWinningResult() {
+    const icon = textOf(byId('resultModalIcon'));
+    const title = textOf(byId('resultModalTitle'));
+    const badge = textOf(byId('replayBadgeLabel'));
+    return icon.includes('👑') || title.includes('获胜') || badge.includes('胜利');
+  }
+
+  function renderInsights(host, mode) {
+    if (!host) return;
+    let panel = host.querySelector('.sky-replay-insights');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'sky-replay-insights';
+      panel.setAttribute('role', 'status');
+      panel.setAttribute('aria-live', 'polite');
+      host.appendChild(panel);
+    }
+    const total = replayCount();
+    const moves = replayMoves();
+    const fallback = moves.length < 3;
+    const winning = isWinningResult();
+    const signature = [mode, total, fallback ? 1 : 0, winning ? 1 : 0].join('|');
+    if (panel.dataset.skySignature === signature) return;
+    panel.dataset.skySignature = signature;
+    const pivot = total > 0 ? Math.max(1, total - 2) : 0;
+    const mistake = total > 0 ? Math.max(1, total - 1) : 0;
+    const fallbackText = fallback ? '最近落子降级标记（非引擎判定）' : '候选标记（非引擎判定）';
+    const winningText = winning && total > 0 ? '第 ' + total + ' 手 · 终局标记' : '本局无胜者 · 结果标记';
+    panel.innerHTML =
+      '<div class="sky-replay-insights-title">✦ 星轨复盘 · ' + (fallback ? '安全降级' : '候选分析') + '</div>' +
+      '<div class="sky-replay-insights-row"><strong>转折手</strong><span>' + (pivot ? '第 ' + pivot + ' 手 · ' + fallbackText : fallbackText) + '</span></div>' +
+      '<div class="sky-replay-insights-row"><strong>失误手</strong><span>' + (mistake ? '第 ' + mistake + ' 手 · ' + fallbackText : fallbackText) + '</span></div>' +
+      '<div class="sky-replay-insights-row"><strong>制胜手</strong><span>' + winningText + '</span></div>';
+  }
+
+  function syncSelectedButton() {
+    const grid = byId('gameSocialDockGrid');
+    if (!grid || grid.dataset.skyBound === '1') return;
+    grid.dataset.skyBound = '1';
+    const buttons = () => [...grid.querySelectorAll('button[id^="btnGame"]')];
+    const mark = button => {
+      buttons().forEach(item => {
+        const selected = item === button;
+        item.classList.toggle('sky-island-selected', selected);
+        if (selected) item.setAttribute('aria-current', 'true');
+        else item.removeAttribute('aria-current');
+      });
+    };
+    const initial = buttons()[0];
+    if (initial) mark(initial);
+    grid.addEventListener('click', event => {
+      const button = event.target.closest('button[id^="btnGame"]');
+      if (button) mark(button);
+    });
+  }
+
+  function refresh() {
+    syncSelectedButton();
+    const result = byId('gameResultModal');
+    if (result && result.classList.contains('show')) {
+      const winning = isWinningResult();
+      if (winning && result.dataset.skyGlowSeen !== '1') {
+        result.dataset.skyGlowSeen = '1';
+        playVictoryAfterglow();
+      }
+      renderInsights(result.querySelector('.custom-confirm-card') || result, 'result');
+    } else if (result) {
+      result.dataset.skyGlowSeen = '0';
+    }
+    const replay = byId('replayControlDock');
+    if (replay && getComputedStyle(replay).display !== 'none') renderInsights(replay, 'replay');
+  }
+
+  function init() {
+    if (!document.body) return;
+    let scheduled = false;
+    const schedule = () => {
+      if (scheduled) return;
+      scheduled = true;
+      const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+      raf(() => { scheduled = false; refresh(); });
+    };
+    if (typeof MutationObserver === 'function') {
+      let resultObserverAttached = false;
+      const attachResultObservers = () => {
+        let attached = false;
+        ['gameResultModal', 'replayControlDock'].forEach(id => {
+          const target = byId(id);
+          if (!target || target.dataset.skyObserverBound === '1') return;
+          const targetObserver = new MutationObserver(schedule);
+          targetObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
+          target.dataset.skyObserverBound = '1';
+          attached = true;
+        });
+        return attached;
+      };
+      resultObserverAttached = attachResultObservers();
+      const bodyObserver = new MutationObserver(() => {
+        if (attachResultObservers()) schedule();
+      });
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
+      if (resultObserverAttached) schedule();
+    }
+    document.addEventListener('click', event => {
+      if (event.target.closest('#gameSocialDockGrid button')) schedule();
+    }, true);
+    schedule();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+  else init();
+})();
+</script>
+<script id="worldChatEnhancements">
+(() => {
+  'use strict';
+
+  const MAX_CHARS = 500;
+  const PAGE_SIZE = 50;
+  // 与好友社交模块统一：立即重试后按 1/2/4/8/12 秒退避。
+  const RETRY_DELAYS = [0, 1000, 2000, 4000, 8000, 12000];
+  const state = {
+    messages: [],
+    oldestId: 0,
+    hasMore: false,
+    loading: false,
+    reading: false,
+    unread: 0,
+    socket: null,
+    socketConnecting: false,
+    socketRetry: 0,
+    socketRetryTimer: null,
+    started: false,
+    panelOpen: false,
+    domObserver: null,
+    badgeScheduled: false
+  };
+
+  const socialUnreadState = window.GomokuSocialUnreadState || { world: 0, announcements: 0 };
+  window.GomokuSocialUnreadState = socialUnreadState;
+
+  const byId = id => document.getElementById(id);
+  const textOf = value => String(value == null ? '' : value);
+  const registered = () => {
+    try { return typeof hasRegisteredAccountSession === 'function' && hasRegisteredAccountSession(); }
+    catch (_) { return false; }
+  };
+  const currentUid = () => {
+    try { return typeof currentUserUid !== 'undefined' ? String(currentUserUid || '') : ''; }
+    catch (_) { return ''; }
+  };
+  const notice = (message, warning = true) => {
+    try { if (typeof showGameNotice === 'function') showGameNotice(String(message || ''), warning); } catch (_) {}
+  };
+  const loginGuide = () => {
+    notice('🔑 世界聊天需要先登录正式账号', true);
+    try { if (typeof openAuthModal === 'function') openAuthModal('login'); } catch (_) {}
+  };
+  const displayName = message => textOf(message && (message.nickname || message.username || '棋友')).trim().slice(0, 32) || '棋友';
+
+  async function api(path, options = {}) {
+    if (typeof safeApiFetch !== 'function') throw new Error('云端世界频道暂不可用，单文件仍可离线对局');
+    const request = { ...options };
+    const method = String(request.method || 'GET').toUpperCase();
+    let endpoint = String(path);
+    if (method === 'GET') {
+      const url = new URL(endpoint, window.location.href);
+      url.searchParams.set('uid', currentUid());
+      endpoint = url.pathname + url.search;
+    } else {
+      let body = {};
+      try { body = request.body ? JSON.parse(request.body) : {}; } catch (_) {}
+      request.headers = { 'Content-Type': 'application/json', ...(request.headers || {}) };
+      request.body = JSON.stringify({ ...body, uid: currentUid() });
+    }
+    const response = await safeApiFetch(endpoint, request);
+    let payload = null;
+    try { payload = await response.json(); } catch (_) {}
+    if (!response.ok || !payload || payload.code !== 0) {
+      const error = new Error(payload && payload.msg ? String(payload.msg) : '世界频道请求失败');
+      error.status = response.status;
+      throw error;
+    }
+    return { data: payload.data, response };
+  }
+
+  function messageFrom(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id) || 0;
+    const body = textOf(raw.body).normalize ? textOf(raw.body).normalize('NFC') : textOf(raw.body);
+    if (!id || !body || Array.from(body).length > MAX_CHARS) return null;
+    return {
+      id,
+      senderUid: textOf(raw.senderUid || raw.sender_uid).slice(0, 64),
+      username: textOf(raw.username).slice(0, 32),
+      nickname: textOf(raw.nickname).slice(0, 32),
+      avatar: textOf(raw.avatar).slice(0, 8),
+      body: body.slice(0, MAX_CHARS),
+      createdAt: Number(raw.createdAt || raw.created_at) || 0
+    };
+  }
+
+  function setStatus(message, warning = false) {
+    const node = byId('worldChatStatus');
+    if (node) {
+      node.textContent = String(message || '');
+      node.style.color = warning ? '#b45309' : '#64748b';
+    }
+  }
+
+  function parseBadgeCount(node) {
+    const match = textOf(node && node.textContent).match(/\d+/);
+    return match ? Math.min(999, Number(match[0]) || 0) : 0;
+  }
+
+  function setIfChanged(node, key, value) {
+    if (node && node.getAttribute(key) !== String(value)) node.setAttribute(key, String(value));
+  }
+
+  function applyUnifiedUnreadBadges() {
+    state.badgeScheduled = false;
+    socialUnreadState.world = state.unread;
+    const totalIds = ['socialUnreadBadge', 'gameFriendsUnreadBadge', 'gameDockUnreadBadge'];
+    totalIds.forEach(id => {
+      const node = byId(id);
+      if (!node) return;
+      const rendered = Number(node.dataset.socialUnreadRendered);
+      const current = parseBadgeCount(node);
+      const extras = (Number(node.dataset.socialUnreadWorld) || 0) + (Number(node.dataset.socialUnreadAnnouncements) || 0);
+      const base = Number.isFinite(rendered) && rendered === current
+        ? (Number(node.dataset.socialUnreadBase) || 0)
+        : Math.max(0, current - extras);
+      const total = Math.min(999, Math.max(0, base + socialUnreadState.world + socialUnreadState.announcements));
+      node.dataset.socialUnreadBase = String(base);
+      node.dataset.socialUnreadRendered = String(total);
+      node.dataset.socialUnreadWorld = String(socialUnreadState.world);
+      node.dataset.socialUnreadAnnouncements = String(socialUnreadState.announcements);
+      if (node.textContent !== (total > 99 ? '99+' : total ? String(total) : '')) node.textContent = total > 99 ? '99+' : total ? String(total) : '';
+      node.style.display = total > 0 ? 'inline-flex' : 'none';
+      setIfChanged(node, 'aria-hidden', total <= 0 ? 'true' : 'false');
+      setIfChanged(node, 'aria-label', total > 0 ? total + ' 条社交动态' : '没有社交动态');
+      setIfChanged(node, 'title', total > 0 ? total + ' 条社交动态' : '没有社交动态');
+    });
+    const friendButton = byId('btnGameFriends');
+    if (friendButton) {
+      const raw = friendButton.getAttribute('aria-label') || '打开好友、私聊与亲密关系';
+      const suffix = /，世界频道/.test(raw) ? raw.slice(0, raw.indexOf('，世界频道')) : raw;
+      friendButton.dataset.worldBaseLabel = suffix;
+      const label = state.unread > 0 ? suffix + '，世界频道 ' + state.unread + ' 条未读' : suffix;
+      setIfChanged(friendButton, 'aria-label', label);
+    }
+    const fab = byId('gameSocialDockFab');
+    if (fab) {
+      const raw = fab.getAttribute('aria-label') || '展开八个游戏功能按钮';
+      const suffix = /，世界频道/.test(raw) ? raw.slice(0, raw.indexOf('，世界频道')) : raw;
+      const label = state.unread > 0 ? suffix + '，世界频道 ' + state.unread + ' 条未读' : suffix;
+      setIfChanged(fab, 'aria-label', label);
+    }
+    const entry = byId('btnWorldChat');
+    if (entry) {
+      entry.classList.toggle('has-unread', state.unread > 0);
+      entry.setAttribute('aria-label', state.unread > 0 ? '世界聊天，' + state.unread + ' 条未读' : '世界聊天');
+      const badge = byId('worldChatUnreadBadge');
+      if (badge) {
+        badge.textContent = state.unread > 99 ? '99+' : state.unread ? String(state.unread) : '';
+        badge.style.display = state.unread > 0 ? 'inline-flex' : 'none';
+        setIfChanged(badge, 'aria-hidden', state.unread > 0 ? 'false' : 'true');
+      }
+    }
+  }
+
+  function scheduleBadges() {
+    if (state.badgeScheduled) return;
+    state.badgeScheduled = true;
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(applyUnifiedUnreadBadges);
+  }
+
+  window.GomokuSocialUnreadRefresh = scheduleBadges;
+
+  function ensurePanel() {
+    let panel = byId('worldChatPanel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'worldChatPanel';
+    panel.className = 'online-modal-backdrop';
+    panel.setAttribute('aria-hidden', 'true');
+    panel.innerHTML =
+      '<div class="online-modal-card world-chat-card" role="dialog" aria-modal="true" aria-labelledby="worldChatTitle" onclick="event.stopPropagation()">' +
+        '<div class="world-chat-head"><div><div id="worldChatTitle" class="world-chat-title">🌐 世界聊天</div><div id="worldChatStatus" class="world-chat-status">尚未连接</div></div>' +
+          '<button type="button" id="worldChatClose" class="btn-chat-tool" aria-label="关闭世界聊天">✕</button></div>' +
+        '<div class="world-chat-retention">世界消息会持久保存在云端数据库，仅显示最近 30 天（最多 5000 条消息）；清空我的视图只改变你这一侧的已读位置，不会删除他人消息。</div>' +
+        '<div id="worldChatMessages" class="world-chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>' +
+        '<div id="worldChatOlder" class="world-chat-older"></div>' +
+        '<div class="world-chat-quick" aria-label="快捷短语">' +
+          '<button type="button" class="btn-chat-tool" data-world-quick="你好！">你好！</button>' +
+          '<button type="button" class="btn-chat-tool" data-world-quick="来一局？">来一局？</button>' +
+          '<button type="button" class="btn-chat-tool" data-world-quick="精彩对局！">精彩对局！</button>' +
+        '</div>' +
+        '<div class="world-chat-compose"><textarea id="worldChatInput" maxlength="500" aria-label="世界聊天消息" placeholder="输入文字、Emoji 或快捷短语（最多 500 字）"></textarea><button type="button" id="worldChatSend" class="btn-chat-tool" style="background:#2563eb;color:#fff;border-color:#1d4ed8;">发送</button></div>' +
+        '<div class="world-chat-actions"><span id="worldChatCount" class="world-chat-count">0/500</span><button type="button" id="worldChatClear" class="btn-chat-tool">清空我的视图</button></div>' +
+      '</div>';
+    panel.addEventListener('click', event => { if (event.target === panel) closePanel(); });
+    document.body.appendChild(panel);
+    byId('worldChatClose')?.addEventListener('click', closePanel);
+    byId('worldChatSend')?.addEventListener('click', send);
+    byId('worldChatClear')?.addEventListener('click', clearMyView);
+    byId('worldChatInput')?.addEventListener('input', updateCount);
+    byId('worldChatInput')?.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
+    });
+    document.querySelectorAll('[data-world-quick]').forEach(button => button.addEventListener('click', () => {
+      const input = byId('worldChatInput'); if (input) { input.value = button.dataset.worldQuick || ''; updateCount(); input.focus(); }
+    }));
+    return panel;
+  }
+
+  function ensureEntry() {
+    const modal = byId('friendsModal');
+    if (!modal) return;
+    const firstTab = modal.querySelector('[data-social-tab]');
+    const bar = firstTab && firstTab.parentElement;
+    if (!bar || byId('btnWorldChat')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'btnWorldChat';
+    button.className = 'btn-chat-tool social-tab world-chat-tab';
+    button.setAttribute('aria-controls', 'worldChatPanel');
+    button.setAttribute('aria-label', '世界聊天');
+    button.textContent = '🌐 世界';
+    const badge = document.createElement('span');
+    badge.id = 'worldChatUnreadBadge';
+    badge.className = 'world-chat-tab-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    button.appendChild(badge);
+    button.addEventListener('click', openPanel);
+    bar.appendChild(button);
+  }
+
+  function renderMessages(keepPosition = false) {
+    const root = byId('worldChatMessages');
+    const older = byId('worldChatOlder');
+    if (!root) return;
+    const previousHeight = root.scrollHeight;
+    root.replaceChildren();
+    if (!state.messages.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:18px 8px;text-align:center;color:#64748b;font-size:13px';
+      empty.textContent = '还没有世界消息，来打个招呼吧';
+      root.appendChild(empty);
+    } else {
+      state.messages.forEach(message => {
+        const row = document.createElement('div');
+        row.className = 'world-chat-row';
+        const bubble = document.createElement('div');
+        bubble.className = 'world-chat-bubble';
+        const meta = document.createElement('div');
+        meta.className = 'world-chat-meta';
+        meta.textContent = displayName(message) + (message.createdAt ? ' · ' + new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+        const body = document.createElement('div');
+        body.className = 'world-chat-body';
+        body.textContent = message.body;
+        bubble.append(meta, body);
+        row.appendChild(bubble);
+        root.appendChild(row);
+      });
+    }
+    if (older) {
+      older.replaceChildren();
+      if (state.hasMore) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-chat-tool';
+        button.textContent = state.loading ? '正在加载…' : '加载更早消息';
+        button.disabled = state.loading;
+        button.setAttribute('aria-label', '加载更早世界消息');
+        button.addEventListener('click', () => loadPage(true));
+        older.appendChild(button);
+      }
+    }
+    if (keepPosition) root.scrollTop = Math.max(0, root.scrollHeight - previousHeight);
+    else root.scrollTop = root.scrollHeight;
+  }
+
+  function mergeMessages(incoming, prepend = false) {
+    const known = new Set(state.messages.map(item => String(item.id)));
+    const page = incoming.map(messageFrom).filter(Boolean).filter(item => !known.has(String(item.id)));
+    state.messages = prepend ? page.concat(state.messages) : page;
+    state.messages.sort((a, b) => a.id - b.id);
+    if (state.messages.length > 200) state.messages = state.messages.slice(-200);
+    state.oldestId = state.messages.reduce((min, item) => min && min < item.id ? min : item.id, 0);
+    return page.length;
+  }
+
+  async function loadPage(older = false) {
+    if (!registered() || state.loading || (older && (!state.hasMore || !state.oldestId))) return;
+    state.loading = true;
+    renderMessages(true);
+    try {
+      let path = '/api/world/messages?limit=' + PAGE_SIZE;
+      if (older) path += '&before=' + encodeURIComponent(state.oldestId);
+      const result = await api(path);
+      const data = result.data || {};
+      mergeMessages(Array.isArray(data.messages) ? data.messages : [], older);
+      state.hasMore = data.hasMore === true;
+      if (Number.isFinite(Number(data.unreadCount))) state.unread = Math.max(0, Number(data.unreadCount));
+      renderMessages(older);
+      scheduleBadges();
+      if (!older && state.panelOpen) await markRead();
+      setStatus('世界频道已同步 · 最近 30 天', false);
+    } catch (error) {
+      setStatus(error.message || '世界频道暂不可用', true);
+      notice(error.message || '世界频道暂不可用', true);
+    } finally {
+      state.loading = false;
+      renderMessages(true);
+    }
+  }
+
+  async function markRead() {
+    if (!state.panelOpen || state.reading || !state.messages.length || !registered()) return;
+    const last = state.messages[state.messages.length - 1].id;
+    if (!last) return;
+    state.reading = true;
+    try {
+      await api('/api/world/messages/read', { method: 'POST', body: JSON.stringify({ lastMessageId: last }) });
+      state.unread = 0;
+      scheduleBadges();
+    } catch (_) {
+      // 下一次恢复或打开面板时重试；不把正文写入日志。
+    } finally {
+      state.reading = false;
+    }
+  }
+
+  function appendMessage(raw) {
+    const message = messageFrom(raw);
+    if (!message || state.messages.some(item => item.id === message.id)) return false;
+    state.messages.push(message);
+    state.messages.sort((a, b) => a.id - b.id);
+    if (state.messages.length > 200) state.messages.shift();
+    if (state.panelOpen) {
+      renderMessages(false);
+      markRead();
+    } else if (message.senderUid !== currentUid()) {
+      state.unread += 1;
+      scheduleBadges();
+    }
+    return true;
+  }
+
+  function socketOrigin(response) {
+    try { return response && response.url ? new URL(response.url).origin : (typeof activeApiHost !== 'undefined' ? String(activeApiHost || '') : window.location.origin); }
+    catch (_) { return window.location.origin; }
+  }
+
+  function scheduleReconnect() {
+    if (!state.started || !registered() || state.socketRetryTimer) return;
+    const delay = RETRY_DELAYS[Math.min(state.socketRetry, RETRY_DELAYS.length - 1)];
+    state.socketRetry += 1;
+    state.socketRetryTimer = window.setTimeout(() => { state.socketRetryTimer = null; connectSocket(); }, delay);
+  }
+
+  async function connectSocket() {
+    if (!state.started || !registered() || state.socketConnecting) return;
+    if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) return;
+    if (typeof WebSocket !== 'function') { setStatus('实时连接不可用，列表仍可使用', true); return; }
+    state.socketConnecting = true;
+    try {
+      const result = await api('/api/world/socket-ticket', { method: 'POST' });
+      const ticket = textOf(result.data && result.data.ticket);
+      if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) throw new Error('世界频道连接票据无效');
+      const url = new URL('/api/world/socket', socketOrigin(result.response));
+      // fetch 探针返回 HTTPS，但 WebSocket 必须使用 WSS（本地 HTTP 则保持 WS）。
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.searchParams.set('ticket', ticket);
+      const socket = new WebSocket(url.href);
+      state.socket = socket;
+      socket.onopen = () => { state.socketRetry = 0; setStatus('世界频道实时连接已建立', false); };
+      socket.onmessage = event => {
+        let packet = null;
+        try { packet = JSON.parse(String(event.data || '')); } catch (_) { return; }
+        const item = packet && packet.event && packet.event.kind === 'world_message' ? packet.event.message : null;
+        if (packet && packet.event && packet.event.channel && packet.event.channel !== 'world') return;
+        if (item) appendMessage(item);
+      };
+      socket.onerror = () => {};
+      socket.onclose = () => {
+        if (state.socket === socket) state.socket = null;
+        setStatus('世界频道已断开，正在恢复…', true);
+        scheduleReconnect();
+      };
+    } catch (error) {
+      setStatus(error.message || '世界频道暂不可用', true);
+      scheduleReconnect();
+    } finally {
+      state.socketConnecting = false;
+    }
+  }
+
+  async function start() {
+    if (state.started || !registered()) return;
+    state.started = true;
+    state.socketRetry = 0;
+    await loadPage(false);
+    await connectSocket();
+  }
+
+  async function openPanel() {
+    if (!registered()) { loginGuide(); return; }
+    const panel = ensurePanel();
+    ensureEntry();
+    state.panelOpen = true;
+    panel.classList.add('show');
+    panel.setAttribute('aria-hidden', 'false');
+    await start();
+    renderMessages(false);
+    await markRead();
+    byId('worldChatInput')?.focus();
+  }
+
+  function closePanel() {
+    const panel = byId('worldChatPanel');
+    state.panelOpen = false;
+    if (panel) {
+      panel.classList.remove('show');
+      panel.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  async function clearMyView() {
+    if (!registered()) { loginGuide(); return; }
+    let confirmed = false;
+    try {
+      confirmed = typeof confirmAction === 'function'
+        ? await confirmAction('只会清空你这一侧看到的世界消息，不会删除他人消息。', { title: '清空我的视图', icon: '🗑️', okText: '确认清空' })
+        : window.confirm('只会清空你这一侧看到的世界消息，不会删除他人消息。');
+    } catch (_) {}
+    if (!confirmed) return;
+    try {
+      await api('/api/world/messages/clear', { method: 'POST', body: '{}' });
+      state.messages = [];
+      state.oldestId = 0;
+      state.hasMore = false;
+      state.unread = 0;
+      renderMessages(false);
+      scheduleBadges();
+      setStatus('已清空你的视图（不会删除他人消息）', false);
+    } catch (error) {
+      notice(error.message || '清空失败', true);
+    }
+  }
+
+  function newMessageId() {
+    try {
+      const bytes = new Uint8Array(12);
+      crypto.getRandomValues(bytes);
+      return 'wmsg_' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    } catch (_) {
+      return 'wmsg_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+    }
+  }
+
+  async function send(text) {
+    if (!registered()) { loginGuide(); return; }
+    const input = byId('worldChatInput');
+    const value = textOf(text == null ? input && input.value : text).normalize ? textOf(text == null ? input && input.value : text).normalize('NFC').trim() : textOf(text == null ? input && input.value : text).trim();
+    if (!value) return;
+    if (Array.from(value).length > MAX_CHARS) { notice('世界消息最多 500 个文字或 Emoji', true); return; }
+    const sendButton = byId('worldChatSend');
+    if (sendButton) sendButton.disabled = true;
+    try {
+      const result = await api('/api/world/messages', { method: 'POST', body: JSON.stringify({ text: value, clientMessageId: newMessageId() }) });
+      appendMessage(result.data);
+      if (input && !text) input.value = '';
+      updateCount();
+      setStatus('消息已发送；内容会保存在云端', false);
+    } catch (error) {
+      notice(error.message || '世界消息发送失败', true);
+    } finally {
+      if (sendButton) sendButton.disabled = false;
+      if (input) input.focus();
+    }
+  }
+
+  function updateCount() {
+    const input = byId('worldChatInput');
+    const count = byId('worldChatCount');
+    if (count) count.textContent = Array.from(textOf(input && input.value)).length + '/500';
+  }
+
+  async function resume() {
+    if (!registered()) return;
+    ensureEntry();
+    if (!state.started) return;
+    await loadPage(false);
+    await connectSocket();
+  }
+
+  function observe() {
+    ensureEntry();
+    ensurePanel();
+    scheduleBadges();
+    const observer = new MutationObserver(() => {
+      ensureEntry();
+      scheduleBadges();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    state.domObserver = observer;
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
+    window.addEventListener('beforeunload', () => {
+      state.started = false;
+      if (state.socket) { try { state.socket.close(1000, 'page-close'); } catch (_) {} }
+    }, { once: true });
+  }
+
+  window.GomokuWorldChat = Object.freeze({
+    open: openPanel,
+    close: closePanel,
+    refresh: resume,
+    getUnreadCount: () => state.unread,
+    send
+  });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
+  else observe();
+})();
+</script>
+<script id="announcementCenterEnhancements">
+(() => {
+  'use strict';
+
+  const PAGE_SIZE = 20;
+  const MAX_TITLE = 120;
+  const MAX_BODY = 10000;
+  const CACHE_KEY = 'gomoku_announcements_cache_v1';
+  const sharedUnread = window.GomokuSocialUnreadState || { world: 0, announcements: 0 };
+  window.GomokuSocialUnreadState = sharedUnread;
+  const state = {
+    items: [],
+    hasMore: false,
+    nextBefore: null,
+    detail: null,
+    loading: false,
+    unread: 0,
+    lastReadId: 0,
+    panelOpen: false,
+    listMode: true,
+    badgeScheduled: false
+  };
+
+  const byId = id => document.getElementById(id);
+  const textOf = value => String(value == null ? '' : value);
+  const registered = () => {
+    try { return typeof hasRegisteredAccountSession === 'function' && hasRegisteredAccountSession(); }
+    catch (_) { return false; }
+  };
+  const uid = () => {
+    try { return typeof currentUserUid !== 'undefined' ? String(currentUserUid || '') : ''; }
+    catch (_) { return ''; }
+  };
+  const notice = message => {
+    try { if (typeof showGameNotice === 'function') showGameNotice(textOf(message), true); } catch (_) {}
+  };
+  const safeActionUrl = raw => {
+    const value = textOf(raw).trim();
+    if (!value || value.length > 512 || /[\u0000-\u0020]/.test(value)) return '';
+    if (value.startsWith('/') && !value.startsWith('//')) return value;
+    try {
+      const parsed = new URL(value, window.location.href);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) return '';
+      return parsed.href;
+    } catch (_) {
+      return '';
+    }
+  };
+  const cleanTitle = value => textOf(value).normalize ? textOf(value).normalize('NFC').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, MAX_TITLE) : textOf(value).slice(0, MAX_TITLE);
+  const cleanBody = value => textOf(value).normalize ? textOf(value).normalize('NFC').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, MAX_BODY) : textOf(value).slice(0, MAX_BODY);
+  const formatTime = value => {
+    const stamp = Number(value) || 0;
+    if (!stamp) return '时间待定';
+    try { return new Date(stamp).toLocaleString(); } catch (_) { return new Date(stamp).toISOString(); }
+  };
+  const publicItem = raw => {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id) || 0;
+    const title = cleanTitle(raw.title);
+    if (!id || !title) return null;
+    return {
+      id,
+      title,
+      publishedAt: Number(raw.publishedAt) || 0,
+      pinned: Boolean(raw.pinned),
+      expiresAt: Number(raw.expiresAt) || 0,
+      actionUrl: safeActionUrl(raw.actionUrl)
+    };
+  };
+  const publicDetail = raw => {
+    const item = publicItem(raw);
+    if (!item) return null;
+    const body = cleanBody(raw.body);
+    return { ...item, body };
+  };
+  const readCache = () => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.map(publicItem).filter(Boolean).slice(0, 100) : [];
+    } catch (_) { return []; }
+  };
+  const writeCache = () => {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(state.items.slice(0, 100))); } catch (_) {}
+  };
+
+  async function api(path, options = {}) {
+    if (typeof safeApiFetch !== 'function') throw new Error('offline');
+    const request = { ...options };
+    const method = String(request.method || 'GET').toUpperCase();
+    let endpoint = String(path);
+    if (method === 'GET') {
+      const url = new URL(endpoint, window.location.href);
+      if (request.includeUid === true && registered()) url.searchParams.set('uid', uid());
+      delete request.includeUid;
+      endpoint = url.pathname + (url.search || '');
+    } else {
+      let body = {};
+      try { body = request.body ? JSON.parse(request.body) : {}; } catch (_) {}
+      delete request.includeUid;
+      if (registered()) body.uid = uid();
+      request.headers = { 'Content-Type': 'application/json', ...(request.headers || {}) };
+      request.body = JSON.stringify(body);
+    }
+    const response = await safeApiFetch(endpoint, request);
+    let payload = null;
+    try { payload = await response.json(); } catch (_) {}
+    if (!response.ok || !payload || payload.code !== 0) {
+      const error = new Error(payload && payload.msg ? textOf(payload.msg) : 'request failed');
+      error.status = response.status;
+      throw error;
+    }
+    return payload.data || {};
+  }
+
+  function setStatus(message) {
+    const node = byId('announcementCenterStatus');
+    if (node) node.textContent = textOf(message);
+  }
+
+  function applyEntryBadge() {
+    const count = Math.max(0, Number(state.unread) || 0);
+    const label = count > 0 ? '公告中心，' + count + ' 条未读' : '公告中心';
+    [
+      { entry: byId('btnAnnouncements'), badge: byId('announcementCenterUnreadBadge') },
+      { entry: byId('btnGameAnnouncementsPublic'), badge: byId('gameAnnouncementUnreadBadge') }
+    ].forEach(({ entry, badge }) => {
+      if (!entry) return;
+      entry.classList.toggle('has-unread', count > 0);
+      entry.setAttribute('aria-label', label);
+      if (!badge) return;
+      badge.textContent = count > 99 ? '99+' : count ? String(count) : '';
+      badge.style.display = count > 0 ? 'inline-flex' : 'none';
+      badge.setAttribute('aria-hidden', count > 0 ? 'false' : 'true');
+      badge.setAttribute('aria-label', count > 0 ? count + ' 条公告未读' : '没有公告未读');
+    });
+  }
+
+  function scheduleBadges() {
+    if (state.badgeScheduled) return;
+    state.badgeScheduled = true;
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => { state.badgeScheduled = false; applyEntryBadge(); });
+  }
+
+  function setUnread(value, lastReadId) {
+    state.unread = Math.max(0, Math.min(999, Number(value) || 0));
+    if (Number.isFinite(Number(lastReadId))) state.lastReadId = Math.max(0, Number(lastReadId));
+    sharedUnread.announcements = state.unread;
+    try {
+      if (typeof window.GomokuSocialUnreadRefresh === 'function') window.GomokuSocialUnreadRefresh();
+    } catch (_) {}
+    scheduleBadges();
+  }
+
+  function ensurePanel() {
+    let panel = byId('announcementCenterPanel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'announcementCenterPanel';
+    panel.className = 'online-modal-backdrop';
+    panel.setAttribute('aria-hidden', 'true');
+    panel.style.display = 'none';
+    panel.innerHTML =
+      '<div class="online-modal-card announcement-center-card" role="dialog" aria-modal="true" aria-labelledby="announcementCenterTitle" onclick="event.stopPropagation()">' +
+        '<div class="announcement-center-head"><div><div id="announcementCenterTitle" class="announcement-center-title">📣 公告中心</div><div id="announcementCenterStatus" class="announcement-center-status">准备加载</div></div>' +
+          '<button type="button" id="announcementCenterClose" class="btn-chat-tool" aria-label="关闭公告中心">✕</button></div>' +
+        '<div class="announcement-center-note">公告会保留在云端数据库；列表默认隐藏已过期或撤下内容，仅按需加载正文。星光标记表示置顶，不代表额外玩法。</div>' +
+        '<div id="announcementCenterList" class="announcement-center-list" role="list" aria-live="polite"></div>' +
+        '<div id="announcementCenterDetail" class="announcement-center-detail" hidden></div>' +
+        '<div id="announcementCenterPager" class="announcement-center-pager"></div>' +
+        '<div class="announcement-center-foot"><span id="announcementCenterReadStatus" class="announcement-center-status"></span><button type="button" id="announcementCenterBack" class="btn-chat-tool" hidden>返回列表</button></div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    panel.addEventListener('click', event => { if (event.target === panel) closeCenter(); });
+    byId('announcementCenterClose')?.addEventListener('click', closeCenter);
+    byId('announcementCenterBack')?.addEventListener('click', () => { state.detail = null; state.listMode = true; render(); });
+    return panel;
+  }
+
+  function ensureEntry() {
+    const modal = byId('friendsModal');
+    if (!modal || byId('btnAnnouncements')) return;
+    const firstTab = modal.querySelector('[data-social-tab]');
+    const bar = firstTab && firstTab.parentElement;
+    if (!bar) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'btnAnnouncements';
+    button.className = 'btn-chat-tool social-tab announcement-center-tab';
+    button.setAttribute('aria-controls', 'announcementCenterPanel');
+    button.setAttribute('aria-label', '公告中心');
+    button.textContent = '📣 公告';
+    const badge = document.createElement('span');
+    badge.id = 'announcementCenterUnreadBadge';
+    badge.className = 'announcement-center-tab-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    button.appendChild(badge);
+    button.addEventListener('click', openCenter);
+    const world = byId('btnWorldChat');
+    if (world && world.parentElement === bar) bar.insertBefore(button, world.nextSibling);
+    else bar.appendChild(button);
+  }
+
+  function renderList() {
+    const list = byId('announcementCenterList');
+    const detail = byId('announcementCenterDetail');
+    const pager = byId('announcementCenterPager');
+    const back = byId('announcementCenterBack');
+    if (!list || !detail || !pager || !back) return;
+    list.hidden = !state.listMode;
+    detail.hidden = state.listMode;
+    back.hidden = state.listMode;
+    pager.hidden = !state.listMode;
+    if (!state.listMode) return;
+    list.replaceChildren();
+    if (!state.items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'announcement-center-status';
+      empty.textContent = '暂无公开公告；网络恢复后会自动刷新。';
+      list.appendChild(empty);
+    } else {
+      state.items.forEach(item => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'announcement-center-item';
+        button.setAttribute('role', 'listitem');
+        button.dataset.announcementId = String(item.id);
+        const icon = document.createElement('span');
+        icon.className = 'announcement-center-icon';
+        icon.textContent = item.pinned ? '✦' : '✉';
+        const body = document.createElement('span');
+        const title = document.createElement('span');
+        title.className = 'announcement-center-item-title';
+        title.textContent = item.title;
+        const meta = document.createElement('span');
+        meta.className = 'announcement-center-item-meta';
+        meta.textContent = formatTime(item.publishedAt) + (item.expiresAt ? ' · 有效至 ' + formatTime(item.expiresAt) : '');
+        body.append(title, meta);
+        button.append(icon, body);
+        if (state.unread > 0 && item.id > state.lastReadId) {
+          const dot = document.createElement('span');
+          dot.className = 'announcement-center-unread';
+          dot.setAttribute('aria-label', '未读');
+          button.appendChild(dot);
+        }
+        button.addEventListener('click', () => openDetail(item.id));
+        list.appendChild(button);
+      });
+    }
+    pager.replaceChildren();
+    if (state.hasMore) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'btn-chat-tool';
+      more.textContent = '加载更早公告';
+      more.addEventListener('click', () => loadList(true));
+      pager.appendChild(more);
+    }
+  }
+
+  function renderDetail() {
+    const detail = byId('announcementCenterDetail');
+    if (!detail || !state.detail) return;
+    detail.replaceChildren();
+    const title = document.createElement('div');
+    title.className = 'announcement-center-detail-title';
+    title.textContent = state.detail.title;
+    const meta = document.createElement('div');
+    meta.className = 'announcement-center-detail-meta';
+    meta.textContent = formatTime(state.detail.publishedAt) + (state.detail.pinned ? ' · 置顶' : '') + (state.detail.expiresAt ? ' · 有效至 ' + formatTime(state.detail.expiresAt) : '');
+    const body = document.createElement('div');
+    body.className = 'announcement-center-detail-body';
+    body.textContent = state.detail.body;
+    const actions = document.createElement('div');
+    actions.className = 'announcement-center-detail-actions';
+    const actionUrl = safeActionUrl(state.detail.actionUrl);
+    if (actionUrl) {
+      const link = document.createElement('a');
+      link.className = 'btn-chat-tool';
+      link.href = actionUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = '打开相关页面';
+      actions.appendChild(link);
+    }
+    detail.append(title, meta, body, actions);
+  }
+
+  function render() {
+    renderList();
+    if (!state.listMode) renderDetail();
+  }
+
+  async function loadList(older) {
+    if (state.loading) return;
+    state.loading = true;
+    setStatus('正在同步公告…');
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(PAGE_SIZE));
+      if (older && state.nextBefore) params.set('before', String(state.nextBefore));
+      const data = await api('/api/announcements?' + params.toString());
+      const incoming = Array.isArray(data.items) ? data.items.map(publicItem).filter(Boolean) : [];
+      if (older) {
+        const seen = new Set(state.items.map(item => item.id));
+        state.items = state.items.concat(incoming.filter(item => !seen.has(item.id)));
+      } else {
+        state.items = incoming;
+      }
+      state.hasMore = Boolean(data.hasMore);
+      state.nextBefore = data.nextBefore == null ? (state.items.length ? state.items[state.items.length - 1].id : null) : Number(data.nextBefore) || null;
+      writeCache();
+      setStatus(state.items.length ? '已同步 · 公开公告' : '暂无公开公告');
+    } catch (_) {
+      if (!state.items.length) state.items = readCache();
+      state.hasMore = false;
+      state.nextBefore = null;
+      setStatus(state.items.length ? '当前离线 · 显示最近缓存（只读）' : '公告暂不可用 · 稍后重试');
+    } finally {
+      state.loading = false;
+      render();
+    }
+  }
+
+  async function refreshUnread() {
+    if (!registered()) {
+      setUnread(0, 0);
+      return;
+    }
+    try {
+      const data = await api('/api/announcements/unread', { includeUid: true });
+      setUnread(data.unreadCount, data.lastReadId);
+    } catch (_) {
+      setStatus(state.items.length ? '未读状态暂不可用' : '公告暂不可用 · 稍后重试');
+    }
+  }
+
+  async function openDetail(id) {
+    const numericId = Number(id);
+    if (!Number.isSafeInteger(numericId) || numericId <= 0) return;
+    ensurePanel();
+    state.listMode = false;
+    state.detail = publicDetail(state.items.find(item => item.id === numericId));
+    setStatus('正在加载公告正文…');
+    render();
+    try {
+      const data = await api('/api/announcements/' + numericId);
+      state.detail = publicDetail(data.item || data.announcement || data);
+      if (!state.detail) throw new Error('invalid');
+      setStatus('已加载 · 公告正文按需读取');
+      render();
+      if (registered()) {
+        await api('/api/announcements/read', { method: 'POST', body: JSON.stringify({ announcementId: numericId }) });
+        state.lastReadId = Math.max(state.lastReadId, numericId);
+        await refreshUnread();
+      } else {
+        byId('announcementCenterReadStatus').textContent = '游客阅读不写入账号状态';
+      }
+    } catch (_) {
+      setStatus(state.detail ? '当前离线 · 仅显示已缓存摘要' : '公告正文暂不可用');
+      render();
+    }
+  }
+
+  async function openCenter() {
+    ensurePanel();
+    state.panelOpen = true;
+    state.listMode = true;
+    state.detail = null;
+    const panel = byId('announcementCenterPanel');
+    panel.setAttribute('aria-hidden', 'false');
+    panel.style.display = 'flex';
+    panel.classList.add('show');
+    render();
+    await Promise.all([loadList(false), refreshUnread()]);
+  }
+
+  function closeCenter() {
+    const panel = byId('announcementCenterPanel');
+    if (!panel) return;
+    state.panelOpen = false;
+    panel.classList.remove('show');
+    panel.setAttribute('aria-hidden', 'true');
+    panel.style.display = 'none';
+  }
+
+  async function refresh() {
+    if (!state.panelOpen) {
+      await refreshUnread();
+      return;
+    }
+    await Promise.all([loadList(false), refreshUnread()]);
+  }
+
+  function observe() {
+    ensurePanel();
+    ensureEntry();
+    scheduleBadges();
+    if (typeof MutationObserver === 'function') {
+      const observer = new MutationObserver(() => ensureEntry());
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  }
+
+  window.GomokuAnnouncements = Object.freeze({
+    open: openCenter,
+    close: closeCenter,
+    refresh,
+    getUnreadCount: () => state.unread
+  });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
+  else observe();
+})();
+</script>
 </body>
 </html>

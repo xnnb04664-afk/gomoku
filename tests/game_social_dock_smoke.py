@@ -2,6 +2,50 @@ import os
 
 from playwright.sync_api import sync_playwright
 
+def assert_collapsed_fab_clear(page):
+    geometry = page.evaluate("""
+      () => {
+        const fab = document.getElementById('gameSocialDockFab');
+        const roomExit = document.getElementById('btnLeaveRoom');
+        const previousRoomExitDisplay = roomExit?.style.display || '';
+        if (roomExit) roomExit.style.display = 'inline-flex';
+        const fabRect = fab?.getBoundingClientRect();
+        const visibleControls = [...document.querySelectorAll('.bottom-controls .btn-ctrl')]
+          .filter(node => {
+            const style = getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+          });
+        const overlaps = visibleControls.filter(node => {
+          const rect = node.getBoundingClientRect();
+          return fabRect && rect.left < fabRect.right && rect.right > fabRect.left
+            && rect.top < fabRect.bottom && rect.bottom > fabRect.top;
+        }).map(node => node.id);
+        const fabVisibleText = [...(fab?.querySelectorAll(':scope > span') || [])]
+          .filter(node => {
+            const style = getComputedStyle(node);
+            return style.display !== 'none' && style.visibility !== 'hidden';
+          })
+          .map(node => node.textContent || '')
+          .join('')
+          .trim();
+        if (roomExit) roomExit.style.display = previousRoomExitDisplay;
+        return {
+          overlaps,
+          fabText: fab?.querySelector('span[aria-hidden="true"]')?.textContent || '',
+          fabVisibleText,
+          roomExitTested: Boolean(roomExit),
+          fabTop: fabRect?.top || 0,
+          fabBottom: fabRect?.bottom || 0,
+          viewportHeight: window.innerHeight,
+        };
+      }
+    """)
+    assert geometry["overlaps"] == [], f"collapsed FAB overlaps bottom controls: {geometry}"
+    assert geometry["fabText"] == "⌃", f"collapsed FAB still has feature text: {geometry}"
+    assert geometry["fabVisibleText"] == "⌃", f"collapsed FAB has visible text besides ⌃: {geometry}"
+    assert geometry["roomExitTested"], "room exit control was not included in geometry regression"
+
 
 def main():
     url = os.environ.get("GOMOKU_TEST_URL", "http://127.0.0.1:3000/index.html")
