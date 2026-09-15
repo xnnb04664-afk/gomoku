@@ -415,11 +415,6 @@ try {
     'tests/official_site_smoke.py',
     'tests/official_site_worker_smoke.py',
     'tests/online_reconnect_smoke.py',
-    'theme1_zen_dark.html',
-    'theme2_neo_traditional.html',
-    'theme3_luxury_glass.html',
-    'theme4_clean_ios.html',
-    'theme5_sweet_romance.html',
     'version.json',
     '五子棋.apk',
     '五子棋大师_单文件版.html'
