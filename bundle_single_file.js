@@ -12,6 +12,8 @@ execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
 console.log('>>> [1/3] 读取当前最新 index.html 母本代码...');
 let html = fs.readFileSync(SOURCE_HTML, 'utf8');
 html = injectAiWorkerSource(html, ROOT_DIR);
+// 单文件版会把 app.min.js 内联，不能留下指向不存在外部资源的 preload。
+html = html.replace(/\s*<link rel="preload" href="js\/app\.min\.js" as="script">/i, '');
 
 console.log('>>> [2/3] 准备可按需载入的联机、音频与头像资源...');
 

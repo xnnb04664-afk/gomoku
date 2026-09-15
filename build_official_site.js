@@ -5,6 +5,34 @@ const root = __dirname;
 const outDir = path.join(root, 'official-site');
 const playDir = path.join(outDir, 'play');
 
+function displayVersionTag(versionName) {
+  const match = String(versionName || '').trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return `v${versionName}`;
+  const patch = Number(match[3]);
+  if (!Number.isFinite(patch) || patch < 100) return `v${match[1]}.${match[2]}.${match[3]}`;
+  return `v${match[1]}.${Math.max(0, Math.floor(patch / 10) - 10)}.${patch % 10}`;
+}
+
+function syncOfficialSiteVersion() {
+  const version = JSON.parse(fs.readFileSync(path.join(root, 'version.json'), 'utf8'));
+  const display = displayVersionTag(version.versionName);
+  const build = String(version.versionCode);
+  const publishTime = String(version.publishTime || '').trim();
+  const homePath = path.join(outDir, 'index.html');
+  let home = fs.readFileSync(homePath, 'utf8');
+  home = home.replace(/(<span>当前版本 <strong class="js-version">)v[\d.]+(<\/strong><\/span>)/, `$1${display}$2`);
+  home = home.replace(/(<span>Build <strong class="js-build">)\d+(<\/strong><\/span>)/, `$1${build}$2`);
+  home = home.replace(/(<span>GAME DOCK<\/span><span>当前版本 )v[\d.]+(<\/span>)/, `$1${display}$2`);
+  home = home.replace(/(<span class="js-version">)v[\d.]+(<\/span><\/div>)/, `$1${display}$2`);
+  home = home.replace(/(<span>Build <span class="js-build">)\d+(<\/span> · 原签名覆盖升级<\/span>)/, `$1${build}$2`);
+  fs.writeFileSync(homePath, home, 'utf8');
+
+  const privacyPath = path.join(outDir, 'privacy', 'index.html');
+  let privacy = fs.readFileSync(privacyPath, 'utf8');
+  privacy = privacy.replace(/(当前版本：)v[\d.]+ · \d{4}-\d{2}-\d{2}/, `$1${display} · ${publishTime}`);
+  fs.writeFileSync(privacyPath, privacy, 'utf8');
+}
+
 function copyTree(source, destination) {
   fs.mkdirSync(destination, { recursive: true });
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
@@ -24,6 +52,7 @@ fs.copyFileSync(path.join(root, 'version.json'), path.join(playDir, 'version.jso
 fs.copyFileSync(path.join(root, 'version.json'), path.join(outDir, 'version.json'));
 copyTree(path.join(root, 'js'), path.join(playDir, 'js'));
 copyTree(path.join(root, 'img'), path.join(playDir, 'img'));
+syncOfficialSiteVersion();
 
 // 官网的游戏页是从根目录单页同步而来；只给官网副本补一个回站入口，
 // 不改原始游戏页，因此 APK、单文件版和其他部署入口保持完全不变。

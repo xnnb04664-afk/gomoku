@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.124';
+    const CURRENT_VERSION_TAG = 'v1.0.125';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.123 显示为 v1.2.3；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -2302,9 +2302,18 @@
       gridY = (cHeight - 2 * paddingY) / 15;
       radius = gridX * 0.44; // 棋子饱满大号，触摸体验极佳
       invalidateBoardCache();
-      // 尺寸变化后立即完成一次首帧，保证 gomoku_board_ready/交互标记仍对应
-      // 已经可见的棋盘；后续 resize 事件由 scheduleBoardResize 合并。
-      draw(true);
+      // 冷启动先绘制一个轻量可见棋盘，丰富主题底盘移到首个交互帧后，
+      // 让 gomoku_board_ready/交互标记对应真实可操作的棋盘而不是空白画布。
+      const hasStones = board.some(row => Array.isArray(row) && row.some(value => value !== EMPTY));
+      if (initialBoardFramePending && !hasStones && !isReplayMode) {
+        drawFirstFrame();
+        initialBoardFramePending = false;
+        const raf = window.requestAnimationFrame || (fn => setTimeout(fn, 0));
+        raf(() => setTimeout(() => draw(true), 0));
+      } else {
+        initialBoardFramePending = false;
+        draw(true);
+      }
     }
 
     const actx = new (window.AudioContext || window.webkitAudioContext)();
@@ -5287,6 +5296,7 @@
     let boardDrawPending = false;
     let boardDrawLastAt = 0;
     let vfxLastRenderAt = 0;
+    let initialBoardFramePending = true;
     const canvasFrameStats = {
       requested: 0,
       rendered: 0,
@@ -5440,6 +5450,24 @@
       }
       cachedPiecesKey = key;
       return cachedPiecesCanvas;
+    }
+
+    function drawFirstFrame() {
+      ctx.clearRect(0, 0, cWidth, cHeight);
+      ctx.fillStyle = '#78c82e';
+      ctx.fillRect(0, 0, cWidth, cHeight);
+      ctx.strokeStyle = 'rgba(36, 78, 12, 0.46)';
+      ctx.lineWidth = Math.max(0.6, 1 / Math.max(1, dpr));
+      ctx.beginPath();
+      for (let i = 0; i < 15; i++) {
+        const x = paddingX + i * gridX;
+        const y = paddingY + i * gridY;
+        ctx.moveTo(x, paddingY);
+        ctx.lineTo(x, paddingY + 14 * gridY);
+        ctx.moveTo(paddingX, y);
+        ctx.lineTo(paddingX + 14 * gridX, y);
+      }
+      ctx.stroke();
     }
 
     function drawNow() {

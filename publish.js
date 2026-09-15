@@ -1,18 +1,34 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const { loadSecretIntoEnv } = require('./local_secret_store');
 
 const ROOT_DIR = __dirname;
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
+const argv = new Set(process.argv.slice(2));
+function readArg(name) {
+  const prefix = `${name}=`;
+  const value = process.argv.slice(2).find(item => item.startsWith(prefix));
+  return value ? value.slice(prefix.length).trim() : '';
+}
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log('用法：node publish.js [--deploy-cloudflare]');
+  console.log('用法：node publish.js [--deploy-cloudflare] [--target-branch=master]');
   console.log('默认：构建 APK/单文件版、提交推送并发布 GitHub Release，不部署 Cloudflare 生产环境。');
   console.log('显式部署：追加 --deploy-cloudflare，或设置 GOMOKU_DEPLOY_CLOUDFLARE=1。');
+  console.log('发布目标分支默认是 master；从隔离工作树发布时请显式设置 GOMOKU_ALLOW_NONMASTER_RELEASE=1。');
   process.exit(0);
 }
 const SHOULD_DEPLOY_CLOUDFLARE = process.argv.includes('--deploy-cloudflare')
   || String(process.env.GOMOKU_DEPLOY_CLOUDFLARE || '').trim() === '1';
+const TARGET_BRANCH = readArg('--target-branch') || String(process.env.GOMOKU_PUBLISH_BRANCH || 'master').trim() || 'master';
+if (!/^[A-Za-z0-9._/-]+$/.test(TARGET_BRANCH) || TARGET_BRANCH.startsWith('-') || TARGET_BRANCH.includes('..')) {
+  throw new Error(`发布安全门禁拦截：目标分支名不安全：${TARGET_BRANCH}`);
+}
+const currentBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+const allowNonMasterRelease = String(process.env.GOMOKU_ALLOW_NONMASTER_RELEASE || '').trim() === '1';
+if (currentBranch !== TARGET_BRANCH && !allowNonMasterRelease) {
+  throw new Error(`发布安全门禁拦截：当前分支 ${currentBranch} 不等于目标分支 ${TARGET_BRANCH}。从隔离工作树发布请显式设置 GOMOKU_ALLOW_NONMASTER_RELEASE=1，避免误推送。`);
+}
 // A failed artifact build may leave the already-prepared version in the tree.
 // This flag lets a resumed publish finish that exact version without bumping twice.
 const SKIP_VERSION_BUMP = String(process.env.GOMOKU_SKIP_VERSION_BUMP || '').trim() === '1';
@@ -277,7 +293,9 @@ const releaseHighlights = [
   `👥 【完整好友系统】正式账号支持精确查找、申请/同意/拒绝/取消、在线状态、最近对手、删除好友和黑名单管理`,
   `💬 【实时文字私聊】好友之间支持文字、Emoji、快捷短语、历史分页、未读同步和仅清空自己一侧记录`,
   `🎮 【好友实时邀战】邀请方自动创建房间并发送 2 分钟有效邀请；接受后自动进房，P2P 失败仍可通过 TURN/WebSocket 继续`,
-  `⚡ 【启动性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包；4× CPU、5 次冷启动中位 FCP 1444ms、可操作 2010.4ms`,
+  `⚡ 【启动性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包；4× CPU、5 次冷启动中位 FCP 1468ms、可操作 2369.4ms`,
+  `🚀 【首屏稳态修复】非关键增强延迟到首帧后执行，首次棋盘使用轻量绘制并预加载核心脚本，修复延迟加载下的入口时序问题`,
+  `📱 【MuMu 验收】公告入口、AI 落子、十字棋实验入口与 Android 生命周期已完成模拟器回归，保持原签名覆盖升级`,
   `🎨 【自动画质】新增自动/高清/流畅三档，Canvas DPR 上限分别按设备能力控制，弱机和后台场景降低发热与内存占用`,
   `📡 【联机入口与重连】并行探测 Worker/Pages 并缓存 30 分钟较快入口；断线按 0、1、2、4、8、12 秒退避恢复`,
   `🛡️ 【社交隐私安全】完整关系/拉黑复验、精确账号搜索、防枚举最近对手、消息幂等与 60 秒一次性 WebSocket 票据`,
@@ -307,6 +325,10 @@ const vJson = {
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
 console.log('📌 已同步更新 version.json (短时票据保护更新通道)');
+
+// 官网游戏页与版本回退文本必须和本次客户端发布保持一致；这里只生成仓库产物，
+// 是否部署 Cloudflare 仍由显式 --deploy-cloudflare 选项控制。
+execSync('node build_official_site.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 同步更新 backend/worker.js 中的版本号与更新日志
 const workerJsPath = path.join(ROOT_DIR, 'backend', 'worker.js');
@@ -347,15 +369,81 @@ const apkSize = (fs.statSync(apkPath).size / (1024 * 1024)).toFixed(2);
 const htmlSize = (fs.statSync(singleHtmlPath).size / 1024).toFixed(2);
 console.log(`>>> [5/8] 交付物产物校验通过: APK ${apkSize} MB | HTML ${htmlSize} KB (v${newName})`);
 
-// 6. 执行 Git 本地提交并推送到 GitHub
-console.log('>>> [6/8] 执行 Git 提交并推送到 GitHub...');
+// 6. 执行 Git 本地提交并推送到 GitHub。发布时只暂存明确的发布文件，
+// 不允许用 git add . 把截图、临时诊断文件或其他工作树内容带入提交。
+  console.log(`>>> [6/8] 执行 Git 提交并推送到 GitHub（目标分支 ${TARGET_BRANCH}）...`);
 try {
   const commitMsg = `release: 发布 v${newName} (Build ${newCode}) - 原生APK与GitHub Releases同步就绪`;
-  execSync('git add .', { cwd: ROOT_DIR, stdio: 'inherit' });
+  const alreadyStaged = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only'], {
+    cwd: ROOT_DIR,
+    encoding: 'utf8'
+  }).trim();
+  if (alreadyStaged) {
+    throw new Error(`发布安全门禁拦截：提交前发现已有暂存文件，请先清理暂存区：${alreadyStaged}`);
+  }
+  const explicitFiles = [
+    'PROJECT_HANDOVER.md',
+    'android_src/AndroidManifest.xml',
+    'backend/worker.js',
+    'build_official_site.js',
+    'bundle_single_file.js',
+    'build_apk.js',
+    'index.html',
+    'js/app.js',
+    'js/app.min.js',
+    'official-site/index.html',
+    'official-site/privacy/index.html',
+    'official-site/site.js',
+    'official-site/styles.css',
+    'official-site/version.json',
+    'pages_build/_worker.js',
+    'publish.js',
+    'tests/official_site_smoke.py',
+    'theme1_zen_dark.html',
+    'theme2_neo_traditional.html',
+    'theme3_luxury_glass.html',
+    'theme4_clean_ios.html',
+    'theme5_sweet_romance.html',
+    'version.json',
+    '五子棋.apk',
+    '五子棋大师_单文件版.html'
+  ];
+  const existingExplicitFiles = explicitFiles.filter(file => fs.existsSync(path.join(ROOT_DIR, file)));
+  execFileSync('git', ['add', '--', ...existingExplicitFiles], { cwd: ROOT_DIR, stdio: 'inherit' });
+  // Generated trees are scoped to tracked files only; untracked screenshots/diagnostics stay out.
+  for (const generatedPath of ['android_src/assets', 'official-site/play']) {
+    const trackedGeneratedFiles = execFileSync('git', ['ls-files', '--', generatedPath], {
+      cwd: ROOT_DIR,
+      encoding: 'utf8'
+    }).trim();
+    if (trackedGeneratedFiles) {
+      execFileSync('git', ['add', '-u', '--', generatedPath], { cwd: ROOT_DIR, stdio: 'inherit' });
+    }
+  }
+  const stagedFiles = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only'], {
+    cwd: ROOT_DIR,
+    encoding: 'utf8'
+  })
+    .split(/\r?\n/).map(file => file.trim()).filter(Boolean);
+  const allowedGenerated = file => file.startsWith('android_src/assets/') || file.startsWith('official-site/play/');
+  const unexpectedFiles = stagedFiles.filter(file => !existingExplicitFiles.includes(file) && !allowedGenerated(file));
+  if (unexpectedFiles.length > 0) {
+    throw new Error(`发布安全门禁拦截：发现未授权暂存文件：${unexpectedFiles.join(', ')}`);
+  }
+  console.log(`✅ 显式暂存文件检查通过，共 ${stagedFiles.length} 个文件。`);
   execSync(`git commit -m "${commitMsg}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 Git 本地提交成功: ${commitMsg}`);
-  execSync('git push origin master', { cwd: ROOT_DIR, stdio: 'inherit' });
-  console.log('🎉 GitHub 仓库同步推送成功！');
+   // 只允许把本次刚提交的精确 HEAD 推到显式目标分支，并在推送前拒绝覆盖远端新提交。
+   const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+   const remoteRef = `refs/remotes/origin/${TARGET_BRANCH}`;
+   try {
+     execFileSync('git', ['show-ref', '--verify', '--quiet', remoteRef], { cwd: ROOT_DIR, stdio: 'ignore' });
+     execFileSync('git', ['merge-base', '--is-ancestor', remoteRef, releaseCommit], { cwd: ROOT_DIR, stdio: 'ignore' });
+   } catch (_) {
+     throw new Error(`发布安全门禁拦截：origin/${TARGET_BRANCH} 含有当前提交未包含的历史，请先 fetch/merge 后再发布。`);
+   }
+   execFileSync('git', ['push', 'origin', `${releaseCommit}:refs/heads/${TARGET_BRANCH}`], { cwd: ROOT_DIR, stdio: 'inherit' });
+   console.log('🎉 GitHub 仓库同步推送成功！');
 } catch(e) {
   console.error('❌ Git 提交或推送失败，已停止后续发版与部署：' + e.message);
   process.exit(1);
@@ -373,7 +461,8 @@ try {
   const releaseTitle = `五子棋 ${releaseTag} 官方正式版 (APK + 单文件HTML双发布)`;
   const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 极速安装包：\`gomoku.apk\` (1.5MB，闪电安装)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (免安装双击即玩)`;
 
-  execSync(`gh release create ${releaseTag} "gomoku.apk" "gomoku.html" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
+   const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+   execFileSync('gh', ['release', 'create', releaseTag, 'gomoku.apk', 'gomoku.html', '--target', releaseCommit, '--title', releaseTitle, '--notes', releaseNotes], { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {
   console.log('ℹ️ GitHub Release 已存在或创建提示: ' + err.message);
@@ -390,6 +479,9 @@ if (SHOULD_DEPLOY_CLOUDFLARE) {
   console.log('>>> 正在同步部署 Cloudflare Pages & Worker 官方安全中枢...');
   try {
     execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+    console.log('>>> 正在部署天空棋岛官方站（gomoku-home）...');
+    execSync('npx wrangler pages deploy official-site --project-name gomoku-home --commit-dirty=true', { cwd: ROOT_DIR, stdio: 'inherit' });
+    console.log('🎉 官方站 gomoku-home 部署成功！');
   } catch(e) {
     console.error('❌ Worker/Pages 部署失败，发布流程未完成：', e.message);
     process.exit(1);

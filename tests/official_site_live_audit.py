@@ -37,7 +37,7 @@ def mock_local_api(page):
             lambda route: route.fulfill(
                 status=200,
                 content_type="application/json",
-                body='{"code":0,"tag":"v1.0.124","build":125}',
+                body='{"code":0,"tag":"v1.0.125","build":126}',
             ),
         )
 
@@ -53,7 +53,7 @@ def main():
         mock_local_api(home)
         home.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=30000)
         settle_page(home)
-        assert home.locator("h1").inner_text().startswith("让下一手")
+        assert home.locator("h1").inner_text().startswith("落子有声")
         assert home.locator('a[href="/play/"]').count() >= 1
         assert home.locator('a[href="/social/"]').count() >= 1
         assert home.locator('a[href="/help/"]').count() >= 1
@@ -70,10 +70,6 @@ def main():
         play = browser.new_page(viewport={"width": 390, "height": 844})
         mock_local_api(play)
         play.goto(f"{BASE_URL}/play/", wait_until="domcontentloaded", timeout=30000)
-        play.wait_for_selector("#skyLobby", state="visible", timeout=15000)
-        play.locator("[data-sky-action='quick']").click()
-        play.wait_for_selector("#skySheetBackdrop.show", state="visible", timeout=10000)
-        play.locator("[data-sheet-action='pvp']").click()
         play.wait_for_selector("#cvs", timeout=30000)
         play.wait_for_timeout(1200)
         assert play.locator(".official-return-strip").count() == 1

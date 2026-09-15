@@ -88,7 +88,7 @@
     let display = internalTag;
     if (match && Number(match[3]) >= 100) {
       // 内部版本保留三位发布序号，但官网沿用用户界面的折叠显示：
-      // v1.0.118 -> v1.1.8，v1.0.124 -> v1.2.4。更新比较仍使用 internalTag。
+      // 内部版本的三位发布序号会折叠成用户界面版本；更新比较仍使用 internalTag。
       const patch = Number(match[3]);
       display = `v${match[1]}.${Number(match[2]) + Math.floor((patch % 100) / 10)}.${patch % 10}`;
     }
