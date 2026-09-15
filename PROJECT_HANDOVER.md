@@ -1456,3 +1456,14 @@ node publish.js
 - **发布边界**：本轮为客户端与 GitHub Release 发布，未部署 Cloudflare Worker、D1 或 Pages；本机对生产版本接口的 HTTPS 探测超时，因此不将生产 API 版本接口视为本轮已验收项。发布脚本已改为显式文件清单暂存，禁止 `git add .` 混入截图或临时诊断文件。
 
 后续若需部署 Cloudflare 或同步官网 Pages，必须单独执行并记录 D1 备份、部署地址和线上版本接口；不得提交或输出任何密钥、长期令牌、聊天正文或短时下载票据。
+
+
+## 六十六、官网天空棋岛改版正式上线（2026-09-15）
+
+本轮按项目真实功能重新设计官网首页并部署到官方 Pages。新首页以“天空棋岛”为视觉主题，保留五子棋的绿盘、黑白落子和珊瑚色强调，明确呈现本地 AI、好友/P2P 联机、十字棋实验、好友聊天、游戏八宫格和 APK/单文件下载入口。内部版本显示仍为 `v1.2.5`，对应 `v1.0.125 (Build 126)`。
+
+- **代码提交**：`e5b81d0`（`feat(site): redesign official homepage as sky island`）已推送私有 `origin/master`；发布脚本改为显式包含 `official-site/styles.css`，官网冒烟脚本同步新版标题和版本断言。
+- **正式地址**：[`https://gomoku-home.pages.dev/`](https://gomoku-home.pages.dev/)；生产分支部署别名为 `b7c2a8db.gomoku-home.pages.dev`。
+- **线上验收**：首页、`/help/`、`/privacy/`、`/social/`、`/play/` 和 `/api/site-version` 均 HTTP 200；版本接口返回 `{"code":0,"tag":"v1.0.125","build":126}`。`python tests/official_site_live_audit.py` 通过，覆盖桌面/390px 导航、网页版八宫格、好友页 iframe 和横向溢出检查。
+- **本地验收**：`python tests/official_site_smoke.py` 通过，覆盖演示棋盘落子/重置、滚动揭示动画、320px/390px 无横向溢出、帮助/隐私/好友/网页版路由和控制台错误检查；已用 Playwright 截图复核首页与移动端棋盘页。
+- **发布边界**：本轮只部署 `gomoku-home` Pages（包含该项目既有的静态资源与 Pages 路由），未部署独立 backend Worker、未执行 D1 迁移、未创建新的 GitHub Release、未重新发布 APK。主目录 `D:\小游戏\五子棋` 未合入隔离分支；后续网站改动仍须显式暂存，禁止用 `git add .` 带入截图或临时文件。
