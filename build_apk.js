@@ -61,6 +61,7 @@ const ROOT_DIR = __dirname;
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:app'], { cwd: ROOT_DIR });
 const SRC_DIR = path.join(ROOT_DIR, 'android_src');
 const OUTPUT_APK = path.join(ROOT_DIR, '五子棋.apk');
+const SYNC_ONLY = process.argv.includes('--sync-only');
 
 // 签名密钥必须位于仓库之外。保留同一份证书即可覆盖升级，但绝不再把密钥或密码写进源码。
 const USER_PROFILE = process.env.USERPROFILE || '';
@@ -96,8 +97,8 @@ function loadSigningConfig() {
   return { storePassword, keyPassword };
 }
 
-const signingConfig = loadSigningConfig();
-const signingEnv = {
+const signingConfig = SYNC_ONLY ? null : loadSigningConfig();
+const signingEnv = SYNC_ONLY ? null : {
   ...process.env,
   [KEYSTORE_PASSWORD_ENV]: signingConfig.storePassword,
   [KEY_PASSWORD_ENV]: signingConfig.keyPassword
@@ -142,6 +143,12 @@ fs.writeFileSync(path.join(SRC_DIR, 'assets', 'index.html'), runtimeIndexHtml, '
 });
 
 // 不再用未内嵌的母本覆盖 Android assets；上面的 runtimeIndexHtml 才是可热更新的完整页面。
+
+if (SYNC_ONLY) {
+  fs.rmSync(TEMP_BUILD, { recursive: true, force: true });
+  console.log('✅ Android WebView assets 已同步（--sync-only）；未编译、未签名、未生成 APK。');
+  process.exit(0);
+}
 
 console.log('>>> [3/7] 编译 Android 资源 (aapt2 compile & link)...');
 const resZip = path.join(TEMP_BUILD, 'resources.zip');

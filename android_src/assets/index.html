@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
+  <title>天空棋岛 · 云上活棋谱</title>
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
   <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="stylesheet" href="js/sky-island.css">
   <!-- 首屏只保留页面骨架；联机、音频和大图资源在真正需要时才加载。 -->
   <script id="gomokuResourceLoader">
     (() => {
@@ -25,6 +26,7 @@
         ,social: { local: 'js/social.min.js' }
         ,voice: { local: 'js/voice.js' }
         ,cross: { local: 'js/cross.js' }
+        ,expedition: { local: 'js/expedition.js' }
       };
       const promises = Object.create(null);
 
@@ -42,6 +44,7 @@
         if (name === 'social') return Boolean(window.GomokuSocial && typeof window.GomokuSocial.open === 'function');
         if (name === 'voice') return Boolean(window.GomokuVoice && typeof window.GomokuVoice.toggle === 'function');
         if (name === 'cross') return Boolean(window.GomokuCross && typeof window.GomokuCross.open === 'function');
+        if (name === 'expedition') return Boolean(window.GomokuExpedition && typeof window.GomokuExpedition.open === 'function');
         if (name === 'online') return window.__GOMOKU_ONLINE_READY__ === true;
         return false;
       }
@@ -96,6 +99,13 @@
       window.openFriendsModal = function() {
         return ensure('social').then(() => window.GomokuSocial.open());
       };
+      window.openSkyExpedition = function() {
+        return ensure('expedition').then(() => window.GomokuExpedition.open()).catch(error => {
+          if (typeof window.showGameNotice === 'function') window.showGameNotice('远征航线加载失败，请刷新后重试', true);
+          console.warn('[expedition resource]', error?.message || error);
+          return false;
+        });
+      };
       // 官网使用 /play/#friends 作为好友中心深链接。社交模块是延迟加载的，
       // 因此等核心脚本完成后再打开；游客会自然进入登录引导。
       let friendsHashOpened = false;
@@ -135,6 +145,7 @@
       // 底部活动区先提供入口；签到/亲密关系仅在用户点击后访问云端，避免拖慢首屏。
       const GAME_ECONOMY_LOCAL_KEY = 'gomoku_economy_preview_v1';
       const GAME_DOCK_ORDER_KEY = 'gomoku_game_dock_order_v1';
+      const GAME_DOCK_COLLAPSED_KEY = 'gomoku_game_dock_collapsed_v1';
       const GAME_DOCK_DEFAULT_ORDER = Object.freeze([
         'btnGameFriends', 'btnGameRecent', 'btnGameRank', 'btnGameBag',
         'btnGameTasks', 'btnGameAchievements', 'btnGameActivity', 'btnGameSettings'
@@ -151,6 +162,49 @@
       });
       let gameEconomyState = { coins: 0, diamonds: 0, checkedIn: false, streak: 0, totalDays: 0, affinity: [], day: '' };
       let gameDockDragId = '';
+
+      function readGameDockCollapsed() {
+        try {
+          const value = localStorage.getItem(GAME_DOCK_COLLAPSED_KEY);
+          return value === '1' || value === 'true';
+        } catch (_) {
+          return false;
+        }
+      }
+      function applyGameDockCollapsed(collapsed) {
+        const next = Boolean(collapsed);
+        const activeElement = document.activeElement;
+        const dock = document.getElementById('gameSocialDock');
+        const fab = document.getElementById('gameSocialDockFab');
+        const toggle = document.getElementById('btnGameDockToggle');
+        try { localStorage.setItem(GAME_DOCK_COLLAPSED_KEY, next ? '1' : '0'); } catch (_) {}
+        if (dock) {
+          dock.classList.toggle('is-collapsed', next);
+          dock.dataset.collapsed = String(next);
+          dock.setAttribute('aria-hidden', String(next));
+        }
+        if (fab) {
+          fab.classList.toggle('is-visible', next);
+          fab.setAttribute('aria-hidden', String(!next));
+          fab.setAttribute('aria-expanded', String(!next));
+          fab.tabIndex = next ? 0 : -1;
+        }
+        if (toggle) {
+          toggle.setAttribute('aria-expanded', String(!next));
+          toggle.setAttribute('aria-label', next ? '展开八个游戏功能按钮' : '收起八个游戏功能按钮');
+          toggle.textContent = next ? '⌃' : '⌄';
+        }
+        // 收起会把 dock 从布局中移除，避免焦点落在不可见控件上；展开后把焦点还给原来的小按钮。
+        if (next && fab && dock && (activeElement === toggle || dock.contains(activeElement))) {
+          fab.focus({ preventScroll: true });
+        } else if (!next && toggle && activeElement === fab) {
+          toggle.focus({ preventScroll: true });
+        }
+        return next;
+      }
+      window.getGameDockCollapsed = readGameDockCollapsed;
+      window.setGameDockCollapsed = applyGameDockCollapsed;
+      window.toggleGameDockCollapsed = () => applyGameDockCollapsed(!readGameDockCollapsed());
 
       function normalizeGameDockOrder(value) {
         const source = Array.isArray(value) ? value : [];
@@ -263,7 +317,9 @@
           checkin.setAttribute('aria-label', gameEconomyState.checkedIn ? '今日已签到' : '每日签到，领取金币');
         }
         const friendsButton = document.getElementById('btnGameFriends');
-        if (friendsButton) friendsButton.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
+        const friendsLabel = document.getElementById('gameFriendsButtonLabel');
+        if (friendsLabel) friendsLabel.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
+        else if (friendsButton) friendsButton.textContent = bestLevel ? `👥 好友 · Lv.${bestLevel}` : '👥 好友';
         if (status) status.textContent = gameEconomyRegistered() ? (gameEconomyState.checkedIn ? `今日已签到 · 连续 ${Number(gameEconomyState.streak) || 1} 天 · 钻石仅可充值获得` : '今日签到可领 10 金币 · 钻石仅可充值获得') : '登录正式账号后可云端保存金币与亲密度';
         const activityCoins = document.getElementById('gameActivityCoins');
         const activityDiamonds = document.getElementById('gameActivityDiamonds');
@@ -396,18 +452,67 @@
       };
       window.refreshGameEconomy = refreshGameEconomy;
       document.addEventListener('DOMContentLoaded', () => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200), { once: true });
+      const GAME_FEATURE_PANEL_CONFIG = Object.freeze({
+        recent: { icon: '🧑‍🤝‍🧑', title: '最近对手', subtitle: '最近 30 个完成身份确认的正式账号对手' },
+        bag: { icon: '🎒', title: '背包', subtitle: '棋盘、棋子和活动道具都从这里查看' },
+        tasks: { icon: '🗓️', title: '任务中心', subtitle: '完成对局和签到，逐步解锁活动奖励' },
+        achievements: { icon: '🏅', title: '成就墙', subtitle: '记录你的五连珠、联机和社交里程碑' }
+      });
+      function gameFeaturePanelAction(action) {
+        const close = () => window.closeGameFeaturePanel();
+        if (action === 'friend') { close(); return window.openGameAffinity(); }
+        if (action === 'activity') { close(); return window.openGameActivity(); }
+        if (action === 'online') { close(); return typeof window.openOnlineModal === 'function' ? window.openOnlineModal('match') : false; }
+        if (action === 'settings') { close(); return window.openGameSettings(); }
+        if (action === 'login') { close(); return typeof window.openAuthModal === 'function' ? window.openAuthModal('login') : false; }
+        return false;
+      }
+      function renderGameFeaturePanel(type) {
+        const config = GAME_FEATURE_PANEL_CONFIG[type];
+        const body = document.getElementById('gameFeaturePanelBody');
+        const icon = document.getElementById('gameFeaturePanelIcon');
+        const title = document.getElementById('gameFeaturePanelTitle');
+        const subtitle = document.getElementById('gameFeaturePanelSubtitle');
+        if (!config || !body || !icon || !title || !subtitle) return false;
+        icon.textContent = config.icon;
+        title.textContent = config.title;
+        subtitle.textContent = config.subtitle;
+        if (type === 'recent') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>棋局结束后，棋友不会丢</strong><span>好友房、房间码和全服匹配的正式账号对手会进入这里。可直接申请好友或拉黑。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>林间听雨</strong><small>刚刚对局 · 直连 18ms · 白方</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">加好友</button></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🪵</span><span class="game-feature-panel-row-main"><strong>MuMu-棋友</strong><small>昨天对局 · WebSocket 中继 · 黑方</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">加好友</button></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="online">⚡ 邀请下一局</button><button type="button" class="btn-chat-tool" data-game-panel-action="friend">👥 搜索好友</button></div><div class="game-feature-panel-foot">只有完成身份确认的正式账号对手会记录；被拉黑的用户不会再次出现在这里。</div>`;
+        } else if (type === 'bag') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>棋盘视觉已固定</strong><span>官方晴空浮岛草坪版是唯一视觉，变化来自棋局状态、日线与落子反馈。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>晴空浮岛草坪版</strong><small>当前使用 · 官方默认棋盘</small></span><span style="color:#16a34a;font-size:10px;font-weight:900;">已装备</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">☀️</span><span class="game-feature-panel-row-main"><strong>棋局状态反馈</strong><small>最后一手、幽灵预览与胜负线随对局变化</small></span><span style="color:#466d4b;font-size:10px;font-weight:900;">已启用</span></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="settings">🌿 打开显示与声音</button></div><div class="game-feature-panel-foot">设置仅保留官方视觉、画质与声音偏好，不提供多主题换肤。</div>`;
+        } else if (type === 'tasks') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>今天做三件小事</strong><span>签到奖励和任务状态只对正式账号云端保存；游客可以先查看入口。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🎁</span><span class="game-feature-panel-row-main"><strong>每日签到</strong><small>领取 10 金币 · 今日待签到</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><button type="button" class="btn-chat-tool" data-game-panel-action="activity">去签到</button></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">⚫</span><span class="game-feature-panel-row-main"><strong>完成 1 局对弈</strong><small>完成本地 AI、好友房或匹配对局</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">0 / 1</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">👥</span><span class="game-feature-panel-row-main"><strong>和棋友说句话</strong><small>好友私聊成功发送一条文字消息</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">0 / 1</span></div></div><div class="game-feature-panel-foot">任务奖励规则会随活动开放逐步接入；当前签到按钮已经可以使用。</div>`;
+        } else if (type === 'achievements') {
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>每一手都算数</strong><span>这里记录棋局、联机和社交里的长期里程碑，不影响普通对弈。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🏁</span><span class="game-feature-panel-row-main"><strong>第一手</strong><small>完成一次本地对弈</small></span><span style="color:#16a34a;font-size:10px;font-weight:900;">已解锁</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🏆</span><span class="game-feature-panel-row-main"><strong>五连珠</strong><small>在棋盘上完成一次五子连珠</small></span><span style="color:#f59e0b;font-size:10px;font-weight:900;">进行中</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">💞</span><span class="game-feature-panel-row-main"><strong>棋友相逢</strong><small>添加好友并完成一次私聊</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">去完成</button></div></div><div class="game-feature-panel-foot">成就入口先提供统一承载面，后续会接入完整进度和奖励明细。</div>`;
+        }
+        body.querySelectorAll('[data-game-panel-action]').forEach(button => button.addEventListener('click', () => gameFeaturePanelAction(button.dataset.gamePanelAction)));
+        return true;
+      }
+      window.openGameFeaturePanel = function(type) {
+        const modal = document.getElementById('gameFeaturePanelModal');
+        if (!modal || !renderGameFeaturePanel(type)) return false;
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+        return true;
+      };
+      window.closeGameFeaturePanel = function() {
+        const modal = document.getElementById('gameFeaturePanelModal');
+        if (modal) { modal.classList.remove('show'); modal.setAttribute('aria-hidden', 'true'); }
+      };
       window.openGameFeaturePlaceholder = function(label) {
-        const name = String(label || '该功能').slice(0, 24);
-        const message = `🧪 ${name}正在准备中，先把这一局下完吧！`;
-        if (typeof window.showGameNotice === 'function') window.showGameNotice(message, false);
-        else console.info('[game feature placeholder]', name);
+        const key = ({ '最近对手': 'recent', '背包': 'bag', '任务中心': 'tasks', '成就': 'achievements' })[String(label || '')] || 'recent';
+        return window.openGameFeaturePanel(key);
       };
       window.openGameSettings = function() {
         applyGameDockOrder(readGameDockOrder());
         if (typeof window.openThemeModal === 'function') return window.openThemeModal();
         return window.openGameFeaturePlaceholder('设置');
       };
-      document.addEventListener('DOMContentLoaded', () => applyGameDockOrder(readGameDockOrder()), { once: true });
+      document.addEventListener('DOMContentLoaded', () => {
+        applyGameDockOrder(readGameDockOrder());
+        applyGameDockCollapsed(readGameDockCollapsed());
+      }, { once: true });
       window.openCrossChess = function() {
         return ensure('cross').then(() => window.GomokuCross.open()).catch(error => {
           if (typeof window.showGameNotice === 'function') window.showGameNotice('十字棋实验模块加载失败，请刷新后重试', true);
@@ -1627,43 +1732,6 @@
       transition: background 0.3s ease, color 0.3s ease;
     }
 
-    /* 🎨 多主题动态切换背景类 (下棋中无缝换肤) */
-    body.theme-zen-dark { background: #09090b !important; color: #f4f4f5 !important; }
-    body.theme-zen-dark .cloud { display: none; }
-    body.theme-zen-dark .signs-row .sign-board { background: #18181b; border-color: #3f3f46; color: #fff; }
-    body.theme-zen-dark .signs-row .sign-status { color: #fff; }
-    body.theme-zen-dark .main-chat-box { background: rgba(24,24,27,0.85); border-color: #3f3f46; }
-    body.theme-zen-dark .main-chat-header { color: #a1a1aa; }
-    body.theme-zen-dark .main-chat-line { color: #fff; }
-
-    body.theme-sweet-romance { background: radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%) !important; color: #fff !important; }
-    body.theme-sweet-romance .cloud { display: none; }
-    body.theme-sweet-romance .signs-row .sign-board { background: rgba(255,255,255,0.15); border-color: #ff8fa3; color: #fff; }
-    body.theme-sweet-romance .signs-row .sign-status { color: #fbcfe8; }
-    body.theme-sweet-romance .main-chat-box { background: rgba(255,255,255,0.15); border-color: #ff758c; }
-    body.theme-sweet-romance .main-chat-header { color: #fbcfe8; }
-    body.theme-sweet-romance .main-chat-line { color: #fff; }
-
-    body.theme-neo-trad { background: #eae2d5 !important; color: #2c221a !important; }
-    body.theme-neo-trad .cloud { display: none; }
-    body.theme-neo-trad .signs-row .sign-board { background: #fbf8f2; border-color: #dcb374; }
-    body.theme-neo-trad .signs-row .sign-status { color: #4a3b2c; }
-    body.theme-neo-trad .main-chat-box { background: #f7f1e6; border-color: #dcb374; }
-
-    body.theme-luxury-glass { background: #0b0c10 !important; color: #fff !important; }
-    body.theme-luxury-glass .cloud { display: none; }
-    body.theme-luxury-glass .signs-row .sign-board { background: rgba(99,102,241,0.15); border-color: #6366f1; color: #fff; }
-    body.theme-luxury-glass .signs-row .sign-status { color: #818cf8; }
-    body.theme-luxury-glass .main-chat-box { background: rgba(16,18,27,0.85); border-color: #6366f1; }
-    body.theme-luxury-glass .main-chat-line { color: #fff; }
-
-    body.theme-clean-ios { background: #f2f2f7 !important; color: #1d1d1f !important; }
-    body.theme-clean-ios .cloud { display: none; }
-    body.theme-clean-ios .signs-row .sign-board { background: #ffffff; border-color: #d1d1d6; }
-    body.theme-clean-ios .signs-row .sign-status { color: #1d1d1f; }
-    body.theme-clean-ios .main-chat-box { background: #ffffff; border-color: #e5e5ea; }
-
-
     /* 纯净漂浮白云 (置底并彻底禁用触控拦截，绝不遮挡任何按键) */
     .cloud, .cloud::before, .cloud::after {
       pointer-events: none !important;
@@ -1966,6 +2034,85 @@
       flex-shrink: 0;
       touch-action: manipulation;
     }
+    .game-social-dock.is-collapsed { display: none; }
+    .game-social-dock-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-height: 18px;
+      padding: 0 2px;
+    }
+    .game-social-dock-title {
+      color: #64748b;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: .04em;
+      line-height: 1.1;
+    }
+    .game-social-dock-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 20px;
+      padding: 0;
+      border: 1px solid rgba(90, 56, 24, .22);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, .86);
+      color: #64748b;
+      font-size: 14px;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .game-social-dock-toggle:hover { background: #fff; color: #334155; }
+    .game-social-dock-toggle:focus-visible {
+      outline: 2px solid rgba(14, 165, 233, .55);
+      outline-offset: 1px;
+    }
+    .game-social-dock-fab {
+      position: fixed;
+      right: max(8px, calc(50% - 260px));
+      /* 底部操作区可能因十字棋/退出房间出现第二行，入口固定在其上方留出安全间距。 */
+      bottom: calc(116px + env(safe-area-inset-bottom, 0px));
+      z-index: 40;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      min-width: 34px;
+      min-height: 34px;
+      padding: 0;
+      border: 1.5px solid rgba(90, 56, 24, .28);
+      border-radius: 50%;
+      background: rgba(255, 253, 245, .94);
+      box-shadow: 0 3px 12px rgba(90, 56, 24, .2);
+      color: #475569;
+      font-size: 17px;
+      font-weight: 900;
+      line-height: 1.1;
+      cursor: pointer;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(6px) scale(.94);
+      transition: opacity .18s ease, transform .18s ease, background .15s ease;
+      touch-action: manipulation;
+    }
+    .game-social-dock-fab.is-visible {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+    .game-social-dock-fab:hover { background: #fff; }
+    .game-social-dock-fab:focus-visible {
+      outline: 3px solid rgba(14, 165, 233, .5);
+      outline-offset: 2px;
+    }
     .game-social-dock-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1994,7 +2141,30 @@
       outline: 3px solid rgba(14, 165, 233, .42);
       outline-offset: 1px;
     }
-    #btnGameFriends { background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
+    .game-social-unread-badge {
+      position: absolute;
+      top: -6px;
+      right: -5px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border: 2px solid #fffdf5;
+      border-radius: 999px;
+      background: #ef4444;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 900;
+      line-height: 1;
+      white-space: nowrap;
+      box-shadow: 0 1px 4px rgba(127, 29, 29, .35);
+      pointer-events: none;
+      z-index: 2;
+    }
+    #btnGameFriends { position: relative; overflow: visible; background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; color: #1d4ed8; }
+    .game-social-dock-fab .game-social-unread-badge { top: -7px; right: -7px; border-color: #fffdf5; }
     #btnGameActivity { background: linear-gradient(135deg, #fff7ed, #ffedd5); border-color: #fdba74; color: #c2410c; }
     #btnGameSettings { background: linear-gradient(135deg, #f1f5f9, #e2e8f0); border-color: #cbd5e1; color: #475569; }
     .game-social-dock-grid button:nth-child(2),
@@ -2036,6 +2206,27 @@
     .game-recharge-package:hover { background: #f3e8ff; }
     .game-recharge-package span:last-child { padding: 3px 6px; border-radius: 6px; background: #ede9fe; color: #7c3aed; font-size: 10px; white-space: nowrap; }
     .game-activity-muted { color: #94a3b8; font-size: 10px; font-weight: 800; line-height: 1.35; }
+    .game-feature-panel-card { max-width:420px; width:94%; max-height:88vh; overflow-y:auto; padding:15px; text-align:left; }
+    .game-feature-panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-bottom:9px; border-bottom:1.5px solid rgba(0,0,0,.08); }
+    .game-feature-panel-title { display:flex; align-items:center; gap:7px; min-width:0; color:#1e293b; font-size:16px; font-weight:900; }
+    .game-feature-panel-subtitle { margin-top:2px; color:#64748b; font-size:10.5px; font-weight:800; }
+    .game-feature-panel-close { border:0; background:transparent; color:#64748b; font-size:18px; font-weight:900; cursor:pointer; padding:2px 5px; }
+    .game-feature-panel-hero { margin:11px 0; padding:12px; border:1.5px solid #dbeafe; border-radius:13px; background:linear-gradient(135deg,#eff6ff,#f8fafc); }
+    .game-feature-panel-hero strong { display:block; color:#1e3a8a; font-size:15px; }
+    .game-feature-panel-hero span { display:block; margin-top:3px; color:#64748b; font-size:10.5px; font-weight:800; line-height:1.5; }
+    .game-feature-panel-list { display:flex; flex-direction:column; gap:7px; }
+    .game-feature-panel-row { display:flex; align-items:center; gap:9px; min-height:54px; padding:8px 9px; border:1.5px solid #e2e8f0; border-radius:11px; background:#fff; }
+    .game-feature-panel-row-icon { display:grid; place-items:center; width:34px; height:34px; flex:none; border-radius:10px; background:#f1f5f9; font-size:19px; }
+    .game-feature-panel-row-main { min-width:0; flex:1; }
+    .game-feature-panel-row-main strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#334155; font-size:12px; }
+    .game-feature-panel-row-main small { display:block; margin-top:2px; color:#94a3b8; font-size:10px; font-weight:700; line-height:1.35; }
+    .game-feature-panel-row .btn-chat-tool { flex:none; padding:5px 8px; font-size:10px; }
+    .game-feature-panel-progress { height:6px; margin-top:5px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
+    .game-feature-panel-progress span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#38bdf8,#818cf8); }
+    .game-feature-panel-empty { padding:21px 12px; border:1.5px dashed #cbd5e1; border-radius:12px; background:#f8fafc; color:#64748b; font-size:11px; font-weight:800; line-height:1.6; text-align:center; }
+    .game-feature-panel-foot { margin-top:11px; color:#94a3b8; font-size:10px; font-weight:800; line-height:1.45; text-align:center; }
+    .game-feature-panel-actions { display:flex; gap:6px; margin-top:11px; }
+    .game-feature-panel-actions > button { flex:1; }
     .game-social-dock-note {
       color: #94a3b8;
       font-size: 9px;
@@ -2177,7 +2368,7 @@
       z-index: 10;
       padding: 1px 2px;
       flex-shrink: 0;
-    
+
       height: 52px;
       min-height: 52px;
       max-height: 52px;
@@ -2253,7 +2444,7 @@
       align-items: center;
       flex-shrink: 0;
       z-index: 15;
-    
+
       height: 54px;
       min-height: 54px;
       max-height: 54px;
@@ -2572,7 +2763,7 @@
       flex: 1; overflow-y: auto; padding-right: 2px; -webkit-overflow-scrolling: touch;
     }
     .profile-modal-backdrop.show .profile-modal-card { transform: scale(1); }
-    
+
     .profile-header-preview {
       display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 10px;
     }
@@ -2582,7 +2773,7 @@
       font-size: 34px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
     .big-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
-    
+
     .btn-upload-photo {
       background: linear-gradient(135deg, #4da4ff 0%, #1e3a8a 100%);
       color: #fff; border: 2px solid var(--border-dark); border-radius: 12px;
@@ -2629,7 +2820,7 @@
     /* --- 🌐 在线联机大厅弹窗 --- */
     /* 普通弹窗统一浮于个人资料层之上；认证/改密层在更高层独立显示。 */
     #phraseManageModal, #onlineModal, #gameReplayModal,
-    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal, #feedbackModal, #gameActivityModal {
+    #historyModal, #leaderboardModal, #authModal, #undoModal, #themeModal, #feedbackModal, #gameActivityModal, #gameFeaturePanelModal {
       z-index: 300 !important;
     }
 
@@ -2640,7 +2831,7 @@
     }
     .online-modal-backdrop.show { opacity: 1; pointer-events: auto; }
 
-    
+
     /* ✨ 五子棋专属高颜值账号通行证弹窗 (彻底杜绝系统级丑陋弹窗) */
     .auth-modal-card {
       background: #fffdf7;
@@ -2799,7 +2990,7 @@
       box-shadow: 0 1.5px 0 #047857;
     }
 
-    
+
     /* ⚡ 全服实时快速匹配雷达与卡片动画 */
     .matchmaking-box {
       background: #fff;
@@ -3076,6 +3267,10 @@
         border-radius: 10px !important;
         gap: 3px !important;
       }
+      .game-social-dock-head { min-height: 16px !important; }
+      .game-social-dock-title { font-size: 8px !important; }
+      .game-social-dock-toggle { width: 22px !important; height: 18px !important; font-size: 13px !important; }
+      .game-social-dock-fab { right: 8px; bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
       .game-social-dock-grid { gap: 3px !important; }
       .game-social-dock-grid button {
         min-height: 28px !important;
@@ -3204,7 +3399,7 @@
         <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;">💬 实时对局聊天框</span>
         <div style="display:flex; align-items:center; gap:5px; flex-shrink:0;">
           <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
-          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格</span>
+          <span style="background:#213a4a; color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); window.SkyIslandUI?.openBulletin();">☁️ 岛讯</span>
           <span style="white-space:nowrap;">📜 展开 ➔</span>
         </div>
       </div>
@@ -3309,9 +3504,13 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" data-collapsed="false" aria-label="社交、签到与活动入口">
+    <div class="game-social-dock-head">
+      <span class="game-social-dock-title">游戏功能</span>
+      <button type="button" class="game-social-dock-toggle" id="btnGameDockToggle" onclick="toggleGameDockCollapsed()" aria-controls="gameSocialDock" aria-expanded="true" aria-label="收起八个游戏功能按钮">⌄</button>
+    </div>
     <div class="game-social-dock-grid" id="gameSocialDockGrid" role="list" aria-label="游戏功能八宫格">
-      <button type="button" id="btnGameFriends" role="listitem" onclick="openGameAffinity()" aria-label="打开好友、私聊与亲密关系">👥 好友</button>
+      <button type="button" id="btnGameFriends" role="listitem" onclick="openGameAffinity()" aria-label="打开好友、私聊与亲密关系"><span id="gameFriendsButtonLabel">👥 好友</span><span id="gameFriendsUnreadBadge" class="game-social-unread-badge" aria-hidden="true">0</span></button>
       <button type="button" id="btnGameRecent" role="listitem" onclick="openGameFeaturePlaceholder('最近对手')">🧑‍🤝‍🧑 最近</button>
       <button type="button" id="btnGameRank" role="listitem" onclick="openLeaderboardModal()">🏆 排行</button>
       <button type="button" id="btnGameBag" role="listitem" onclick="openGameFeaturePlaceholder('背包')">🎒 背包</button>
@@ -3322,6 +3521,7 @@
     </div>
     <div class="game-social-dock-status"><span><strong id="gameCoinBalance">🪙 0 金币</strong><strong id="gameDiamondBalance" style="margin-left:6px; color:#7c3aed;">💎 0 钻石</strong></span><span id="gameEconomyStatus">登录正式账号后可云端保存金币与亲密度</span></div>
   </section>
+  <button type="button" class="game-social-dock-fab" id="gameSocialDockFab" onclick="setGameDockCollapsed(false)" aria-controls="gameSocialDock" aria-expanded="false" aria-label="展开八个游戏功能按钮" title="展开八个游戏功能按钮" aria-hidden="true" tabindex="-1"><span aria-hidden="true">⌃</span><span id="gameDockUnreadBadge" class="game-social-unread-badge" aria-hidden="true">0</span></button>
 
   <!-- 🎁 活动中心：签到与付费钻石入口。当前仅展示沙盒入口，绝不触发真实扣款。 -->
   <div class="online-modal-backdrop" id="gameActivityModal" aria-hidden="true" onclick="if(event.target===this)closeGameActivity()">
@@ -3352,6 +3552,20 @@
         <div id="gameRechargeStatus" aria-live="polite" style="margin-top:7px; padding:7px 8px; border-radius:8px; background:#f8fafc; color:#64748b; font-size:10px; font-weight:800; line-height:1.35;">当前没有可用支付渠道，不会扣款；正式支付接入后会在此完成订单校验。</div>
       </div>
       <button type="button" class="btn-chat-tool" onclick="closeGameActivity()" style="width:100%; margin-top:12px; padding:8px;">关闭</button>
+    </div>
+  </div>
+
+  <!-- 🧩 游戏功能面板：最近、背包、任务、成就均从底部八宫格进入。 -->
+  <div class="online-modal-backdrop" id="gameFeaturePanelModal" aria-hidden="true" onclick="if(event.target===this)closeGameFeaturePanel()">
+    <div class="online-modal-card game-feature-panel-card" onclick="event.stopPropagation()">
+      <div class="game-feature-panel-head">
+        <div>
+          <div class="game-feature-panel-title"><span id="gameFeaturePanelIcon" aria-hidden="true">🧩</span><span id="gameFeaturePanelTitle">游戏功能</span></div>
+          <div class="game-feature-panel-subtitle" id="gameFeaturePanelSubtitle">从底部八宫格进入</div>
+        </div>
+        <button type="button" class="game-feature-panel-close" onclick="closeGameFeaturePanel()" aria-label="关闭功能面板">✕</button>
+      </div>
+      <div id="gameFeaturePanelBody"></div>
     </div>
   </div>
 
@@ -3417,7 +3631,7 @@
   <div class="profile-modal-backdrop" id="profileModal">
     <div class="profile-modal-card">
       <div class="undo-title" id="profileModalTitle" style="flex-shrink:0; margin-bottom:6px;">👤 自定义我的昵称与头像</div>
-      
+
       <!-- 📜 中间滚动内容区域 (保持平滑滚动) -->
       <div class="profile-modal-scroll">
       <!-- 头像预览与相册上传按钮 -->
@@ -3524,7 +3738,7 @@
   <div class="online-modal-backdrop" id="phraseManageModal">
     <div class="online-modal-card" style="max-width:380px; text-align:left;">
       <div class="undo-title" style="text-align:center;">⚙️ 自定义快捷短语</div>
-      
+
       <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:6px;">输入新短语（最多20字）：</div>
       <div style="display:flex; gap:6px; margin-bottom:12px;">
         <input type="text" id="inputNewPhrase" placeholder="如: 棋逢对手，幸甚至哉！" maxlength="20" style="flex:1; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark); font-size:13px; font-weight:800; outline:none;" />
@@ -3566,7 +3780,7 @@
           </div>
           <div id="matchStatusText" style="font-size:14px; font-weight:900; color:#1e293b; margin:12px 0 4px 0;">⚡ 寻找全国实力相当的对手</div>
           <div id="matchTimerText" style="font-size:11.5px; font-weight:800; color:#64748b; margin-bottom:12px;">全国百万棋友实时联网对战</div>
-          
+
           <div id="matchVsCard" style="display:none; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:14px; padding:10px 14px; margin-bottom:12px;">
             <div style="font-size:11px; font-weight:800; color:#f59e0b; margin-bottom:6px;">⚔️ 匹配成功！对手已就位</div>
             <div style="display:flex; justify-content:space-around; align-items:center;">
@@ -3723,7 +3937,7 @@
         <div id="loginErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
 
         <button class="auth-submit-btn" onclick="submitLogin()" id="btnLoginSubmit" style="background:linear-gradient(135deg, #0284c7, #0369a1); box-shadow:0 3.5px 0 #075985;">🚀 立即安全登录</button>
-        
+
         <div style="text-align:right; margin-top:10px;">
           <span style="font-size:11.5px; color:#0284c7; font-weight:800; cursor:pointer;" onclick="switchAuthTab('reset')">忘记密码？通过密保找回 ➔</span>
         </div>
@@ -3744,13 +3958,13 @@
         <!-- 🛡️ 自定义高颜值密保选择器（无原生系统弹窗，纯游戏组件） -->
         <div class="auth-input-group" style="position:relative;">
           <div class="auth-input-label"><span>🛡️</span> 专属密保问题（用于随时重置密码）：</div>
-          
+
           <div class="custom-q-selector-wrap">
             <div class="custom-q-trigger" id="customQTrigger" onclick="toggleQDropdown(event)">
               <span id="selectedQDisplay">❤️ 你最喜欢的人是谁？</span>
               <span style="font-size:10px; color:#64748b; margin-left:6px;">▼</span>
             </div>
-            
+
             <div class="custom-q-dropdown" id="qDropdownMenu" style="display:none;">
               <div class="custom-q-opt" onclick="pickSecurityQ('❤️ 你最喜欢的人是谁？')">❤️ 你最喜欢的人是谁？</div>
               <div class="custom-q-opt" onclick="pickSecurityQ('🐱 你的第一只宠物叫什么名字？')">🐱 你的第一只宠物叫什么名字？</div>
@@ -3923,7 +4137,7 @@
         <div style="text-align:left;">
           <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
             <span>🏆 全服天梯风云榜</span>
-            
+
           </div>
           <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">胜局 +25 分 · 败局 -15 分 · 实时云端同步</div>
         </div>
@@ -3953,85 +4167,11 @@
 
 
 
-  <!-- 🎨 六大顶级视觉风格无缝切换弹窗 -->
+  <!-- 🎨 官方晴空浮岛显示与声音设置（运行时仍由 sky-hub 统一渲染） -->
   <div class="online-modal-backdrop" id="themeModal" onclick="if(event.target===this)closeThemeModal()">
     <div class="online-modal-card" style="max-width:380px; max-height:85vh; overflow-y:auto;">
-      <div class="undo-title">🎨 对局中无缝换装</div>
-      <div style="font-size:12px; font-weight:800; color:#10b981; margin-bottom:12px; background:#e8f5e9; padding:4px 8px; border-radius:8px;">⚡ 下棋中点击秒换！棋子位置与对局进度 100% 保留！</div>
-
-      <div style="display:flex; flex-direction:column; gap:9px;">
-        <!-- 1. 晴空草坪版 (官方默认) -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#e8f5e9; border:2px solid #2e7d32; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('default')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">🌿</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#1b5e20; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">晴空浮岛草坪版 (官方默认)</div>
-              <div style="font-size:10px; font-weight:700; color:#2e7d32; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">可爱手绘 · 猫爪肉垫 · 蓝天白云</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#2e7d32; padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.15); flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 2. 草莓蜜桃恋爱版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%); border:2px solid #ff758c; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('sweet_romance')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">💖</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#ff8fa3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">草莓蜜桃恋爱版 (晚霞柔光)</div>
-              <div style="font-size:10px; font-weight:700; color:#fbcfe8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">果冻心形棋子 · 💖爱心星位 · 奶茶圆盘</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:linear-gradient(135deg,#ff758c,#ff8fa3); padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.2); flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 3. 极简禅意暗黑版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#18181b; border:2px solid #3f3f46; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('zen_dark')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">禅</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#f4f4f5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">极简禅意暗黑版 (Zen Dark)</div>
-              <div style="font-size:10px; font-weight:700; color:#a1a1aa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">黑曜石白玉 · 哑光黑胡桃木</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#27272a; padding:3px 8px; border-radius:6px; border:1px solid #52525b; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 4. 新中式宣纸榧木版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#fbf8f2; border:2px solid #dcb374; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('neo_trad')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">📜</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#4a3b2c; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">新中式宣纸榧木版 (雅集古风)</div>
-              <div style="font-size:10px; font-weight:700; color:#8c7866; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">宣纸榧木年轮 · 水墨象牙玉石</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#c88942; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 5. 现代奢华毛玻璃版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#0b0c10; border:2px solid #6366f1; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('luxury_glass')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">✨</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">现代奢华毛玻璃版 (Luxury Glass)</div>
-              <div style="font-size:10px; font-weight:700; color:#818cf8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Linear 冷光紫 · 悬浮黑胡桃木</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#4f46e5; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 6. Clean iOS 极简暖白手机版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#f2f2f6; border:2px solid #0071e3; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('clean_ios')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">📱</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#1d1d1f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Clean iOS 极简暖白手机版</div>
-              <div style="font-size:10px; font-weight:700; color:#86868b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">自然影棚柔光 · 悬浮抽屉微振感</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#0071e3; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-      </div>
+      <div class="undo-title">🌿 官方晴空浮岛</div>
+      <div style="font-size:12px; font-weight:800; color:#466d4b; margin-bottom:12px; background:#e7f3e8; padding:8px 10px; border-radius:8px;">统一使用云纸、深天蓝、岛屿苔绿与黑白棋石。视觉变化来自棋局状态与落子反馈，不提供多主题换肤。</div>
 
       <div style="margin-top:12px; padding:9px 10px; border:1.5px solid #bae6fd; border-radius:12px; background:#f0f9ff; text-align:left;">
         <div style="font-size:12px; font-weight:900; color:#0369a1; margin-bottom:6px;">⚡ 棋盘画质与流畅度</div>
@@ -4043,9 +4183,9 @@
         <div id="graphicsQualityHint" style="font-size:10px; color:#64748b; font-weight:700; margin-top:5px;">自动根据设备性能选择清晰度</div>
       </div>
 
-      <div id="gameDockOrderSettings" style="margin-top:12px; padding:9px 10px; border:1.5px solid #ddd6fe; border-radius:12px; background:#faf5ff; text-align:left;">
+      <div id="gameDockOrderSettings" style="margin-top:12px; padding:9px 10px; border:1.5px solid #d9e7dc; border-radius:12px; background:#f5faf5; text-align:left;">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-          <div style="font-size:12px; font-weight:900; color:#6d28d9;">⚙️ 自定义底部八按钮</div>
+          <div style="font-size:12px; font-weight:900; color:#466d4b;">⚙️ 调整棋局工具顺序</div>
           <span style="font-size:10px; color:#94a3b8; font-weight:800;">拖动或使用 ↑ ↓</span>
         </div>
         <div id="gameFeatureOrderList" class="game-feature-order-list" role="list" aria-label="底部八按钮顺序"></div>
@@ -4230,6 +4370,7 @@
     </div>
   </div>
 
+  <script defer src="js/sky-hub.js"></script>
   <script defer src="js/app.min.js"></script>
 </body>
 </html>

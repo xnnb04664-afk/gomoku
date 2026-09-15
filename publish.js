@@ -177,9 +177,9 @@ if (SHOULD_DEPLOY_CLOUDFLARE) {
   execSync('node backup_d1.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 }
 
-// 六套主题都必须在发包前单独解析，避免某个切换主题携带语法错误或截断代码。
+// 官方版本只保留一套晴空浮岛视觉；发布前解析主页面，避免内联脚本截断。
 function runAllThemeSyntaxChecks() {
-  const files = ['index.html', 'theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'];
+  const files = ['index.html'];
   for (const file of files) {
     const html = fs.readFileSync(path.join(ROOT_DIR, file), 'utf8');
     const scripts = html.match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) || [];
@@ -193,13 +193,13 @@ function runAllThemeSyntaxChecks() {
   execSync('node --check build_ai_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check js/ai_fast.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check js/ai_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
-  console.log('✅ 六大主题、发布脚本、部署脚本和 AI Worker 语法校验通过。');
+  console.log('✅ 官方晴空页面、发布脚本、部署脚本和 AI Worker 语法校验通过。');
 }
 
 try {
   runAllThemeSyntaxChecks();
 } catch (error) {
-  console.error(`\n❌ [发布致命拦截] 全主题/发布链路语法校验失败：${error.message}`);
+  console.error(`\n❌ [发布致命拦截] 官方页面/发布链路语法校验失败：${error.message}`);
   process.exit(1);
 }
 
@@ -235,7 +235,7 @@ if (codeMatch && nameMatch) {
 }
 
 // 2. 同步更新所有 HTML 中的 CURRENT_VERSION_TAG 与 UI 显示
-console.log('>>> [2/8] 同步前端版本号到 6 大主题...');
+console.log('>>> [2/8] 同步前端版本号到官方晴空页面...');
 function formatDisplayVersionName(versionName) {
   const match = String(versionName || '').trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
   if (!match) return `v${versionName}`;
@@ -249,12 +249,7 @@ function formatDisplayVersionName(versionName) {
 }
 const displayVersionTag = formatDisplayVersionName(newName);
 const htmlFiles = [
-  'index.html',
-  'theme1_zen_dark.html',
-  'theme2_neo_traditional.html',
-  'theme3_luxury_glass.html',
-  'theme4_clean_ios.html',
-  'theme5_sweet_romance.html'
+  'index.html'
 ];
 htmlFiles.forEach(f => {
   const fp = path.join(ROOT_DIR, f);
@@ -377,7 +372,7 @@ fs.copyFileSync(singleHtmlPath, releaseHtml);
 try {
   const releaseTitle = `五子棋 ${releaseTag} 官方正式版 (APK + 单文件HTML双发布)`;
   const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 极速安装包：\`gomoku.apk\` (1.5MB，闪电安装)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (免安装双击即玩)`;
-  
+
   execSync(`gh release create ${releaseTag} "gomoku.apk" "gomoku.html" --title "${releaseTitle}" --notes "${releaseNotes}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {

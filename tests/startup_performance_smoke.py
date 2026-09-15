@@ -66,6 +66,10 @@ def collect_run(browser, test_url, cpu_rate, timeout_ms):
 
     try:
         page.goto(test_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        # The product now opens on the sky-island lobby; reveal the preserved
+        # standard board before measuring its ready-to-play surface.
+        page.wait_for_selector("#skyLobby", state="visible", timeout=timeout_ms)
+        page.evaluate("() => window.SkyIslandUI?.showGame()")
         page.locator("#cvs").wait_for(state="visible", timeout=timeout_ms)
         try:
             page.wait_for_function(

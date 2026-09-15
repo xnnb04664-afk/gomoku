@@ -47,6 +47,10 @@ def test_page(page, url, single_file):
         ),
     )
     page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+    # The refreshed product opens on the sky-island lobby. Enter the
+    # preserved standard board before asserting avatar-related game UI.
+    page.wait_for_selector("#skyLobby", state="visible", timeout=10_000)
+    page.evaluate("() => window.SkyIslandUI?.showGame()")
     page.locator("#cvs").wait_for(state="visible", timeout=10_000)
 
     cold = page.evaluate(

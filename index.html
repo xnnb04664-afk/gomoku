@@ -480,7 +480,7 @@
         if (type === 'recent') {
           body.innerHTML = `<div class="game-feature-panel-hero"><strong>棋局结束后，棋友不会丢</strong><span>好友房、房间码和全服匹配的正式账号对手会进入这里。可直接申请好友或拉黑。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>林间听雨</strong><small>刚刚对局 · 直连 18ms · 白方</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">加好友</button></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🪵</span><span class="game-feature-panel-row-main"><strong>MuMu-棋友</strong><small>昨天对局 · WebSocket 中继 · 黑方</small></span><button type="button" class="btn-chat-tool" data-game-panel-action="friend">加好友</button></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="online">⚡ 邀请下一局</button><button type="button" class="btn-chat-tool" data-game-panel-action="friend">👥 搜索好友</button></div><div class="game-feature-panel-foot">只有完成身份确认的正式账号对手会记录；被拉黑的用户不会再次出现在这里。</div>`;
         } else if (type === 'bag') {
-          body.innerHTML = `<div class="game-feature-panel-hero"><strong>把喜欢的棋盘留在手边</strong><span>当前版本先展示你的装扮位置，主题切换仍在“设置”里完成。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>晴空浮岛草坪版</strong><small>当前使用 · 官方默认棋盘</small></span><span style="color:#16a34a;font-size:10px;font-weight:900;">已装备</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🎨</span><span class="game-feature-panel-row-main"><strong>更多主题与棋子</strong><small>后续活动和装扮会在这里统一管理</small></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">预留</span></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="settings">🎨 打开设置换装</button></div><div class="game-feature-panel-foot">背包入口已经固定在八宫格中，后续新增装扮无需改动底部布局。</div>`;
+          body.innerHTML = `<div class="game-feature-panel-hero"><strong>棋盘视觉已固定</strong><span>官方晴空浮岛草坪版是唯一视觉，变化来自棋局状态、日线与落子反馈。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🌿</span><span class="game-feature-panel-row-main"><strong>晴空浮岛草坪版</strong><small>当前使用 · 官方默认棋盘</small></span><span style="color:#16a34a;font-size:10px;font-weight:900;">已装备</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">☀️</span><span class="game-feature-panel-row-main"><strong>棋局状态反馈</strong><small>最后一手、幽灵预览与胜负线随对局变化</small></span><span style="color:#466d4b;font-size:10px;font-weight:900;">已启用</span></div></div><div class="game-feature-panel-actions"><button type="button" class="btn-chat-tool" data-game-panel-action="settings">🌿 打开显示与声音</button></div><div class="game-feature-panel-foot">设置仅保留官方视觉、画质与声音偏好，不提供多主题换肤。</div>`;
         } else if (type === 'tasks') {
           body.innerHTML = `<div class="game-feature-panel-hero"><strong>今天做三件小事</strong><span>签到奖励和任务状态只对正式账号云端保存；游客可以先查看入口。</span></div><div class="game-feature-panel-list"><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">🎁</span><span class="game-feature-panel-row-main"><strong>每日签到</strong><small>领取 10 金币 · 今日待签到</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><button type="button" class="btn-chat-tool" data-game-panel-action="activity">去签到</button></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">⚫</span><span class="game-feature-panel-row-main"><strong>完成 1 局对弈</strong><small>完成本地 AI、好友房或匹配对局</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">0 / 1</span></div><div class="game-feature-panel-row"><span class="game-feature-panel-row-icon">👥</span><span class="game-feature-panel-row-main"><strong>和棋友说句话</strong><small>好友私聊成功发送一条文字消息</small><div class="game-feature-panel-progress"><span style="width:0%"></span></div></span><span style="color:#94a3b8;font-size:10px;font-weight:900;">0 / 1</span></div></div><div class="game-feature-panel-foot">任务奖励规则会随活动开放逐步接入；当前签到按钮已经可以使用。</div>`;
         } else if (type === 'achievements') {
@@ -1195,7 +1195,7 @@
       z-index: 10;
       padding: 1px 2px;
       flex-shrink: 0;
-    
+
       height: 52px;
       min-height: 52px;
       max-height: 52px;
@@ -1271,7 +1271,7 @@
       align-items: center;
       flex-shrink: 0;
       z-index: 15;
-    
+
       height: 54px;
       min-height: 54px;
       max-height: 54px;
@@ -1590,7 +1590,7 @@
       flex: 1; overflow-y: auto; padding-right: 2px; -webkit-overflow-scrolling: touch;
     }
     .profile-modal-backdrop.show .profile-modal-card { transform: scale(1); }
-    
+
     .profile-header-preview {
       display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 10px;
     }
@@ -1600,7 +1600,7 @@
       font-size: 34px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     }
     .big-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
-    
+
     .btn-upload-photo {
       background: linear-gradient(135deg, #4da4ff 0%, #1e3a8a 100%);
       color: #fff; border: 2px solid var(--border-dark); border-radius: 12px;
@@ -1658,7 +1658,7 @@
     }
     .online-modal-backdrop.show { opacity: 1; pointer-events: auto; }
 
-    
+
     /* ✨ 五子棋专属高颜值账号通行证弹窗 (彻底杜绝系统级丑陋弹窗) */
     .auth-modal-card {
       background: #fffdf7;
@@ -1817,7 +1817,7 @@
       box-shadow: 0 1.5px 0 #047857;
     }
 
-    
+
     /* ⚡ 全服实时快速匹配雷达与卡片动画 */
     .matchmaking-box {
       background: #fff;
@@ -2458,7 +2458,7 @@
   <div class="profile-modal-backdrop" id="profileModal">
     <div class="profile-modal-card">
       <div class="undo-title" id="profileModalTitle" style="flex-shrink:0; margin-bottom:6px;">👤 自定义我的昵称与头像</div>
-      
+
       <!-- 📜 中间滚动内容区域 (保持平滑滚动) -->
       <div class="profile-modal-scroll">
       <!-- 头像预览与相册上传按钮 -->
@@ -2565,7 +2565,7 @@
   <div class="online-modal-backdrop" id="phraseManageModal">
     <div class="online-modal-card" style="max-width:380px; text-align:left;">
       <div class="undo-title" style="text-align:center;">⚙️ 自定义快捷短语</div>
-      
+
       <div style="font-size:12px; font-weight:700; color:#666; margin-bottom:6px;">输入新短语（最多20字）：</div>
       <div style="display:flex; gap:6px; margin-bottom:12px;">
         <input type="text" id="inputNewPhrase" placeholder="如: 棋逢对手，幸甚至哉！" maxlength="20" style="flex:1; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark); font-size:13px; font-weight:800; outline:none;" />
@@ -2607,7 +2607,7 @@
           </div>
           <div id="matchStatusText" style="font-size:14px; font-weight:900; color:#1e293b; margin:12px 0 4px 0;">⚡ 寻找全国实力相当的对手</div>
           <div id="matchTimerText" style="font-size:11.5px; font-weight:800; color:#64748b; margin-bottom:12px;">全国百万棋友实时联网对战</div>
-          
+
           <div id="matchVsCard" style="display:none; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:14px; padding:10px 14px; margin-bottom:12px;">
             <div style="font-size:11px; font-weight:800; color:#f59e0b; margin-bottom:6px;">⚔️ 匹配成功！对手已就位</div>
             <div style="display:flex; justify-content:space-around; align-items:center;">
@@ -2764,7 +2764,7 @@
         <div id="loginErrorMsg" style="display:none; font-size:11px; font-weight:800; color:#ef4444; margin-bottom:8px; text-align:left; background:#fef2f2; padding:6px 10px; border-radius:8px; border:1px solid #fecaca;"></div>
 
         <button class="auth-submit-btn" onclick="submitLogin()" id="btnLoginSubmit" style="background:linear-gradient(135deg, #0284c7, #0369a1); box-shadow:0 3.5px 0 #075985;">🚀 立即安全登录</button>
-        
+
         <div style="text-align:right; margin-top:10px;">
           <span style="font-size:11.5px; color:#0284c7; font-weight:800; cursor:pointer;" onclick="switchAuthTab('reset')">忘记密码？通过密保找回 ➔</span>
         </div>
@@ -2785,13 +2785,13 @@
         <!-- 🛡️ 自定义高颜值密保选择器（无原生系统弹窗，纯游戏组件） -->
         <div class="auth-input-group" style="position:relative;">
           <div class="auth-input-label"><span>🛡️</span> 专属密保问题（用于随时重置密码）：</div>
-          
+
           <div class="custom-q-selector-wrap">
             <div class="custom-q-trigger" id="customQTrigger" onclick="toggleQDropdown(event)">
               <span id="selectedQDisplay">❤️ 你最喜欢的人是谁？</span>
               <span style="font-size:10px; color:#64748b; margin-left:6px;">▼</span>
             </div>
-            
+
             <div class="custom-q-dropdown" id="qDropdownMenu" style="display:none;">
               <div class="custom-q-opt" onclick="pickSecurityQ('❤️ 你最喜欢的人是谁？')">❤️ 你最喜欢的人是谁？</div>
               <div class="custom-q-opt" onclick="pickSecurityQ('🐱 你的第一只宠物叫什么名字？')">🐱 你的第一只宠物叫什么名字？</div>
@@ -2964,7 +2964,7 @@
         <div style="text-align:left;">
           <div style="font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
             <span>🏆 全服天梯风云榜</span>
-            
+
           </div>
           <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-top:2px;">胜局 +25 分 · 败局 -15 分 · 实时云端同步</div>
         </div>
@@ -2994,85 +2994,11 @@
 
 
 
-  <!-- 🎨 六大顶级视觉风格无缝切换弹窗 -->
+  <!-- 🎨 官方晴空浮岛显示与声音设置（运行时仍由 sky-hub 统一渲染） -->
   <div class="online-modal-backdrop" id="themeModal" onclick="if(event.target===this)closeThemeModal()">
     <div class="online-modal-card" style="max-width:380px; max-height:85vh; overflow-y:auto;">
-      <div class="undo-title">🎨 对局中无缝换装</div>
-      <div style="font-size:12px; font-weight:800; color:#10b981; margin-bottom:12px; background:#e8f5e9; padding:4px 8px; border-radius:8px;">⚡ 下棋中点击秒换！棋子位置与对局进度 100% 保留！</div>
-
-      <div style="display:flex; flex-direction:column; gap:9px;">
-        <!-- 1. 晴空草坪版 (官方默认) -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#e8f5e9; border:2px solid #2e7d32; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('default')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">🌿</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#1b5e20; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">晴空浮岛草坪版 (官方默认)</div>
-              <div style="font-size:10px; font-weight:700; color:#2e7d32; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">可爱手绘 · 猫爪肉垫 · 蓝天白云</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#2e7d32; padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.15); flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 2. 草莓蜜桃恋爱版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%); border:2px solid #ff758c; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('sweet_romance')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">💖</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#ff8fa3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">草莓蜜桃恋爱版 (晚霞柔光)</div>
-              <div style="font-size:10px; font-weight:700; color:#fbcfe8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">果冻心形棋子 · 💖爱心星位 · 奶茶圆盘</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:linear-gradient(135deg,#ff758c,#ff8fa3); padding:3px 8px; border-radius:6px; box-shadow:0 2px 5px rgba(0,0,0,0.2); flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 3. 极简禅意暗黑版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#18181b; border:2px solid #3f3f46; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('zen_dark')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">禅</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#f4f4f5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">极简禅意暗黑版 (Zen Dark)</div>
-              <div style="font-size:10px; font-weight:700; color:#a1a1aa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">黑曜石白玉 · 哑光黑胡桃木</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#27272a; padding:3px 8px; border-radius:6px; border:1px solid #52525b; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 4. 新中式宣纸榧木版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#fbf8f2; border:2px solid #dcb374; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('neo_trad')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">📜</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#4a3b2c; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">新中式宣纸榧木版 (雅集古风)</div>
-              <div style="font-size:10px; font-weight:700; color:#8c7866; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">宣纸榧木年轮 · 水墨象牙玉石</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#c88942; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 5. 现代奢华毛玻璃版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#0b0c10; border:2px solid #6366f1; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('luxury_glass')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">✨</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">现代奢华毛玻璃版 (Luxury Glass)</div>
-              <div style="font-size:10px; font-weight:700; color:#818cf8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Linear 冷光紫 · 悬浮黑胡桃木</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#4f46e5; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-
-        <!-- 6. Clean iOS 极简暖白手机版 -->
-        <div style="display:flex; align-items:center; justify-content:space-between; background:#f2f2f6; border:2px solid #0071e3; border-radius:14px; padding:8px 12px; cursor:pointer;" onclick="switchThemeSeamless('clean_ios')">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
-            <div style="font-size:22px; flex-shrink:0;">📱</div>
-            <div style="text-align:left; flex:1; min-width:0;">
-              <div style="font-size:13px; font-weight:900; color:#1d1d1f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Clean iOS 极简暖白手机版</div>
-              <div style="font-size:10px; font-weight:700; color:#86868b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">自然影棚柔光 · 悬浮抽屉微振感</div>
-            </div>
-          </div>
-          <span style="font-size:11px; font-weight:900; color:#fff; background:#0071e3; padding:3px 8px; border-radius:6px; flex-shrink:0; white-space:nowrap; margin-left:8px;">⚡ 秒换</span>
-        </div>
-      </div>
+      <div class="undo-title">🌿 官方晴空浮岛</div>
+      <div style="font-size:12px; font-weight:800; color:#466d4b; margin-bottom:12px; background:#e7f3e8; padding:8px 10px; border-radius:8px;">统一使用云纸、深天蓝、岛屿苔绿与黑白棋石。视觉变化来自棋局状态与落子反馈，不提供多主题换肤。</div>
 
       <div style="margin-top:12px; padding:9px 10px; border:1.5px solid #bae6fd; border-radius:12px; background:#f0f9ff; text-align:left;">
         <div style="font-size:12px; font-weight:900; color:#0369a1; margin-bottom:6px;">⚡ 棋盘画质与流畅度</div>
@@ -3084,9 +3010,9 @@
         <div id="graphicsQualityHint" style="font-size:10px; color:#64748b; font-weight:700; margin-top:5px;">自动根据设备性能选择清晰度</div>
       </div>
 
-      <div id="gameDockOrderSettings" style="margin-top:12px; padding:9px 10px; border:1.5px solid #ddd6fe; border-radius:12px; background:#faf5ff; text-align:left;">
+      <div id="gameDockOrderSettings" style="margin-top:12px; padding:9px 10px; border:1.5px solid #d9e7dc; border-radius:12px; background:#f5faf5; text-align:left;">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-          <div style="font-size:12px; font-weight:900; color:#6d28d9;">⚙️ 自定义底部八按钮</div>
+          <div style="font-size:12px; font-weight:900; color:#466d4b;">⚙️ 调整棋局工具顺序</div>
           <span style="font-size:10px; color:#94a3b8; font-weight:800;">拖动或使用 ↑ ↓</span>
         </div>
         <div id="gameFeatureOrderList" class="game-feature-order-list" role="list" aria-label="底部八按钮顺序"></div>
