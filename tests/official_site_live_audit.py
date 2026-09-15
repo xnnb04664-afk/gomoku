@@ -7,6 +7,7 @@ Override GOMOKU_OFFICIAL_BASE_URL when checking a preview deployment.
 """
 
 import os
+import time
 
 from playwright.sync_api import sync_playwright
 
@@ -30,6 +31,21 @@ def settle_page(page):
         page.wait_for_timeout(500)
 
 
+def goto_page(page, url):
+    # A local static preview can accept its TCP probe a few milliseconds before
+    # Python's handler is ready. Retry only that preview navigation; real live
+    # URLs still surface the first navigation failure immediately.
+    attempts = 3 if BASE_URL.startswith(("http://127.0.0.1", "http://localhost")) else 1
+    for attempt in range(attempts):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return
+        except Exception:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(0.5)
+
+
 def mock_local_api(page):
     if BASE_URL.startswith(("http://127.0.0.1", "http://localhost")):
         page.route(
@@ -51,7 +67,7 @@ def main():
         home.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
         home.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
         mock_local_api(home)
-        home.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=30000)
+        goto_page(home, f"{BASE_URL}/")
         settle_page(home)
         assert home.locator("h1").inner_text().startswith("落子有声")
         assert home.locator('a[href="/play/"]').count() >= 1
@@ -61,7 +77,7 @@ def main():
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
         mock_local_api(mobile)
-        mobile.goto(f"{BASE_URL}/", wait_until="domcontentloaded", timeout=30000)
+        goto_page(mobile, f"{BASE_URL}/")
         settle_page(mobile)
         mobile.locator(".nav-toggle").click()
         assert "is-open" in (mobile.locator("#siteNav").get_attribute("class") or "")
@@ -69,7 +85,7 @@ def main():
 
         play = browser.new_page(viewport={"width": 390, "height": 844})
         mock_local_api(play)
-        play.goto(f"{BASE_URL}/play/", wait_until="domcontentloaded", timeout=30000)
+        goto_page(play, f"{BASE_URL}/play/")
         play.wait_for_function("window.SkyIslandUI && typeof window.SkyIslandUI.showGame === 'function'", timeout=30000)
         play.evaluate("window.SkyIslandUI.showGame()")
         play.wait_for_selector("#cvs", state="visible", timeout=30000)
@@ -85,7 +101,7 @@ def main():
 
         social = browser.new_page(viewport={"width": 390, "height": 844})
         mock_local_api(social)
-        social.goto(f"{BASE_URL}/social/", wait_until="domcontentloaded", timeout=30000)
+        goto_page(social, f"{BASE_URL}/social/")
         social.wait_for_selector('iframe[title="五子棋好友中心"]', timeout=15000)
         assert social.locator('iframe[title="五子棋好友中心"]').get_attribute("src") == "/play/#friends"
         assert_no_horizontal_overflow(social)
