@@ -2754,7 +2754,7 @@
       // 否则登录/匹配可能被导向一个“能预检、业务不完整”的节点。
       const primaryHost = CLOUDFLARE_API_HOSTS[0];
       const preferredHost = !isApiHostCoolingDown(primaryHost)
-        ? primaryHos
+        ? primaryHost
         : (isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost) ? activeApiHost : '');
       const preferred = preferredHost ? [preferredHost] : [];
       const healthy = CLOUDFLARE_API_HOSTS.filter(host => !preferred.includes(host) && !isApiHostCoolingDown(host));

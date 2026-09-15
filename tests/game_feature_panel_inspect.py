@@ -7,8 +7,13 @@ def main():
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 390, "height": 844})
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+        page.wait_for_function("() => typeof window.SkyIslandUI?.showGame === 'function'", timeout=10_000)
+        page.evaluate("() => window.SkyIslandUI.showGame()")
         page.wait_for_selector("#cvs", state="visible", timeout=15_000)
-        page.locator("#btnGameTasks").click()
+        # 新棋局界面默认收起兼容用八宫格；直接调用同一入口检查旧面板
+        # 的 z-index/动画，不依赖隐藏的兼容按钮。
+        page.evaluate("() => window.openGameFeaturePlaceholder('任务中心')")
         page.wait_for_selector("#gameFeaturePanelModal.show", state="visible", timeout=5_000)
         page.wait_for_timeout(350)
         info = page.evaluate(

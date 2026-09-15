@@ -33,6 +33,12 @@ def main():
         )
         page.on("pageerror", lambda error: page_errors.append(str(error)))
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        # The product now opens on the sky-island lobby; reveal the preserved
+        # standard game surface before asserting Canvas scheduling behavior.
+        if page.locator("#skyLobby").count():
+            page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+            page.wait_for_function("() => typeof window.SkyIslandUI?.showGame === 'function'", timeout=10_000)
+            page.evaluate("() => window.SkyIslandUI?.showGame()")
         page.locator("#cvs").wait_for(state="visible", timeout=10_000)
         try:
             page.wait_for_load_state("networkidle", timeout=15_000)
@@ -53,6 +59,8 @@ def main():
                 return { schedulerReady: false };
               }
 
+              // 切换大厅/棋局后可能还有一帧初始化重绘，先让它稳定再计数。
+              await new Promise(resolve => setTimeout(resolve, 120));
               const before = { ...stats };
               for (let i = 0; i < 8; i++) window.draw();
               await new Promise(resolve => setTimeout(resolve, 120));

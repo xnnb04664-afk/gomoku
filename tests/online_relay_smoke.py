@@ -117,6 +117,9 @@ def main():
                 page.wait_for_load_state("networkidle", timeout=15_000)
             except PlaywrightTimeoutError:
                 pass
+            page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+            page.wait_for_function("() => typeof window.SkyIslandUI?.showGame === 'function'", timeout=10_000)
+            page.evaluate("() => window.SkyIslandUI.showGame()")
             page.locator("#cvs").wait_for(state="visible", timeout=10_000)
             page.evaluate("() => window.ensureGomokuFeature('online')")
             page.wait_for_function("() => window.__GOMOKU_ONLINE_READY__ === true", timeout=30_000)

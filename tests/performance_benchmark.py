@@ -122,6 +122,9 @@ def collect_browser_run(
 
     try:
         page.goto(test_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_selector("#skyLobby", state="visible", timeout=timeout_ms)
+        page.wait_for_function("() => typeof window.SkyIslandUI?.showGame === 'function'", timeout=10_000)
+        page.evaluate("() => window.SkyIslandUI.showGame()")
         page.locator("#cvs").wait_for(state="visible", timeout=timeout_ms)
         page.wait_for_function(
             "names => names.every(name => performance.getEntriesByName(name).length > 0)",
