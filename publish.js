@@ -383,6 +383,7 @@ try {
     'official-site/index.html',
     'official-site/privacy/index.html',
     'official-site/site.js',
+    'official-site/styles.css',
     'official-site/version.json',
     'pages_build/_worker.js',
     'publish.js',

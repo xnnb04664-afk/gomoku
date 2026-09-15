@@ -11,13 +11,13 @@ def main():
         errors = []
         desktop.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
         desktop.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
-        desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.124","build":125}'))
+        desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.125","build":126}'))
 
         desktop.goto("http://127.0.0.1:4173/", wait_until="networkidle")
         if os.environ.get("SAVE_SCREENSHOT") == "1":
             desktop.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-home.png", full_page=True)
-        assert "一盘棋" in desktop.title()
-        assert desktop.locator("h1").inner_text().startswith("一盘棋")
+        assert "落子有声" in desktop.title()
+        assert desktop.locator("h1").inner_text().startswith("落子有声")
         assert desktop.locator('meta[name="description"]').get_attribute("content")
         assert desktop.locator('meta[name="robots"]').get_attribute("content") == "index,follow"
         assert desktop.locator('link[rel="canonical"]').get_attribute("href") == "https://gomoku-home.pages.dev/"
@@ -25,8 +25,8 @@ def main():
         assert desktop.locator("h1").count() == 1
         assert desktop.locator('#siteNav a[href="/social/"]').count() == 1
         assert desktop.locator('.social-retention-note').inner_text().startswith("私聊消息会永久保存在云端数据库")
-        assert desktop.locator(".js-version").first.inner_text() == "v1.2.4"
-        assert desktop.locator(".js-build").first.inner_text() == "125"
+        assert desktop.locator(".js-version").first.inner_text() == "v1.2.5"
+        assert desktop.locator(".js-build").first.inner_text() == "126"
         assert desktop.locator("[data-demo-status]").get_attribute("aria-live") == "polite"
         assert "@media (prefers-reduced-motion: reduce)" in Path("official-site/styles.css").read_text(encoding="utf-8")
         headers = Path("official-site/_headers").read_text(encoding="utf-8")
@@ -36,10 +36,18 @@ def main():
         assert "第 1 手" in desktop.locator("[data-demo-status]").inner_text()
         desktop.locator("[data-reset-board]").click()
         assert "第一手" in desktop.locator("[data-demo-status]").inner_text()
+        reveal_items = desktop.locator(".reveal")
+        for index in range(reveal_items.count()):
+            item = reveal_items.nth(index)
+            item.scroll_into_view_if_needed()
+            desktop.wait_for_timeout(90)
+            assert "is-visible" in (item.get_attribute("class") or ""), index
+        if os.environ.get("SAVE_SCREENSHOT") == "1":
+            desktop.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-home-scrolled.png", full_page=True)
         assert errors == [], errors
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
-        mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.124","build":125}'))
+        mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.125","build":126}'))
         mobile.goto("http://127.0.0.1:4173/", wait_until="networkidle")
         toggle = mobile.locator(".nav-toggle")
         assert toggle.is_visible()
