@@ -6,9 +6,54 @@
   <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
   <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="preload" href="js/app.min.js" as="script">
   <!-- 首屏只保留页面骨架；联机、音频和大图资源在真正需要时才加载。 -->
   <script id="gomokuResourceLoader">
     (() => {
+      const pendingResources = [];
+      const pendingCalls = [];
+      const deferredApiNames = [
+        'toggleGomokuVoice', 'openFriendsModal', 'openPublicGameAnnouncements',
+        'openGameAffinity', 'openGameFeaturePanel', 'openGameFeaturePlaceholder',
+        'openGameActivity', 'closeGameActivity', 'openGameRecharge',
+        'selectGameRechargePackage', 'openGameCheckIn', 'openGameSettings',
+        'closeGameFeaturePanel', 'resetGameDockOrder', 'setGameDockCollapsed',
+        'toggleGameDockCollapsed', 'getGameDockOrder', 'setGameDockOrder',
+        'openCrossChess', 'refreshGameEconomy'
+      ];
+      let loaderStarted = false;
+      let loaderScheduled = false;
+      const onDomReady = callback => {
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', callback, { once: true });
+        else callback();
+      };
+
+      const scheduleLoader = () => {
+        if (loaderStarted || loaderScheduled) return;
+        loaderScheduled = true;
+        const afterDomReady = () => {
+          const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+          raf(() => window.setTimeout(startLoader, 0));
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', afterDomReady, { once: true });
+        else afterDomReady();
+      };
+      const queueResource = name => new Promise((resolve, reject) => {
+        pendingResources.push({ name, resolve, reject });
+        scheduleLoader();
+      });
+      const queueCall = (name, args) => new Promise((resolve, reject) => {
+        pendingCalls.push({ name, args, resolve, reject });
+        scheduleLoader();
+      });
+      window.ensureGomokuResource = queueResource;
+      window.ensureGomokuFeature = queueResource;
+      deferredApiNames.forEach(name => { window[name] = (...args) => queueCall(name, args); });
+      const firstPaintRaf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+      firstPaintRaf(() => { try { performance.mark('gomoku_first_paint'); } catch (_) {} });
+
+      const startLoader = () => {
+        (() => {
       const definitions = {
         mqtt: { local: 'js/mqtt.min.js', fallback: 'https://fastly.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js' },
         aiFast: { local: 'js/ai_fast.js' },
@@ -119,11 +164,7 @@
         friendsHashOpened = false;
         openFriendsFromHash();
       });
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', openFriendsFromHash, { once: true });
-      } else {
-        openFriendsFromHash();
-      }
+      onDomReady(openFriendsFromHash);
       window.toggleGomokuVoice = function() {
         return ensure('voice').then(() => window.GomokuVoice.toggle()).catch(error => {
           const status = document.getElementById('gomokuVoiceStatus');
@@ -452,7 +493,7 @@
         return false;
       };
       window.refreshGameEconomy = refreshGameEconomy;
-      document.addEventListener('DOMContentLoaded', () => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200), { once: true });
+      onDomReady(() => setTimeout(() => refreshGameEconomy({ quiet: true }), 1200));
       const GAME_FEATURE_PANEL_CONFIG = Object.freeze({
         recent: { icon: '🧑‍🤝‍🧑', title: '最近对手', subtitle: '最近 30 个完成身份确认的正式账号对手' },
         bag: { icon: '🎒', title: '背包', subtitle: '棋盘、棋子和活动道具都从这里查看' },
@@ -510,10 +551,10 @@
         if (typeof window.openThemeModal === 'function') return window.openThemeModal();
         return window.openGameFeaturePlaceholder('设置');
       };
-      document.addEventListener('DOMContentLoaded', () => {
+      onDomReady(() => {
         applyGameDockOrder(readGameDockOrder());
         applyGameDockCollapsed(readGameDockCollapsed());
-      }, { once: true });
+      });
       window.openCrossChess = function() {
         return ensure('cross').then(() => window.GomokuCross.open()).catch(error => {
           if (typeof window.showGameNotice === 'function') window.showGameNotice('十字棋实验模块加载失败，请刷新后重试', true);
@@ -521,7 +562,21 @@
           return false;
         });
       };
-      requestAnimationFrame(() => { try { performance.mark('gomoku_first_paint'); } catch (_) {} });
+        })();
+        loaderStarted = true;
+        const ensure = window.ensureGomokuResource;
+        pendingResources.splice(0).forEach(item => {
+          Promise.resolve().then(() => ensure(item.name)).then(item.resolve, item.reject);
+        });
+        pendingCalls.splice(0).forEach(item => {
+          Promise.resolve().then(() => {
+            const fn = window[item.name];
+            if (typeof fn !== 'function') throw new Error('延迟入口未注册: ' + item.name);
+            return fn(...item.args);
+          }).then(item.resolve, item.reject);
+        });
+      };
+      scheduleLoader();
     })();
   </script>
   <!-- 生产构建会把快速 AI Worker 内嵌到这里；源码开发环境使用 js/ai_worker.js 回退。 -->
@@ -3763,7 +3818,7 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.123" data-collapsed="false" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.124" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
       <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
@@ -3977,7 +4032,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.4</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.5</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -4565,7 +4620,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.4</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.5</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
@@ -4707,6 +4762,9 @@
   <script defer src="js/app.min.js"></script>
 <script id="skyIslandEnhancements">
 (() => {
+  // Sky/社交增强只影响交互后的装饰和入口；延后到首个交互帧后解析，缩短冷启动主线程阻塞。
+  const start = () => {
+    (() => {
   'use strict';
   // 仅作为未来 UI 实验开关，默认关闭；不调用、不声明任何后端能力。
   window.SKY_ISLAND_FEATURE_FLAGS = Object.freeze({
@@ -4861,10 +4919,20 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
+    })();
+  };
+  const schedule = () => {
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => window.setTimeout(start, 0));
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', schedule, { once: true });
+  else schedule();
 })();
 </script>
 <script id="worldChatEnhancements">
 (() => {
+  const start = () => {
+    (() => {
   'use strict';
 
   const MAX_CHARS = 500;
@@ -5376,10 +5444,20 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
   else observe();
+    })();
+  };
+  const schedule = () => {
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => window.setTimeout(start, 0));
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', schedule, { once: true });
+  else schedule();
 })();
 </script>
 <script id="announcementCenterEnhancements">
 (() => {
+  const start = () => {
+    (() => {
   'use strict';
 
   const PAGE_SIZE = 20;
@@ -5792,6 +5870,14 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
   else observe();
+    })();
+  };
+  const schedule = () => {
+    const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
+    raf(() => window.setTimeout(start, 0));
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', schedule, { once: true });
+  else schedule();
 })();
 </script>
 </body>

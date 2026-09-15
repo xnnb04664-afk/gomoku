@@ -11,7 +11,7 @@ def main():
         errors = []
         desktop.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
         desktop.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
-        desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.122","build":123}'))
+        desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.124","build":125}'))
 
         desktop.goto("http://127.0.0.1:4173/", wait_until="networkidle")
         if os.environ.get("SAVE_SCREENSHOT") == "1":
@@ -25,8 +25,8 @@ def main():
         assert desktop.locator("h1").count() == 1
         assert desktop.locator('#siteNav a[href="/social/"]').count() == 1
         assert desktop.locator('.social-retention-note').inner_text().startswith("私聊消息会永久保存在云端数据库")
-        assert desktop.locator(".js-version").first.inner_text() == "v1.2.2"
-        assert desktop.locator(".js-build").first.inner_text() == "123"
+        assert desktop.locator(".js-version").first.inner_text() == "v1.2.4"
+        assert desktop.locator(".js-build").first.inner_text() == "125"
         assert desktop.locator("[data-demo-status]").get_attribute("aria-live") == "polite"
         assert "@media (prefers-reduced-motion: reduce)" in Path("official-site/styles.css").read_text(encoding="utf-8")
         headers = Path("official-site/_headers").read_text(encoding="utf-8")
@@ -39,7 +39,7 @@ def main():
         assert errors == [], errors
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
-        mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.122","build":123}'))
+        mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.124","build":125}'))
         mobile.goto("http://127.0.0.1:4173/", wait_until="networkidle")
         toggle = mobile.locator(".nav-toggle")
         assert toggle.is_visible()
