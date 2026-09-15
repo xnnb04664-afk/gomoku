@@ -98,7 +98,7 @@ function runPreflightChecks() {
       }
     }
 
-  for (const relativePath of ['js/app.js', 'js/app.min.js', 'js/account.js', 'js/account.min.js', 'js/replay.js', 'js/replay.min.js', 'js/settings.js', 'js/settings.min.js', 'js/online.js', 'js/online.min.js', 'js/social.js', 'js/social.min.js', 'js/voice.js', 'js/cross.js']) {
+  for (const relativePath of ['js/app.js', 'js/app.min.js', 'js/account.js', 'js/account.min.js', 'js/replay.js', 'js/replay.min.js', 'js/settings.js', 'js/settings.min.js', 'js/online.js', 'js/online.min.js', 'js/social.js', 'js/social.min.js', 'js/voice.js', 'js/cross.js', 'js/sky-hub.js', 'js/expedition.js']) {
       const scriptPath = path.join(ROOT_DIR, relativePath);
       if (!fs.existsSync(scriptPath)) {
         console.error(`\n❌ [发布致命拦截] 缺失应用脚本: ${relativePath}`);
@@ -395,9 +395,12 @@ try {
     'build_official_site.js',
     'bundle_single_file.js',
     'build_apk.js',
+    'deploy_worker.js',
     'index.html',
     'js/app.js',
     'js/app.min.js',
+    'js/sky-hub.js',
+    'js/expedition.js',
     'official-site/index.html',
     'official-site/privacy/index.html',
     'official-site/site.js',

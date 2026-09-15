@@ -4,7 +4,12 @@ const { execFileSync } = require('child_process');
 const { loadSecretIntoEnv } = require('./local_secret_store');
 
 const ROOT_DIR = __dirname;
-const CONFIG_PATH = path.join(ROOT_DIR, '.cloudflare_config.json');
+// The deployment config is intentionally kept outside Git.  A worktree may
+// point at the operator's existing local config without copying it into the
+// checkout (and without changing the main project directory).
+const CONFIG_PATH = path.resolve(
+  process.env.GOMOKU_CLOUDFLARE_CONFIG || path.join(ROOT_DIR, '.cloudflare_config.json'),
+);
 const WORKER_PATH = path.join(ROOT_DIR, 'backend', 'worker.js');
 const PAGES_BUILD_DIR = path.join(ROOT_DIR, 'pages_build');
 const PAGES_PROJECT_NAME = 'gomoku-api';
