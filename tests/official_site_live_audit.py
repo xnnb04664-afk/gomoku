@@ -6,13 +6,16 @@ Run with:
 Override GOMOKU_OFFICIAL_BASE_URL when checking a preview deployment.
 """
 
+import json
 import os
 import time
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 
 BASE_URL = os.environ.get("GOMOKU_OFFICIAL_BASE_URL", "https://gomoku-home.pages.dev").rstrip("/")
+VERSION = json.loads(Path("official-site/version.json").read_text(encoding="utf-8"))
 
 
 def assert_no_horizontal_overflow(page):
@@ -53,7 +56,7 @@ def mock_local_api(page):
             lambda route: route.fulfill(
                 status=200,
                 content_type="application/json",
-                body='{"code":0,"tag":"v1.0.125","build":126}',
+                body=json.dumps({"code": 0, "tag": VERSION["releaseTag"], "build": VERSION["versionCode"]}),
             ),
         )
 

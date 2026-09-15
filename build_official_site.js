@@ -20,6 +20,17 @@ function syncOfficialSiteVersion() {
   const publishTime = String(version.publishTime || '').trim();
   const homePath = path.join(outDir, 'index.html');
   let home = fs.readFileSync(homePath, 'utf8');
+  // Keep every public version badge in lockstep. The homepage has three
+  // slightly different markup shapes (strong, b, and a plain span), so the
+  // old text-specific replacements could silently leave stale badges behind.
+  home = home.replace(
+    /(<(?:strong|b|span)[^>]*class="js-version"[^>]*>)v[\d.]+(<\/(?:strong|b|span)>)/g,
+    `$1${display}$2`,
+  );
+  home = home.replace(
+    /(<(?:strong|b|span)[^>]*class="js-build"[^>]*>)\d+(<\/(?:strong|b|span)>)/g,
+    `$1${build}$2`,
+  );
   home = home.replace(/(<span>当前版本 <strong class="js-version">)v[\d.]+(<\/strong><\/span>)/, `$1${display}$2`);
   home = home.replace(/(<span>Build <strong class="js-build">)\d+(<\/strong><\/span>)/, `$1${build}$2`);
   home = home.replace(/(<span>GAME DOCK<\/span><span>当前版本 )v[\d.]+(<\/span>)/, `$1${display}$2`);

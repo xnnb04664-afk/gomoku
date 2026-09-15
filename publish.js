@@ -497,7 +497,10 @@ if (SHOULD_DEPLOY_CLOUDFLARE) {
   try {
     execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
     console.log('>>> 正在部署天空棋岛官方站（gomoku-home）...');
-    execSync('npx wrangler pages deploy official-site --project-name gomoku-home --commit-dirty=true', { cwd: ROOT_DIR, stdio: 'inherit' });
+    // Pages is configured with `master` as the production branch. Supplying
+    // the branch is required; omitting it creates a preview deployment even
+    // when the release itself was pushed to master.
+    execSync('npx wrangler pages deploy official-site --project-name gomoku-home --branch master --commit-dirty=true', { cwd: ROOT_DIR, stdio: 'inherit' });
     console.log('🎉 官方站 gomoku-home 部署成功！');
   } catch(e) {
     console.error('❌ Worker/Pages 部署失败，发布流程未完成：', e.message);

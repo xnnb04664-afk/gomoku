@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -5,6 +6,15 @@ from playwright.sync_api import sync_playwright
 
 
 BASE_URL = os.environ.get("GOMOKU_OFFICIAL_BASE_URL", "http://127.0.0.1:4173").rstrip("/")
+
+
+def expected_site_version():
+    version = json.loads(Path("official-site/version.json").read_text(encoding="utf-8"))
+    name = str(version["versionName"])
+    parts = name.split(".")
+    patch = int(parts[2]) if len(parts) == 3 else 0
+    display = f"v{parts[0]}.{max(0, patch // 10 - 10)}.{patch % 10}" if patch >= 100 else f"v{name}"
+    return version, display
 
 
 def open_page(page, url):
@@ -16,13 +26,15 @@ def open_page(page, url):
 
 
 def main():
+    version, display_version = expected_site_version()
+    api_body = json.dumps({"code": 0, "tag": version["releaseTag"], "build": version["versionCode"]})
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         desktop = browser.new_page(viewport={"width": 1365, "height": 900})
         errors = []
         desktop.on("console", lambda msg: errors.append(f"console:{msg.type}:{msg.text}") if msg.type == "error" else None)
         desktop.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
-        desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.125","build":126}'))
+        desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body=api_body))
 
         open_page(desktop, f"{BASE_URL}/")
         if os.environ.get("SAVE_SCREENSHOT") == "1":
@@ -36,8 +48,8 @@ def main():
         assert desktop.locator("h1").count() == 1
         assert desktop.locator('#siteNav a[href="/social/"]').count() == 1
         assert desktop.locator('.social-retention-note').inner_text().startswith("私聊消息会永久保存在云端数据库")
-        assert desktop.locator(".js-version").first.inner_text() == "v1.2.5"
-        assert desktop.locator(".js-build").first.inner_text() == "126"
+        assert desktop.locator(".js-version").all_inner_texts() == [display_version] * desktop.locator(".js-version").count()
+        assert desktop.locator(".js-build").all_inner_texts() == [str(version["versionCode"])] * desktop.locator(".js-build").count()
         assert desktop.locator("[data-demo-status]").get_attribute("aria-live") == "polite"
         assert "@media (prefers-reduced-motion: reduce)" in Path("official-site/styles.css").read_text(encoding="utf-8")
         headers = Path("official-site/_headers").read_text(encoding="utf-8")
@@ -58,7 +70,7 @@ def main():
         assert errors == [], errors
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
-        mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.125","build":126}'))
+        mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body=api_body))
         open_page(mobile, f"{BASE_URL}/")
         toggle = mobile.locator(".nav-toggle")
         assert toggle.is_visible()
