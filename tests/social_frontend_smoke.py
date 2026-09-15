@@ -151,6 +151,8 @@ def main():
         guest = browser.new_page(viewport={"width": 390, "height": 844})
         guest.route("https://*/api/**", api_handler)
         guest.goto(test_url, wait_until="domcontentloaded", timeout=30_000)
+        guest.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+        guest.evaluate("() => window.SkyIslandUI?.showGame()")
         guest.wait_for_selector("#cvs", state="visible")
         gate_result = guest.evaluate("window.openFriendsModal()")
         guest.wait_for_timeout(100)
@@ -196,6 +198,8 @@ def main():
             page.wait_for_load_state("networkidle", timeout=10_000)
         except PlaywrightTimeoutError:
             pass
+        page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+        page.evaluate("() => window.SkyIslandUI?.showGame()")
         page.wait_for_function("typeof window.hasRegisteredAccountSession === 'function' && window.hasRegisteredAccountSession()")
         page.evaluate("() => { window.showCustomConfirm = (_message, yes) => yes(); return true; }")
         page.evaluate("window.openFriendsModal()")

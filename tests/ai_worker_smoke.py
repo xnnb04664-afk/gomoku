@@ -34,6 +34,14 @@ def test_page(page, url, expected_inline):
         page.wait_for_load_state("networkidle", timeout=15_000)
     except PlaywrightTimeoutError:
         pass
+    # 官方首页先展示天空棋岛；单文件版可能没有大厅壳，直接保留原棋局入口。
+    page.wait_for_function(
+        "() => Boolean(document.querySelector('#skyLobby, #cvs'))",
+        timeout=15_000,
+    )
+    if page.locator("#skyLobby").count():
+        page.locator("#skyLobby").wait_for(state="visible", timeout=15_000)
+        page.evaluate("() => window.SkyIslandUI?.showGame()")
     page.locator("#cvs").wait_for(state="visible", timeout=10_000)
 
     result = page.evaluate(

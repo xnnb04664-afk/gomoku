@@ -69,6 +69,15 @@ if (fs.existsSync(crossPath)) {
   crossContent = fs.readFileSync(crossPath, 'utf8');
 }
 
+const expeditionPath = path.join(ROOT_DIR, 'js', 'expedition.js');
+const expeditionContent = fs.existsSync(expeditionPath) ? fs.readFileSync(expeditionPath, 'utf8') : '';
+
+const skyHubPath = path.join(ROOT_DIR, 'js', 'sky-hub.js');
+const skyHubContent = fs.existsSync(skyHubPath) ? fs.readFileSync(skyHubPath, 'utf8') : '';
+
+const skyStylePath = path.join(ROOT_DIR, 'js', 'sky-island.css');
+const skyStyleContent = fs.existsSync(skyStylePath) ? fs.readFileSync(skyStylePath, 'utf8') : '';
+
 const voicePath = path.join(ROOT_DIR, 'js', 'voice.js');
 let voiceContent = '';
 if (fs.existsSync(voicePath)) {
@@ -98,6 +107,18 @@ html = html.replace(
   /\s*<script defer src="js\/app\.min\.js"><\/script>/i,
   `\n  <script>\n${appContent.replace(/<\/script/gi, '<\\/script')}\n  </script>`
 );
+if (skyHubContent) {
+  html = html.replace(
+    /\s*<script defer src="js\/sky-hub\.js"><\/script>/i,
+    `\n  <script>\n${skyHubContent.replace(/<\/script/gi, '<\\/script')}\n  </script>`
+  );
+}
+if (skyStyleContent) {
+  html = html.replace(
+    /\s*<link rel="stylesheet" href="js\/sky-island\.css">/i,
+    `\n  <style id="sky-island-inline-style">\n${skyStyleContent.replace(/<\/style/gi, '<\\/style')}\n  </style>`
+  );
+}
 
 // 压缩库可能包含 </script> 字符串；内联时必须转义，否则浏览器会提前结束脚本标签。
 const escapeInlineScript = content => content.replace(/<\/script/gi, '<\\/script');
@@ -141,6 +162,7 @@ const inlineOptionalResources = [
   ,inlineResourceTag('social', '内联好友与私聊模块（登录或打开好友中心时载入）', socialContent)
   ,inlineResourceTag('voice', '内联房间语音模块（用户开启语音时载入）', voiceContent)
   ,inlineResourceTag('cross', '内联十字棋实验模式（打开实验棋盘时载入）', crossContent)
+  ,inlineResourceTag('expedition', '内联天空棋岛残局远征（打开远征时载入）', expeditionContent)
 ].join('');
 html = html.slice(0, styleStart) + inlineOptionalResources + '\n' + html.slice(styleStart);
 
@@ -166,4 +188,4 @@ fs.writeFileSync(OUTPUT_FILE, html.replace(/[ \t]+$/gm, ''), 'utf8');
 const stat = fs.statSync(OUTPUT_FILE);
 console.log(`✅ 单文件全功能版打包成功！`);
 console.log(`📦 文件路径: ${OUTPUT_FILE}`);
-console.log(`📏 文件大小: ${(stat.size / 1024).toFixed(2)} KB (包含全套UI、AI、6套换肤、9大干扰卡、命运神抽、果冻HUD、Web Audio合成音效与炸弹音频数据)`);
+console.log(`📏 文件大小: ${(stat.size / 1024).toFixed(2)} KB (包含晴空棋岛UI、AI、残局远征、联机社交与离线资源)`);

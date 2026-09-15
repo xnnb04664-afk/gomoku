@@ -26,6 +26,9 @@ def main():
             # 外部 CDN 不应阻止核心页面完成；记录状态后继续检查本地功能。
             pass
 
+        # 默认大厅首屏先展示天空棋岛；旧优化断言仍从标准棋局开始。
+        page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+        page.evaluate("() => window.SkyIslandUI?.showGame()")
         page.locator("#cvs").wait_for(state="visible", timeout=10_000)
         critical = page.evaluate(
             """
@@ -250,7 +253,9 @@ def main():
                 p: BLACK,
                 roundId: 'round_skill_result'
               });
-              await new Promise(resolve => setTimeout(resolve, 420));
+              // The refreshed board-first result drawer intentionally gives the
+              // winning line a short reading beat before it rises.
+              await new Promise(resolve => setTimeout(resolve, 920));
               if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
               onlineHeartbeatTimer = null;
               return {

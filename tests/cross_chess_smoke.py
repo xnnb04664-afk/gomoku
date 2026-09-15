@@ -16,6 +16,9 @@ def main():
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        # 十字棋属于实验风场；先离开默认大厅，再调用原有实验入口。
+        page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+        page.evaluate("() => window.SkyIslandUI?.showGame()")
         page.locator("#cvs").wait_for(state="visible", timeout=10_000)
         page.evaluate("() => window.openCrossChess()")
         page.wait_for_selector("#crossChessModal.show", timeout=10_000)

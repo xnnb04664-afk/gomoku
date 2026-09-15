@@ -4009,7 +4009,7 @@
         resultModalTimer = null;
         if (generation !== resultModalGeneration || !isOver) return;
         showGameResultModal(options);
-      }, 350);
+      }, 820);
     }
 
     function cancelPendingGameResultModal() {
@@ -4213,22 +4213,16 @@
       const winnerName = `${getPlayerNameByColor(winnerColor)} (${colorTag})`;
 
       if (gameMode === 'pvp') {
-        // 👥 双人同屏：两个玩家共用一部手机，始终展示获胜方专属凯旋特效
-        triggerVictoryVFX();
+        // 先保留终局棋形与五连日线，再从底部给出结算。
         playSkillSound('victory');
-        showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
         scheduleGameResultModal({ isPvp: true, winnerName });
       } else if (isPlayerWin) {
-        // 🎉 胜利方视角：大调凯旋专属胜利音效 + 金色五彩烟花
-        triggerVictoryVFX();
+        // 胜利反馈集中在棋盘本身，避免彩纸和提示横幅争抢注意力。
         playSkillSound('victory');
-        showSkillBanner('👑', '【五子连珠】绝杀获胜！', customWinReason || `恭喜【${winnerName}】达成五连珠，获得最终胜利！`);
         scheduleGameResultModal({ isWin: true, winnerName });
       } else {
-        // 💔 失败方视角：小调幽默哀叹专属失败音效 + 局势震颤
-        triggerBoardShake(false);
+        // 失败也保留棋形，不震屏、不用第二层横幅覆盖关键落点。
         playSkillSound('defeat');
-        showSkillBanner('💔', '【棋局惜败】胜败乃兵家常事！', customWinReason || `【${winnerName}】达成五连珠！胜不骄败不馁，再战一局必定逆袭！`);
         scheduleGameResultModal({ isWin: false, winnerName });
       }
 
@@ -4722,38 +4716,19 @@
       }
     }
 
-    // 晴空浮岛草坪版是官方默认版本，默认始终展示青草绿地与纯黑白棋子
-    const urlParams = new URLSearchParams(window.location.search);
-    const urlTheme = urlParams.get('theme');
-    // 若 URL 明确传参或当前 session 切换过才生效，否则始终呈现官方纯净草坪版
-    let activeThemeKey = urlTheme || sessionStorage.getItem('gomoku_active_theme') || 'default';
-    if (activeThemeKey === 'default') {
-      try { localStorage.removeItem('gomoku_active_theme'); } catch(e){}
-    }
+    // 产品只保留官方晴空浮岛草坪视觉。旧版本留下的 URL / 本地主题状态全部忽略并清理。
+    let activeThemeKey = 'default';
+    try {
+      localStorage.removeItem('gomoku_active_theme');
+      sessionStorage.removeItem('gomoku_active_theme');
+    } catch(e){}
 
-    function switchThemeSeamless(key) {
-      activeThemeKey = key;
-      sessionStorage.setItem('gomoku_active_theme', key);
-      if (key === 'default') {
-        try { localStorage.removeItem('gomoku_active_theme'); } catch(e){}
-      } else {
-        localStorage.setItem('gomoku_active_theme', key);
-      }
-      document.body.className = key === 'default' ? '' : 'theme-' + key.replace('_', '-');
+    function switchThemeSeamless() {
+      activeThemeKey = 'default';
       closeThemeModal();
       invalidateBoardCache();
       draw();
-      
-      const names = {
-        'default': '晴空浮岛草坪版 🌿',
-        'sweet_romance': '草莓蜜桃恋爱版 💖',
-        'zen_dark': '极简禅意暗黑版 禅',
-        'neo_trad': '新中式宣纸榧木版 📜',
-        'luxury_glass': '现代奢华毛玻璃版 ✨',
-        'clean_ios': 'Clean iOS 极简暖白手机版 📱'
-      };
-      // 优雅微提示 (使用果冻 HUD，不遮挡木牌)
-      showGameNotice(`✨ 已换装: ${names[key] || key}`, false);
+      showGameNotice('当前使用官方晴空浮岛草坪视觉', false);
       updateUI();
     }
 
@@ -5272,6 +5247,9 @@
     let cachedBoardH = 0;
     let cachedPiecesCanvas = null;
     let cachedPiecesKey = '';
+    // 标准棋局的幽灵落子只存在于渲染层，不进入 board/history，也不会触及 P2P 状态。
+    let boardPreviewPoint = null;
+    let boardPointerId = null;
 
     function invalidateBoardCache() {
       cachedBoardKey = '';
@@ -5297,12 +5275,7 @@
 
       const origCtx = ctx;
       ctx = bCtx;
-      if (activeThemeKey === 'zen_dark') drawZenDarkBoard();
-      else if (activeThemeKey === 'sweet_romance') drawSweetRomanceBoard();
-      else if (activeThemeKey === 'neo_trad') drawNeoTradBoard();
-      else if (activeThemeKey === 'luxury_glass') drawLuxuryGlassBoard();
-      else if (activeThemeKey === 'clean_ios') drawCleanIosBoard();
-      else drawHandmadeGrassBoard();
+      drawHandmadeGrassBoard();
       ctx = origCtx;
 
       cachedBoardKey = activeThemeKey;
@@ -5405,6 +5378,24 @@
       // 2. 棋子与复盘序号使用离屏缓存；动态标记和粒子特效仍在主画布绘制 (零插值模糊)。
       const piecesBitmap = getCachedPiecesBitmap();
       if (piecesBitmap) ctx.drawImage(piecesBitmap, 0, 0, cWidth, cHeight);
+
+      // 棋息预览：按下或悬停时先显示半透明棋子，松手才真正落子。
+      if (!isReplayMode && !isOver && boardPreviewPoint && !activeSkill &&
+          board[boardPreviewPoint.r] && board[boardPreviewPoint.r][boardPreviewPoint.c] === EMPTY) {
+        const previewX = paddingX + (boardPreviewPoint.c + 0.5) * gridX;
+        const previewY = paddingY + (boardPreviewPoint.r + 0.5) * gridY;
+        const pulse = (Math.sin(performance.now() / 120) + 1) / 2;
+        ctx.save();
+        ctx.globalAlpha = 0.46;
+        drawThemedStone(previewX, previewY, radius, turn, 'default');
+        ctx.globalAlpha = 0.45 + pulse * 0.35;
+        ctx.beginPath();
+        ctx.arc(previewX, previewY, radius * (1.34 + pulse * 0.1), 0, Math.PI * 2);
+        ctx.strokeStyle = '#f2bf4d';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
 
       // 3. 最后一手落子标记 (采用五子棋行业公认标准：中心经典高反差正红圆点 + 纯白轮廓，全主题全棋色通用)
       if (!isReplayMode) {
@@ -5709,40 +5700,98 @@
       }
     }
 
-    cvs.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      if (isReplayMode) return; // 复盘模式下禁止在主棋盘落子
-      if (isOver) return;
-      if (gameMode === 'ai' && turn !== BLACK) return;
-      if (gameMode === 'online') {
-        if (turn !== myOnlineColor) {
-          showGameNotice("⏳ 轮到对手走棋，请稍候...", false);
-          return;
-        }
-        if (!conn || !conn.open) {
-          showGameNotice("⚠️ 联机连接未就绪或已中断，无法落子！请稍候自动重连...", true);
-          return;
-        }
-      }
-
+    function getBoardPointFromPointer(e) {
       const rect = cvs.getBoundingClientRect();
       const clickX = (e.clientX - rect.left) * (cWidth / rect.width);
       const clickY = (e.clientY - rect.top) * (cHeight / rect.height);
-      
       const col = Math.floor((clickX - paddingX) / gridX);
       const row = Math.floor((clickY - paddingY) / gridY);
-      
-      if (row >= 0 && row < 15 && col >= 0 && col < 15) {
-        // 如果正处于技能选点施法模式，优先处理施法
-        if (activeSkill) {
-          handleSkillClick(row, col);
-          return;
-        }
-        if (board[row][col] === EMPTY) {
-          makeMove(row, col, turn);
-        }
+      return row >= 0 && row < 15 && col >= 0 && col < 15 ? { row, col } : null;
+    }
+
+    function canPreviewLocalMove() {
+      if (isReplayMode || isOver) return false;
+      if (gameMode === 'ai' && turn !== BLACK) return false;
+      if (gameMode === 'online' && (turn !== myOnlineColor || !conn || !conn.open)) return false;
+      return true;
+    }
+
+    function setBoardPreview(point) {
+      const next = point && board[point.row] && board[point.row][point.col] === EMPTY
+        ? { r: point.row, c: point.col }
+        : null;
+      if ((next?.r ?? -1) === (boardPreviewPoint?.r ?? -1) && (next?.c ?? -1) === (boardPreviewPoint?.c ?? -1)) return;
+      boardPreviewPoint = next;
+      if (next) cvs.dataset.previewPoint = `${next.r},${next.c}`;
+      else delete cvs.dataset.previewPoint;
+      draw();
+    }
+
+    cvs.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const point = getBoardPointFromPointer(e);
+      if (!point) return;
+
+      // 技能选点保持原来的即时操作语义，避免影响联机卡牌协议。
+      if (activeSkill) {
+        handleSkillClick(point.row, point.col);
+        return;
+      }
+      if (!canPreviewLocalMove()) {
+        if (gameMode === 'online' && turn !== myOnlineColor) showGameNotice('轮到对手走棋，请稍候…', false);
+        else if (gameMode === 'online' && (!conn || !conn.open)) showGameNotice('连接正在恢复，棋盘进度已保留', true);
+        return;
+      }
+      if (board[point.row][point.col] !== EMPTY) {
+        triggerSkillVFX('invalid_click', point.row, point.col);
+        return;
+      }
+      boardPointerId = e.pointerId;
+      cvs.setPointerCapture?.(e.pointerId);
+      setBoardPreview(point);
+    }, { passive: false });
+
+    cvs.addEventListener('pointermove', (e) => {
+      if (activeSkill || !canPreviewLocalMove()) return;
+      if (e.pointerType !== 'mouse' && e.pointerId !== boardPointerId) return;
+      if (e.pointerId === boardPointerId) e.preventDefault();
+      setBoardPreview(getBoardPointFromPointer(e));
+    }, { passive: false });
+
+    cvs.addEventListener('pointerup', (e) => {
+      if (e.pointerId !== boardPointerId) return;
+      e.preventDefault();
+      const point = getBoardPointFromPointer(e);
+      const preview = boardPreviewPoint;
+      boardPointerId = null;
+      cvs.releasePointerCapture?.(e.pointerId);
+      boardPreviewPoint = null;
+      delete cvs.dataset.previewPoint;
+      if (point && preview && point.row === preview.r && point.col === preview.c &&
+          board[point.row][point.col] === EMPTY && canPreviewLocalMove()) {
+        makeMove(point.row, point.col, turn);
+        try { navigator.vibrate?.(8); } catch (_) {}
+      } else {
+        draw();
       }
     }, { passive: false });
+
+    const cancelBoardPointer = (e) => {
+      if (boardPointerId !== null && (!e || e.pointerId === boardPointerId)) {
+        boardPointerId = null;
+        boardPreviewPoint = null;
+        delete cvs.dataset.previewPoint;
+        draw();
+      }
+    };
+    cvs.addEventListener('pointercancel', cancelBoardPointer, { passive: false });
+    cvs.addEventListener('pointerleave', (e) => {
+      if (boardPointerId === null && e.pointerType === 'mouse') {
+        boardPreviewPoint = null;
+        delete cvs.dataset.previewPoint;
+        draw();
+      }
+    }, { passive: true });
 
     // 底部按键绑定
     document.getElementById('btnOpenChat').onclick = openChatDrawer;
@@ -6567,13 +6616,8 @@
       }
     });
     
-    // 初始化
-    if (activeThemeKey && activeThemeKey !== 'default') {
-      document.body.className = 'theme-' + activeThemeKey.replace('_', '-');
-    } else {
-      document.body.className = '';
-      activeThemeKey = 'default';
-    }
+    // 初始化：只锁定官方视觉，不覆盖大厅/棋局等页面状态 class。
+    activeThemeKey = 'default';
     restoreGameStateIfAny();
     renderQuickPhrases();
     drawRandomThreeCards();

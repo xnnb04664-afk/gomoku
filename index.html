@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>五子棋 · 【晴空浮岛草坪对决】🌐🎴💬🌿</title>
+  <title>天空棋岛 · 云上活棋谱</title>
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
   <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="stylesheet" href="js/sky-island.css">
   <!-- 首屏只保留页面骨架；联机、音频和大图资源在真正需要时才加载。 -->
   <script id="gomokuResourceLoader">
     (() => {
@@ -25,6 +26,7 @@
         ,social: { local: 'js/social.min.js' }
         ,voice: { local: 'js/voice.js' }
         ,cross: { local: 'js/cross.js' }
+        ,expedition: { local: 'js/expedition.js' }
       };
       const promises = Object.create(null);
 
@@ -42,6 +44,7 @@
         if (name === 'social') return Boolean(window.GomokuSocial && typeof window.GomokuSocial.open === 'function');
         if (name === 'voice') return Boolean(window.GomokuVoice && typeof window.GomokuVoice.toggle === 'function');
         if (name === 'cross') return Boolean(window.GomokuCross && typeof window.GomokuCross.open === 'function');
+        if (name === 'expedition') return Boolean(window.GomokuExpedition && typeof window.GomokuExpedition.open === 'function');
         if (name === 'online') return window.__GOMOKU_ONLINE_READY__ === true;
         return false;
       }
@@ -95,6 +98,13 @@
       window.ensureGomokuFeature = ensure;
       window.openFriendsModal = function() {
         return ensure('social').then(() => window.GomokuSocial.open());
+      };
+      window.openSkyExpedition = function() {
+        return ensure('expedition').then(() => window.GomokuExpedition.open()).catch(error => {
+          if (typeof window.showGameNotice === 'function') window.showGameNotice('远征航线加载失败，请刷新后重试', true);
+          console.warn('[expedition resource]', error?.message || error);
+          return false;
+        });
       };
       // 官网使用 /play/#friends 作为好友中心深链接。社交模块是延迟加载的，
       // 因此等核心脚本完成后再打开；游客会自然进入登录引导。
@@ -548,43 +558,6 @@
       padding: env(safe-area-inset-top, 4px) 6px env(safe-area-inset-bottom, 6px) 6px;
       transition: background 0.3s ease, color 0.3s ease;
     }
-
-    /* 🎨 多主题动态切换背景类 (下棋中无缝换肤) */
-    body.theme-zen-dark { background: #09090b !important; color: #f4f4f5 !important; }
-    body.theme-zen-dark .cloud { display: none; }
-    body.theme-zen-dark .signs-row .sign-board { background: #18181b; border-color: #3f3f46; color: #fff; }
-    body.theme-zen-dark .signs-row .sign-status { color: #fff; }
-    body.theme-zen-dark .main-chat-box { background: rgba(24,24,27,0.85); border-color: #3f3f46; }
-    body.theme-zen-dark .main-chat-header { color: #a1a1aa; }
-    body.theme-zen-dark .main-chat-line { color: #fff; }
-
-    body.theme-sweet-romance { background: radial-gradient(circle at 50% 20%, #341f38 0%, #1c1124 100%) !important; color: #fff !important; }
-    body.theme-sweet-romance .cloud { display: none; }
-    body.theme-sweet-romance .signs-row .sign-board { background: rgba(255,255,255,0.15); border-color: #ff8fa3; color: #fff; }
-    body.theme-sweet-romance .signs-row .sign-status { color: #fbcfe8; }
-    body.theme-sweet-romance .main-chat-box { background: rgba(255,255,255,0.15); border-color: #ff758c; }
-    body.theme-sweet-romance .main-chat-header { color: #fbcfe8; }
-    body.theme-sweet-romance .main-chat-line { color: #fff; }
-
-    body.theme-neo-trad { background: #eae2d5 !important; color: #2c221a !important; }
-    body.theme-neo-trad .cloud { display: none; }
-    body.theme-neo-trad .signs-row .sign-board { background: #fbf8f2; border-color: #dcb374; }
-    body.theme-neo-trad .signs-row .sign-status { color: #4a3b2c; }
-    body.theme-neo-trad .main-chat-box { background: #f7f1e6; border-color: #dcb374; }
-
-    body.theme-luxury-glass { background: #0b0c10 !important; color: #fff !important; }
-    body.theme-luxury-glass .cloud { display: none; }
-    body.theme-luxury-glass .signs-row .sign-board { background: rgba(99,102,241,0.15); border-color: #6366f1; color: #fff; }
-    body.theme-luxury-glass .signs-row .sign-status { color: #818cf8; }
-    body.theme-luxury-glass .main-chat-box { background: rgba(16,18,27,0.85); border-color: #6366f1; }
-    body.theme-luxury-glass .main-chat-line { color: #fff; }
-
-    body.theme-clean-ios { background: #f2f2f7 !important; color: #1d1d1f !important; }
-    body.theme-clean-ios .cloud { display: none; }
-    body.theme-clean-ios .signs-row .sign-board { background: #ffffff; border-color: #d1d1d6; }
-    body.theme-clean-ios .signs-row .sign-status { color: #1d1d1f; }
-    body.theme-clean-ios .main-chat-box { background: #ffffff; border-color: #e5e5ea; }
-
 
     /* 纯净漂浮白云 (置底并彻底禁用触控拦截，绝不遮挡任何按键) */
     .cloud, .cloud::before, .cloud::after {
@@ -2253,7 +2226,7 @@
         <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;">💬 实时对局聊天框</span>
         <div style="display:flex; align-items:center; gap:5px; flex-shrink:0;">
           <span style="background:linear-gradient(135deg,#ec4899,#db2777); color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(219,39,119,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); openFeedbackModal();">💬 反馈</span>
-          <span style="background:linear-gradient(135deg,#ff6b81,#ee5253); color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; box-shadow:0 2px 6px rgba(238,82,83,0.3); display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); openThemeModal();">🎨 风格</span>
+          <span style="background:#213a4a; color:#fff; padding:3px 8px; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:2px; white-space:nowrap; min-height:20px; line-height:1.2;" onclick="event.stopPropagation(); window.SkyIslandUI?.openBulletin();">☁️ 岛讯</span>
           <span style="white-space:nowrap;">📜 展开 ➔</span>
         </div>
       </div>
@@ -3298,6 +3271,7 @@
     </div>
   </div>
 
+  <script defer src="js/sky-hub.js"></script>
   <script defer src="js/app.min.js"></script>
 </body>
 </html>

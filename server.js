@@ -14,11 +14,6 @@ const HOST = '127.0.0.1';
 const ROOT_DIR = path.resolve(__dirname);
 const PUBLIC_ROOT_FILES = new Set([
   'index.html',
-  'theme1_zen_dark.html',
-  'theme2_neo_traditional.html',
-  'theme3_luxury_glass.html',
-  'theme4_clean_ios.html',
-  'theme5_sweet_romance.html',
   '五子棋大师_单文件版.html',
   'favicon.png'
 ]);

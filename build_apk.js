@@ -131,7 +131,8 @@ const runtimeIndexHtml = injectAiWorkerSource(
 fs.writeFileSync(path.join(TEMP_BUILD, 'assets', 'index.html'), runtimeIndexHtml, 'utf8');
 fs.writeFileSync(path.join(SRC_DIR, 'assets', 'index.html'), runtimeIndexHtml, 'utf8');
 
-// 同步完整的 js, img 目录到 assets，保证本地微型服务器绝对不报 404
+// 同步完整的 js, img 目录到 assets，保证本地微型服务器绝对不报 404。
+// 产品已统一为官方晴空视觉，不再复制独立主题页面。
 ['js', 'img'].forEach(dir => {
   const srcD = path.join(ROOT_DIR, dir);
   if (fs.existsSync(srcD)) {
@@ -140,13 +141,6 @@ fs.writeFileSync(path.join(SRC_DIR, 'assets', 'index.html'), runtimeIndexHtml, '
   }
 });
 
-['theme1_zen_dark.html', 'theme2_neo_traditional.html', 'theme3_luxury_glass.html', 'theme4_clean_ios.html', 'theme5_sweet_romance.html'].forEach(f => {
-  const p = path.join(ROOT_DIR, f);
-  if (fs.existsSync(p)) {
-    fs.copyFileSync(p, path.join(TEMP_BUILD, 'assets', f));
-    fs.copyFileSync(p, path.join(SRC_DIR, 'assets', f));
-  }
-});
 // 不再用未内嵌的母本覆盖 Android assets；上面的 runtimeIndexHtml 才是可热更新的完整页面。
 
 console.log('>>> [3/7] 编译 Android 资源 (aapt2 compile & link)...');
