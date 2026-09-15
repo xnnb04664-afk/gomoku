@@ -16,8 +16,8 @@ def main():
         desktop.goto("http://127.0.0.1:4173/", wait_until="networkidle")
         if os.environ.get("SAVE_SCREENSHOT") == "1":
             desktop.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-home.png", full_page=True)
-        assert "一盘棋" in desktop.title()
-        assert desktop.locator("h1").inner_text().startswith("一盘棋")
+        assert "天空棋岛" in desktop.title()
+        assert desktop.locator("h1").inner_text().startswith("让下一手")
         assert desktop.locator('meta[name="description"]').get_attribute("content")
         assert desktop.locator('meta[name="robots"]').get_attribute("content") == "index,follow"
         assert desktop.locator('link[rel="canonical"]').get_attribute("href") == "https://gomoku-home.pages.dev/"
@@ -71,9 +71,10 @@ def main():
                 assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
             if path == "/play/":
                 assert "openFriendsFromHash" in page.content()
-                assert page.locator("#gameSocialDock .game-social-dock-grid button").count() == 8
-                assert "亲密关系" in (page.locator("#btnGameFriends").get_attribute("aria-label") or "")
-                assert page.locator("#btnGameSettings").count() == 1
+                assert page.locator("#skyLobby [data-sky-nav]").count() == 4
+                assert page.locator("#skyLobby [data-sky-action='expedition']").count() == 1
+                assert "今日岛讯" in page.locator("#skyLobby").inner_text()
+                assert page.locator("#gameSocialDock").count() == 1
                 assert page.locator('.official-return-strip a[href="/social/"]').count() == 1
             page.close()
 
