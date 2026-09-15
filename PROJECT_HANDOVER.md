@@ -1290,7 +1290,17 @@ node publish.js
 - **部署与验收**：官网最新生产部署预览为 `https://f83efb29.gomoku-home.pages.dev`，稳定域名 `https://gomoku-home.pages.dev` 已返回 `/api/site-version = v1.0.123 / Build 124`；首页静态回退包含 8 个八宫格卡片，帮助/好友/隐私页均返回 HTTP 200。`python tests/official_site_smoke.py`、320px 窄屏检查、`node --check official-site/site.js` 和 `git diff --check` 通过。
 - **边界**：官网只是当前游戏的说明和入口，不虚构已开放的支付功能；真实充值仍关闭。官网 API 仍通过 `gomoku-api.pages.dev`，独立 Worker 版本接口未配置 GitHub 读取密钥时的 503 不影响 Pages 主出口。
 
+## 五十七、天空棋岛前端竖切片与默认风格收敛（2026-09-15，官网已部署）
+
+- **前端重做**：新增统一的“天空棋岛 · 云上活棋谱”大厅，主动作是继续/开始远征，快速对局、好友云桥、实验风场使用抽屉入口，一级导航收敛为游戏、好友、棋谱、我的；标准棋局保留棋盘主角、棋息反馈、最后一手、胜负线与结果层，移动端保持单屏触控布局。
+- **远征竖切片**：新增本地残局远征模块，包含 6 个普通棋台与 1 个首领棋台；通过懒加载接入，不改标准 AI、P2P、好友社交或十字棋协议。
+- **风格边界**：删除五套可选主题页面及 Android 主题副本，只保留官方默认晴空浮岛草坪视觉；旧八宫格 DOM 保留为兼容层，新大厅作为产品主表面。
+- **提交与云端留档**：隔离分支 `feature/sky-island-vslice` 提交 `8d4461a`，已推送私有 origin；主目录 `D:\小游戏\五子棋` 未修改、未合并。
+- **回归**：`optimization_smoke.py`、`ai_worker_smoke.py`、`cross_chess_smoke.py`、`lazy_feature_smoke.py`、`sky_island_vslice_smoke.py`、`game_social_dock_smoke.py`、`game_social_variants_smoke.py`、`online_match_race_smoke.py`、`online_transport_smoke.py`、`p2p_recovery_smoke.py`、`social_frontend_smoke.py`、`android_splash_smoke.py` 与 `official_site_smoke.py` 通过；Node/Python 语法检查和 `git diff --check` 通过。
+- **官网部署**：已将 `official-site` 部署到 Pages 生产分支，预览 `https://a06da0bd.gomoku-home.pages.dev`，稳定地址 `https://gomoku-home.pages.dev/`；线上 `/play/` 移动冒烟通过，四项一级导航存在、快速对局抽屉可用、无横向溢出和页面错误。
+- **版本边界**：线上 `/api/site-version` 当前返回 `tag=v1.0.125、build=124`，与本地旧 `version.json`/后端版本存在漂移；本轮未改 Worker、D1、APK、GitHub Release 或版本号，后续需单独确认版本元数据后再处理。
+
 ---
-*交接文档最后更新时间：2026年9月12日*
+*交接文档最后更新时间：2026年9月15日*
 *当前工程正式版本为 v1.0.123 (Build 124，界面显示 v1.2.3)；已完成 D1 备份、Worker/Pages/官网部署和私有 GitHub Release。真实充值仍关闭，VPS 不参与联机。*
 *当前工程状态：下载票据保护、客户端防篡改、天梯榜性能优化、统一密码策略、修改密码、满盘和棋、联机神抽额度与云端和棋记录、MQTT/WebRTC 联机稳定性、AI/Canvas/联机安全重点优化、全端 UI 精细化排查、联机终局/重开/悔棋/状态显示修复、Refresh Token 自动续期、全服匹配自动续期与授权错误提示、手机 TXT 导出、双方网络状态/延迟显示、联机昵称同步兜底、Pages 主出口优先与 Worker 容灾、手机端图标设计提示词、棋子超清重构与全工程视觉舒适度拉网排查、默认棋子纯黑白样式确认、手机端应用图标替换、账号登录网络路径优化、更新检测可靠性修复、五子连珠终局后悔棋继续对弈全模式适配、全工程深层排查与空安全加固、移动端 Web Worker/bitboard AI 异步性能优化、更新路由与 D1 冷启动隔离、干扰牌/大爆炸历史记录防污染与专业推演复盘引擎深度重构、跨端匹配 ready 闸门、双端 join_ready/join_confirmed 进房确认、MQTT 多节点错峰汇合、匹配轮询去重、match_id 幂等重试、D1 匹配队列索引与限频清理、API 出口后台预热、线上 Worker/Pages 入口恢复、终局待确认事务机制与胜后悔棋不计对局/天梯落库、最强大师 AI v2、AI v3 根节点战术候选与威胁空间搜索、统一快速引擎回退、移动端 Worker 威胁深度传递、情侣动漫头像资源轻量化、榜单头像加载闸门与懒加载、P2P/MQTT 可靠业务消息层、低延迟直连优先、TURN 非阻塞建链、网络状态加速刷新与断网自动重连、P2P 心跳按实际链路测量、TURN/直连线路识别、延迟样本去污染、高 RTT 线路自动重选、WiFi/流量切换自愈、双端进房状态一致性、项目自有 Durable Object 房间中继、WebSocket 主信令、公共 MQTT 仅保留旧版迁移/自动化测试开关和可重复 Cloudflare 部署流程均已完成或按本交接文档状态维护。普通客户端发版默认不重复部署 Cloudflare；只有修改后端 Worker、DO、D1、Pages 配置或更新中转/票据逻辑时才执行一次显式部署。后续代码更新先运行完整回归，再使用仓库外正式签名密钥执行 `node publish.js`。*
