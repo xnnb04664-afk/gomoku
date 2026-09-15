@@ -1483,3 +1483,13 @@ node publish.js
 - **线上验收**：首页、`/help/`、`/privacy/`、`/social/`、`/play/` 和 `/api/site-version` 均 HTTP 200；版本接口返回 `{"code":0,"tag":"v1.0.125","build":126}`。`python tests/official_site_live_audit.py` 通过，覆盖桌面/390px 导航、网页版八宫格、好友页 iframe 和横向溢出检查。
 - **本地验收**：`python tests/official_site_smoke.py` 通过，覆盖演示棋盘落子/重置、滚动揭示动画、320px/390px 无横向溢出、帮助/隐私/好友/网页版路由和控制台错误检查；已用 Playwright 截图复核首页与移动端棋盘页。
 - **发布边界**：本轮只部署 `gomoku-home` Pages（包含该项目既有的静态资源与 Pages 路由），未部署独立 backend Worker、未执行 D1 迁移、未创建新的 GitHub Release、未重新发布 APK。主目录 `D:\小游戏\五子棋` 未合入隔离分支；后续网站改动仍须显式暂存，禁止用 `git add .` 带入截图或临时文件。
+
+
+## 六十七、本地 v1.0.125 合并后构建与发布前审计（2026-09-16，未上线）
+
+本轮在隔离分支完成 `origin/master` 合并后的版本收敛，当前 merge commit 为 `75262e0`，内部版本统一为 `v1.0.125 (Build 126)`，界面显示 `v1.2.5`。根页面、Android WebView 页面、压缩脚本、官网 `/play/`、单文件版和 APK 均已按同一版本重新生成；`official-site/play/` 是可重建的 ignored 构建产物，不依赖手工提交。
+
+- **APK 候选**：`五子棋.apk` 为 `1,133,127 bytes`，SHA-256 为 `39E9006DAEBF8CD34474E0736367CA5C766542E66A6180870D4B156DFE6A12B8`；`versionName=1.0.125`、`versionCode=126`，包含 Sky Island 必需资源且不含 legacy `theme1..5`，v1/v2/v3 签名通过，证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **官网版本源**：`official-site/_worker.js` 的 `/api/site-version` 由构建时从 `version.json` 同步的静态常量提供，避免旧公网 API 覆盖官网版本；下载票据路由仍使用远端 API。发布脚本默认推当前分支、只暂存显式文件，并禁止 Release 创建失败时自动 `--clobber`。
+- **本地回归**：官网静态 smoke、live audit、Wrangler Worker smoke、社交/公告/Android 开屏与生命周期、APK manifest、AI hotpath、AI Worker、Canvas 合帧、优化、十字棋、懒加载、Sky Island、社交 Dock、功能面板、语音和联机禁用公共 MQTT 均通过；Node/Python 语法及 `git diff --check` 通过。
+- **发布边界**：本轮未执行 `publish.js`，未 push、未创建 GitHub Release、未部署 Cloudflare Worker/D1/Pages、未安装到手机或 MuMu；主目录 `D:\小游戏\五子棋` 未合入本分支。公网旧版本漂移仍需后续获得明确部署授权后再统一线上 API、Pages 静态资源和 Release 资产。

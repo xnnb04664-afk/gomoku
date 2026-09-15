@@ -12,20 +12,23 @@ function readArg(name) {
   return value ? value.slice(prefix.length).trim() : '';
 }
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log('用法：node publish.js [--deploy-cloudflare] [--target-branch=master]');
+  console.log('用法：node publish.js [--deploy-cloudflare] [--target-branch=<branch>] [--allow-release-overwrite]');
   console.log('默认：构建 APK/单文件版、提交推送并发布 GitHub Release，不部署 Cloudflare 生产环境。');
   console.log('显式部署：追加 --deploy-cloudflare，或设置 GOMOKU_DEPLOY_CLOUDFLARE=1。');
-  console.log('发布目标分支默认是 master；从隔离工作树发布时请显式设置 GOMOKU_ALLOW_NONMASTER_RELEASE=1。');
+  console.log('发布目标分支默认是当前分支；跨分支发布必须同时显式指定 --target-branch 与 GOMOKU_ALLOW_NONMASTER_RELEASE=1。');
+  console.log('已有 Release 不会自动覆盖；确需补传时追加 --allow-release-overwrite。');
   process.exit(0);
 }
 const SHOULD_DEPLOY_CLOUDFLARE = process.argv.includes('--deploy-cloudflare')
   || String(process.env.GOMOKU_DEPLOY_CLOUDFLARE || '').trim() === '1';
-const TARGET_BRANCH = readArg('--target-branch') || String(process.env.GOMOKU_PUBLISH_BRANCH || 'master').trim() || 'master';
+const currentBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+const TARGET_BRANCH = readArg('--target-branch') || String(process.env.GOMOKU_PUBLISH_BRANCH || currentBranch).trim() || currentBranch;
 if (!/^[A-Za-z0-9._/-]+$/.test(TARGET_BRANCH) || TARGET_BRANCH.startsWith('-') || TARGET_BRANCH.includes('..')) {
   throw new Error(`发布安全门禁拦截：目标分支名不安全：${TARGET_BRANCH}`);
 }
-const currentBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
 const allowNonMasterRelease = String(process.env.GOMOKU_ALLOW_NONMASTER_RELEASE || '').trim() === '1';
+const ALLOW_RELEASE_OVERWRITE = argv.has('--allow-release-overwrite')
+  || String(process.env.GOMOKU_ALLOW_RELEASE_OVERWRITE || '').trim() === '1';
 if (currentBranch !== TARGET_BRANCH && !allowNonMasterRelease) {
   throw new Error(`发布安全门禁拦截：当前分支 ${currentBranch} 不等于目标分支 ${TARGET_BRANCH}。从隔离工作树发布请显式设置 GOMOKU_ALLOW_NONMASTER_RELEASE=1，避免误推送。`);
 }
@@ -206,6 +209,8 @@ function runAllThemeSyntaxChecks() {
   }
   execSync('node --check deploy_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check publish.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  execSync('node --check build_official_site.js', { cwd: ROOT_DIR, stdio: 'pipe' });
+  execSync('node --check official-site/_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check build_ai_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check js/ai_fast.js', { cwd: ROOT_DIR, stdio: 'pipe' });
   execSync('node --check js/ai_worker.js', { cwd: ROOT_DIR, stdio: 'pipe' });
@@ -265,12 +270,14 @@ function formatDisplayVersionName(versionName) {
 }
 const displayVersionTag = formatDisplayVersionName(newName);
 const htmlFiles = [
-  'index.html'
+  'index.html',
+  path.join('android_src', 'assets', 'index.html')
 ];
 htmlFiles.forEach(f => {
   const fp = path.join(ROOT_DIR, f);
   if (fs.existsSync(fp)) {
     let c = fs.readFileSync(fp, 'utf8');
+    c = c.replace(/data-build-version="v[0-9.]+"/g, 'data-build-version="v' + newName + '"');
     c = c.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
     c = c.replace(/id="appVersionDisplay"[^>]*>v[\d\.]+<\/(?:div|span)>/g, `id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">${displayVersionTag}</div>`);
     c = c.replace(/id="feedbackAppVer">v[\d\.]+<\/span>/g, `id="feedbackAppVer">${displayVersionTag}</span>`);
@@ -395,10 +402,16 @@ try {
     'official-site/privacy/index.html',
     'official-site/site.js',
     'official-site/styles.css',
+    'official-site/_worker.js',
     'official-site/version.json',
     'pages_build/_worker.js',
     'publish.js',
+    'tests/game_feature_panel_inspect.py',
+    'tests/game_social_variants_smoke.py',
+    'tests/official_site_live_audit.py',
     'tests/official_site_smoke.py',
+    'tests/official_site_worker_smoke.py',
+    'tests/online_reconnect_smoke.py',
     'theme1_zen_dark.html',
     'theme2_neo_traditional.html',
     'theme3_luxury_glass.html',
@@ -431,7 +444,7 @@ try {
     throw new Error(`发布安全门禁拦截：发现未授权暂存文件：${unexpectedFiles.join(', ')}`);
   }
   console.log(`✅ 显式暂存文件检查通过，共 ${stagedFiles.length} 个文件。`);
-  execSync(`git commit -m "${commitMsg}"`, { cwd: ROOT_DIR, stdio: 'inherit' });
+  execFileSync('git', ['commit', '-m', commitMsg], { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 Git 本地提交成功: ${commitMsg}`);
    // 只允许把本次刚提交的精确 HEAD 推到显式目标分支，并在推送前拒绝覆盖远端新提交。
    const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
@@ -465,10 +478,11 @@ try {
    execFileSync('gh', ['release', 'create', releaseTag, 'gomoku.apk', 'gomoku.html', '--target', releaseCommit, '--title', releaseTitle, '--notes', releaseNotes], { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {
-  console.log('ℹ️ GitHub Release 已存在或创建提示: ' + err.message);
-  try {
-    execSync(`gh release upload ${releaseTag} "gomoku.apk" "gomoku.html" --clobber`, { cwd: ROOT_DIR, stdio: 'inherit' });
-  } catch(_) {}
+  if (!ALLOW_RELEASE_OVERWRITE) {
+    throw new Error(`GitHub Release 创建失败，已禁止自动覆盖既有 Release：${err.message}。如确认需要补传，请显式追加 --allow-release-overwrite。`);
+  }
+  console.log('⚠️ 已显式允许覆盖，尝试补传当前 Release 资产。');
+  execFileSync('gh', ['release', 'upload', releaseTag, 'gomoku.apk', 'gomoku.html', '--clobber'], { cwd: ROOT_DIR, stdio: 'inherit' });
 } finally {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);

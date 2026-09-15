@@ -1,8 +1,10 @@
+import os
+
 from playwright.sync_api import sync_playwright
 
 
 def main():
-    url = "http://127.0.0.1:3000/index.html"
+    url = os.environ.get("GOMOKU_TEST_URL", "http://127.0.0.1:3000/index.html")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 390, "height": 844})

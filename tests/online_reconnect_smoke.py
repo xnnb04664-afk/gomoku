@@ -57,7 +57,12 @@ def main():
                       mode: gameMode,
                       room: currentRoomCode,
                       round: onlineRoundId,
-                      reconnecting: isReconnecting,
+                      // online.js keeps the reconnect flag module-scoped; use the
+                      // visible overlay as a public diagnostic fallback so this
+                      // smoke test does not depend on a private lexical binding.
+                      reconnecting: typeof isReconnecting !== 'undefined'
+                        ? isReconnecting
+                        : Boolean(document.querySelector('#onlineReconnectModal.show')),
                       conn: conn ? {
                         open: conn.open,
                         ready: conn.ready,

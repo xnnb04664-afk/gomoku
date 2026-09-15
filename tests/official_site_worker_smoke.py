@@ -22,7 +22,7 @@ def main():
     assert data["tag"] == version["releaseTag"]
     assert data["build"] == version["versionCode"]
 
-    for path, marker in (("/", "一盘棋"), ("/help/", "怎样开始一局"), ("/privacy/", "我们保存什么"), ("/play/", "gomokuResourceLoader")):
+    for path, marker in (("/", "落子有声"), ("/help/", "怎样开始一局"), ("/privacy/", "我们保存什么"), ("/play/", "gomokuResourceLoader")):
         status, _, body = get(path)
         assert status == 200, path
         assert marker in body.decode("utf-8"), path

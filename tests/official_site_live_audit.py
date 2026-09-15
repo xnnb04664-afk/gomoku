@@ -31,7 +31,7 @@ def settle_page(page):
 
 
 def mock_local_api(page):
-    if BASE_URL.startswith("http://127.0.0.1"):
+    if BASE_URL.startswith(("http://127.0.0.1", "http://localhost")):
         page.route(
             "**/api/site-version",
             lambda route: route.fulfill(
@@ -70,7 +70,9 @@ def main():
         play = browser.new_page(viewport={"width": 390, "height": 844})
         mock_local_api(play)
         play.goto(f"{BASE_URL}/play/", wait_until="domcontentloaded", timeout=30000)
-        play.wait_for_selector("#cvs", timeout=30000)
+        play.wait_for_function("window.SkyIslandUI && typeof window.SkyIslandUI.showGame === 'function'", timeout=30000)
+        play.evaluate("window.SkyIslandUI.showGame()")
+        play.wait_for_selector("#cvs", state="visible", timeout=30000)
         play.wait_for_timeout(1200)
         assert play.locator(".official-return-strip").count() == 1
         assert play.locator('.official-return-strip a[href="/"]').count() == 1

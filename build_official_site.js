@@ -31,6 +31,15 @@ function syncOfficialSiteVersion() {
   let privacy = fs.readFileSync(privacyPath, 'utf8');
   privacy = privacy.replace(/(当前版本：)v[\d.]+ · \d{4}-\d{2}-\d{2}/, `$1${display} · ${publishTime}`);
   fs.writeFileSync(privacyPath, privacy, 'utf8');
+
+  const workerPath = path.join(outDir, '_worker.js');
+  let worker = fs.readFileSync(workerPath, 'utf8');
+  const releaseTag = String(version.releaseTag || `v${version.versionName}`).trim();
+  worker = worker.replace(
+    /const STATIC_SITE_VERSION = Object\.freeze\(\{ tag: 'v[\d.]+', build: \d+ \}\);/,
+    `const STATIC_SITE_VERSION = Object.freeze({ tag: '${releaseTag}', build: ${Number(version.versionCode)} });`,
+  );
+  fs.writeFileSync(workerPath, worker, 'utf8');
 }
 
 function copyTree(source, destination) {

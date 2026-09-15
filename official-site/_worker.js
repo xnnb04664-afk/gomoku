@@ -1,4 +1,6 @@
 const API_ORIGIN = 'https://gomoku-api.pages.dev';
+// 由 build_official_site.js 从 version.json 同步；官网版本接口以此为准，避免 API 与静态资源漂移。
+const STATIC_SITE_VERSION = Object.freeze({ tag: 'v1.0.125', build: 126 });
 const UPDATE_CLIENT = 'gomoku-app-client-v2';
 const LANDING_CSP_PATHS = new Set(['/','/index.html']);
 
@@ -55,29 +57,13 @@ async function fetchVersion() {
   return data;
 }
 
-async function readSiteBuild(env, request) {
-  try {
-    const asset = await env.ASSETS.fetch(new Request(new URL('/version.json', request.url)));
-    if (!asset.ok) return null;
-    const data = await asset.json();
-    return Number.isInteger(Number(data.versionCode)) ? Number(data.versionCode) : null;
-  } catch (_) {
-    return null;
-  }
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method !== 'GET' && request.method !== 'HEAD') return json({ code: 405, msg: '仅支持 GET 请求' }, 405);
 
     if (url.pathname === '/api/site-version') {
-      try {
-        const data = await fetchVersion();
-        return json({ code: 0, tag: data.tag, build: await readSiteBuild(env, request) });
-      } catch (_) {
-        return json({ code: 503, msg: '版本信息暂时不可用' }, 503);
-      }
+      return json({ code: 0, ...STATIC_SITE_VERSION });
     }
 
     const assetType = url.pathname === '/download/apk' ? 'apk' : url.pathname === '/download/html' ? 'html' : '';

@@ -34,7 +34,7 @@ def main():
     version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
     internal = f"v{version['versionName']}"
     patch = int(str(version["versionName"]).split(".")[-1])
-    # The display convention is v1.2.3 for internal v1.0.123.
+    # The display convention is v1.2.5 for internal v1.0.125.
     display = f"v1.{max(0, patch // 10 - 10)}.{patch % 10}" if patch >= 100 else internal
 
     sources = {}

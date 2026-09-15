@@ -4,6 +4,17 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 
+BASE_URL = os.environ.get("GOMOKU_OFFICIAL_BASE_URL", "http://127.0.0.1:4173").rstrip("/")
+
+
+def open_page(page, url):
+    # The landing page performs best-effort version/API checks.  Those requests
+    # may stay open in a local Wrangler preview, so this smoke test should gate
+    # on DOM readiness rather than an idle-network heuristic.
+    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+    page.wait_for_timeout(250)
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -13,7 +24,7 @@ def main():
         desktop.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
         desktop.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.125","build":126}'))
 
-        desktop.goto("http://127.0.0.1:4173/", wait_until="networkidle")
+        open_page(desktop, f"{BASE_URL}/")
         if os.environ.get("SAVE_SCREENSHOT") == "1":
             desktop.screenshot(path="D:/小游戏/.codex-diagnostics/official-site-home.png", full_page=True)
         assert "落子有声" in desktop.title()
@@ -48,7 +59,7 @@ def main():
 
         mobile = browser.new_page(viewport={"width": 390, "height": 844})
         mobile.route("**/api/site-version", lambda route: route.fulfill(status=200, content_type="application/json", body='{"code":0,"tag":"v1.0.125","build":126}'))
-        mobile.goto("http://127.0.0.1:4173/", wait_until="networkidle")
+        open_page(mobile, f"{BASE_URL}/")
         toggle = mobile.locator(".nav-toggle")
         assert toggle.is_visible()
         assert toggle.get_attribute("aria-expanded") == "false"
@@ -63,13 +74,13 @@ def main():
         assert toggle.get_attribute("aria-label") == "打开导航"
         for width in (320, 390):
             compact = browser.new_page(viewport={"width": width, "height": 844})
-            compact.goto("http://127.0.0.1:4173/", wait_until="networkidle")
+            open_page(compact, f"{BASE_URL}/")
             assert compact.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
             compact.close()
 
         for path, marker in (("/help/", "怎样开始一局"), ("/privacy/", "我们保存什么"), ("/play/", "gomokuResourceLoader")):
             page = browser.new_page(viewport={"width": 320, "height": 844} if path != "/play/" else {"width": 390, "height": 844})
-            page.goto(f"http://127.0.0.1:4173{path}", wait_until="networkidle")
+            open_page(page, f"{BASE_URL}{path}")
             assert marker in page.content(), path
             if path in ("/help/", "/privacy/"):
                 assert page.locator('link[rel="canonical"]').get_attribute("href") == f"https://gomoku-home.pages.dev{path}"
@@ -86,7 +97,7 @@ def main():
             page.close()
 
         social = browser.new_page(viewport={"width": 390, "height": 844})
-        social.goto("http://127.0.0.1:4173/social/", wait_until="domcontentloaded")
+        open_page(social, f"{BASE_URL}/social/")
         assert social.locator("#socialPageTitle").inner_text().startswith("把棋友")
         assert social.locator('iframe[title="五子棋好友中心"]').get_attribute("src") == "/play/#friends"
         assert social.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
