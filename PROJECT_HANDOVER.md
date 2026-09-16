@@ -1514,3 +1514,17 @@ node publish.js
 - **MuMu 验收**：已覆盖安装并启动 `com.gomoku.master`；在逻辑显示屏 13 上实测好友、棋谱、我的三个独立页面，进入快速对局后首次点棋盘即出现黑子并切换白方回合，证明首个真实棋盘手势已送达。未发现 `FATAL EXCEPTION` 或 Java 崩溃；Chromium shared-image/EGL 调试信息属于模拟器图形噪声，未阻断使用。验收截图保存在未跟踪诊断目录 `.codex-diagnostics`，未纳入暂存。
 - **APK 候选**：`五子棋.apk` 大小 `1,436,698 bytes`，SHA-256 `09D1A90D3FB5B46EC7702760072E65E54B48F719DD4E9B690104910492710942`；`aapt` 显示 `versionName=1.0.126`、`versionCode=127`、`targetSdkVersion=35`；`apksigner` v1/v2/v3 通过，原证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
 - **发布边界**：本轮没有运行 `publish.js`，没有 push、创建 Release、上架 APK 或部署 Cloudflare Worker/D1/Pages；主目录 `D:\小游戏\五子棋` 未合入。正式上线前仍需单独解决公网 API 与静态 `version.json` 的版本源一致性，并在明确授权后再发布。
+
+
+## 六十九、天空棋岛 v1.0.127 全面发布与 MuMu 验收（2026-09-17，已上线）
+
+本轮完成启动动画、天空棋岛四页大厅、棋盘首屏性能与导航滚动修复，并按用户授权完成当前隔离分支的全平台发布。内部版本为 `v1.0.127 (Build 128)`，界面显示 `v1.2.7`；发布提交为 `81a7b04`。主目录 `D:\小游戏\五子棋` 未合入本分支。
+
+- **修复内容**：页面切换时重置新工作区滚动位置，修复好友/棋谱页面沿用旧滚动偏移导致标题被截断；棋盘可交互首帧先完成，快捷短语与技能牌 DOM 在首个交互帧后补齐，4× CPU 五次冷启动中位 FCP `1216ms`、interactive `2446ms`，性能门槛通过。
+- **GitHub Release**：正式 Release 为 [`v1.0.127`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.127)，非草稿、非预发布，包含 `gomoku.apk` 与 `gomoku.html`；资产大小分别为 `1,444,890 bytes` 与 `1,730,941 bytes`。APK SHA-256 为 `AFA40F21ADA592EC1B961D588AC8127045276A5FF7E2CFE5D4D0340E107A5381`。
+- **APK 签名**：`aapt` 显示 `versionName=1.0.127`、`versionCode=128`、`targetSdkVersion=35`；apksigner v1/v2/v3 通过，单签名证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **官网与后端**：`https://gomoku-home.pages.dev`、`/version.json`、`/api/site-version`、`https://gomoku-api.pages.dev/api/version` 均已统一为 `v1.0.127 / Build 128`；官方站 live audit、Worker smoke 和线上 `/play/` 冒烟通过。当前部署使用本机既有 Cloudflare 配置，未将令牌或配置写入仓库。
+- **MuMu 验收**：`emulator-5554` 覆盖安装成功，包名 `com.gomoku.master` 显示 `1.0.127/128`；启动大厅、快速对局、双人同屏、连续黑白落子均通过，重启后无 `FATAL EXCEPTION` 或 `AndroidRuntime` 崩溃。世界聊天入口可打开，游客会先进入“五子棋云端通行证”登录门槛，登录后才可发送世界消息。
+- **回归**：启动动画首击/减少动画、响应式卡片、天空棋岛、好友/棋谱导航、社交变体、懒加载、AI Worker、Canvas 合帧、十字棋、联机竞态/中继/语音、Android 开屏/生命周期、APK 清单、官网静态/live/Worker smoke 和 Node 语法检查均通过；AI hotpath 在并发跑测试时存在 80ms 基准的调度抖动，单独复测通过，产品 AI Worker 回归通过。
+
+本轮已完成 GitHub Release、Cloudflare Worker/API、`gomoku-home` Pages 和 MuMu 验收；未上传 Google Play 等第三方应用商店，也未合并到主目录。后续若继续改动，必须从新版本号开始，保持原签名、私有仓库和显式文件暂存约束。
