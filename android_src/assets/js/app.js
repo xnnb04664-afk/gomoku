@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.126';
+    const CURRENT_VERSION_TAG = 'v1.0.127';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -304,7 +304,7 @@
       graphicsQuality = value;
       try { localStorage.setItem('gomoku_graphics_quality_v1', value); } catch (_) {}
       updateGraphicsQualityUI();
-      resizeBoard();
+      ensureBoardSurface();
       showGameNotice(`⚡ 已切换到${value === 'auto' ? '自动画质' : (value === 'high' ? '高清画质' : '流畅画质')}`, false);
     }
 
@@ -1515,16 +1515,19 @@
         const icon = card.icon;
         const name = card.name;
         const desc = card.desc;
+        const disabled = isUsed ? ' disabled' : '';
+        const accessibleLabel = isUsed ? `${name}（已使用）` : `${name}：${desc}`;
         return `
-          <div class="card-slot ${isUsed ? 'used' : ''} ${isCasting ? 'casting' : ''}"
+          <button type="button" class="card-slot ${isUsed ? 'used' : ''} ${isCasting ? 'casting' : ''}"
                onclick="handleCardClick(${idx})"
-               title="${escapeHtml(desc)}">
-            <div class="card-slot-header" style="display:flex; align-items:center; justify-content:center; gap:3px; max-width:98%;">
-              <span class="slot-icon" style="font-size:15px; line-height:1;">${escapeHtml(icon)}</span>
-              <span class="slot-title" style="font-size:12px; font-weight:900; color:#1e3a8a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(name)}</span>
-            </div>
-            <div class="slot-sub" style="font-size:10.5px; font-weight:700; color:#475569; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:96%; line-height:1.2; margin-top:2px;">${isUsed ? '已使用' : escapeHtml(desc)}</div>
-          </div>
+               title="${escapeHtml(desc)}"
+               aria-label="${escapeHtml(accessibleLabel)}"${disabled}>
+            <span class="card-slot-header">
+              <span class="slot-icon" aria-hidden="true">${escapeHtml(icon)}</span>
+              <span class="slot-title">${escapeHtml(name)}</span>
+            </span>
+            <span class="slot-sub">${isUsed ? '已使用' : escapeHtml(desc)}</span>
+          </button>
         `;
       }).join('');
     }
@@ -6713,6 +6716,7 @@
     }
 
     let boardResizeFrame = null;
+    let boardSurfaceReady = false;
     function scheduleBoardResize() {
       if (boardResizeFrame !== null) return;
       const raf = window.requestAnimationFrame || (fn => setTimeout(fn, 16));
@@ -6743,36 +6747,58 @@
         window.__gomokuTrimMemory(20);
       } else {
         updateGraphicsQualityUI();
-        scheduleBoardResize();
+        if (boardSurfaceReady) scheduleBoardResize();
         if (window.GomokuSocial?.resume) window.GomokuSocial.resume();
       }
     });
 
+    function markBoardInteractive() {
+      requestAnimationFrame(() => {
+        try { performance.mark('gomoku_interactive'); } catch (_) {}
+        setTimeout(() => {
+          try {
+            const navigation = performance.getEntriesByType('navigation')[0];
+            const paint = performance.getEntriesByName('first-contentful-paint')[0];
+            const boardReady = performance.getEntriesByName('gomoku_board_ready')[0];
+            const interactive = performance.getEntriesByName('gomoku_interactive')[0];
+            if (paint) window.recordGomokuMetric('fcp', paint.startTime);
+            if (navigation) window.recordGomokuMetric('dcl', navigation.domContentLoadedEventEnd - navigation.startTime);
+            if (boardReady) window.recordGomokuMetric('board_ready', boardReady.startTime);
+            if (interactive) window.recordGomokuMetric('interactive', interactive.startTime);
+            window.recordGomokuMetric('graphics_quality', 1, { bucket: getEffectiveGraphicsTier() });
+          } catch (_) {}
+        }, 800);
+      });
+    }
+
+    // 首页现在先展示天空棋岛大厅；在大厅阶段不要为隐藏的旧棋盘做完整
+    // Canvas 初始化。真正进入标准对局时再初始化，避免首屏主线程被无效绘制占用。
+    function ensureBoardSurface() {
+      if (boardSurfaceReady) return true;
+      updateGraphicsQualityUI();
+      resizeBoard();
+      boardSurfaceReady = true;
+      try { performance.mark('gomoku_board_ready'); } catch (_) {}
+      markBoardInteractive();
+      // The playable canvas is ready before the optional chat chips and skill
+      // tray are rebuilt.  Those two DOM renderers can be relatively costly on
+      // a 4x-throttled WebView, so schedule them after the first interactive
+      // frame instead of making the player wait for decorative controls.
+      const raf = window.requestAnimationFrame || (fn => setTimeout(fn, 0));
+      raf(() => {
+        renderQuickPhrases();
+        drawRandomThreeCards();
+        updateUI();
+      });
+      return true;
+    }
+    window.__gomokuEnsureBoardReady = ensureBoardSurface;
+
     // 初始化：只锁定官方视觉，不覆盖大厅/棋局等页面状态 class。
     activeThemeKey = 'default';
     restoreGameStateIfAny();
-    renderQuickPhrases();
-    drawRandomThreeCards();
     updateGraphicsQualityUI();
-    resizeBoard();
-    try { performance.mark('gomoku_board_ready'); } catch (_) {}
-    updateUI();
-    requestAnimationFrame(() => {
-      try { performance.mark('gomoku_interactive'); } catch (_) {}
-      setTimeout(() => {
-        try {
-          const navigation = performance.getEntriesByType('navigation')[0];
-          const paint = performance.getEntriesByName('first-contentful-paint')[0];
-          const boardReady = performance.getEntriesByName('gomoku_board_ready')[0];
-          const interactive = performance.getEntriesByName('gomoku_interactive')[0];
-          if (paint) window.recordGomokuMetric('fcp', paint.startTime);
-          if (navigation) window.recordGomokuMetric('dcl', navigation.domContentLoadedEventEnd - navigation.startTime);
-          if (boardReady) window.recordGomokuMetric('board_ready', boardReady.startTime);
-          if (interactive) window.recordGomokuMetric('interactive', interactive.startTime);
-          window.recordGomokuMetric('graphics_quality', 1, { bucket: getEffectiveGraphicsTier() });
-        } catch (_) {}
-      }, 800);
-    });
+    if (!window.SkyIslandUI) ensureBoardSurface();
 
     // 启用水平拖拽滑动
     enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));

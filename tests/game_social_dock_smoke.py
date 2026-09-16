@@ -87,23 +87,34 @@ def main():
         page.locator(".sky-game-topbar [data-game-action='lobby']").click()
         page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
 
-        # Guest social access still routes through the official account sheet.
+        # The four-item navigation is now four independent product surfaces;
+        # each surface exposes its own primary actions without hijacking the
+        # legacy dialogs that still power account/history/settings flows.
         page.locator("#skyLobby [data-sky-nav='friends']").click()
+        page.wait_for_selector("#skyNavWorkspace[data-screen='friends']", state="visible", timeout=10_000)
+        assert page.locator("#skyGameHome").is_hidden()
+        assert "棋友在云上相逢" in page.locator("#skyNavWorkspace").inner_text()
+        page.locator("[data-nav-action='friends-open']").click()
         page.wait_for_selector("#authModal.show", state="visible", timeout=10_000)
         page.wait_for_function("getComputedStyle(document.querySelector('#authModal')).opacity === '1'")
         page.locator("#authModal").click(position={"x": 2, "y": 2})
 
         page.locator("#skyLobby [data-sky-nav='records']").click()
+        page.wait_for_selector("#skyNavWorkspace[data-screen='records']", state="visible", timeout=10_000)
+        assert "每一手，都有回声" in page.locator("#skyNavWorkspace").inner_text()
+        page.locator("[data-nav-action='records-history']").first.click()
         page.wait_for_selector("#historyModal.show", state="visible", timeout=10_000)
         history_z = page.evaluate("""() => { const e=document.querySelector('#historyModal'),s=getComputedStyle(e); return {inline:e.style.zIndex,computed:s.zIndex,body:document.body.className,top:document.elementFromPoint(2,2)?.id}; }""")
         assert history_z["computed"] == "100040", history_z
         page.evaluate("window.closeHistoryModal()")
 
         page.locator("#skyLobby [data-sky-nav='me']").click()
-        page.wait_for_selector("#skySheetBackdrop.show", state="visible")
-        assert "我的棋岛" in page.locator("#skySheetBody").inner_text()
-        assert "显示与声音" in page.locator("#skySheetBody").inner_text()
-        page.locator("#skySheetBackdrop").click(position={"x": 4, "y": 4})
+        page.wait_for_selector("#skyNavWorkspace[data-screen='me']", state="visible", timeout=10_000)
+        assert "把棋岛调成你的样子" in page.locator("#skyNavWorkspace").inner_text()
+        page.locator("[data-nav-action='me-settings']").click()
+        page.wait_for_selector("#themeModal.show", state="visible", timeout=10_000)
+        assert "唯一官方视觉" in page.locator("#themeModal").inner_text()
+        page.evaluate("window.closeThemeModal()")
 
         overflow = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
         assert overflow <= 1, f"new lobby causes horizontal overflow: {overflow}px"

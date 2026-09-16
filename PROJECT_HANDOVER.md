@@ -19,6 +19,14 @@
 - **视觉边界**：只保留云纸、深天蓝、岛屿苔绿、石墨黑、日线金、朱砂红；设置中仅提供官方视觉、画质与声音偏好，不再展示或恢复多主题换肤。
 - **交付边界**：本轮只在隔离分支完成前端与本地静态资源同步；未部署 Cloudflare/D1/Pages，未创建 Release，未编译/签名/发布 APK。
 
+### ✅ 2026-09-16「天空棋岛启动动画」本地实现（未发布）
+
+- **四帧叙事**：`img/startup/startup-01.webp` 至 `startup-04.webp` 对应空岛棋盘、飞子落盘、对局展开和五连高光；原始 941×1672 画面压为 720 宽 WebP，四帧合计约 294 KB。
+- **网页与单文件**：`js/startup-splash.css` / `js/startup-splash.js` 提供 2.4～2.8 秒淡入序列、点击/按钮/ESC/回车跳过、`prefers-reduced-motion` 快速收起、页面隐藏时暂停；`bundle_single_file.js` 会把 CSS、控制器和四帧内嵌到 `五子棋大师_单文件版.html`。
+- **Android**：`GomokuSplashView.java` 从 APK 本地 `assets/img/startup` 读取同一组 WebP 并交叉淡入，资源缺失时保留 Canvas 兜底；检测到 `AndroidNativeApp.isNativeApp()` 后，WebView 不重复播放网页层。
+- **同步与验证**：`build_apk.js --sync-only` 已将 29 个 minimal 资源同步到 Android；`npm run build:official-site` 已刷新被忽略的 `official-site/play/`。`tests/startup_splash_smoke.py`、`android_splash_smoke.py`、`android_lifecycle_smoke.py`、`apk_asset_manifest_smoke.py`、官网静态 smoke/live audit 均已通过。
+- **本地 APK**：已重新生成当前版本 `v1.0.126` / Build `127`，v1/v2/v3 签名校验通过并保持原正式证书；未创建新 Release、未部署官网、未安装到设备。
+
 ### ✅ v1.0.120（Build 121）交接记录（2026-09-08）
 
 - **发布状态**：已发布私有 GitHub Release `v1.0.120`，内部版本 `1.0.120`、Build `121`；界面显示 `v1.2.0`，更新比较仍使用内部版本号。生产 Pages/Worker 已在 D1 备份后完成一次部署，线上 `/api/version` 返回 `v1.0.120`。
@@ -1493,3 +1501,16 @@ node publish.js
 - **官网版本源**：`official-site/_worker.js` 的 `/api/site-version` 由构建时从 `version.json` 同步的静态常量提供，避免旧公网 API 覆盖官网版本；下载票据路由仍使用远端 API。发布脚本默认推当前分支、只暂存显式文件，并禁止 Release 创建失败时自动 `--clobber`。
 - **本地回归**：官网静态 smoke、live audit、Wrangler Worker smoke、社交/公告/Android 开屏与生命周期、APK manifest、AI hotpath、AI Worker、Canvas 合帧、优化、十字棋、懒加载、Sky Island、社交 Dock、功能面板、语音和联机禁用公共 MQTT 均通过；Node/Python 语法及 `git diff --check` 通过。
 - **发布边界**：本轮未执行 `publish.js`，未 push、未创建 GitHub Release、未部署 Cloudflare Worker/D1/Pages、未安装到手机或 MuMu；主目录 `D:\小游戏\五子棋` 未合入本分支。公网旧版本漂移仍需后续获得明确部署授权后再统一线上 API、Pages 静态资源和 Release 资产。
+
+
+## 六十八、启动动画首击与天空棋岛四页大厅验收（2026-09-16，本地候选，未发布）
+
+本轮继续在隔离工作树 `D:\小游戏\gomoku-sky-island-vslice-20260915` 完成首屏交互修复、底部导航独立页面和 MuMu 验收。当前内部版本为 `v1.0.126 (Build 127)`，界面显示 `v1.2.6`；当前 HEAD `ab0d6e0`，本轮改动仍未提交。
+
+- **首击修复**：启动动画网页遮罩改为不拦截底层点击；用户第一次点击好友、快速对局或棋盘时，启动层在捕获阶段退出，同时把同一手势交给真实按钮/Canvas。Android 原生开屏在 `ACTION_DOWN` 请求退出后返回 `false`，不再吞掉首次 WebView 手势。
+- **四个独立界面**：底部 `对局 / 好友 / 棋谱 / 我的` 不再只是切换标签或弹窗，分别拥有独立的 Sky Island 工作区、标题、空态/资料区和操作入口；旧的好友、棋谱、设置等功能仍由各页面动作接入。切回对局会恢复主大厅，并预热棋盘表面，避免点击后才开始初始化。
+- **资源同步**：启动动画四帧已转为 `img/startup/startup-01..04.webp`，根页面、Android assets、官网 `/play/`、压缩脚本和单文件版按当前源重新构建；根页面与官网 `/play/` 的 `app.js`、Sky Island JS/CSS hash 一致。Android 入口与根入口的 AI Worker 内嵌差异属于既有打包设计，不能按原始文件直接比较。
+- **浏览器回归**：启动动画首击、社交 Dock、Sky Island、懒加载、优化、AI Worker、十字棋、Canvas 合帧、官网静态 smoke/live audit、Android 开屏/生命周期、公告、社交变体、APK 资源清单和 Node 语法检查均通过。4× CPU Chromium 五次中位数为 FCP `1180ms`、interactive `2303.6ms`，相对基线改善 `39.38%`，无页面错误或控制台错误。
+- **MuMu 验收**：已覆盖安装并启动 `com.gomoku.master`；在逻辑显示屏 13 上实测好友、棋谱、我的三个独立页面，进入快速对局后首次点棋盘即出现黑子并切换白方回合，证明首个真实棋盘手势已送达。未发现 `FATAL EXCEPTION` 或 Java 崩溃；Chromium shared-image/EGL 调试信息属于模拟器图形噪声，未阻断使用。验收截图保存在未跟踪诊断目录 `.codex-diagnostics`，未纳入暂存。
+- **APK 候选**：`五子棋.apk` 大小 `1,436,698 bytes`，SHA-256 `09D1A90D3FB5B46EC7702760072E65E54B48F719DD4E9B690104910492710942`；`aapt` 显示 `versionName=1.0.126`、`versionCode=127`、`targetSdkVersion=35`；`apksigner` v1/v2/v3 通过，原证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- **发布边界**：本轮没有运行 `publish.js`，没有 push、创建 Release、上架 APK 或部署 Cloudflare Worker/D1/Pages；主目录 `D:\小游戏\五子棋` 未合入。正式上线前仍需单独解决公网 API 与静态 `version.json` 的版本源一致性，并在明确授权后再发布。

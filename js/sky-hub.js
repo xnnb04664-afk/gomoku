@@ -9,6 +9,8 @@
   let lobby = null;
   let sheetBackdrop = null;
   let topbar = null;
+  let navWorkspace = null;
+  let activeNav = 'game';
 
   function safeCall(name, ...args) {
     const fn = window[name];
@@ -58,48 +60,74 @@
     return `
       <header class="sky-lobby-top">
         <div class="sky-brand">
-          <span class="sky-brand-mark" aria-hidden="true">●</span>
-          <span><strong>天空棋岛</strong><small>云上活棋谱</small></span>
+          <span class="sky-brand-mark" aria-hidden="true"><i></i></span>
+          <span><strong>天空棋岛</strong><small>夕照云海 · 黑曜棋台</small></span>
         </div>
-        <button class="sky-bulletin" type="button" data-sky-action="bulletin" aria-label="打开今日岛讯">
-          <span aria-hidden="true">☁</span><span>今日岛讯：第一条残局航线已开放</span>
-        </button>
+        <nav class="sky-lobby-nav" aria-label="天空航标">
+          <button type="button" data-sky-nav="game" aria-current="page"><span aria-hidden="true">⌂</span><b>对局</b></button>
+          <button type="button" data-sky-nav="friends"><span aria-hidden="true">∞</span><b>好友</b></button>
+          <button type="button" data-sky-nav="records"><span aria-hidden="true">⌁</span><b>棋谱</b></button>
+          <button type="button" data-sky-nav="me"><span aria-hidden="true">○</span><b>我的</b></button>
+        </nav>
+        <div class="sky-lobby-tools">
+          <button class="sky-bulletin sky-broadcast-trigger" type="button" data-sky-action="chat" aria-label="打开世界聊天">
+            <span aria-hidden="true">◌</span><span>云层广播</span><em id="skyWorldUnread" hidden>0</em>
+          </button>
+          <button class="sky-bulletin sky-bulletin-secondary" type="button" data-sky-action="bulletin" aria-label="打开今日岛讯">
+            <span aria-hidden="true">☼</span><span>今日岛讯</span>
+          </button>
+        </div>
       </header>
-      <main class="sky-lobby-main">
-        <section class="sky-lobby-copy" aria-labelledby="skyLobbyTitle">
-          <div class="sky-lobby-kicker">一手一岛 · 每局都有目的地</div>
-          <h1 id="skyLobbyTitle">让下一手<br>唤醒整座岛</h1>
-          <p>从高张力残局开始，沿着七座棋台穿过云层。标准五子棋仍是规则，变化来自每一盘真正值得思考的棋形。</p>
-          <button class="sky-primary-action" type="button" data-sky-action="expedition">
-            <span><b id="skyContinueLabel">开始远征</b><small id="skyExpeditionProgress">新航线 · 从云隙初光开始</small></span>
-            <span class="sky-primary-arrow" aria-hidden="true">→</span>
-          </button>
-        </section>
-        <div class="sky-hero-island" aria-hidden="true">
-          <div class="sky-hero-grid">
-            <i class="sky-hero-stone black s1"></i><i class="sky-hero-stone white s2"></i>
-            <i class="sky-hero-stone black s3"></i><i class="sky-hero-stone white s4"></i>
-            <i class="sky-hero-stone black s5"></i><i class="sky-hero-breath"></i>
+      <div class="sky-lobby-stage">
+        <main id="skyGameHome" class="sky-lobby-main sky-cockpit-main" data-sky-screen="game">
+          <div class="sky-cockpit-ribbon">
+            <span class="sky-status-signal"><i></i> 棋台已就位</span>
+            <span>标准局 · 15 × 15</span>
+            <span class="sky-cockpit-index">LIVE BOARD / 01</span>
           </div>
-        </div>
-        <aside class="sky-route-list" aria-label="对局入口">
-          <button class="sky-route-button" type="button" data-sky-action="quick">
-            <span class="sky-route-icon">●</span><span><strong>快速对局</strong><small>AI、同屏或全服匹配</small></span><span>›</span>
+          <section class="sky-board-bay" aria-labelledby="skyLobbyTitle">
+            <div class="sky-board-halo" aria-hidden="true"></div>
+            <div class="sky-route-orbit" aria-hidden="true"><i class="node node-a"></i><i class="node node-b"></i><i class="node node-c"></i><span></span></div>
+            <div class="sky-preview-board" role="img" aria-label="天空棋台预览，黑白棋石正在等待第一手">
+              <div class="sky-preview-surface">
+                <div class="sky-preview-grid" aria-hidden="true"></div>
+                <i class="sky-preview-stone black p1"></i><i class="sky-preview-stone white p2"></i>
+                <i class="sky-preview-stone black p3"></i><i class="sky-preview-stone white p4"></i>
+                <i class="sky-preview-stone black p5"></i><i class="sky-preview-cursor"></i>
+              </div>
+              <div class="sky-preview-coordinate sky-preview-coordinate-top">A · B · C · D · E · F · G</div>
+              <div class="sky-preview-coordinate sky-preview-coordinate-bottom">落子后，航线会亮起来</div>
+            </div>
+            <div class="sky-board-caption"><span>等待第一手</span><small>棋台中央 · 黑方先行</small></div>
+          </section>
+          <section class="sky-command-deck">
+            <div class="sky-command-copy">
+              <div class="sky-lobby-kicker">一手一岛 · 每局都有目的地</div>
+              <h1 id="skyLobbyTitle">让下一手<br><em>唤醒整座岛</em></h1>
+              <p>先落下一颗棋子，再让航线告诉你下一步往哪里走。</p>
+            </div>
+            <div class="sky-command-actions">
+              <button class="sky-primary-action sky-primary-live" type="button" data-sky-action="quick">
+                <span><b>开始对局</b><small>本地 AI · 双人同屏 · 好友联机</small></span>
+                <span class="sky-primary-arrow" aria-hidden="true">↗</span>
+              </button>
+              <div class="sky-mode-rail" aria-label="其他玩法">
+                <button type="button" data-sky-action="friends"><span>∞</span>好友云桥</button>
+                <button type="button" data-sky-action="lab"><span>✚</span>十字棋实验</button>
+                <button type="button" data-sky-action="expedition"><span>☼</span><b id="skyContinueLabel">开始远征</b></button>
+              </div>
+            </div>
+          </section>
+          <button class="sky-broadcast-strip" type="button" data-sky-action="chat" aria-label="打开世界聊天">
+            <span class="sky-broadcast-mark" aria-hidden="true">◌</span>
+            <span><b>云层广播</b><small>世界聊天 · 看看棋友此刻在说什么</small></span>
+            <span class="sky-broadcast-preview">“下一手，交给风。”</span><strong>打开 →</strong>
           </button>
-          <button class="sky-route-button" type="button" data-sky-action="friends">
-            <span class="sky-route-icon">∞</span><span><strong>好友云桥</strong><small>邀战、房间码与私聊</small></span><span>›</span>
-          </button>
-          <button class="sky-route-button" type="button" data-sky-action="lab">
-            <span class="sky-route-icon">✚</span><span><strong>实验风场</strong><small>十字棋实验规则</small></span><span>›</span>
-          </button>
-        </aside>
-      </main>
-      <nav class="sky-lobby-nav" aria-label="一级导航">
-        <button type="button" data-sky-nav="game" aria-current="page"><span>●</span>游戏</button>
-        <button type="button" data-sky-nav="friends"><span>∞</span>好友</button>
-        <button type="button" data-sky-nav="records"><span>⌁</span>棋谱</button>
-        <button type="button" data-sky-nav="me"><span>○</span>我的</button>
-      </nav>`;
+          <div class="sky-lobby-footline"><span id="skyExpeditionProgress">新航线 · 从云隙初光开始</span><span>不联网也能随时开始</span></div>
+        </main>
+      <section id="skyNavWorkspace" class="sky-nav-workspace" data-sky-screen="workspace" aria-live="polite" hidden></section>
+      </div>
+      `;
   }
 
   function buildLobby() {
@@ -109,14 +137,103 @@
     lobby.setAttribute('aria-label', '天空棋岛大厅');
     lobby.innerHTML = lobbyMarkup();
     document.body.appendChild(lobby);
+    navWorkspace = lobby.querySelector('#skyNavWorkspace');
 
     lobby.addEventListener('click', event => {
+      const navAction = event.target.closest('[data-nav-action]')?.dataset.navAction;
+      if (navAction) {
+        runNavAction(navAction);
+        return;
+      }
       const action = event.target.closest('[data-sky-action]')?.dataset.skyAction;
       if (action) runAction(action);
       const nav = event.target.closest('[data-sky-nav]')?.dataset.skyNav;
       if (nav) runNav(nav);
     });
+    setActiveNav('game');
     refreshProgress();
+  }
+
+  function navWorkspaceMarkup(nav) {
+    if (nav === 'friends') return `
+      <div class="sky-nav-page sky-nav-page-friends sky-space-page">
+        <div class="sky-space-heading">
+          <div><span class="sky-nav-eyebrow">FRIENDS / 云桥</span><h1>棋友在云上相逢</h1><p>把一盘棋递过云层。在线节点会亮起，邀请、房间码和世界聊天都从同一条航线出发。</p></div>
+          <span class="sky-space-glyph" aria-hidden="true">∞</span>
+        </div>
+        <section class="sky-island-network" aria-label="好友云桥预览">
+          <div class="sky-network-map" aria-hidden="true"><i class="network-line line-one"></i><i class="network-line line-two"></i><i class="network-node node-home">你</i><i class="network-node node-online">星舟</i><i class="network-node node-away">南风</i><i class="network-node node-chat">◌</i></div>
+          <div class="sky-network-copy"><span class="sky-space-kicker">TODAY / 云桥在线</span><strong>今天，和谁下一手？</strong><small>连接按需建立，不会打断离线对局。</small><button class="sky-nav-primary" type="button" data-nav-action="friends-open"><span>打开好友云桥</span><b aria-hidden="true">↗</b></button></div>
+        </section>
+        <div class="sky-space-command-line"><button type="button" data-nav-action="friends-room"><span>↗</span><b>创建棋局</b><small>发出一张云上邀请</small></button><button type="button" data-nav-action="friends-match"><span>↯</span><b>快速找对手</b><small>现在就开一盘标准局</small></button><button type="button" data-nav-action="friends-chat"><span>◌</span><b>云端消息</b><small>查看棋友留下的话</small></button></div>
+        <div class="sky-nav-footnote"><span class="sky-nav-dot"></span>好友服务按需连接 · 世界聊天需要正式账号发送消息。</div>
+      </div>`;
+    if (nav === 'records') return `
+      <div class="sky-nav-page sky-nav-page-records sky-space-page">
+        <div class="sky-space-heading"><div><span class="sky-nav-eyebrow">RECORDS / 活棋谱</span><h1>每一手，都有回声</h1><p>把对局变成一条可回看的航线：棋盘留在中央，转折留在时间线上。</p></div><span class="sky-space-glyph sky-glyph-line" aria-hidden="true">⌁</span></div>
+        <section class="sky-replay-console" aria-label="棋谱回放预览"><div class="sky-replay-board"><span class="replay-stone rs-1"></span><span class="replay-stone rs-2"></span><span class="replay-stone rs-3"></span><span class="replay-stone rs-4"></span></div><div class="sky-replay-copy"><span class="sky-space-kicker">LATEST ECHO / 最近回声</span><strong>暂无新的远征回声</strong><small>先完成一盘对局，第一颗棋谱星点就会亮起。</small><button class="sky-nav-primary sky-nav-primary-light" type="button" data-nav-action="records-history"><span>查看全部棋谱</span><b aria-hidden="true">↗</b></button></div></section>
+        <div class="sky-timeline"><span class="timeline-fill"></span><i>01</i><i>04</i><i>08</i><i>15</i><b>落子时间线 · 拖动后回到任意一手</b></div>
+        <div class="sky-space-command-line"><button type="button" data-nav-action="records-history"><span>⌁</span><b>对局历史</b><small>复盘每一处转折</small></button><button type="button" data-nav-action="records-rank"><span>✦</span><b>棋力排行</b><small>看看你在棋岛的位置</small></button><button type="button" data-nav-action="records-expedition"><span>☼</span><b>远征进度</b><small>七座棋台的点亮记录</small></button></div>
+        <div class="sky-nav-footnote"><span class="sky-nav-dot sky-nav-dot-sun"></span>只记录结果，不打断你正在进行的棋局。</div>
+      </div>`;
+    return `
+      <div class="sky-nav-page sky-nav-page-me sky-space-page">
+        <div class="sky-space-heading"><div><span class="sky-nav-eyebrow">MY ISLAND / 我的</span><h1>把棋岛调成你的样子</h1><p>从昵称到画质，从活动到反馈，这里是你的航海日志，也是所有偏好的停靠点。</p></div><span class="sky-space-glyph sky-avatar-glyph" aria-hidden="true">小能</span></div>
+        <section class="sky-captain-plaque"><div class="sky-captain-avatar">小</div><div><span class="sky-space-kicker">CURRENT CAPTAIN / 当前旅人</span><strong>小能</strong><small>晴空棋岛 · 离线也能继续远征</small></div><button class="sky-nav-primary" type="button" data-nav-action="me-profile"><span>查看资料</span><b aria-hidden="true">↗</b></button></section>
+        <div class="sky-island-readout"><span>远征</span><b>00</b><span>棋谱</span><b>00</b><span>棋友</span><b>离线</b></div>
+        <div class="sky-space-command-line"><button type="button" data-nav-action="me-activity"><span>☼</span><b>活动与签到</b><small>查看金币与活动记录</small></button><button type="button" data-nav-action="me-settings"><span>≡</span><b>显示与声音</b><small>统一的官方晴空视觉</small></button><button type="button" data-nav-action="me-feedback"><span>↗</span><b>提交反馈</b><small>告诉我们下一站想去哪里</small></button></div>
+        <div class="sky-nav-footnote"><span class="sky-nav-dot sky-nav-dot-moss"></span>你的设置保存在本机，换设备时可随时重新调整。</div>
+      </div>`;
+  }
+
+  function setActiveNav(nav) {
+    const next = ['game', 'friends', 'records', 'me'].includes(nav) ? nav : 'game';
+    activeNav = next;
+    const gameHome = lobby?.querySelector('#skyGameHome');
+    if (gameHome) gameHome.hidden = next !== 'game';
+    if (navWorkspace) {
+      navWorkspace.hidden = next === 'game';
+      navWorkspace.dataset.screen = next;
+      navWorkspace.innerHTML = next === 'game' ? '' : navWorkspaceMarkup(next);
+      // Each workspace page is a new scroll context.  Without resetting it,
+      // switching away from a scrolled page leaves the next page clipped at
+      // the same offset (especially visible on the mobile WebView).
+      navWorkspace.scrollTop = 0;
+    }
+    lobby?.querySelectorAll('[data-sky-nav]').forEach(button => {
+      const selected = button.dataset.skyNav === next;
+      if (selected) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+  }
+
+  function runNavAction(action) {
+    if (action === 'friends-open') {
+      openFriends();
+    } else if (action === 'friends-chat') {
+      closeSheet();
+      if (window.GomokuWorldChat?.open) window.GomokuWorldChat.open();
+      else openFriends();
+    } else if (action === 'friends-room') {
+      showGame();
+      safeCall('openOnlineModal', 'create');
+    } else if (action === 'friends-match') {
+      showGame();
+      safeCall('openOnlineModal', 'match');
+    } else if (action === 'records-history') {
+      closeSheet();
+      elevateLegacyModal('historyModal');
+      safeCall('openHistoryModal');
+    } else if (action === 'records-rank') {
+      closeSheet();
+      elevateLegacyModal('leaderboardModal');
+      safeCall('openLeaderboardModal');
+    } else if (action === 'records-expedition') {
+      closeSheet();
+      window.openSkyExpedition?.();
+    } else if (action === 'me-profile' || action === 'me-activity' || action === 'me-settings' || action === 'me-feedback') {
+      runSheetAction(action.slice(3));
+    }
   }
 
   function buildTopbar() {
@@ -214,6 +331,9 @@
     lobby.hidden = true;
     document.body.classList.remove('sky-lobby-open');
     document.body.classList.add('sky-game-open');
+    if (typeof window.__gomokuEnsureBoardReady === 'function') {
+      window.__gomokuEnsureBoardReady();
+    }
     window.setTimeout(() => window.dispatchEvent(new Event('resize')), 40);
   }
 
@@ -222,7 +342,20 @@
     document.body.classList.remove('sky-game-open');
     document.body.classList.add('sky-lobby-open');
     if (lobby) lobby.hidden = false;
+    setActiveNav('game');
     refreshProgress();
+  }
+
+  function warmBoardSurface() {
+    const warm = () => {
+      if (document.body.classList.contains('sky-game-open')) return;
+      if (typeof window.__gomokuEnsureBoardReady === 'function') {
+        window.__gomokuEnsureBoardReady();
+      }
+    };
+    // 用零延迟任务排在大厅挂载之后，确保棋盘预热不阻塞大厅 DOM 构建，
+    // 同时比 requestIdleCallback 更稳定地覆盖低端 WebView 的忙碌首屏。
+    window.setTimeout(warm, 0);
   }
 
   function enterStandardMode(mode) {
@@ -245,16 +378,18 @@
       closeSheet();
       Promise.resolve(window.openSkyExpedition?.()).catch(error => console.warn('[sky expedition]', error?.message || error));
     } else if (action === 'quick') openQuickSheet();
-    else if (action === 'friends') openFriends();
+    else if (action === 'friends') setActiveNav('friends');
+    else if (action === 'chat') {
+      closeSheet();
+      if (window.GomokuWorldChat?.open) window.GomokuWorldChat.open();
+      else openFriends();
+    }
     else if (action === 'lab') openLabSheet();
     else if (action === 'bulletin') openBulletin();
   }
 
   function runNav(nav) {
-    if (nav === 'game') return;
-    if (nav === 'friends') openFriends();
-    if (nav === 'records') runSheetAction('records');
-    if (nav === 'me') openMeSheet();
+    setActiveNav(nav);
   }
 
   function runSheetAction(action) {
@@ -276,8 +411,7 @@
       window.openSkyExpedition?.();
     } else if (action === 'records') {
       closeSheet();
-      elevateLegacyModal('historyModal');
-      safeCall('openHistoryModal');
+      setActiveNav('records');
     } else if (action === 'profile') {
       closeSheet();
       elevateLegacyModal('profileModal');
@@ -325,6 +459,9 @@
     buildLobby();
     buildSheet();
     document.body.classList.add('sky-lobby-open');
+    // 启动大厅先响应导航；随后在空闲帧预热标准棋盘，让用户点“快速对局”
+    // 时无需再等待 Canvas 首次建图。
+    warmBoardSurface();
     window.addEventListener('gomoku:expedition-progress', refreshProgress);
 
     // Android 返回键优先关闭当前层；标准棋局逻辑仍交给原处理器。

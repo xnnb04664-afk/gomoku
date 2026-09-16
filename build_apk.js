@@ -92,7 +92,14 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   // 晴空浮岛大厅与残局远征是新的首屏体验，必须随包提供。
   'js/sky-hub.js',
   'js/expedition.js',
-  'js/sky-island.css'
+  'js/sky-island.css',
+  // 启动动画四帧：网页与 Android 原生 splash 共用同一组离线画面。
+  'js/startup-splash.css',
+  'js/startup-splash.js',
+  'img/startup/startup-01.webp',
+  'img/startup/startup-02.webp',
+  'img/startup/startup-03.webp',
+  'img/startup/startup-04.webp'
 ]);
 
 const APK_LEGACY_COMPAT_ASSETS = Object.freeze([

@@ -36,8 +36,6 @@ if (currentBranch !== TARGET_BRANCH && !allowNonMasterRelease) {
 // This flag lets a resumed publish finish that exact version without bumping twice.
 const SKIP_VERSION_BUMP = String(process.env.GOMOKU_SKIP_VERSION_BUMP || '').trim() === '1';
 
-execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
-
 const vm = require('vm');
 
 // Cloudflare 生产部署是显式动作；普通发版只构建、提交并发布 GitHub Release，
@@ -293,6 +291,9 @@ if (fs.existsSync(appSourcePath)) {
   fs.writeFileSync(appSourcePath, appSource, 'utf8');
 }
 
+// 版本号写入源文件后再压缩，确保 app.js 与 app.min.js 的版本常量始终一致。
+execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
+
 // 同步更新 version.json（兼容旧客户端；新客户端统一走 Cloudflare Worker 中转）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
@@ -300,7 +301,7 @@ const releaseHighlights = [
   `👥 【完整好友系统】正式账号支持精确查找、申请/同意/拒绝/取消、在线状态、最近对手、删除好友和黑名单管理`,
   `💬 【实时文字私聊】好友之间支持文字、Emoji、快捷短语、历史分页、未读同步和仅清空自己一侧记录`,
   `🎮 【好友实时邀战】邀请方自动创建房间并发送 2 分钟有效邀请；接受后自动进房，P2P 失败仍可通过 TURN/WebSocket 继续`,
-  `⚡ 【启动性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包；4× CPU、5 次冷启动中位 FCP 1468ms、可操作 2369.4ms`,
+  `⚡ 【启动性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包；4× CPU、5 次冷启动中位 FCP 1216ms、可操作 2446ms`,
   `🚀 【首屏稳态修复】非关键增强延迟到首帧后执行，首次棋盘使用轻量绘制并预加载核心脚本，修复延迟加载下的入口时序问题`,
   `📱 【MuMu 验收】公告入口、AI 落子、十字棋实验入口与 Android 生命周期已完成模拟器回归，保持原签名覆盖升级`,
   `🎨 【自动画质】新增自动/高清/流畅三档，Canvas DPR 上限分别按设备能力控制，弱机和后台场景降低发热与内存占用`,
@@ -400,7 +401,22 @@ try {
     'js/app.js',
     'js/app.min.js',
     'js/sky-hub.js',
+    'js/sky-island.css',
     'js/expedition.js',
+    'js/startup-splash.css',
+    'js/startup-splash.js',
+    'img/startup/startup-01.webp',
+    'img/startup/startup-02.webp',
+    'img/startup/startup-03.webp',
+    'img/startup/startup-04.webp',
+    'android_src/assets/js/startup-splash.css',
+    'android_src/assets/js/startup-splash.js',
+    'android_src/assets/img/startup/startup-01.webp',
+    'android_src/assets/img/startup/startup-02.webp',
+    'android_src/assets/img/startup/startup-03.webp',
+    'android_src/assets/img/startup/startup-04.webp',
+    'android_src/res/values/strings.xml',
+    'android_src/src/com/gomoku/master/GomokuSplashView.java',
     'official-site/index.html',
     'official-site/privacy/index.html',
     'official-site/site.js',
@@ -410,7 +426,11 @@ try {
     'pages_build/_worker.js',
     'publish.js',
     'tests/game_feature_panel_inspect.py',
+    'tests/card_responsive_smoke.py',
     'tests/game_social_variants_smoke.py',
+    'tests/game_social_dock_smoke.py',
+    'tests/sky_island_vslice_smoke.py',
+    'tests/startup_splash_smoke.py',
     'tests/official_site_live_audit.py',
     'tests/official_site_smoke.py',
     'tests/official_site_worker_smoke.py',

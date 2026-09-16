@@ -5,6 +5,9 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.content.res.AssetManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -14,11 +17,13 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.animation.PathInterpolator;
 
+import java.io.InputStream;
+
 /**
- * A small, self-contained native splash.  It is deliberately drawn with Canvas
- * instead of loading a bitmap so a cold/offline launch has no asset decode or
- * network dependency.  The WebView is started before this view is shown and
- * stays underneath it, so the animation never blocks first paint.
+ * A small, self-contained native splash.  It reads four compressed, local
+ * opening frames from the APK assets and cross-fades them while WebView boots.
+ * If an asset is unavailable, the original Canvas fallback remains available,
+ * so a damaged update can never block first paint.
  */
 public final class GomokuSplashView extends View {
     public interface DismissListener {
@@ -30,6 +35,12 @@ public final class GomokuSplashView extends View {
     private static final float[][] STONES = {
             {2f, 2f, 0f}, {6f, 2f, 1f}, {3f, 4f, 0f},
             {5f, 4f, 1f}, {4f, 6f, 0f}, {4f, 3f, 1f}
+    };
+    private static final String[] STARTUP_FRAME_ASSETS = {
+            "img/startup/startup-01.webp",
+            "img/startup/startup-02.webp",
+            "img/startup/startup-03.webp",
+            "img/startup/startup-04.webp"
     };
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -43,6 +54,9 @@ public final class GomokuSplashView extends View {
     private final int lightStoneColor;
     private final int darkStoneColor;
     private final int accentColor;
+    private final Bitmap[] startupFrames;
+    private final boolean startupFramesAvailable;
+    private final RectF startupFrameRect = new RectF();
     private ValueAnimator animator;
     private float progress;
     private DismissListener dismissListener;
@@ -57,6 +71,8 @@ public final class GomokuSplashView extends View {
         darkStoneColor = context.getResources().getColor(R.color.splash_stone_dark);
         accentColor = context.getResources().getColor(R.color.splash_accent);
         reducedMotion = isReducedMotion(context);
+        startupFrames = loadStartupFrames(context);
+        startupFramesAvailable = hasAllDecodedFrames(startupFrames);
 
         setClickable(true);
         setFocusable(true);
@@ -113,6 +129,7 @@ public final class GomokuSplashView extends View {
             animator.cancel();
             animator = null;
         }
+        releaseStartupFrames();
     }
 
     @Override
@@ -122,6 +139,12 @@ public final class GomokuSplashView extends View {
         final float width = getWidth();
         final float height = getHeight();
         canvas.drawColor(backgroundColor);
+
+        if (startupFramesAvailable) {
+            drawStartupFrames(canvas, width, height);
+            drawStartupCopy(canvas, width, height, density);
+            return;
+        }
 
         final float centerX = width * 0.5f;
         final float boardSize = Math.min(Math.min(width * 0.72f, height * 0.43f), 360f * density);
@@ -186,14 +209,68 @@ public final class GomokuSplashView extends View {
         textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
     }
 
+    private void drawStartupFrames(Canvas canvas, float width, float height) {
+        float framePosition = clamp(progress) * (startupFrames.length - 1f);
+        int frameIndex = Math.min(startupFrames.length - 1, (int) Math.floor(framePosition));
+        int nextIndex = Math.min(startupFrames.length - 1, frameIndex + 1);
+        float blend = framePosition - frameIndex;
+
+        drawBitmapCover(canvas, startupFrames[frameIndex], width, height, 255);
+        if (nextIndex != frameIndex && blend > 0f && startupFrames[nextIndex] != null) {
+            drawBitmapCover(canvas, startupFrames[nextIndex], width, height, (int) (255f * blend));
+        }
+    }
+
+    private void drawBitmapCover(Canvas canvas, Bitmap bitmap, float width, float height, int alpha) {
+        if (bitmap == null || bitmap.isRecycled()) return;
+        float scale = Math.max(width / bitmap.getWidth(), height / bitmap.getHeight());
+        float drawWidth = bitmap.getWidth() * scale;
+        float drawHeight = bitmap.getHeight() * scale;
+        startupFrameRect.set(
+                (width - drawWidth) * 0.5f,
+                (height - drawHeight) * 0.5f,
+                (width + drawWidth) * 0.5f,
+                (height + drawHeight) * 0.5f
+        );
+        paint.setFilterBitmap(true);
+        paint.setAlpha(Math.max(0, Math.min(255, alpha)));
+        canvas.drawBitmap(bitmap, null, startupFrameRect, paint);
+        paint.setAlpha(255);
+    }
+
+    private void drawStartupCopy(Canvas canvas, float width, float height, float density) {
+        final float centerX = width * 0.5f;
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+        textPaint.setColor(0xffffffff);
+        textPaint.setAlpha(245);
+        textPaint.setShadowLayer(8f * density, 0f, 2f * density, 0x660b4770);
+        textPaint.setTextSize(Math.max(24f * density, Math.min(38f * density, width * 0.095f)));
+        canvas.drawText(getResources().getString(R.string.splash_title), centerX, height * 0.17f, textPaint);
+        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL));
+        textPaint.setTextSize(12f * density);
+        textPaint.setAlpha(230);
+        canvas.drawText(getResources().getString(R.string.splash_subtitle), centerX, height * 0.73f, textPaint);
+        textPaint.setTextSize(11f * density);
+        textPaint.setAlpha(190);
+        canvas.drawText(getResources().getString(R.string.splash_skip), centerX, height - 32f * density, textPaint);
+        textPaint.clearShadowLayer();
+        textPaint.setAlpha(255);
+        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (event == null) return false;
-        if (event.getAction() == MotionEvent.ACTION_UP) {
-            performClick();
-            if (dismissListener != null) dismissListener.onDismissRequested();
+        // The native opening layer must never consume the first real game
+        // gesture. WebView content can already be interactive underneath it;
+        // dismissing here and returning false lets FrameLayout dispatch the
+        // same pointer sequence to that content instead of forcing a second
+        // tap. The web splash still owns its explicit skip control.
+        if (event != null && event.getAction() == MotionEvent.ACTION_DOWN
+                && dismissListener != null) {
+            dismissListener.onDismissRequested();
         }
-        return true;
+        return false;
     }
 
     @Override
@@ -204,6 +281,36 @@ public final class GomokuSplashView extends View {
 
     private static float clamp(float value) {
         return Math.max(0f, Math.min(1f, value));
+    }
+
+    private static Bitmap[] loadStartupFrames(Context context) {
+        Bitmap[] frames = new Bitmap[STARTUP_FRAME_ASSETS.length];
+        AssetManager assets = context.getAssets();
+        for (int i = 0; i < STARTUP_FRAME_ASSETS.length; i++) {
+            try (InputStream input = assets.open(STARTUP_FRAME_ASSETS[i])) {
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inPreferredConfig = Bitmap.Config.RGB_565;
+                options.inScaled = false;
+                frames[i] = BitmapFactory.decodeStream(input, null, options);
+            } catch (Exception ignored) {
+                // Keep the Canvas fallback if a partially updated APK misses a frame.
+            }
+        }
+        return frames;
+    }
+
+    private static boolean hasAllDecodedFrames(Bitmap[] frames) {
+        if (frames == null) return false;
+        for (Bitmap frame : frames) {
+            if (frame == null || frame.isRecycled()) return false;
+        }
+        return true;
+    }
+
+    private void releaseStartupFrames() {
+        for (Bitmap frame : startupFrames) {
+            if (frame != null && !frame.isRecycled()) frame.recycle();
+        }
     }
 
     private static boolean isReducedMotion(Context context) {

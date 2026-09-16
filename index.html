@@ -7,7 +7,10 @@
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="js/app.min.js" as="script">
+  <link rel="preload" href="img/startup/startup-01.webp" as="image" fetchpriority="high">
   <link rel="stylesheet" href="js/sky-island.css">
+  <link rel="stylesheet" href="js/startup-splash.css">
+  <script defer src="js/startup-splash.js"></script>
   <!-- 首屏只保留页面骨架；联机、音频和大图资源在真正需要时才加载。 -->
   <script id="gomokuResourceLoader">
     (() => {
@@ -1224,40 +1227,52 @@
     /* 3 张干扰技能卡牌槽位与施法样式 */
     .card-slots-area {
       width: 100%;
-      max-width: 500px;
+      max-width: 540px;
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 4px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
       z-index: 10;
-      padding: 1px 2px;
+      padding: 3px 2px;
       flex-shrink: 0;
 
-      height: 52px;
-      min-height: 52px;
-      max-height: 52px;
+      height: 82px;
+      min-height: 82px;
+      max-height: 82px;
       box-sizing: border-box;}
     .card-slot {
-      background: rgba(255, 255, 255, 0.75);
-      border: 1.5px dashed #90caf9;
-      border-radius: 11px;
-      padding: 4px 2px;
+      appearance: none;
+      width: 100%;
+      min-width: 0;
+      min-height: 74px;
+      background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(237, 249, 225, 0.88));
+      border: 1px solid rgba(116, 169, 93, 0.48);
+      border-radius: 14px;
+      padding: 7px 7px 6px;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 1px;
+      gap: 0;
       cursor: pointer;
       transition: all 0.15s;
-      box-shadow: inset 0 2px 6px rgba(0,0,0,0.05);
+      box-shadow: 0 5px 14px rgba(54, 97, 73, 0.12), inset 0 1px 0 rgba(255,255,255,.78);
       position: relative;
       overflow: hidden;
+      color: #19526d;
+      font: inherit;
     }
     .card-slot:hover {
-      background: rgba(255, 255, 255, 0.92);
-      border-color: #42a5f5;
+      background: linear-gradient(145deg, #ffffff, #f8f4df);
+      border-color: #f2b54a;
       transform: translateY(-2px);
+      box-shadow: 0 9px 18px rgba(54, 97, 73, 0.18), inset 0 1px 0 rgba(255,255,255,.9);
     }
     .card-slot:active { transform: translateY(1px); }
+    .card-slot:focus-visible {
+      outline: 3px solid rgba(242, 181, 74, .72);
+      outline-offset: 2px;
+    }
+    .card-slot:disabled { cursor: default; }
     .card-slot.casting {
       border: 2px solid #facc15 !important;
       background: rgba(254, 240, 138, 0.85) !important;
@@ -1293,24 +1308,63 @@
       50% { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 18px #f59e0b); }
       100% { transform: scale(1); filter: none; }
     }
-    .slot-icon { font-size: 19px; line-height: 1.1; }
-    .slot-title { font-size: 13px; font-weight: 900; color: #1e3a8a; }
-    .slot-sub { font-size: 11px; font-weight: 800; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 95%; }
+    .card-slot-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      width: 100%;
+      min-width: 0;
+    }
+    .slot-icon { flex: 0 0 auto; font-size: 17px; line-height: 1; }
+    .slot-title {
+      display: -webkit-box;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      color: #19526d;
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+      text-align: left;
+      text-overflow: clip;
+      white-space: normal;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .slot-sub {
+      display: -webkit-box;
+      width: 100%;
+      max-width: 100%;
+      margin-top: 4px;
+      overflow: hidden;
+      color: #2e7087;
+      font-size: 9.5px;
+      font-weight: 800;
+      line-height: 1.28;
+      text-align: center;
+      text-overflow: clip;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
 
     /* 卡牌与施法指引外层恒定高度容器 (确保棋盘绝对不发生垂直跳动) */
     .card-area-wrapper {
       position: relative;
       width: 100%;
-      max-width: 500px;
+      max-width: 540px;
       display: flex;
       flex-direction: column;
       align-items: center;
       flex-shrink: 0;
       z-index: 15;
 
-      height: 54px;
-      min-height: 54px;
-      max-height: 54px;
+      height: 84px;
+      min-height: 84px;
+      max-height: 84px;
       box-sizing: border-box;}
 
     /* 技能施法目标指引条 (绝对定位悬浮，完全不挤占垂直空间，棋盘绝不移位) */
@@ -2156,20 +2210,27 @@
         bottom: calc(100% + 2px) !important;
       }
       .card-slots-area {
-        gap: 3px !important;
-        padding: 1px 1px !important;
+        gap: 4px !important;
+        padding: 3px 1px !important;
+        height: 82px !important;
+        min-height: 82px !important;
+        max-height: 82px !important;
       }
       .card-slot {
-        padding: 2.5px 1px !important;
+        min-height: 74px !important;
+        padding: 6px 4px !important;
+        border-radius: 12px !important;
       }
       .slot-icon {
-        font-size: 17px !important;
+        font-size: 15px !important;
       }
       .slot-title {
-        font-size: 12.5px !important;
+        font-size: 11px !important;
       }
       .slot-sub {
-        font-size: 10.5px !important;
+        margin-top: 3px !important;
+        font-size: 9px !important;
+        line-height: 1.22 !important;
       }
       .bottom-controls {
         gap: 3px !important;
@@ -2340,6 +2401,31 @@
 </head>
 <body>
 
+  <div id="startupSplash" class="startup-splash" role="dialog" aria-modal="true" aria-label="天空棋岛正在启动" aria-hidden="true">
+    <div class="startup-splash-frame" data-startup-frame="0">
+      <img src="img/startup/startup-01.webp" alt="" fetchpriority="high" decoding="async">
+    </div>
+    <div class="startup-splash-frame" data-startup-frame="1">
+      <img src="img/startup/startup-02.webp" alt="" loading="eager" decoding="async">
+    </div>
+    <div class="startup-splash-frame" data-startup-frame="2">
+      <img src="img/startup/startup-03.webp" alt="" loading="eager" decoding="async">
+    </div>
+    <div class="startup-splash-frame" data-startup-frame="3">
+      <img src="img/startup/startup-04.webp" alt="" loading="eager" decoding="async">
+    </div>
+    <div class="startup-splash-shade" aria-hidden="true"></div>
+    <div class="startup-splash-brand">
+      <div class="startup-splash-kicker">Sky Island · Gomoku</div>
+      <h1 class="startup-splash-title">天空棋岛</h1>
+      <p class="startup-splash-subtitle">落子有声，下一手唤醒整座岛</p>
+    </div>
+    <div class="startup-splash-footer">
+      <span class="startup-splash-progress">Loading island</span>
+      <button class="startup-splash-skip" type="button" data-startup-skip>跳过动画</button>
+    </div>
+  </div>
+
   <div class="cloud cloud-1"></div>
   <div class="cloud cloud-2"></div>
 
@@ -2496,7 +2582,7 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.126" data-collapsed="false" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.127" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
       <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
@@ -2710,7 +2796,7 @@
         </div>
         <div onclick="checkAppUpdate(true)" style="background:linear-gradient(135deg, #e0f2fe, #f0f9ff); border:1.5px solid #38bdf8; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(56,189,248,0.1);">
           <div style="font-size:10px; font-weight:800; color:#0369a1;">🚀 更新</div>
-          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.6</div>
+          <div id="appVersionDisplay" style="font-size:12px; font-weight:900; color:#0284c7; margin-top:2px;">v1.2.7</div>
         </div>
         <div onclick="openFeedbackModal()" style="background:linear-gradient(135deg, #fdf2f8, #fce7f3); border:1.5px solid #ec4899; border-radius:10px; padding:6px 2px; text-align:center; cursor:pointer; box-shadow:0 2px 4px rgba(236,72,153,0.1);">
           <div style="font-size:10px; font-weight:800; color:#9d174d;">💬 反馈</div>
@@ -3224,7 +3310,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.6</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.7</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
