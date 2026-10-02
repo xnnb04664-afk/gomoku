@@ -1241,6 +1241,7 @@ public class MainActivity extends Activity {
     public void startApkDownload(String updateTicket) {
         final String cleanUpdateTicket = updateTicket == null ? "" : updateTicket.trim();
         if (cleanUpdateTicket.isEmpty()) {
+            notifyWebProgress(0, "error");
             runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新授权已失效，请重新检查更新", Toast.LENGTH_LONG).show());
             return;
         }
@@ -1252,6 +1253,7 @@ public class MainActivity extends Activity {
         File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (destDir == null) destDir = getFilesDir();
         if (!destDir.exists() && !destDir.mkdirs()) {
+            notifyWebProgress(0, "error");
             Toast.makeText(MainActivity.this, "更新目录不可用，请稍后重试", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1322,7 +1324,11 @@ public class MainActivity extends Activity {
                 android.util.Log.e("MainActivity", "Direct download or integrity check failed: " + e.getMessage());
                 if (expectedHash != null && !expectedHash.isEmpty()) {
                     handedOffToDownloadManager = fallbackDownloadManager(expectedHash, cleanUpdateTicket);
+                    if (!handedOffToDownloadManager) {
+                        notifyWebProgress(0, "error");
+                    }
                 } else {
+                    notifyWebProgress(0, "error");
                     runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新清单校验失败，已停止安装", Toast.LENGTH_LONG).show());
                 }
             } finally {
@@ -1335,6 +1341,7 @@ public class MainActivity extends Activity {
         try {
             if (!isVerifiedApk(apkFile, sExpectedApkSha256)) {
                 if (apkFile != null && apkFile.exists()) apkFile.delete();
+                notifyWebProgress(0, "error");
                 Toast.makeText(MainActivity.this, "更新包完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
                 return;
             }
@@ -1357,6 +1364,7 @@ public class MainActivity extends Activity {
             startActivity(installIntent);
             Toast.makeText(MainActivity.this, "🎉 正在唤起系统安装更新，请点击确认！", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
+            notifyWebProgress(0, "error");
             Toast.makeText(MainActivity.this, "自动呼起安装失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
@@ -1398,6 +1406,7 @@ public class MainActivity extends Activity {
                                 installDownloadedApk(destFile);
                             } else {
                                 if (destFile.exists()) destFile.delete();
+                                notifyWebProgress(0, "error");
                                 Toast.makeText(MainActivity.this, "下载完成但完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
                             }
                         }
@@ -1406,6 +1415,7 @@ public class MainActivity extends Activity {
 
             } catch (Exception e) {
                 sIsDownloading = false;
+                notifyWebProgress(0, "error");
                 Toast.makeText(MainActivity.this, "备用下载启动失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });

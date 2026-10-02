@@ -1528,3 +1528,32 @@ node publish.js
 - **回归**：启动动画首击/减少动画、响应式卡片、天空棋岛、好友/棋谱导航、社交变体、懒加载、AI Worker、Canvas 合帧、十字棋、联机竞态/中继/语音、Android 开屏/生命周期、APK 清单、官网静态/live/Worker smoke 和 Node 语法检查均通过；AI hotpath 在并发跑测试时存在 80ms 基准的调度抖动，单独复测通过，产品 AI Worker 回归通过。
 
 本轮已完成 GitHub Release、Cloudflare Worker/API、`gomoku-home` Pages 和 MuMu 验收；未上传 Google Play 等第三方应用商店，也未合并到主目录。后续若继续改动，必须从新版本号开始，保持原签名、私有仓库和显式文件暂存约束。
+
+
+## 七十、APK 更新回退修复与 v1.0.127 MuMu 复验（2026-09-27，本地未发布）
+
+本轮继续在隔离工作树 `D:\小游戏\gomoku-sky-island-vslice-20260915` 维护已发布的 `v1.0.127 (Build 128)`。当前 `HEAD=83f8262`、分支为 `feature/sky-island-vslice`，与 `origin/feature/sky-island-vslice` 一致；本轮仅有未提交工作树修改，未改变线上 v1.0.127、主目录或既有 Release。
+
+- **APK 更新失败回退**：`js/app.js` 现在仅在完整 HTML 热更新通道（`htmlUrl`、`htmlTicket`、`htmlSha256`）齐备时展示热更新；原生 `saveHotUpdateFile` 抛错或返回失败后，自动使用 `apkTicket` 调用 `downloadAndInstallApkWithTicket` 完整安装 APK；非原生环境则使用受保护的 `fastUrl` 下载。`onApkDownloadProgress` 收到 `error/failed` 会解除下载锁定、恢复按钮并显示“重试 APK 安装更新”，避免界面永久停在下载中。
+- **Android 错误回传**：`android_src/src/com/gomoku/master/MainActivity.java` 在授权失效、更新目录不可用、下载管理器未接管、完整性校验失败、安装启动失败和备用下载异常时回传 WebView 错误状态，保留原有短时票据、完整性校验和系统安装确认流程。
+- **底部按钮对齐**：`js/sky-island.css` 及 Android/单文件同步资源将可见的 `聊天 / 重开 / 悔棋 / 匹配` 控件从 5 列修正为 4 列；桌面、移动端和官网 `/play/` 均使用等宽四列，不再留下空第五列。
+- **同步产物**：已执行官网构建、单文件构建和 APK 构建；同步修改了根 `js/`、Android `assets/js/`、压缩脚本、`五子棋大师_单文件版.html` 和 `五子棋.apk`。官网 `official-site/play/` 仍是被忽略的可重建产物，不手工编辑。
+- **新增回归**：`tests/update_fallback_smoke.py` 模拟原生热更新失败并断言 APK 安装回退、失败状态复位和重试按钮恢复。
+
+### 当前本地 APK 与验证
+
+- **本地候选**：`五子棋.apk` 为 `1,444,890 bytes`，SHA-256 为 `9AE981A1B5ECD6F6DEF4F955B720A0D167156E9FDB30E8FEF1309FA9CEAC9A29`；版本源为 `versionName=1.0.127`、`versionCode=128`、`releaseTag=v1.0.127`。apksigner v1/v2/v3 均为 `true`，签名者为 1，继续使用原正式证书（白名单摘要 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`）。
+- **Release 边界**：本地重建 APK 与 v1.0.127 GitHub Release 中的历史 APK（SHA-256 `AFA40F21ADA592EC1B961D588AC8127045276A5FF7E2CFE5D4D0340E107A5381`）摘要不同，即使文件大小相同，也不得替换线上资产或称为已发布版本；如正式纳入本轮改动，必须递增新版本号并重新走发布校验。
+- **本地回归**：在启动 `127.0.0.1:3000` 静态服务器后，`tests/update_fallback_smoke.py`、`tests/card_responsive_smoke.py`、`tests/game_social_dock_smoke.py` 均通过；`tests/android_splash_smoke.py`、`tests/android_lifecycle_smoke.py`、`tests/apk_asset_manifest_smoke.py`（minimal 29 files / 1,552,970 bytes，conservative 35 files / 2,187,488 bytes）、`node --check js/app.js`、`node --check build_apk.js` 和 `git diff --check` 均通过。未将服务器日志或诊断截图加入仓库。
+- **MuMu 复验**：通过 `127.0.0.1:7555` 覆盖安装成功；`com.gomoku.master` 显示 `1.0.127/128`，冷启动可显示天空棋岛启动动画并进入大厅。AI 对局中真实触控落黑后，AI 自动落白并回到“你的回合”；聊天面板、重开确认、好友页和四等分底部按钮均能响应。抽样日志无 `FATAL EXCEPTION`、`Process: com.gomoku.master` 或 Java 崩溃。云层广播会进入“五子棋云端通行证”登录门槛，游客需登录后才能发送世界消息；这不是按钮无响应，也未在验收中填入账号凭据。诊断截图位于仓库外 `D:\小游戏\.codex-diagnostics`，不纳入提交。
+
+### 当前工作树与下一步
+
+当前未提交路径为：
+
+- `js/app.js`、`js/app.min.js`、`js/sky-island.css`；
+- `android_src/assets/js/app.js`、`android_src/assets/js/app.min.js`、`android_src/assets/js/sky-island.css`、`android_src/src/com/gomoku/master/MainActivity.java`；
+- `五子棋大师_单文件版.html`、`五子棋.apk`；
+- 新增未跟踪测试 `tests/update_fallback_smoke.py`。
+
+本轮未运行 `publish.js`，未 push、未创建新 GitHub Release、未部署 Cloudflare Worker/D1/Pages，未合并到主目录 `D:\小游戏\五子棋`。后续若正式发版，必须先审查并只暂存明确文件（禁止 `git add .`），递增版本号、重新构建官网/单文件/APK，复核原签名与 v1/v2/v3，并在授权后分别发布；不要把当前本地 APK 当作线上 v1.0.127 资产。

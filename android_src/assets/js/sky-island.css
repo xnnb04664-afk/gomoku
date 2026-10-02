@@ -814,7 +814,7 @@ body.sky-game-open.sky-cards-open > .card-area-wrapper {
 .bottom-controls {
   width:min(620px, 100%) !important;
   max-width:620px !important;
-  grid-template-columns:repeat(5, minmax(0,1fr)) !important;
+  grid-template-columns:repeat(4, minmax(0,1fr)) !important;
   gap:6px !important;
   padding:4px 0 0 !important;
   margin:0 auto !important;
@@ -995,7 +995,7 @@ body.sky-game-open.sky-cards-open > .card-area-wrapper {
     max-width:none !important;
     flex:1 1 auto !important;
   }
-  .bottom-controls { grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:4px !important; }
+  .bottom-controls { grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:4px !important; }
   .bottom-controls .btn-ctrl { min-height:38px !important; padding:5px 2px !important; font-size:10px !important; }
   #gameResultModal .custom-confirm-card { max-height:72dvh; overflow:auto; }
 }

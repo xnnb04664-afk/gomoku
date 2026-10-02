@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.127';
+    const CURRENT_VERSION_TAG = 'v1.0.128';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -6871,8 +6871,13 @@
     function invokeProtectedNativeApkUpdate(ticket) {
       if (typeof AndroidNativeApp === 'undefined' || !ticket) return false;
       if (typeof AndroidNativeApp.downloadAndInstallApkWithTicket !== 'function') return false;
-      AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
-      return true;
+      try {
+        AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
+        return true;
+      } catch (error) {
+        console.warn('[APK update bridge]', error?.message || error);
+        return false;
+      }
     }
 
     async function sha256Hex(value) {
@@ -6985,7 +6990,16 @@
 
       if (progressWrap) progressWrap.style.display = 'block';
 
-      if (status === 'done' || percent >= 100) {
+      if (status === 'error' || status === 'failed') {
+        isAppDownloading = false;
+        if (progressStatus) progressStatus.textContent = '❌ APK 安装更新失败，请重试';
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.innerHTML = '<span>🔁 重试 APK 安装更新</span>';
+        }
+        showGameNotice('APK 安装更新失败，请检查网络或安装权限后重试', true);
+      } else if (status === 'done' || percent >= 100) {
         isAppDownloading = false;
         if (progressInner) progressInner.style.width = '100%';
         if (progressPercent) progressPercent.textContent = '100%';
@@ -7101,7 +7115,38 @@
 
       const fastLink = versionData.fastUrl || '';
       const htmlLink = versionData.htmlUrl || '';
-      const hasUpdateTickets = Boolean(versionData.apkTicket && versionData.htmlTicket);
+      const hasApkUpdateTicket = Boolean(versionData.apkTicket);
+      const hasHotUpdateChannel = Boolean(htmlLink && versionData.htmlTicket && versionData.htmlSha256);
+
+      const startApkInstallFallback = (progress = 5, progressText = '🚀 正在启动 APK 安装更新...') => {
+        if (!hasApkUpdateTicket) {
+          isAppDownloading = false;
+          showGameNotice('当前版本暂未提供可用的 APK 安装授权，请重新检查更新', true);
+          return false;
+        }
+
+        isAppDownloading = true;
+        setVisualProgress(progress, progressText);
+        if (typeof AndroidNativeApp !== 'undefined'
+          && invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
+          showGameNotice(`📦 热更新不可用，已自动切换为 APK 安装更新 (${versionData.tag})`, true);
+          return true;
+        }
+
+        if (fastLink) {
+          downloadProtectedApk(fastLink, versionData.apkTicket)
+            .then(() => showGameNotice('✅ 安装包已开始下载，请在浏览器下载列表中安装', false))
+            .catch(() => showGameNotice('APK 安装包下载失败，请重新检查更新', true))
+            .finally(() => {
+              isAppDownloading = false;
+            });
+          return true;
+        }
+
+        isAppDownloading = false;
+        showGameNotice('更新服务暂未提供可用的 APK 安装地址，请重新检查更新', true);
+        return false;
+      };
 
       if (hasNewVersion) {
         // 发现新版本！
@@ -7119,7 +7164,9 @@
         if (btnFast) {
           btnFast.style.display = "flex";
           // 🌟 核心革新：如果处于原生 App 环境，首推免安装秒级在线热更新！
-          if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveHotUpdateFile) {
+          if (typeof AndroidNativeApp !== "undefined"
+            && typeof AndroidNativeApp.saveHotUpdateFile === 'function'
+            && hasHotUpdateChannel) {
             btnFast.innerHTML = "<span>⚡ 免安装一键秒更 (推荐·2秒无感)</span>";
             btnFast.onclick = async (e) => {
               e.preventDefault();
@@ -7178,29 +7225,25 @@
                 throw new Error("沙盒写入失败");
               } catch(err) {
                 console.warn('[HotUpdate Concurrent Fallback]', err);
-                setVisualProgress(50, "🔄 自动转入 APK 完整通道下载...");
-                if (hasUpdateTickets && !invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
-                  isAppDownloading = false;
-                  showGameNotice('当前安装包需要先安装新版安全客户端，请先手动安装最新版 APK', true);
+                if (!startApkInstallFallback(50, "🔄 热更新不可用，自动转入 APK 完整安装通道...")) {
+                  btnFast.disabled = false;
+                  btnFast.style.opacity = "1";
+                  btnFast.innerHTML = "<span>🔁 重试更新</span>";
                 }
               }
             };
           } else {
-            btnFast.innerHTML = "<span>⚡ 极速全自动下载更新 (推荐)</span>";
+            btnFast.innerHTML = hasApkUpdateTicket
+              ? "<span>📦 一键安装 APK 更新</span>"
+              : "<span>⚡ 极速全自动下载更新</span>";
             btnFast.onclick = (e) => {
               e.preventDefault();
-              setVisualProgress(5, "🚀 正在启动全自动极速下载...");
-              isAppDownloading = true;
-              if (hasUpdateTickets && typeof AndroidNativeApp !== "undefined" && invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
-                showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
-              } else if (hasUpdateTickets && fastLink) {
-                downloadProtectedApk(fastLink, versionData.apkTicket)
-                  .then(() => showGameNotice('✅ 安装包已开始下载，请在浏览器下载列表中安装', false))
-                  .catch(() => showGameNotice('更新下载授权已失效，请重新检查更新', true))
-                  .finally(() => { isAppDownloading = false; });
-              } else {
-                isAppDownloading = false;
-                showGameNotice('更新服务暂未提供有效授权，请重新检查更新', true);
+              if (btnFast.disabled) return;
+              btnFast.disabled = true;
+              btnFast.style.opacity = "0.8";
+              if (!startApkInstallFallback(5, "🚀 正在启动 APK 安装更新...")) {
+                btnFast.disabled = false;
+                btnFast.style.opacity = "1";
               }
             };
           }

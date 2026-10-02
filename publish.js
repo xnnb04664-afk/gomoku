@@ -298,6 +298,8 @@ execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
+  `📦 【APK 更新回退】原生热更新失败或不可用时自动切换为完整 APK 安装通道，并在失败后恢复重试按钮，避免更新界面卡住`,
+  `🎛️ 【底部操作栏】聊天、重开、悔棋、匹配四个可见按钮统一为等宽四列，修复移动端底部空列和错位`,
   `👥 【完整好友系统】正式账号支持精确查找、申请/同意/拒绝/取消、在线状态、最近对手、删除好友和黑名单管理`,
   `💬 【实时文字私聊】好友之间支持文字、Emoji、快捷短语、历史分页、未读同步和仅清空自己一侧记录`,
   `🎮 【好友实时邀战】邀请方自动创建房间并发送 2 分钟有效邀请；接受后自动进房，P2P 失败仍可通过 TURN/WebSocket 继续`,
@@ -417,6 +419,7 @@ try {
     'android_src/assets/img/startup/startup-04.webp',
     'android_src/res/values/strings.xml',
     'android_src/src/com/gomoku/master/GomokuSplashView.java',
+    'android_src/src/com/gomoku/master/MainActivity.java',
     'official-site/index.html',
     'official-site/privacy/index.html',
     'official-site/site.js',
@@ -434,6 +437,7 @@ try {
     'tests/official_site_live_audit.py',
     'tests/official_site_smoke.py',
     'tests/official_site_worker_smoke.py',
+    'tests/update_fallback_smoke.py',
     'tests/online_reconnect_smoke.py',
     'version.json',
     '五子棋.apk',
