@@ -16,7 +16,7 @@ def main():
     latest_html = (ROOT / "index.html").read_bytes()
     manifest = {
         "code": 0,
-        "tag": "v1.0.128",
+        "tag": "v1.0.129",
         "apkPath": "/api/update/apk",
         "htmlPath": "/api/update/html",
         "apkTicket": "apk-fallback-ticket",
@@ -42,7 +42,7 @@ def main():
                 window.__updateFallbackProbe.apkTickets.push(String(ticket || ''));
               }
             };
-            localStorage.setItem('gomoku_last_seen_version', 'v1.0.127');
+            localStorage.setItem('gomoku_last_seen_version', 'v1.0.128');
             """
         )
         page = context.new_page()

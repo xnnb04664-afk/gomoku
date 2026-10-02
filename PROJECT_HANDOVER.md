@@ -1557,3 +1557,18 @@ node publish.js
 - 新增未跟踪测试 `tests/update_fallback_smoke.py`。
 
 本轮未运行 `publish.js`，未 push、未创建新 GitHub Release、未部署 Cloudflare Worker/D1/Pages，未合并到主目录 `D:\小游戏\五子棋`。后续若正式发版，必须先审查并只暂存明确文件（禁止 `git add .`），递增版本号、重新构建官网/单文件/APK，复核原签名与 v1/v2/v3，并在授权后分别发布；不要把当前本地 APK 当作线上 v1.0.127 资产。
+
+
+## 七十一、v1.0.128 / Build 129 正式发布与线上验收（2026-10-02，已上线）
+
+本轮按用户授权完成天空棋岛版本的正式发布。发布提交为 `efb84d1`，分支为 `feature/sky-island-vslice`；主目录 `D:\小游戏\五子棋` 未合入，仓库仍保持私有。内部版本统一为 `v1.0.128 (Build 129)`，界面显示 `v1.2.8`。
+
+- **GitHub Release**：正式 Release 为 [`v1.0.128`](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.128)，非草稿、非预发布，包含 `gomoku.apk` 与 `gomoku.html`。APK 为 `1,444,890 bytes`，SHA-256 为 `46CBFCB3F2FBCB37D62D7F8F4C1ECD80662AA71034CFDE46E901E374EB3DB34B`；HTML 为 `1,731,603 bytes`，SHA-256 为 `7298F68A68BC29E446BE331C209AB48839B16826BF87960313C723B83188B08A`。
+- **APK 签名**：`aapt` 版本源为 `versionName=1.0.128`、`versionCode=129`；构建沿用原正式证书，白名单证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。构建过程中的 Android 35 平台 jar 警告未阻断 javac、d8、aapt、签名和产物生成。
+- **功能修复**：原生 HTML 热更新写入失败时会自动回退到 APK 完整安装；下载/安装失败会解除进度锁并显示重试入口。底部 `聊天 / 重开 / 悔棋 / 匹配` 统一为四等分布局，根页面、Android 资源、单文件版和官网 `/play/` 已同步。
+- **官网与后端**：正式官网为 [`https://gomoku-home.pages.dev/`](https://gomoku-home.pages.dev/)，`gomoku-home` Pages、`gomoku-api` Pages 和 `gomoku-backend` Worker 均已部署。官网 `/version.json` 与 `/api/site-version` 为 `v1.0.128 / Build 129`；后端 `/api/version` 返回 `v1.0.128`，下载票据和 HTML 完整性摘要可用，未输出任何票据值。Worker 部署版本 ID 为 `d5e670c2-b9ae-48ef-848a-bc8b42d67158`。
+- **线上验收**：`tests/official_site_live_audit.py` 和 `GOMOKU_OFFICIAL_BASE_URL=https://gomoku-home.pages.dev python -B tests/official_site_worker_smoke.py` 均通过；覆盖首页、移动导航、`/play/`、好友 iframe、无横向溢出、官网版本接口和下载入口。
+- **本地回归**：`android_splash_smoke.py`、`android_lifecycle_smoke.py`、`apk_asset_manifest_smoke.py`、`card_responsive_smoke.py`、`game_social_dock_smoke.py`、`update_fallback_smoke.py`、关键 Node 语法和 `git diff --check` 均通过。回退测试夹具已随本次后续提交更新为“当前 v1.0.128、模拟最新 v1.0.129”，避免版本升级后误判为无更新。
+- **备份与凭据边界**：D1 发布前备份保存于仓库外 `C:\Users\ZhuanZ1\Documents\GomokuBackups\gomoku-db-2026-10-02T04-10-26-597Z.sql`；Cloudflare 配置仅通过本机已有外部配置和短时环境加载使用，没有复制到仓库、提交或输出令牌。
+- **MuMu 状态**：发布后检查时 `adb devices` 没有在线模拟器，`127.0.0.1:7555` 连接被拒绝，因此 `v1.0.128` APK 的 MuMu 覆盖安装尚未复验。此前同一修复内容的 `v1.0.127` 候选已通过启动动画、AI 对局、首个落子、聊天面板、重开、好友页和四等分按钮验收；不能将该结果冒充为 v1.0.128 的安装验收。
+- **发布边界**：本轮已上线 GitHub Release、Cloudflare Worker/API 和官方 Pages；未上传 Google Play 等第三方应用商店，未合并到主目录，也未把截图、诊断目录或长期密钥纳入提交。后续如需 MuMu 验收，应先启动模拟器再安装 Release 中的 `gomoku.apk`，并记录实际 SHA-256 与版本号。
