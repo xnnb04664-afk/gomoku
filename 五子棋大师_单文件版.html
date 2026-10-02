@@ -8745,6 +8745,164 @@ const MQTT_BROKER_URLS=["wss://broker.emqx.io:8084/mqtt","wss://broker.hivemq.co
 @media (max-width:600px){#announcementCenterPanel .announcement-center-card{width:calc(100% - 20px);height:min(680px,92vh)}}
 @media (prefers-reduced-motion:reduce){#announcementCenterPanel *{scroll-behavior:auto}}
 </style>
+  <!--
+    v1.0.127 UI visual port: presentation-only overrides from feature/ui-visual-upgrade.
+    Keep this block after the sky-island/startup styles so it cannot alter lobby,
+    startup, social, or update-loading behavior. The low-spec guard below preserves
+    the existing performance escape hatch on older Android devices.
+  -->
+  <style id="ui-visual-upgrade-port">
+    :root {
+      --ui-glass-surface: rgba(255, 255, 255, .78);
+      --ui-glass-border: rgba(255, 255, 255, .72);
+      --ui-glass-shadow: 0 4px 18px rgba(15, 23, 42, .08);
+      --ui-glass-blur: blur(16px);
+    }
+
+    .player-capsule {
+      background: var(--ui-glass-surface);
+      border: 1px solid var(--ui-glass-border);
+      border-radius: 999px;
+      padding: 3px 12px 3px 3px;
+      box-shadow: var(--ui-glass-shadow), inset 0 1px 0 rgba(255, 255, 255, .9);
+      backdrop-filter: var(--ui-glass-blur);
+      -webkit-backdrop-filter: var(--ui-glass-blur);
+      transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .player-capsule.right { padding: 3px 3px 3px 12px; }
+    .player-capsule:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(15, 23, 42, .12), inset 0 1px 0 #fff;
+    }
+    .player-capsule:active { transform: scale(.96); }
+    .avatar-circle {
+      border-color: #38bdf8;
+      box-shadow: 0 2px 6px rgba(56, 189, 248, .35);
+    }
+    .player-capsule.right .avatar-circle {
+      border-color: #f472b6;
+      box-shadow: 0 2px 6px rgba(244, 114, 182, .35);
+    }
+    .player-name { color: #1e293b; font-weight: 800; letter-spacing: .2px; }
+
+    .main-chat-box,
+    .game-social-dock {
+      background: var(--ui-glass-surface);
+      border-color: var(--ui-glass-border);
+      box-shadow: var(--ui-glass-shadow), inset 0 1px 0 rgba(255, 255, 255, .9);
+      backdrop-filter: var(--ui-glass-blur);
+      -webkit-backdrop-filter: var(--ui-glass-blur);
+    }
+    .game-social-dock {
+      border-radius: 14px;
+      padding: 5px 6px;
+    }
+    .game-social-dock-grid button {
+      border: 1px solid rgba(203, 213, 225, .6);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, .85);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, .04);
+      font-weight: 800;
+      transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
+    }
+    .game-social-dock-grid button:hover {
+      background: #fff;
+      border-color: #94a3b8;
+      transform: translateY(-1px);
+      box-shadow: 0 3px 8px rgba(15, 23, 42, .08);
+    }
+    .game-social-dock-grid button:active { transform: scale(.96); }
+
+    .card-slot {
+      border: 1px solid var(--ui-glass-border);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .82);
+      box-shadow: var(--ui-glass-shadow), inset 0 1px 0 rgba(255, 255, 255, .85);
+      backdrop-filter: var(--ui-glass-blur);
+      -webkit-backdrop-filter: var(--ui-glass-blur);
+      transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .card-slot:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(56, 189, 248, .2), inset 0 1px 0 #fff;
+    }
+    .card-slot:active { transform: scale(.96); }
+
+    /* Five regular controls stay in one row; the conditional room-exit control remains hidden until needed. */
+    .bottom-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      padding: 2px 2px max(6px, env(safe-area-inset-bottom, 6px)) 2px;
+      margin-bottom: 2px;
+    }
+    .bottom-controls .btn-ctrl { flex: 1 1 0; min-width: 0; }
+    .btn-ctrl {
+      padding: 8px 2px;
+      border: 1px solid rgba(255, 255, 255, .4);
+      background: rgba(255, 255, 255, .9);
+      color: #1e293b;
+      font-size: 13.5px;
+      font-weight: 800;
+      box-shadow: 0 3px 10px rgba(15, 23, 42, .1), inset 0 1px 0 rgba(255, 255, 255, .6);
+      transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+    }
+    .btn-ctrl:hover {
+      transform: translateY(-1.5px);
+      box-shadow: 0 5px 14px rgba(15, 23, 42, .14), inset 0 1px 0 rgba(255, 255, 255, .8);
+    }
+    .btn-ctrl:active {
+      transform: scale(.95) translateY(1px) !important;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, .1) !important;
+      filter: brightness(.96);
+    }
+    .btn-ctrl.btn-chat {
+      background: linear-gradient(135deg, #818cf8, #6366f1);
+      box-shadow: 0 3px 12px rgba(99, 102, 241, .35), inset 0 1px 0 rgba(255, 255, 255, .35);
+    }
+    .btn-ctrl.btn-primary {
+      box-shadow: 0 3px 12px rgba(16, 185, 129, .35), inset 0 1px 0 rgba(255, 255, 255, .35);
+    }
+    .btn-ctrl.btn-undo {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      color: #fff;
+      box-shadow: 0 3px 12px rgba(245, 158, 11, .35), inset 0 1px 0 rgba(255, 255, 255, .35);
+    }
+    .btn-ctrl.btn-online {
+      background: linear-gradient(135deg, #ec4899, #db2777);
+      box-shadow: 0 3px 12px rgba(236, 72, 153, .35), inset 0 1px 0 rgba(255, 255, 255, .35);
+    }
+    #btnCrossChess {
+      background: linear-gradient(135deg, #06b6d4, #0891b2) !important;
+      color: #fff !important;
+      border-color: rgba(255, 255, 255, .35) !important;
+      box-shadow: 0 3px 12px rgba(6, 182, 212, .35), inset 0 1px 0 rgba(255, 255, 255, .35) !important;
+    }
+    .btn-ctrl.btn-leave-room {
+      box-shadow: 0 3px 12px rgba(239, 68, 68, .35), inset 0 1px 0 rgba(255, 255, 255, .35);
+    }
+
+    .low-spec-mode .player-capsule,
+    .low-spec-mode .main-chat-box,
+    .low-spec-mode .game-social-dock,
+    .low-spec-mode .card-slot {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    @media (max-width: 600px) {
+      .game-social-dock { padding: 3px 4px; border-radius: 12px; }
+      .bottom-controls { gap: 3px; padding: 1px 2px max(4px, env(safe-area-inset-bottom, 4px)) 2px; }
+      .btn-ctrl { padding: 7px 1px; font-size: 12.5px; letter-spacing: -.3px; border-radius: 10px; }
+    }
+    @media (max-width: 380px) {
+      .btn-match-extra { display: none !important; }
+      .btn-ctrl { padding: 6px 0; font-size: 11.5px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .player-capsule, .card-slot, .game-social-dock-grid button, .btn-ctrl { transition: none; }
+    }
+  </style>
 </head>
 <body>
 
