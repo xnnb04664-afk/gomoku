@@ -1,5 +1,5 @@
 -- World channel persistence and per-user read/view state.
--- Messages are retained in D1; the Worker exposes a bounded 30-day/5000-id history window.
+-- Messages are retained in D1 indefinitely; clients page through history by ID.
 CREATE TABLE IF NOT EXISTS world_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   channel TEXT NOT NULL DEFAULT 'world' CHECK(channel = 'world'),

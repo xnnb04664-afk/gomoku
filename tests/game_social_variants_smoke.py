@@ -92,6 +92,8 @@ def main():
         world = extract_block(source, "script", "worldChatEnhancements")
         assert re.search(r"RETRY_DELAYS\s*=\s*\[0,\s*1000,\s*2000,\s*4000,\s*8000,\s*12000\]", world)
         assert "url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'" in world
+        assert "世界消息会永久保存在云端数据库" in world
+        assert "云端永久保存" in world
 
     for tag, ident in (
         ("style", "skyIslandEnhancementsStyle"),
@@ -127,10 +129,18 @@ def main():
     assert "notifySocialWorld" not in announcement_routes
     assert "body.admin" not in backend and "body.isAdmin" not in backend
 
+    world_routes = backend[backend.index("if (url.pathname === '/api/world/messages' && request.method === 'GET')"):backend.index("if (url.pathname === '/api/world/messages' && request.method === 'POST')")]
+    assert "WORLD_HISTORY_WINDOW_MS" not in backend and "WORLD_HISTORY_MAX_ID_SPAN" not in backend
+    assert "created_at >= ?" not in world_routes and "retentionDays" not in world_routes
+    assert "cleared_before_id" in world_routes and "WORLD_UNREAD_COUNT_CAP" in world_routes
+    assert "ORDER BY m.id DESC LIMIT ?" in world_routes
+
     migration = (ROOT / "migrations" / "0003_world_chat.sql").read_text(encoding="utf-8")
     for marker in ("CREATE TABLE IF NOT EXISTS announcements", "CREATE TABLE IF NOT EXISTS announcement_state", "idx_announcements_public"):
         assert marker in migration, f"迁移缺少 {marker}"
     assert "DELETE FROM announcements" not in migration
+    assert "30-day/5000-id" not in migration and "indefinitely" in migration
+    assert "DELETE FROM world_messages" not in backend and "DELETE FROM world_messages" not in migration
 
     social = (ROOT / "js" / "social.js").read_text(encoding="utf-8")
     android_social = (ROOT / "android_src" / "assets" / "js" / "social.js").read_text(encoding="utf-8")

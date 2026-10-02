@@ -56,8 +56,9 @@ const WORLD_MAX_DAILY_MESSAGES = 200;
 const WORLD_ACCOUNT_RATE_LIMIT = 30;
 const WORLD_IP_RATE_LIMIT = 120;
 const WORLD_CHANNEL_RATE_LIMIT = 600;
-const WORLD_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-const WORLD_HISTORY_MAX_ID_SPAN = 5000;
+// World messages are retained indefinitely. Keep the unread query bounded so a
+// newly registered account does not count the entire historical archive.
+const WORLD_UNREAD_COUNT_CAP = 100;
 const ANNOUNCEMENT_MAX_PAGE_SIZE = 20;
 const ANNOUNCEMENT_TITLE_CHARS = 120;
 const ANNOUNCEMENT_BODY_CHARS = 10000;
@@ -2332,20 +2333,22 @@ export default {
       const requestedLimit = Number(url.searchParams.get('limit'));
       const limit = Number.isSafeInteger(requestedLimit) ? Math.min(WORLD_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : WORLD_MAX_PAGE_SIZE;
       const state = await env.DB.prepare('SELECT last_read_id, cleared_before_id FROM world_message_state WHERE uid = ?').bind(uid).first();
-      const latest = await env.DB.prepare('SELECT MAX(id) AS max_id FROM world_messages WHERE channel = ? AND created_at >= ?').bind(WORLD_CHANNEL, Date.now() - WORLD_HISTORY_WINDOW_MS).first();
-      const floorId = Math.max(Number(state?.cleared_before_id) || 0, Math.max(0, (Number(latest?.max_id) || 0) - WORLD_HISTORY_MAX_ID_SPAN));
+      const floorId = Number(state?.cleared_before_id) || 0;
       const rows = await env.DB.prepare(`
         SELECT m.id, m.sender_uid, u.username, u.nickname, u.avatar, m.body, m.created_at
         FROM world_messages m JOIN users u ON u.uid = m.sender_uid
-        WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id < ? AND m.id > ? AND m.created_at >= ?
+        WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id < ? AND m.id > ?
           AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
         ORDER BY m.id DESC LIMIT ?
-      `).bind(WORLD_CHANNEL, before, floorId, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, limit).all();
+      `).bind(WORLD_CHANNEL, before, floorId, uid, limit).all();
       const unread = await env.DB.prepare(`
-        SELECT COUNT(*) AS cnt FROM world_messages m
-        WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id > MAX(?, ?) AND m.created_at >= ? AND m.sender_uid != ?
-          AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
-      `).bind(WORLD_CHANNEL, Number(state?.last_read_id) || 0, Number(state?.cleared_before_id) || 0, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, uid, uid).first();
+        SELECT COUNT(*) AS cnt FROM (
+          SELECT 1 FROM world_messages m
+          WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id > MAX(?, ?) AND m.sender_uid != ?
+            AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
+          ORDER BY m.id DESC LIMIT ?
+        )
+      `).bind(WORLD_CHANNEL, Number(state?.last_read_id) || 0, Number(state?.cleared_before_id) || 0, uid, uid, uid, WORLD_UNREAD_COUNT_CAP).first();
       const page = (rows.results || []).reverse().map(row => ({
         id: Number(row.id) || 0,
         senderUid: String(row.sender_uid || ''),
@@ -2355,7 +2358,7 @@ export default {
         body: String(row.body || ''),
         createdAt: Number(row.created_at) || 0
       }));
-      return json({ code: 0, data: { messages: page, hasMore: page.length >= limit, nextBefore: page.length ? page[0].id : 0, unreadCount: Math.max(0, Number(unread?.cnt) || 0), retentionDays: 30 } });
+      return json({ code: 0, data: { messages: page, hasMore: page.length >= limit, nextBefore: page.length ? page[0].id : 0, unreadCount: Math.max(0, Number(unread?.cnt) || 0) } });
     }
 
     if (url.pathname === '/api/world/messages' && request.method === 'POST') {

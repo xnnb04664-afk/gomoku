@@ -5186,7 +5186,7 @@
       '<div class="online-modal-card world-chat-card" role="dialog" aria-modal="true" aria-labelledby="worldChatTitle" onclick="event.stopPropagation()">' +
         '<div class="world-chat-head"><div><div id="worldChatTitle" class="world-chat-title">🌐 世界聊天</div><div id="worldChatStatus" class="world-chat-status">尚未连接</div></div>' +
           '<button type="button" id="worldChatClose" class="btn-chat-tool" aria-label="关闭世界聊天">✕</button></div>' +
-        '<div class="world-chat-retention">世界消息会持久保存在云端数据库，仅显示最近 30 天（最多 5000 条消息）；清空我的视图只改变你这一侧的已读位置，不会删除他人消息。</div>' +
+        '<div class="world-chat-retention">世界消息会永久保存在云端数据库，可持续加载全部历史；清空我的视图只改变你这一侧的已读位置，不会删除他人消息。</div>' +
         '<div id="worldChatMessages" class="world-chat-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>' +
         '<div id="worldChatOlder" class="world-chat-older"></div>' +
         '<div class="world-chat-quick" aria-label="快捷短语">' +
@@ -5304,7 +5304,7 @@
       renderMessages(older);
       scheduleBadges();
       if (!older && state.panelOpen) await markRead();
-      setStatus('世界频道已同步 · 最近 30 天', false);
+      setStatus('世界频道已同步 · 云端永久保存', false);
     } catch (error) {
       setStatus(error.message || '世界频道暂不可用', true);
       notice(error.message || '世界频道暂不可用', true);
