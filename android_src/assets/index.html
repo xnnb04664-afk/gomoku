@@ -5,9 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>天空棋岛 · 云上活棋谱</title>
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
+  <script>
+    // MuMu's x86 WebView needs a low-composite path before the first CSS
+    // frame; the native bridge is installed before this document is loaded.
+    try {
+      if (window.AndroidNativeApp && typeof window.AndroidNativeApp.isSoftwareRenderFallback === 'function'
+          && window.AndroidNativeApp.isSoftwareRenderFallback()) {
+        document.documentElement.classList.add('mumu-render-fallback');
+      }
+    } catch (_) {}
+  </script>
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="js/app.min.js" as="script">
-  <link rel="preload" href="img/startup/startup-01.webp" as="image" fetchpriority="high">
   <link rel="stylesheet" href="js/sky-island.css">
   <link rel="stylesheet" href="js/startup-splash.css">
   <script defer src="js/startup-splash.js"></script>
@@ -3800,18 +3809,18 @@
 </head>
 <body>
 
-  <div id="startupSplash" class="startup-splash" role="dialog" aria-modal="true" aria-label="天空棋岛正在启动" aria-hidden="true">
+  <div id="startupSplash" class="startup-splash" role="dialog" aria-modal="true" aria-label="天空棋岛正在启动" aria-hidden="true" hidden>
     <div class="startup-splash-frame" data-startup-frame="0">
-      <img src="img/startup/startup-01.webp" alt="" fetchpriority="high" decoding="async">
+      <img src="img/startup/startup-01.webp" alt="" loading="lazy" decoding="async">
     </div>
     <div class="startup-splash-frame" data-startup-frame="1">
-      <img src="img/startup/startup-02.webp" alt="" loading="eager" decoding="async">
+      <img src="img/startup/startup-02.webp" alt="" loading="lazy" decoding="async">
     </div>
     <div class="startup-splash-frame" data-startup-frame="2">
-      <img src="img/startup/startup-03.webp" alt="" loading="eager" decoding="async">
+      <img src="img/startup/startup-03.webp" alt="" loading="lazy" decoding="async">
     </div>
     <div class="startup-splash-frame" data-startup-frame="3">
-      <img src="img/startup/startup-04.webp" alt="" loading="eager" decoding="async">
+      <img src="img/startup/startup-04.webp" alt="" loading="lazy" decoding="async">
     </div>
     <div class="startup-splash-shade" aria-hidden="true"></div>
     <div class="startup-splash-brand">
@@ -5200,7 +5209,9 @@
     panel.addEventListener('click', event => { if (event.target === panel) closePanel(); });
     document.body.appendChild(panel);
     byId('worldChatClose')?.addEventListener('click', closePanel);
-    byId('worldChatSend')?.addEventListener('click', send);
+    // Avoid passing the click PointerEvent into send(text); send() should read
+    // the current textarea value when invoked by the button.
+    byId('worldChatSend')?.addEventListener('click', () => send());
     byId('worldChatClear')?.addEventListener('click', clearMyView);
     byId('worldChatInput')?.addEventListener('input', updateCount);
     byId('worldChatInput')?.addEventListener('keydown', event => {

@@ -62,7 +62,8 @@ def main():
         page.wait_for_selector("#skyExpedition.show", state="visible", timeout=15_000)
         page.wait_for_selector("#skyExpeditionCanvas", state="visible")
         assert page.locator("script[src='js/expedition.js']").count() == 1
-        assert page.evaluate("GomokuExpedition.levels.length") == 7
+        assert page.evaluate("GomokuExpedition.levels.length") >= 48
+        assert page.evaluate("GomokuExpedition.levels.some(level => level.id === 'island-48')")
         assert page.evaluate("GomokuExpedition.getSnapshot().levelId") == "island-01"
         assert_no_overflow(page, "expedition")
         page.screenshot(path=str(output_dir / "sky-island-expedition-board-390x844.png"), full_page=True)

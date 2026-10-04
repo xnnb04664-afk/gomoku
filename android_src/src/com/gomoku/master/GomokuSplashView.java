@@ -31,7 +31,9 @@ public final class GomokuSplashView extends View {
     }
 
     private static final int GRID_SIZE = 9;
-    private static final long ANIMATION_DURATION_MS = 820L;
+    // Keep every artwork frame on screen long enough for slower WebView/Android
+    // devices to render the cross-fade instead of being dismissed on frame one.
+    private static final long ANIMATION_DURATION_MS = 1200L;
     private static final float[][] STONES = {
             {2f, 2f, 0f}, {6f, 2f, 1f}, {3f, 4f, 0f},
             {5f, 4f, 1f}, {4f, 6f, 0f}, {4f, 3f, 1f}

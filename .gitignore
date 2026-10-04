@@ -7,6 +7,7 @@ android_src/classes/
 Thumbs.db
 *.log
 __pycache__/
+.codex-diagnostics/
 .cloudflare_config.json
 .wrangler/
 gomoku.html

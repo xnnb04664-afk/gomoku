@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.content.pm.PackageManager;
 import android.view.View;
 import android.view.ViewGroup;
@@ -198,6 +199,9 @@ public class MainActivity extends Activity {
     private GomokuSplashView mSplashView;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final Runnable mSplashFailSafe = this::dismissNativeSplash;
+    private final Runnable mSplashContentDismiss = this::dismissNativeSplash;
+    private static final long NATIVE_SPLASH_MIN_DURATION_MS = 1200L;
+    private long mNativeSplashStartedAt = 0L;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
     private ValueCallback<Uri[]> mFilePathCallback;
@@ -230,6 +234,37 @@ public class MainActivity extends Activity {
     private long mNetworkEventSequence = 0L;
 
     /**
+     * MuMu's x86 WebView renderer can hit its tile-memory limit while it is
+     * compositing the island shell, canvas and translucent cards together.
+     * Keep hardware rendering on real phones, but use a software WebView
+     * layer on the known virtual x86 profiles so the whole page is painted.
+     */
+    private boolean shouldUseSoftwareWebViewLayer() {
+        boolean hasX86Abi = false;
+        if (Build.SUPPORTED_ABIS != null) {
+            for (String abi : Build.SUPPORTED_ABIS) {
+                if (abi != null && abi.toLowerCase(java.util.Locale.ROOT).contains("x86")) {
+                    hasX86Abi = true;
+                    break;
+                }
+            }
+        }
+        if (!hasX86Abi) return false;
+
+        String fingerprint = String.valueOf(Build.FINGERPRINT).toLowerCase(java.util.Locale.ROOT);
+        String model = String.valueOf(Build.MODEL).toLowerCase(java.util.Locale.ROOT);
+        String product = String.valueOf(Build.PRODUCT).toLowerCase(java.util.Locale.ROOT);
+        boolean knownMuMuProfile = fingerprint.contains("rubens")
+                || model.contains("22041211a")
+                || product.contains("rubens");
+        boolean genericVirtualProfile = fingerprint.contains("generic")
+                || model.contains("sdk_gphone")
+                || model.contains("emulator")
+                || product.contains("sdk_");
+        return knownMuMuProfile || genericVirtualProfile;
+    }
+
+    /**
      * Installs the native splash over the WebView without putting WebView
      * startup behind an animation.  The user can dismiss it at any time;
      * otherwise first committed content removes it and the timeout is only a
@@ -238,6 +273,7 @@ public class MainActivity extends Activity {
     private void showNativeSplash() {
         if (mRootLayout == null || mSplashView != null) return;
         mSplashView = new GomokuSplashView(this);
+        mNativeSplashStartedAt = SystemClock.uptimeMillis();
         mSplashView.setDismissListener(this::dismissNativeSplash);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -249,8 +285,10 @@ public class MainActivity extends Activity {
     private void dismissNativeSplash() {
         if (mSplashView == null) return;
         mMainHandler.removeCallbacks(mSplashFailSafe);
+        mMainHandler.removeCallbacks(mSplashContentDismiss);
         GomokuSplashView splash = mSplashView;
         mSplashView = null;
+        mNativeSplashStartedAt = 0L;
         splash.stopAnimation();
         if (mRootLayout != null) {
             mRootLayout.removeView(splash);
@@ -258,11 +296,20 @@ public class MainActivity extends Activity {
         splash.setVisibility(View.GONE);
     }
 
+    private void requestNativeSplashDismiss() {
+        if (mSplashView == null) return;
+        mMainHandler.removeCallbacks(mSplashContentDismiss);
+        long elapsed = SystemClock.uptimeMillis() - mNativeSplashStartedAt;
+        long remaining = Math.max(0L, NATIVE_SPLASH_MIN_DURATION_MS - elapsed);
+        mMainHandler.postDelayed(mSplashContentDismiss, remaining);
+    }
+
     private void onWebContentVisible() {
-        // Keep this posted so WebView can finish its first draw before the
-        // overlay is removed.  There is no artificial minimum splash delay.
+        // WebView can finish its first draw very quickly. Keep the native
+        // sequence alive until all four frames have had time to render, then
+        // remove it on the main queue without delaying page boot itself.
         if (mSplashView != null) {
-            mMainHandler.post(this::dismissNativeSplash);
+            requestNativeSplashDismiss();
         }
         openFriendsAfterNotificationIfReady();
     }
@@ -470,12 +517,20 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         consumeSocialNotificationIntent(getIntent());
 
-        // 1. 无标题栏 + Window 硬件加速
+        // 1. 无标题栏 + 渲染策略
         requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().setFlags(
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-        );
+        if (shouldUseSoftwareWebViewLayer()) {
+            // MuMu 的 WebView 即使设置了软件 View layer，窗口级 GPU
+            // 合成仍会触发 tile memory limit；软件窗口可保证动态导航
+            // 重新绘制整张页面。真实手机不走这个分支。
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
+            android.util.Log.i("MainActivity", "MuMu virtual profile: using software window composition");
+        } else {
+            getWindow().setFlags(
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+            );
+        }
         getWindow().setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
@@ -534,7 +589,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(mRootLayout);
         // 原生动画与 WebView 并行启动；动画不作为页面可操作性的门槛。
-        showNativeSplash();
+        // Automatically skip the native animation, matching the web entry.
+        // The WebView starts immediately without a second launch overlay.
 
         setupWebView();
         registerNetworkMonitor();
@@ -804,9 +860,20 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
 
-        // 渲染优先级与硬件加速
+        // 渲染优先级与硬件加速。MuMu 的 x86 WebView 在复杂透明层上会
+        // 触发 tile memory limit，导致首屏和棋谱页只绘制出局部内容。
         settings.setRenderPriority(WebSettings.RenderPriority.HIGH);
-        mWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        boolean useSoftwareLayer = shouldUseSoftwareWebViewLayer();
+        mWebView.setLayerType(
+                useSoftwareLayer ? View.LAYER_TYPE_SOFTWARE : View.LAYER_TYPE_HARDWARE,
+                null
+        );
+        android.util.Log.i(
+                "MainActivity",
+                "WebView layer=" + (useSoftwareLayer ? "software" : "hardware")
+                        + ", model=" + Build.MODEL
+                        + ", product=" + Build.PRODUCT
+        );
         mWebView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
         mWebView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -846,6 +913,11 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public boolean isNativeApp() {
                 return true;
+            }
+
+            @android.webkit.JavascriptInterface
+            public boolean isSoftwareRenderFallback() {
+                return shouldUseSoftwareWebViewLayer();
             }
 
             @android.webkit.JavascriptInterface
@@ -1417,6 +1489,7 @@ public class MainActivity extends Activity {
         mDestroyed = true;
         mActivityResumed = false;
         mMainHandler.removeCallbacks(mSplashFailSafe);
+        mMainHandler.removeCallbacks(mSplashContentDismiss);
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);
         if (mSplashView != null) {

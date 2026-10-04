@@ -27,7 +27,7 @@ def main():
     assert "splash_bg" in night_colors and "splash_stone_dark" in night_colors
     assert "splash_content_description" in strings
 
-    assert "showNativeSplash();" in activity
+    assert "showNativeSplash();" not in activity, "native launch animation must be automatically skipped"
     assert "onPageCommitVisible" in activity
     assert "onWebContentVisible();" in activity
     assert "postDelayed(mSplashFailSafe, 1400L)" in activity

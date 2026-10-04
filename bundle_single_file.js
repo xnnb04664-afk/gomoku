@@ -12,6 +12,8 @@ execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
 console.log('>>> [1/3] 读取当前最新 index.html 母本代码...');
 let html = fs.readFileSync(SOURCE_HTML, 'utf8');
 html = injectAiWorkerSource(html, ROOT_DIR);
+const faviconDataUrl = 'data:image/png;base64,' + fs.readFileSync(path.join(ROOT_DIR, 'favicon.png')).toString('base64');
+html = html.replace(/href="favicon\.png"/g, `href="${faviconDataUrl}"`);
 // 单文件版会把 app.min.js 内联，不能留下指向不存在外部资源的 preload。
 html = html.replace(/\s*<link rel="preload" href="js\/app\.min\.js" as="script">/i, '');
 // 启动动画必须在真正的单文件中离线可用：样式、控制器和四张画面
@@ -30,7 +32,9 @@ if (fs.existsSync(startupJsPath)) {
   const startupJsContent = fs.readFileSync(startupJsPath, 'utf8');
   html = html.replace(
     /\s*<script defer src="js\/startup-splash\.js"><\/script>/i,
-    `\n  <script defer>\n${startupJsContent.replace(/<\/script/gi, '<\\/script')}\n  </script>`
+    // Inline scripts ignore defer. Wait for the splash DOM just as the
+    // external deferred script does on the regular page.
+    `\n  <script>\n(() => {\n  const startSplash = () => {\n${startupJsContent.replace(/<\/script/gi, '<\\/script')}\n  };\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startSplash, { once: true });\n  else startSplash();\n})();\n  </script>`
   );
 }
 [
@@ -183,6 +187,8 @@ if (styleStart < 0) {
   throw new Error('无法定位页面样式区域');
 }
 const inlineOptionalResources = [
+  inlineResourceTag('peer', '内联 PeerJS 联机库（进入联机时载入）', fs.readFileSync(path.join(ROOT_DIR, 'js', 'peerjs.min.js'), 'utf8')),
+  inlineResourceTag('p2p', '内联 P2P 网络模块（进入联机时载入）', fs.readFileSync(path.join(ROOT_DIR, 'js', 'p2p-network.js'), 'utf8')),
   inlineResourceTag('mqtt', '内联 MQTT 极速联机引擎（进入联机时载入）', mqttJsContent),
   inlineResourceTag('aiFast', '内联快速五子棋 AI 引擎（Worker 异常时按需回退）', aiFastContent),
   inlineResourceTag('aiCore', '内联兼容五子棋 AI 引擎（双重异常时按需回退）', aiEngineContent),

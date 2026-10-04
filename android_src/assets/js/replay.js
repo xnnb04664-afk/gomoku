@@ -324,6 +324,7 @@
           localStorage.setItem(key, JSON.stringify(json.data));
           renderHistoryUI();
           updateHistoryCountUI();
+          try { window.dispatchEvent(new Event('gomoku:history-updated')); } catch (_) {}
         }
       } catch(e) {}
     }
@@ -345,6 +346,7 @@
               localStorage.setItem(key, JSON.stringify(json.data));
               renderHistoryUI();
               updateHistoryCountUI();
+              try { window.dispatchEvent(new Event('gomoku:history-updated')); } catch (_) {}
             }
           }).catch(() => {});
       }
@@ -361,6 +363,7 @@
         localStorage.removeItem(key);
         renderHistoryUI();
         updateHistoryCountUI();
+        try { window.dispatchEvent(new Event('gomoku:history-updated')); } catch (_) {}
 
         // ☁️ 云端数据库同步清空（确保下次打开绝不会从云端复活）
         if (hasRegisteredAccountSession()) {

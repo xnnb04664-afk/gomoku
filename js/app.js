@@ -3872,6 +3872,7 @@
         if (list.length > 30) list = list.slice(0, 30);
         localStorage.setItem(key, JSON.stringify(list));
         updateHistoryCountUI();
+        try { window.dispatchEvent(new Event('gomoku:history-updated')); } catch (_) {}
 
         // ☁️ 实时异步备份到 Cloudflare D1 云端数据库（换机/重装永不丢战绩谱，仅限正式账号）
         if (hasRegisteredAccountSession()) {
@@ -4799,7 +4800,7 @@
           ctx.fillRect(gx, gy, gridX, 1);
           ctx.fillRect(gx, gy, 1, gridY);
 
-          ctx.strokeStyle = 'rgba(76, 139, 22, 0.25)';
+          ctx.strokeStyle = 'rgba(76,139,22,0.25)';
           ctx.lineWidth = 0.5;
           ctx.strokeRect(gx, gy, gridX, gridY);
         }
