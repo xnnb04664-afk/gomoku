@@ -7,15 +7,15 @@
 ## 立即体验
 
 - **在线试玩**：[进入五子棋官网](https://gomoku-home.pages.dev/)。
-- **Android 手机**：[下载最新版 APK](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk)。下载后按设备提示安装。
-- **电脑浏览器**：[下载单文件网页版](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.html)。下载后用浏览器打开，无需安装。
-- **全部版本与更新说明**：[查看 GitHub Releases](https://github.com/xnnb04664-afk/gomoku/releases)。
+- **Android 手机**：[下载最新版 APK](https://github.com/xnnb04664-afk/wuziqi-gomoku/releases/latest/download/gomoku.apk)。下载后按设备提示安装。
+- **电脑浏览器**：[下载单文件网页版](https://github.com/xnnb04664-afk/wuziqi-gomoku/releases/latest/download/gomoku.html)。下载后用浏览器打开，无需安装。
+- **全部版本与更新说明**：[查看 GitHub Releases](https://github.com/xnnb04664-afk/wuziqi-gomoku/releases)。
 
 ## 游戏说明
 
 - 单机对弈可以本地游玩；好友联机、账号等在线功能需要网络连接。
 - Android 版适合手机和平板；单文件网页版适合 Windows、macOS 等带浏览器的设备。
-- 遇到下载或游戏问题，可到 [问题反馈区](https://github.com/xnnb04664-afk/gomoku/issues) 留言。请勿在公开留言中填写密码、验证码或私人聊天内容。
+- 遇到下载或游戏问题，可到 [问题反馈区](https://github.com/xnnb04664-afk/wuziqi-gomoku/issues) 留言。请勿在公开留言中填写密码、验证码或私人聊天内容。
 
 ## 本地运行
 

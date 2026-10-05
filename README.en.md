@@ -7,9 +7,9 @@ A Chinese-language Gomoku (Five in a Row) game with a bright sky-island setting 
 ## Play
 
 - **Play online**: [Open the Gomoku website](https://gomoku-home.pages.dev/). The game interface is in Simplified Chinese.
-- **Android**: [Download the latest APK](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk). Install it by following your device's prompts.
-- **Desktop browser**: [Download the single-file game](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.html). Open the downloaded file in a browser; no installation is needed.
-- **All releases and notes**: [Browse GitHub Releases](https://github.com/xnnb04664-afk/gomoku/releases).
+- **Android**: [Download the latest APK](https://github.com/xnnb04664-afk/wuziqi-gomoku/releases/latest/download/gomoku.apk). Install it by following your device's prompts.
+- **Desktop browser**: [Download the single-file game](https://github.com/xnnb04664-afk/wuziqi-gomoku/releases/latest/download/gomoku.html). Open the downloaded file in a browser; no installation is needed.
+- **All releases and notes**: [Browse GitHub Releases](https://github.com/xnnb04664-afk/wuziqi-gomoku/releases).
 
 Solo games can be played locally. Friend matches and account features require an internet connection. The in-game interface is primarily in Simplified Chinese; this README provides English download and setup guidance.
 
@@ -25,7 +25,7 @@ Open <http://localhost:3000>. The local server listens on this device only.
 
 ## Feedback
 
-Report download or gameplay issues in [GitHub Issues](https://github.com/xnnb04664-afk/gomoku/issues). Please do not post passwords, verification codes, or private chat content in public issues.
+Report download or gameplay issues in [GitHub Issues](https://github.com/xnnb04664-afk/wuziqi-gomoku/issues). Please do not post passwords, verification codes, or private chat content in public issues.
 
 ## Source code
 
