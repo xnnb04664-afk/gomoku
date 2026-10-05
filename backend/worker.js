@@ -27,8 +27,8 @@ const MAX_UPDATE_ASSET_BYTES = 8 * 1024 * 1024;
 const AUTH_SESSION_TTL_MS = 365 * 24 * 3600 * 1000;
 const REFRESH_TOKEN_BYTES = 32;
 
-// GitHub Release 更新中转：凭据只通过 Worker Secret 注入，绝不下发到客户端。
-const UPDATE_REPOSITORY = 'xnnb04664-afk/wuziqi-gomoku';
+// 私有仓库更新中转：GitHub 凭据只通过 Worker Secret 注入，绝不下发到客户端。
+const UPDATE_REPOSITORY = 'xnnb04664-afk/gomoku';
 const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
 const UPDATE_TICKET_TTL_SECONDS = 90;

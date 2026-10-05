@@ -45,12 +45,12 @@ const release = {
   assets: [
     {
       name: 'gomoku.apk',
-      url: 'https://api.github.com/repos/xnnb04664-afk/wuziqi-gomoku/releases/assets/1',
+      url: 'https://api.github.com/repos/xnnb04664-afk/gomoku/releases/assets/1',
       digest,
     },
     {
       name: 'gomoku.html',
-      url: 'https://api.github.com/repos/xnnb04664-afk/wuziqi-gomoku/releases/assets/2',
+      url: 'https://api.github.com/repos/xnnb04664-afk/gomoku/releases/assets/2',
       digest,
     },
   ],
