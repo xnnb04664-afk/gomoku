@@ -9426,7 +9426,8 @@ function openThemeModal(){document.getElementById("themeModal").classList.add("s
     panel.addEventListener('click', event => { if (event.target === panel) closePanel(); });
     document.body.appendChild(panel);
     byId('worldChatClose')?.addEventListener('click', closePanel);
-    byId('worldChatSend')?.addEventListener('click', send);
+    // A click listener receives a PointerEvent; keep the send API text-only.
+    byId('worldChatSend')?.addEventListener('click', () => send());
     byId('worldChatClear')?.addEventListener('click', clearMyView);
     byId('worldChatInput')?.addEventListener('input', updateCount);
     byId('worldChatInput')?.addEventListener('keydown', event => {
@@ -9687,7 +9688,12 @@ function openThemeModal(){document.getElementById("themeModal").classList.add("s
   async function send(text) {
     if (!registered()) { loginGuide(); return; }
     const input = byId('worldChatInput');
-    const value = textOf(text == null ? input && input.value : text).normalize ? textOf(text == null ? input && input.value : text).normalize('NFC').trim() : textOf(text == null ? input && input.value : text).trim();
+    // Treat non-string arguments (including accidental DOM events) as a request
+    // to send the composer contents, never stringify them into chat messages.
+    const useInput = typeof text !== 'string';
+    const rawValue = useInput ? input && input.value : text;
+    const normalizedValue = textOf(rawValue);
+    const value = (normalizedValue.normalize ? normalizedValue.normalize('NFC') : normalizedValue).trim();
     if (!value) return;
     if (Array.from(value).length > MAX_CHARS) { notice('世界消息最多 500 个文字或 Emoji', true); return; }
     const sendButton = byId('worldChatSend');
@@ -9695,7 +9701,7 @@ function openThemeModal(){document.getElementById("themeModal").classList.add("s
     try {
       const result = await api('/api/world/messages', { method: 'POST', body: JSON.stringify({ text: value, clientMessageId: newMessageId() }) });
       appendMessage(result.data);
-      if (input && !text) input.value = '';
+      if (input && useInput) input.value = '';
       updateCount();
       setStatus('消息已发送；内容会保存在云端', false);
     } catch (error) {
