@@ -65,6 +65,12 @@ def main():
         {"id": index, "sender_uid": "user_friend_2", "receiver_uid": UID, "body": f"更早消息-{index}", "created_at": 1_788_700_000_000 + index}
         for index in range(1, 51)
     ]
+    chat_messages = older_messages + newest_messages
+    next_message_id = [101]
+    cleared_before_id = [0]
+    injected_realtime_messages = {"done": False}
+    after_102_calls = [0]
+    injected_poll_message = {"done": False}
     calls = []
     socket_ticket_failures = {"enabled": False}
     socket_ticket_times = []
@@ -101,11 +107,41 @@ def main():
             requests[:] = [item for item in requests if item["id"] != request_id]
             response = payload()
         elif path == "/api/messages" and request.method == "GET":
-            before = int(query.get("before", [0])[0] or 0)
-            response = payload(older_messages if before == 51 else newest_messages)
+            after_value = query.get("after", [None])[0]
+            if after_value is not None:
+                after = int(after_value)
+                if after == 100 and not injected_realtime_messages["done"]:
+                    for message_id in (101, 102):
+                        chat_messages.append({
+                            "id": message_id, "sender_uid": "user_friend_2", "receiver_uid": UID,
+                            "body": f"实时消息-{message_id}", "created_at": 1_788_900_000_000 + message_id,
+                        })
+                    injected_realtime_messages["done"] = True
+                    next_message_id[0] = 103
+                elif after == 102:
+                    after_102_calls[0] += 1
+                    if after_102_calls[0] >= 2 and not injected_poll_message["done"]:
+                        chat_messages.append({
+                            "id": 103, "sender_uid": "user_friend_2", "receiver_uid": UID,
+                            "body": "断线后轮询补到的消息", "created_at": 1_788_900_000_103,
+                        })
+                        injected_poll_message["done"] = True
+                        next_message_id[0] = 104
+                rows = [item for item in chat_messages if item["id"] > max(after, cleared_before_id[0])]
+                response = payload(rows[:50])
+            else:
+                before = int(query.get("before", [0])[0] or 0)
+                source = older_messages if before == 51 else newest_messages
+                response = payload([item for item in source if item["id"] > cleared_before_id[0]])
         elif path == "/api/messages" and request.method == "POST":
-            response = payload({"id": 101, "sender_uid": UID, "receiver_uid": body.get("receiverUid"), "body": body.get("text"), "created_at": int(time.time() * 1000)})
-        elif path in ("/api/messages/read", "/api/messages/clear"):
+            message = {"id": next_message_id[0], "sender_uid": UID, "receiver_uid": body.get("receiverUid"), "body": body.get("text"), "created_at": int(time.time() * 1000)}
+            next_message_id[0] += 1
+            chat_messages.append(message)
+            response = payload(message)
+        elif path == "/api/messages/read":
+            response = payload()
+        elif path == "/api/messages/clear":
+            cleared_before_id[0] = max((item["id"] for item in chat_messages), default=0)
             response = payload()
         elif path == "/api/social/settings":
             settings["presenceHidden"] = body.get("presenceHidden") is True
@@ -269,6 +305,28 @@ def main():
         assert page.locator("#socialChatMessages img").count() == 0, "消息正文被当成 HTML 执行"
         page.locator('[data-social-action="load-older-messages"]').click()
         page.wait_for_selector("#socialChatMessages >> text=更早消息-1")
+
+        # 两个实时通知在同一次增量请求进行时到达：请求应排队补拉，且保留已有聊天记录。
+        page.evaluate("""
+          () => {
+            const socket = [...window.__mockSockets].reverse().find(item => item.readyState === 1);
+            for (const messageId of [101, 102]) socket.serverMessage(JSON.stringify({ type: 'social_event', event: {
+              kind: 'message', fromUid: 'user_friend_2', messageId
+            }}));
+          }
+        """)
+        page.wait_for_selector("#socialChatMessages >> text=实时消息-101", timeout=5000)
+        page.wait_for_selector("#socialChatMessages >> text=实时消息-102", timeout=5000)
+        page.wait_for_function("document.querySelector('#socialChatMessages')?.textContent.includes('最新消息-100')")
+        page.wait_for_function("document.querySelector('#socialChatMessages')?.textContent.includes('更早消息-1')")
+        page.wait_for_selector("#socialChatMessages >> text=断线后轮询补到的消息", timeout=8000)
+        assert page.locator("#socialChatMessages").inner_text().count("实时消息-101") == 1
+        chat_realtime_merge = all(
+            text in page.locator("#socialChatMessages").inner_text()
+            for text in ("最新消息-100", "更早消息-1", "实时消息-101", "实时消息-102")
+        )
+        chat_poll_fallback = "断线后轮询补到的消息" in page.locator("#socialChatMessages").inner_text()
+
         page.locator("#socialChatInput").fill("你好🙂")
         page.locator("#socialChatInput").press("Enter")
         page.wait_for_selector("#socialChatMessages >> text=你好🙂")
@@ -353,6 +411,8 @@ def main():
             "requestActions": all(not any(item["id"] == value for item in requests) for value in (REQUEST_ACCEPT, REQUEST_REJECT, REQUEST_CANCEL)),
             "chatPagination": any(call["path"] == "/api/messages" and call["query"].get("before") == ["51"] for call in calls),
             "chatRead": read_call["body"].get("lastMessageId") == 100,
+            "chatRealtimeMerge": chat_realtime_merge,
+            "chatPollingFallback": chat_poll_fallback,
             "messageIdempotency": bool(re.fullmatch(r"msg_[a-f0-9]{24}", sent_message["body"].get("clientMessageId", ""))),
             "messageUtf8": sent_message["body"].get("text") == "你好🙂",
             "quickPhrase": any(call["path"] == "/api/messages" and call["method"] == "POST" and call["body"].get("text") == "来一局？" for call in calls),

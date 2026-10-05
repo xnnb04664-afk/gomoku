@@ -2447,14 +2447,27 @@ export default {
       if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '仅好友可以查看私聊' }, 403);
       const pairKey = socialPairKey(uid, friendUid);
       const state = await env.DB.prepare('SELECT cleared_before_id FROM message_state WHERE uid = ? AND pair_key = ?').bind(uid, pairKey).first();
+      const hasAfter = url.searchParams.has('after');
+      const requestedAfter = Number(url.searchParams.get('after'));
+      if (hasAfter && (!Number.isSafeInteger(requestedAfter) || requestedAfter < 0)) {
+        return json({ code: 400, msg: '消息增量位置无效' }, 400);
+      }
       const requestedBefore = Number(url.searchParams.get('before'));
       const before = Number.isSafeInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : Number.MAX_SAFE_INTEGER;
       const requestedLimit = Number(url.searchParams.get('limit'));
       const limit = Number.isSafeInteger(requestedLimit) ? Math.min(SOCIAL_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : 30;
+      const clearedBeforeId = Number(state?.cleared_before_id) || 0;
+      if (hasAfter) {
+        const rows = await env.DB.prepare(`
+          SELECT id, sender_uid, receiver_uid, body, created_at FROM private_messages
+          WHERE pair_key = ? AND id > ? AND id > ? ORDER BY id ASC LIMIT ?
+        `).bind(pairKey, requestedAfter, clearedBeforeId, limit).all();
+        return json({ code: 0, data: rows.results || [] });
+      }
       const rows = await env.DB.prepare(`
         SELECT id, sender_uid, receiver_uid, body, created_at FROM private_messages
         WHERE pair_key = ? AND id < ? AND id > ? ORDER BY id DESC LIMIT ?
-      `).bind(pairKey, before, Number(state?.cleared_before_id) || 0, limit).all();
+      `).bind(pairKey, before, clearedBeforeId, limit).all();
       return json({ code: 0, data: (rows.results || []).reverse() });
     }
 

@@ -2,6 +2,7 @@
   'use strict';
 
   const MESSAGE_LIMIT = 500;
+  const CHAT_REFRESH_INTERVAL_MS = 4000;
   const SEARCH_DEBOUNCE_MS = 320;
   const SEARCH_CACHE_TTL_MS = 15000;
   const SOCKET_RETRY_DELAYS = [0, 1000, 2000, 4000, 8000, 12000];
@@ -18,6 +19,10 @@
     chatOldestId: 0,
     chatHasMore: false,
     chatLoading: false,
+    chatLoadingOlder: false,
+    chatRefreshPending: false,
+    chatRefreshTimer: null,
+    chatGeneration: 0,
     pendingInvites: new Map(),
     socket: null,
     socketConnecting: false,
@@ -612,11 +617,16 @@
   function closeChat() {
     const modal = byId('socialChatModal');
     if (modal) modal.classList.remove('show');
+    if (state.chatRefreshTimer) clearInterval(state.chatRefreshTimer);
+    state.chatRefreshTimer = null;
+    state.chatGeneration += 1;
+    state.chatRefreshPending = false;
     state.currentChat = null;
     state.messages = [];
     state.chatOldestId = 0;
     state.chatHasMore = false;
     state.chatLoading = false;
+    state.chatLoadingOlder = false;
   }
 
   function renderMessages(scrollToBottom) {
@@ -628,7 +638,7 @@
     }
     const myUid = uid();
     const older = state.chatHasMore
-      ? `<div style="text-align:center;margin:2px 0 6px">${button('load-older-messages', state.chatLoading ? '正在加载…' : '加载更早消息', state.chatLoading ? 'disabled' : '')}</div>`
+      ? `<div style="text-align:center;margin:2px 0 6px">${button('load-older-messages', state.chatLoadingOlder ? '正在加载…' : '加载更早消息', state.chatLoadingOlder ? 'disabled' : '')}</div>`
       : '';
     root.innerHTML = older + state.messages.map(message => {
       const mine = String(message.sender_uid) === myUid;
@@ -638,46 +648,98 @@
     if (scrollToBottom !== false) root.scrollTop = root.scrollHeight;
   }
 
+  function latestChatMessageId(messages) {
+    return (messages || state.messages).reduce((max, message) => Math.max(max, Number(message && message.id) || 0), 0);
+  }
+
+  function mergeChatMessages(existing, incoming) {
+    const byId = new Map();
+    for (const message of [...(existing || []), ...(incoming || [])]) {
+      if (message && Number(message.id) > 0) byId.set(String(message.id), message);
+    }
+    return Array.from(byId.values()).sort((left, right) => Number(left.id) - Number(right.id));
+  }
+
+  function stopChatRefresh() {
+    if (state.chatRefreshTimer) clearInterval(state.chatRefreshTimer);
+    state.chatRefreshTimer = null;
+  }
+
+  function startChatRefresh() {
+    stopChatRefresh();
+    state.chatRefreshTimer = setInterval(() => {
+      const modal = byId('socialChatModal');
+      if (!state.currentChat || !modal || !modal.classList.contains('show') || document.hidden) return;
+      loadChat({ incremental: true, quiet: true });
+    }, CHAT_REFRESH_INTERVAL_MS);
+  }
+
   async function loadChat(options) {
-    if (!state.currentChat || state.chatLoading) return;
-    const older = options && options.older === true;
+    if (!state.currentChat) return false;
+    const config = options || {};
+    const older = config.older === true;
+    const incremental = config.incremental === true;
+    if (state.chatLoading) {
+      if (!older) state.chatRefreshPending = true;
+      return false;
+    }
     if (older && !state.chatHasMore) return;
     const chatUid = String(state.currentChat.uid);
+    const generation = state.chatGeneration;
     const root = byId('socialChatMessages');
     const previousHeight = root ? root.scrollHeight : 0;
+    const wasAtBottom = !root || root.scrollHeight - root.scrollTop - root.clientHeight < 48;
     state.chatLoading = true;
+    state.chatLoadingOlder = older;
     if (older) renderMessages(false);
     try {
       const params = { friendUid: chatUid, limit: 50 };
       if (older && state.chatOldestId > 0) params.before = state.chatOldestId;
+      if (incremental) params.after = latestChatMessageId();
       const result = await api(makeQuery('/api/messages', params));
-      if (!state.currentChat || String(state.currentChat.uid) !== chatUid) return;
+      if (generation !== state.chatGeneration || !state.currentChat || String(state.currentChat.uid) !== chatUid) return false;
       const page = Array.isArray(result.data) ? result.data : [];
-      const known = new Set(state.messages.map(message => String(message.id)));
-      const uniquePage = page.filter(message => message && !known.has(String(message.id)));
-      state.messages = older ? uniquePage.concat(state.messages) : uniquePage;
+      if (older) state.messages = mergeChatMessages(page, state.messages);
+      else if (incremental) state.messages = mergeChatMessages(state.messages, page);
+      else state.messages = page;
       state.chatOldestId = state.messages.reduce((min, message) => {
         const id = Number(message.id) || 0;
         return id > 0 && (min === 0 || id < min) ? id : min;
       }, 0);
-      state.chatHasMore = page.length >= 50;
-      state.chatLoading = false;
-      renderMessages(!older);
+      if (!incremental) state.chatHasMore = page.length >= 50;
+      state.chatLoadingOlder = false;
+      if (!incremental || page.length > 0) renderMessages(older ? false : (!incremental || wasAtBottom));
       if (older && root) root.scrollTop = Math.max(0, root.scrollHeight - previousHeight);
       const lastId = state.messages.reduce((max, message) => Math.max(max, Number(message.id) || 0), 0);
-      if (!older && lastId) {
-        await api('/api/messages/read', { method: 'POST', body: JSON.stringify({ friendUid: chatUid, lastMessageId: lastId }) });
+      if (!older && page.length > 0 && lastId) {
         const friend = state.friends.find(item => String(item.uid) === chatUid);
         if (friend) friend.unread = 0;
         renderFriends();
         updateUnreadBadge();
+        api('/api/messages/read', { method: 'POST', body: JSON.stringify({ friendUid: chatUid, lastMessageId: lastId }) })
+          .catch(() => { if (generation === state.chatGeneration) refresh({ quiet: true }); });
       }
+      return true;
     } catch (error) {
-      notice(error.message || '聊天记录加载失败', true);
-      state.chatLoading = false;
-      if (older && state.currentChat && String(state.currentChat.uid) === chatUid) renderMessages(false);
+      if (generation === state.chatGeneration) {
+        if (!config.quiet) notice(error.message || '聊天记录加载失败', true);
+        state.chatLoadingOlder = false;
+        if (older && state.currentChat && String(state.currentChat.uid) === chatUid) renderMessages(false);
+      }
+      return false;
     } finally {
-      state.chatLoading = false;
+      if (generation === state.chatGeneration) {
+        state.chatLoading = false;
+        state.chatLoadingOlder = false;
+        if (state.chatRefreshPending) {
+          state.chatRefreshPending = false;
+          setTimeout(() => {
+            if (generation === state.chatGeneration && state.currentChat && String(state.currentChat.uid) === chatUid) {
+              loadChat({ incremental: true, quiet: true });
+            }
+          }, 0);
+        }
+      }
     }
   }
 
@@ -711,6 +773,11 @@
     const friendUid = typeof friend === 'object' ? friend.uid : friend;
     const record = typeof friend === 'object' ? friend : state.friends.find(item => String(item.uid) === String(friendUid));
     if (!friendUid || !record) return notice('好友资料不存在，请刷新后重试', true);
+    stopChatRefresh();
+    state.chatGeneration += 1;
+    state.chatRefreshPending = false;
+    state.chatLoading = false;
+    state.chatLoadingOlder = false;
     state.currentChat = record;
     state.messages = [];
     state.chatOldestId = 0;
@@ -722,6 +789,7 @@
     if (modal) modal.classList.add('show');
     ensureChatControls();
     renderMessages();
+    startChatRefresh();
     await loadChat();
     const input = byId('socialChatInput');
     if (input) input.focus();
@@ -909,6 +977,7 @@
         if (state.socket !== socket) return;
         state.socketRetry = 0;
         setConnectionStatus('好友状态已实时连接', true);
+        if (state.currentChat) loadChat({ incremental: true, quiet: true });
         state.socketPingTimer = setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping', sentAt: Date.now() }));
         }, 20000);
@@ -948,7 +1017,7 @@
       return;
     }
     if (event.kind === 'message' && state.currentChat && String(state.currentChat.uid) === String(event.fromUid)) {
-      loadChat();
+      loadChat({ incremental: true, quiet: true });
     }
     if (event.kind === 'message') notifyIncomingMessage(event);
     refresh({ quiet: true });
@@ -1097,6 +1166,7 @@
   function onVisibilityChange() {
     if (!state.started || document.hidden) return;
     refresh({ quiet: true });
+    if (state.currentChat) loadChat({ incremental: true, quiet: true });
     connectSocket();
   }
 

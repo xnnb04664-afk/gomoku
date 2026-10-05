@@ -159,10 +159,19 @@ class MemoryStatement {
       };
     }
     if (q.includes('from private_messages') && q.includes('where pair_key = ?')) {
-      const [key, before, cleared, limit] = this.args;
+      const [key, cursor, cleared, limit] = this.args;
+      if (q.includes('order by id asc')) {
+        return {
+          results: this.db.messages
+            .filter(row => row.pair_key === key && row.id > Number(cursor) && row.id > Number(cleared))
+            .sort((a, b) => a.id - b.id)
+            .slice(0, Number(limit))
+            .map(row => this.db.publicMessage(row)),
+        };
+      }
       return {
         results: this.db.messages
-          .filter(row => row.pair_key === key && row.id < Number(before) && row.id > Number(cleared))
+          .filter(row => row.pair_key === key && row.id < Number(cursor) && row.id > Number(cleared))
           .sort((a, b) => b.id - a.id)
           .slice(0, Number(limit))
           .map(row => this.db.publicMessage(row)),
@@ -662,6 +671,12 @@ async function main() {
   assert.equal(firstMessage.response.status, 200);
   assert.equal(duplicateMessage.payload.data.id, firstMessage.payload.data.id, '相同客户端消息 ID 应返回同一消息');
   assert.equal(db.messages.length, 1, '相同客户端消息 ID 不得重复落库');
+  const bobIncrementalMessages = await call(env, '/api/messages?uid=100002&friendUid=100001&after=0&limit=50', { token: 'token-bob' });
+  assert.deepEqual(bobIncrementalMessages.payload.data.map(row => row.id), [firstMessage.payload.data.id], 'after 游标应只返回游标之后的新私聊');
+  const bobNoNewMessages = await call(env, `/api/messages?uid=100002&friendUid=100001&after=${firstMessage.payload.data.id}&limit=50`, { token: 'token-bob' });
+  assert.deepEqual(bobNoNewMessages.payload.data, [], 'after 游标之后没有新消息时应返回空数组');
+  const invalidMessageCursor = await call(env, '/api/messages?uid=100002&friendUid=100001&after=-1', { token: 'token-bob' });
+  assert.equal(invalidMessageCursor.response.status, 400, '私聊增量游标必须是非负整数');
   result = await call(env, '/api/messages', {
     method: 'POST', uid: '100001', token: 'token-alice',
     body: { receiverUid: '100002', text: 'changed body', clientMessageId: message.clientMessageId },
@@ -683,6 +698,8 @@ async function main() {
   const aliceMessages = await call(env, '/api/messages?uid=100001&friendUid=100002', { token: 'token-alice' });
   const bobMessages = await call(env, '/api/messages?uid=100002&friendUid=100001', { token: 'token-bob' });
   assert.equal(aliceMessages.payload.data.length, 0, '清空聊天只隐藏当前用户一侧历史');
+  const aliceAfterClearIncremental = await call(env, '/api/messages?uid=100001&friendUid=100002&after=0', { token: 'token-alice' });
+  assert.equal(aliceAfterClearIncremental.payload.data.length, 0, '增量查询也必须尊重当前用户的清空位置');
   assert.equal(bobMessages.payload.data.length, 1, '对方聊天历史不得被一并删除');
   assert.equal(db.messages.length, 1, '清空聊天不得删除永久消息记录');
 
