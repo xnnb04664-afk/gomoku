@@ -9467,13 +9467,15 @@ function openThemeModal(){document.getElementById("themeModal").classList.add("s
     if (!root) return;
     const previousHeight = root.scrollHeight;
     root.replaceChildren();
-    if (!state.messages.length) {
+    // Hide the malformed legacy payload emitted by the old click handler.
+    const visibleMessages = state.messages.filter(message => message.body !== '[object PointerEvent]');
+    if (!visibleMessages.length) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding:18px 8px;text-align:center;color:#64748b;font-size:13px';
       empty.textContent = '还没有世界消息，来打个招呼吧';
       root.appendChild(empty);
     } else {
-      state.messages.forEach(message => {
+      visibleMessages.forEach(message => {
         const row = document.createElement('div');
         row.className = 'world-chat-row';
         const bubble = document.createElement('div');
