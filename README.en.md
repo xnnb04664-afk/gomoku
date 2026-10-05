@@ -6,6 +6,7 @@ A Chinese-language Gomoku (Five in a Row) game with a bright sky-island setting 
 
 ## Play
 
+- **Play online**: [Open the Gomoku website](https://gomoku-home.pages.dev/). The game interface is in Simplified Chinese.
 - **Android**: [Download the latest APK](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk). Install it by following your device's prompts.
 - **Desktop browser**: [Download the single-file game](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.html). Open the downloaded file in a browser; no installation is needed.
 - **All releases and notes**: [Browse GitHub Releases](https://github.com/xnnb04664-afk/gomoku/releases).

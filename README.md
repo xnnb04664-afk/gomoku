@@ -6,6 +6,7 @@
 
 ## 立即体验
 
+- **在线试玩**：[进入五子棋官网](https://gomoku-home.pages.dev/)。
 - **Android 手机**：[下载最新版 APK](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.apk)。下载后按设备提示安装。
 - **电脑浏览器**：[下载单文件网页版](https://github.com/xnnb04664-afk/gomoku/releases/latest/download/gomoku.html)。下载后用浏览器打开，无需安装。
 - **全部版本与更新说明**：[查看 GitHub Releases](https://github.com/xnnb04664-afk/gomoku/releases)。
