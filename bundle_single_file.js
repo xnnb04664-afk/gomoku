@@ -14,6 +14,46 @@ let html = fs.readFileSync(SOURCE_HTML, 'utf8');
 html = injectAiWorkerSource(html, ROOT_DIR);
 // 单文件版会把 app.min.js 内联，不能留下指向不存在外部资源的 preload。
 html = html.replace(/\s*<link rel="preload" href="js\/app\.min\.js" as="script">/i, '');
+// 单文件版内联启动页样式、脚本和四张帧图，保持离线开屏完整。
+html = html.replace(/\s*<link rel="preload" href="img\/startup\/startup-01\.webp"[^>]*>/i, '');
+const startupCssPath = path.join(ROOT_DIR, 'js', 'startup-splash.css');
+const startupJsPath = path.join(ROOT_DIR, 'js', 'startup-splash.js');
+if (fs.existsSync(startupCssPath)) {
+  const startupCssContent = fs.readFileSync(startupCssPath, 'utf8');
+  const startupStyleTag = '\n  <style id="startup-splash-inline-style">\n'
+    + startupCssContent.replace(/<\/style/gi, '<\\/style')
+    + '\n  </style>';
+  html = html.replace(
+    /\s*<link rel="stylesheet" href="js\/startup-splash\.css">/i,
+    startupStyleTag
+  );
+}
+if (fs.existsSync(startupJsPath)) {
+  const startupJsContent = fs.readFileSync(startupJsPath, 'utf8');
+  const startupScriptTag = '\n  <script>\n(() => {\n'
+    + '  const startSplash = () => {\n'
+    + startupJsContent.replace(/<\/script/gi, '<\\/script')
+    + '\n  };\n'
+    + "  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startSplash, { once: true });\n"
+    + '  else startSplash();\n'
+    + '})();\n  </script>';
+  html = html.replace(
+    /\s*<script defer src="js\/startup-splash\.js"><\/script>/i,
+    startupScriptTag
+  );
+}
+[
+  'startup-01.webp',
+  'startup-02.webp',
+  'startup-03.webp',
+  'startup-04.webp'
+].forEach(fileName => {
+  const source = 'img/startup/' + fileName;
+  const filePath = path.join(ROOT_DIR, 'img', 'startup', fileName);
+  if (!fs.existsSync(filePath)) throw new Error('缺少启动动画资源：' + filePath);
+  const dataUrl = 'data:image/webp;base64,' + fs.readFileSync(filePath).toString('base64');
+  html = html.split(source).join(dataUrl);
+});
 
 console.log('>>> [2/3] 准备可按需载入的联机、音频与头像资源...');
 

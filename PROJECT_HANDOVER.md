@@ -1,6 +1,6 @@
 # 五子棋项目交接手册：从零启动
 
-更新日期：2026-10-06
+更新日期：2026-10-08
 项目目录：D:\小游戏\五子棋
 本手册替代旧版按日期堆叠的长交接日志。历史记录与当前代码不一致时，以当前代码、测试和重新核验的线上状态为准。
 
@@ -42,7 +42,7 @@ node server.js
 
 | 路径 | 用途 |
 | --- | --- |
-| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里 |
+| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。js/expedition.js 提供 48 个本地残局关卡；img/startup/ 提供四帧启动画面 |
 | backend/worker.js | Cloudflare API、账号/社交/聊天、房间路由及 Durable Object 实现 |
 | migrations/ | D1 SQL 迁移；Worker 也有幂等建表逻辑，改表前需检查两处 |
 | android_src/ | Android WebView 容器、Java 源码、Manifest 和资源镜像 |
@@ -112,6 +112,7 @@ npm run build:official-site
 
 - build:app 使用 Terser 生成压缩 JS；build_apk.js 自身也会执行 build:app 并同步 android_src/assets。
 - node build_apk.js --sync-only 只同步资源，不会生成 APK。
+- 单文件版和 Android 入口共用 img/startup/ 四帧开屏；网页可跳过动画，Android 原生开屏最短展示 1.2 秒后随页面首绘关闭。
 - APK 构建机需要 JDK（当前已验证 JDK 17）、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。
 - 更新游戏版号时同步 version.json、AndroidManifest.xml 和 JS 当前版本。node publish.js --help 会显示说明；该脚本会构建、改版本、提交并推送，还会创建或上传 GitHub Release。只有用户明确要求正式发版时才运行。
 - official-site/play/ 是忽略的构建产物，不要手改或强行纳入 Git。构建后再部署。

@@ -7,7 +7,10 @@
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="js/app.min.js" as="script">
+  <link rel="preload" href="img/startup/startup-01.webp" as="image" fetchpriority="high">
   <link rel="stylesheet" href="js/sky-island.css">
+  <link rel="stylesheet" href="js/startup-splash.css">
+  <script defer src="js/startup-splash.js"></script>
   <!-- 首屏只保留页面骨架；联机、音频和大图资源在真正需要时才加载。 -->
   <script id="gomokuResourceLoader">
     (() => {
@@ -3580,6 +3583,31 @@
 </style>
 </head>
 <body>
+
+  <div id="startupSplash" class="startup-splash" role="dialog" aria-modal="true" aria-label="天空棋岛正在启动" aria-hidden="true">
+    <div class="startup-splash-frame" data-startup-frame="0">
+      <img src="img/startup/startup-01.webp" alt="" fetchpriority="high" decoding="async">
+    </div>
+    <div class="startup-splash-frame" data-startup-frame="1">
+      <img src="img/startup/startup-02.webp" alt="" loading="eager" decoding="async">
+    </div>
+    <div class="startup-splash-frame" data-startup-frame="2">
+      <img src="img/startup/startup-03.webp" alt="" loading="eager" decoding="async">
+    </div>
+    <div class="startup-splash-frame" data-startup-frame="3">
+      <img src="img/startup/startup-04.webp" alt="" loading="eager" decoding="async">
+    </div>
+    <div class="startup-splash-shade" aria-hidden="true"></div>
+    <div class="startup-splash-brand">
+      <div class="startup-splash-kicker">Sky Island · Gomoku</div>
+      <h1 class="startup-splash-title">天空棋岛</h1>
+      <p class="startup-splash-subtitle">落子有声，下一手唤醒整座岛</p>
+    </div>
+    <div class="startup-splash-footer">
+      <span class="startup-splash-progress">Loading island</span>
+      <button class="startup-splash-skip" type="button" data-startup-skip>跳过动画</button>
+    </div>
+  </div>
 
   <div class="cloud cloud-1"></div>
   <div class="cloud cloud-2"></div>

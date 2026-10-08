@@ -42,6 +42,12 @@ REQUIRED = {
     "js/sky-hub.js",
     "js/expedition.js",
     "js/sky-island.css",
+    "js/startup-splash.css",
+    "js/startup-splash.js",
+    "img/startup/startup-01.webp",
+    "img/startup/startup-02.webp",
+    "img/startup/startup-03.webp",
+    "img/startup/startup-04.webp",
 }
 
 REMOVED_THEME_ASSETS = {

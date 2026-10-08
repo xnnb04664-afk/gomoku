@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.content.pm.PackageManager;
 import android.view.View;
 import android.view.ViewGroup;
@@ -198,6 +199,9 @@ public class MainActivity extends Activity {
     private GomokuSplashView mSplashView;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final Runnable mSplashFailSafe = this::dismissNativeSplash;
+    private final Runnable mSplashContentDismiss = this::dismissNativeSplash;
+    private static final long NATIVE_SPLASH_MIN_DURATION_MS = 1200L;
+    private long mNativeSplashStartedAt = 0L;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
     private ValueCallback<Uri[]> mFilePathCallback;
@@ -238,6 +242,7 @@ public class MainActivity extends Activity {
     private void showNativeSplash() {
         if (mRootLayout == null || mSplashView != null) return;
         mSplashView = new GomokuSplashView(this);
+        mNativeSplashStartedAt = SystemClock.uptimeMillis();
         mSplashView.setDismissListener(this::dismissNativeSplash);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -249,8 +254,10 @@ public class MainActivity extends Activity {
     private void dismissNativeSplash() {
         if (mSplashView == null) return;
         mMainHandler.removeCallbacks(mSplashFailSafe);
+        mMainHandler.removeCallbacks(mSplashContentDismiss);
         GomokuSplashView splash = mSplashView;
         mSplashView = null;
+        mNativeSplashStartedAt = 0L;
         splash.stopAnimation();
         if (mRootLayout != null) {
             mRootLayout.removeView(splash);
@@ -258,11 +265,18 @@ public class MainActivity extends Activity {
         splash.setVisibility(View.GONE);
     }
 
+    private void requestNativeSplashDismiss() {
+        if (mSplashView == null) return;
+        mMainHandler.removeCallbacks(mSplashContentDismiss);
+        long elapsed = SystemClock.uptimeMillis() - mNativeSplashStartedAt;
+        long remaining = Math.max(0L, NATIVE_SPLASH_MIN_DURATION_MS - elapsed);
+        mMainHandler.postDelayed(mSplashContentDismiss, remaining);
+    }
+
     private void onWebContentVisible() {
-        // Keep this posted so WebView can finish its first draw before the
-        // overlay is removed.  There is no artificial minimum splash delay.
+        // Keep the four-frame sequence visible through the first WebView draw.
         if (mSplashView != null) {
-            mMainHandler.post(this::dismissNativeSplash);
+            requestNativeSplashDismiss();
         }
         openFriendsAfterNotificationIfReady();
     }
@@ -1417,6 +1431,7 @@ public class MainActivity extends Activity {
         mDestroyed = true;
         mActivityResumed = false;
         mMainHandler.removeCallbacks(mSplashFailSafe);
+        mMainHandler.removeCallbacks(mSplashContentDismiss);
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);
         if (mSplashView != null) {

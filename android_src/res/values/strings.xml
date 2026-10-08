@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">五子棋</string>
-    <string name="splash_title">五子棋</string>
-    <string name="splash_subtitle">落子有声，棋局无界</string>
+    <string name="splash_title">天空棋岛</string>
+    <string name="splash_subtitle">落子有声，下一手唤醒整座岛</string>
     <string name="splash_skip">轻触屏幕跳过</string>
     <string name="splash_content_description">五子棋正在启动，轻触屏幕跳过开屏动画</string>
 </resources>

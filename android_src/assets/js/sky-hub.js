@@ -195,7 +195,7 @@
 
   function openBulletin() {
     openSheet('今日岛讯', '内容只在你主动打开时出现，不会遮挡正在进行的棋局。', [
-      { action: 'expedition', icon: '☀', title: '残局航线开放', detail: '七座棋台已就绪，进度只保存在本机' },
+      { action: 'expedition', icon: '☀', title: '残局航线开放', detail: '48 关远征已就绪，进度只保存在本机' },
       { action: 'records', icon: '⌁', title: '棋谱仍在原处', detail: '标准AI与联机历史不会被远征短局覆盖' }
     ]);
   }
