@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.134';
+    const CURRENT_VERSION_TAG = 'v1.0.135';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -3719,6 +3719,8 @@
     let currentUserAvatarKind = localStorage.getItem('gomoku_user_avatar_kind') || '';
     let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
     let currentUserRefreshToken = localStorage.getItem('gomoku_user_refresh_token') || '';
+    const storedAuthUpdatedAt = Number(localStorage.getItem('gomoku_user_auth_updated_at') || 0);
+    let currentUserAuthUpdatedAt = Number.isFinite(storedAuthUpdatedAt) && storedAuthUpdatedAt > 0 ? storedAuthUpdatedAt : 0;
     let currentUserScore = parseInt(localStorage.getItem('gomoku_user_score') || '1000', 10);
     const PRIVATE_GAME_LOGIN_ONLY = true;
     const PRIVATE_GAME_LOGIN_NOTICE = '🔒 私人游戏，仅限指定账号登录';
@@ -3742,21 +3744,41 @@
       );
     }
 
-    // 🛡️ 尝试从 Android 原生 SharedPreferences 读取免登双保险备份
-    if ((!currentUsername || !currentUserUid || !currentUserToken || !currentUserRefreshToken) && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
+    // WebView 的 localhost 端口变化会创建新的 localStorage 来源。启动时比较原生备份
+    // 与当前来源的凭证更新时间，避免完整但过期的旧来源遮住较新的原生会话。
+    if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
       try {
         const nativeJson = AndroidNativeApp.getUserLoginJson();
         if (nativeJson) {
           const nativeUser = JSON.parse(nativeJson);
-          if (nativeUser.username) {
+          const nativeUpdatedAtValue = Number(nativeUser.authUpdatedAt || 0);
+          const nativeUpdatedAt = Number.isFinite(nativeUpdatedAtValue) && nativeUpdatedAtValue > 0 ? nativeUpdatedAtValue : 0;
+          const hasNativeSession = Boolean(nativeUser.username && nativeUser.uid && nativeUser.token && !String(nativeUser.uid).startsWith('guest_'));
+          const hasLocalSession = Boolean(currentUsername && currentUserUid && currentUserToken && currentUserRefreshToken && !String(currentUserUid).startsWith('guest_'));
+          const nativeSessionIsNewer = hasNativeSession && (
+            !hasLocalSession ||
+            currentUserAuthUpdatedAt <= 0 ||
+            (nativeUpdatedAt > 0 && nativeUpdatedAt >= currentUserAuthUpdatedAt)
+          );
+          if (nativeSessionIsNewer) {
+            const previousUid = String(currentUserUid || '');
             currentUsername = nativeUser.username;
-            currentUserUid = nativeUser.uid || currentUserUid;
-            currentUserToken = nativeUser.token || currentUserToken;
-            currentUserRefreshToken = nativeUser.refreshToken || currentUserRefreshToken;
+            currentUserUid = String(nativeUser.uid);
+            currentUserToken = String(nativeUser.token);
+            currentUserRefreshToken = String(nativeUser.refreshToken || '');
+            if (previousUid && previousUid !== currentUserUid) {
+              currentUserPublicUid = '';
+              currentUserAvatarKind = '';
+              localStorage.removeItem('gomoku_user_public_uid');
+              localStorage.removeItem('gomoku_user_avatar_kind');
+            }
             localStorage.setItem('gomoku_user_uid', currentUserUid);
             localStorage.setItem('gomoku_user_token', currentUserToken);
             if (currentUserRefreshToken) localStorage.setItem('gomoku_user_refresh_token', currentUserRefreshToken);
+            else localStorage.removeItem('gomoku_user_refresh_token');
             localStorage.setItem('gomoku_user_username', currentUsername);
+            currentUserAuthUpdatedAt = nativeUpdatedAt || Date.now();
+            localStorage.setItem('gomoku_user_auth_updated_at', String(currentUserAuthUpdatedAt));
             if (nativeUser.nickname) {
               p1Name = nativeUser.nickname;
               localStorage.setItem('gomoku_p1Name', p1Name);
@@ -3915,6 +3937,8 @@
       } else if (data.uid === null) {
         currentUserUid = "";
         localStorage.removeItem("gomoku_user_uid");
+        currentUserAuthUpdatedAt = 0;
+        localStorage.removeItem('gomoku_user_auth_updated_at');
       }
       if (data.publicUid === 'lza' || data.publicUid === 'qsq') {
         currentUserPublicUid = data.publicUid;
@@ -3946,9 +3970,16 @@
         // 明确传入 null 时才表示注销
         currentUsername = "";
         localStorage.removeItem("gomoku_user_username");
+        currentUserAuthUpdatedAt = 0;
+        localStorage.removeItem('gomoku_user_auth_updated_at');
         if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.clearUserLogin) {
           try { AndroidNativeApp.clearUserLogin(); } catch(e) {}
         }
+      }
+
+      if ((data.token || data.refreshToken) && currentUsername && currentUserUid && currentUserToken) {
+        currentUserAuthUpdatedAt = Date.now();
+        localStorage.setItem('gomoku_user_auth_updated_at', String(currentUserAuthUpdatedAt));
       }
 
       // 恢复账号中持久化保存的头像与昵称
@@ -7054,6 +7085,7 @@
       currentUserAvatarKind = '';
       currentUserToken = "";
       currentUserRefreshToken = "";
+      currentUserAuthUpdatedAt = 0;
       currentUserScore = 1000;
       p1Name = '游客棋手';
       p1Avatar = 'anime_boy';
@@ -7061,6 +7093,7 @@
       localStorage.removeItem("gomoku_user_username");
       localStorage.removeItem("gomoku_user_token");
       localStorage.removeItem("gomoku_user_refresh_token");
+      localStorage.removeItem('gomoku_user_auth_updated_at');
       localStorage.removeItem("gomoku_user_uid");
       localStorage.removeItem("gomoku_user_public_uid");
       localStorage.removeItem("gomoku_user_avatar_kind");

@@ -1024,6 +1024,7 @@ public class MainActivity extends Activity {
                         .putString("token", token != null ? token : "")
                         .putString("nickname", nickname != null ? nickname : "")
                         .putString("avatar", avatar != null ? avatar : "")
+                        .putLong("authUpdatedAt", System.currentTimeMillis())
                         .apply();
                 } catch (Exception ignored) {}
             }
@@ -1034,6 +1035,7 @@ public class MainActivity extends Activity {
                 try {
                     getSharedPreferences("app_user_login", MODE_PRIVATE).edit()
                         .putString("refreshToken", refreshToken != null ? refreshToken : "")
+                        .putLong("authUpdatedAt", System.currentTimeMillis())
                         .apply();
                 } catch (Exception ignored) {}
             }
@@ -1052,6 +1054,7 @@ public class MainActivity extends Activity {
                     obj.put("refreshToken", sp.getString("refreshToken", ""));
                     obj.put("nickname", sp.getString("nickname", ""));
                     obj.put("avatar", sp.getString("avatar", ""));
+                    obj.put("authUpdatedAt", sp.getLong("authUpdatedAt", 0L));
                     return obj.toString();
                 } catch (Exception e) {
                     return "";
