@@ -2655,6 +2655,7 @@
         board: board,
         history: history,
         turn: turn,
+        hasExtraMove: Boolean(hasExtraMove),
         isOver: isOver,
         isDraw: gameResultIsDraw,
         winnerColor: gameWinnerColor,
@@ -3092,6 +3093,7 @@
         if (!special && !move) return false;
       }
       if (data.turn !== BLACK && data.turn !== WHITE) return false;
+      if (data.hasExtraMove !== undefined && typeof data.hasExtraMove !== 'boolean') return false;
       if (typeof data.isOver !== 'boolean') return false;
       if (data.isDraw !== undefined && typeof data.isDraw !== 'boolean') return false;
       if (data.winnerColor !== undefined && data.winnerColor !== 0 && data.winnerColor !== BLACK && data.winnerColor !== WHITE) return false;
@@ -3123,6 +3125,7 @@
         board: data.board,
         history: data.history,
         turn: data.turn,
+        hasExtraMove: data.hasExtraMove,
         isOver: false,
         isDraw: false,
         currentDrawnCards: data.currentDrawnCards,
@@ -3411,6 +3414,7 @@
           board = data.board.map(row => [...row]);
           history = data.history.map(step => ({ ...step }));
           turn = data.turn;
+          if (typeof data.hasExtraMove === 'boolean') hasExtraMove = data.hasExtraMove;
           isOver = data.isOver;
           gameResultIsDraw = data.isDraw === true;
           gameWinnerColor = data.winnerColor === BLACK || data.winnerColor === WHITE ? data.winnerColor : 0;
@@ -3495,6 +3499,7 @@
               board = data.board.map(r => [...r]);
               history = data.history.map(h => ({ ...h }));
               if (data.turn !== undefined) turn = data.turn;
+              if (typeof data.hasExtraMove === 'boolean') hasExtraMove = data.hasExtraMove;
               isOver = false;
               gameWinnerColor = 0;
               gameResultIsDraw = false;
@@ -3569,6 +3574,11 @@
             player: myOnlineColor === BLACK ? WHITE : BLACK,
             ...quotaBefore
           });
+          if (data.skillId === 'double_move') {
+            hasExtraMove = true;
+            updateUI();
+            persistGameState();
+          }
           alert(`⚡ 对方发动了干扰卡【${incomingCard.name}】！`);
         } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
           const quotaBefore = {

@@ -1980,6 +1980,7 @@
           saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'double_move', player: turn });
           hasExtraMove = true;
           markCardUsed(idx);
+          persistGameState();
           triggerSkillVFX('double_move');
           triggerBoardShake();
           playSkillSound('thunder');
@@ -7521,7 +7522,8 @@
             requestId: acceptedUndoId,
             board: board.map(row => [...row]),
             history: history.map(step => ({ ...step })),
-            turn
+            turn,
+            hasExtraMove
           });
         }
       }
@@ -7658,6 +7660,7 @@
         && snapshot.ownerUid === expectedOwnerUid
         && (snapshot.gameMode === 'ai' || snapshot.gameMode === 'pvp')
         && snapshot.isOver !== true
+        && (snapshot.hasExtraMove === undefined || typeof snapshot.hasExtraMove === 'boolean')
         && Array.isArray(snapshot.history) && snapshot.history.length > 0 && snapshot.history.length <= 512
         && Array.isArray(snapshot.board) && snapshot.board.length === BOARD_SIZE
         && snapshot.board.every(row => Array.isArray(row) && row.length === BOARD_SIZE
@@ -7746,6 +7749,7 @@
       board = session.board.map(row => [...row]);
       history = session.history.map(move => move && typeof move === 'object' ? { ...move } : move);
       turn = session.turn;
+      if (typeof session.hasExtraMove === 'boolean') hasExtraMove = session.hasExtraMove;
       if (Array.isArray(session.currentDrawnCards)) {
         const restoredCards = session.currentDrawnCards
           .map(saved => SKILL_CARD_POOL.find(card => card.id === saved?.id))
@@ -7794,7 +7798,7 @@
         p1Name, p2Name, p1Avatar: String(p1Avatar || '').length <= 4096 ? p1Avatar : '', p2Avatar, ownerUid,
         aiOpponentProfile: gameMode === 'ai' ? { ...aiOpponentProfile } : null,
         currentDrawnCards, cardUsedStatus,
-        opponentSkillsUsedCount, opponentReforgeUsed,
+        opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
         undoStack: undoStack.slice(-30)
       };
 
@@ -7821,7 +7825,7 @@
             board, history, turn, winnerColor: gameWinnerColor,
             isDraw: gameResultIsDraw,
             currentDrawnCards, cardUsedStatus,
-            opponentSkillsUsedCount, opponentReforgeUsed,
+            opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
             undoStack: undoStack.slice(-30),
             timestamp: Date.now()
           };
@@ -7884,6 +7888,7 @@
       board = snapshot.board.map(row => [...row]);
       history = snapshot.history.map(move => move && typeof move === 'object' ? { ...move } : move);
       turn = snapshot.turn;
+      hasExtraMove = snapshot.hasExtraMove === true;
       isOver = false;
       gameWinnerColor = 0;
       gameResultIsDraw = false;
@@ -7972,6 +7977,7 @@
             board = s.board.map(row => [...row]);
             history = s.history.map(move => move && typeof move === 'object' ? { ...move } : move);
             turn = s.turn;
+            hasExtraMove = s.hasExtraMove === true;
             isOver = false;
             gameWinnerColor = 0;
             gameResultIsDraw = false;
