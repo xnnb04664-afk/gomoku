@@ -238,3 +238,4 @@ adb install .\五子棋.apk
 - Android WebView 的账号凭证保存在应用本机 `localStorage`，并由原生 `SharedPreferences` 保存一份恢复副本；登录不依赖 Cookie。`gomoku_user_auth_updated_at` 与原生 `authUpdatedAt` 记录凭证更新时间。启动时若 WebView 来源变化（例如本地服务端口切换）留下了完整但较旧的凭证，会恢复更新时间较新的原生会话；主动退出同步清除该时间戳。
 - 本次只改客户端登录恢复与版本信息；不包含 `auth_sessions` 多设备会话服务端实验，也未部署 ECS 或 Cloudflare。该服务端候选仍需修复旧令牌重复迁移、并发验证轮换与单设备注销，再通过隔离 SQLite/D1 验证后才可部署。
 - APK 构建版本为 `1.0.135` / `versionCode=136`；正式签名验证通过 v1、v2、v3，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5`，与 v1.0.134 安装包一致。签名构建本身不代表真机或 MuMu 安装验收。
+- **发布核验：**GitHub Release `v1.0.135` 已发布，源提交为 `ad878921b9cab28191a21622c206cb8299439067`。APK SHA-256 为 `7da8716a87743a04b2d766c20fe4c9c9f0d4bbb170c1908b9fde28375ed93289`，单文件 HTML SHA-256 为 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`，增量包 328,511 bytes。ECS `/api/version` 已返回 v1.0.135 且哈希与 Release 一致，`/healthz` 为 HTTP 200；这是现有 ECS API 动态读取最新 GitHub Release，本轮未部署 Worker 或改数据库。MuMu/真机未安装本版，Cloudflare 未部署。
