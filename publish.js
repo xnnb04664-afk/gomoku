@@ -475,10 +475,12 @@ fs.copyFileSync(singleHtmlPath, releaseHtml);
 
 try {
   const releaseTitle = `五子棋 ${releaseTag} 官方正式版 (APK + 单文件HTML双发布)`;
-  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 极速安装包：\`gomoku.apk\` (1.5MB，闪电安装)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (免安装双击即玩)`;
+  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 安装包：\`gomoku.apk\` (${apkSize} MB)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (${htmlSize} KB)`;
+  const releaseNotesPath = path.join(ROOT_DIR, `.release-notes-${releaseTag}.md`);
+  fs.writeFileSync(releaseNotesPath, releaseNotes, 'utf8');
 
    const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
-   execFileSync('gh', ['release', 'create', releaseTag, 'gomoku.apk', 'gomoku.html', '--target', releaseCommit, '--title', releaseTitle, '--notes', releaseNotes], { cwd: ROOT_DIR, stdio: 'inherit' });
+   execFileSync('gh', ['release', 'create', releaseTag, 'gomoku.apk', 'gomoku.html', '--target', releaseCommit, '--title', releaseTitle, '--notes-file', releaseNotesPath], { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {
   if (!ALLOW_RELEASE_OVERWRITE) {
@@ -489,6 +491,8 @@ try {
 } finally {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
+  const releaseNotesPath = path.join(ROOT_DIR, `.release-notes-${releaseTag}.md`);
+  if (fs.existsSync(releaseNotesPath)) fs.unlinkSync(releaseNotesPath);
 }
 
 // Cloudflare 生产部署必须显式开启，避免每次普通发版都触碰线上环境。
