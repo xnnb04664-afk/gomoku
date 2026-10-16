@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.135';
+    const CURRENT_VERSION_TAG = 'v1.0.136';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -1601,13 +1601,14 @@
             difficulty: 'master',
             enableFoul: false,
             forbiddenPoints: Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [],
-            // 大师 AI 只在 Worker 中增加预算，主线程不会被搜索阻塞；
-            // 立即成五/必防/强制威胁仍会在引擎内部即时返回。
-            budgetMs: mobile ? 520 : 900,
-            maxDepth: mobile ? 7 : 9,
-            rootLimit: mobile ? 20 : 26,
-            candidateLimit: mobile ? 72 : 96,
-            threatPly: mobile ? 6 : 8
+            // 大师 AI 的主要算力放在 Worker；增加搜索时间、根候选和战术叶预算，
+            // 让迭代加深有机会看得更远，同时不阻塞棋盘交互。
+            budgetMs: mobile ? 1800 : 3200,
+            maxDepth: mobile ? 12 : 14,
+            rootLimit: mobile ? 24 : 32,
+            candidateLimit: mobile ? 96 : 128,
+            threatPly: mobile ? 10 : 12,
+            tacticalLeafLimit: mobile ? 3200 : 5200
           }, [flat.buffer]);
         } catch (error) {
           aiWorkerPending.delete(requestId);
@@ -5465,7 +5466,13 @@
       }
 
       const now = Number.isFinite(timestamp) ? timestamp : performance.now();
-      activeVFX = activeVFX.filter(vfx => now - vfx.startTime < vfx.duration);
+      // 粒子存活窗口内每帧原地压缩列表，避免 filter 为每一帧分配新数组。
+      let liveCount = 0;
+      for (let index = 0; index < activeVFX.length; index++) {
+        const vfx = activeVFX[index];
+        if (now - vfx.startTime < vfx.duration) activeVFX[liveCount++] = vfx;
+      }
+      activeVFX.length = liveCount;
       const frameBudget = getCanvasFrameBudgetMs();
       const shouldRender = vfxLastRenderAt === 0 || now - vfxLastRenderAt >= frameBudget;
       if (shouldRender) {
