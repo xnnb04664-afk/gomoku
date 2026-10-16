@@ -68,18 +68,41 @@ const fakeDb = {
         return this;
       },
       async run() {
-        if (/UPDATE users SET token = \?, token_expires_at = \?, refresh_token_hash = \?, refresh_token_expires_at = /i.test(this.sql)) {
-          const [token, tokenExpiresAt, refreshHash, refreshExpiresAt, uid] = this.args;
-          if (String(uid) === dbState.user.uid) {
+        const normalizedSql = this.sql.replace(/\s+/g, ' ').trim().toLowerCase();
+        if (normalizedSql.startsWith('update users set token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?') &&
+            normalizedSql.includes('where uid = ? and token = ? and refresh_token_hash is ?')) {
+          const [token, tokenExpiresAt, refreshHash, refreshExpiresAt, uid, expectedAccessToken, expectedRefreshHash, now] = this.args;
+          const matches = String(uid) === dbState.user.uid && dbState.user.token === expectedAccessToken &&
+            (dbState.user.refresh_token_hash ?? null) === expectedRefreshHash &&
+            (!dbState.user.token_expires_at || Number(dbState.user.token_expires_at) > Number(now));
+          if (matches) {
             Object.assign(dbState.user, {
               token,
               token_expires_at: tokenExpiresAt,
               refresh_token_hash: refreshHash,
               refresh_token_expires_at: refreshExpiresAt,
             });
+            return { success: true, meta: { changes: 1 } };
           }
+          return { success: true, meta: { changes: 0 } };
         }
-        return { success: true };
+        if (normalizedSql.startsWith('update users set token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?') &&
+            normalizedSql.includes('where uid = ? and refresh_token_hash = ? and refresh_token_expires_at > ?')) {
+          const [token, tokenExpiresAt, refreshHash, refreshExpiresAt, uid, expectedRefreshHash, now] = this.args;
+          const matches = String(uid) === dbState.user.uid && dbState.user.refresh_token_hash === expectedRefreshHash &&
+            Number(dbState.user.refresh_token_expires_at) > Number(now);
+          if (matches) {
+            Object.assign(dbState.user, {
+              token,
+              token_expires_at: tokenExpiresAt,
+              refresh_token_hash: refreshHash,
+              refresh_token_expires_at: refreshExpiresAt,
+            });
+            return { success: true, meta: { changes: 1 } };
+          }
+          return { success: true, meta: { changes: 0 } };
+        }
+        return { success: true, meta: { changes: 0 } };
       },
       async first() {
         if (/FROM users WHERE uid = \?/i.test(this.sql)) return cloneUser();
@@ -105,7 +128,7 @@ function authRequest(path, body) {
 }
 
 async function main() {
-  const env = { DB: fakeDb };
+  const env = { DB: fakeDb, PRIVATE_GAME_MODE: '0' };
 
   const verifyResponse = await worker.fetch(authRequest('/api/auth/verify_session', {
     uid: dbState.user.uid,
@@ -119,14 +142,28 @@ async function main() {
 
   const oldAccessToken = dbState.user.token;
   const oldRefreshToken = verify.data.refreshToken;
-  const refreshResponse = await worker.fetch(authRequest('/api/auth/refresh_session', {
+  const concurrentRefreshResponses = await Promise.all([1, 2].map(() => worker.fetch(authRequest('/api/auth/refresh_session', {
     uid: dbState.user.uid,
     refreshToken: oldRefreshToken,
+  }), env)));
+  const concurrentResults = await Promise.all(concurrentRefreshResponses.map(async response => ({
+    response,
+    payload: await response.json(),
+  })));
+  const refreshWinner = concurrentResults.find(item => item.response.status === 200);
+  const refreshLoser = concurrentResults.find(item => item.response.status === 401);
+  assert.ok(refreshWinner, '并发 refresh 只能有一个请求成功轮换 token');
+  assert.ok(refreshLoser, '并发 refresh 的 CAS 输家必须收到 401');
+  assert.equal(refreshLoser.payload.retryable, true, 'CAS 输家应提示同浏览器等待另一个标签页发布新凭证');
+  const refreshResponse = await worker.fetch(authRequest('/api/auth/refresh_session', {
+    uid: dbState.user.uid,
+    refreshToken: refreshWinner.payload.data.refreshToken,
   }), env);
   const refreshed = await refreshResponse.json();
   assert.equal(refreshResponse.status, 200);
   assert.equal(refreshed.code, 0);
   assert.notEqual(refreshed.data.token, oldAccessToken);
+  assert.notEqual(refreshed.data.token, refreshWinner.payload.data.token);
   assert.match(refreshed.data.token, /^[0-9a-f]{48}$/i);
   assert.match(refreshed.data.refreshToken, /^[0-9a-f]{64}$/i);
 
@@ -138,6 +175,7 @@ async function main() {
 
   console.log(JSON.stringify({
     verifySeededRefreshToken: true,
+    concurrentRefreshSingleWinner: true,
     refreshRotatedAccessToken: true,
     staleRefreshRejected: true,
   }));

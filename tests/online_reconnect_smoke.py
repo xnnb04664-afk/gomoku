@@ -4,7 +4,7 @@ import time
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from online_match_race_smoke import MOCK_MQTT_INIT
+from online_relay_test_support import install_local_relay_mocks
 
 
 def main():
@@ -24,14 +24,7 @@ def main():
         guest = context.new_page()
 
         for name, page in (("host", host), ("guest", guest)):
-            page.add_init_script(
-                f"window.__gomokuMockRole = {json.dumps(name)}; "
-                f"window.__gomokuMockClientId = {json.dumps(name)}; "
-                "window.__GOMOKU_DISABLE_RELAY__ = true; "
-                "window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;"
-            )
-            page.add_init_script(MOCK_MQTT_INIT)
-            page.route("**/js/mqtt.min.js", lambda route: route.fulfill(status=200, content_type="application/javascript", body="window.mqtt = window.__gomokuMockMqtt;"))
+            install_local_relay_mocks(page, name)
             page.on("console", lambda message, name=name: logs[name].append({"type": message.type, "text": message.text}))
             page.on("pageerror", lambda error, name=name: errors[name].append(str(error)))
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
@@ -66,7 +59,7 @@ def main():
                       conn: conn ? {
                         open: conn.open,
                         ready: conn.ready,
-                        mqtt: Boolean(conn.client && conn.client.connected),
+                        relayConnected: Boolean(conn.client && conn.client.connected),
                         p2p: Boolean(conn.isP2pReady)
                       } : null,
                       historyLength: history.length,
@@ -225,6 +218,8 @@ def main():
                 "roomIdentityPersisted": True,
                 "postReconnectMove": True,
                 "postReconnectChatExactlyOnce": chat_count == 1,
+                "transport": "local WebSocket relay mock",
+                "mqttCompatibilityAdapterUsed": False,
                 "pageErrors": errors
             }, ensure_ascii=False, indent=2))
         finally:

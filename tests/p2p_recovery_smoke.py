@@ -4,7 +4,7 @@ import time
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from online_match_race_smoke import MOCK_MQTT_INIT
+from online_relay_test_support import install_local_relay_mocks
 
 def main():
     import sys
@@ -21,19 +21,10 @@ def main():
         context = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=1)
         host = context.new_page()
         guest = context.new_page()
-        host.add_init_script("window.__GOMOKU_DISABLE_RELAY__ = true; window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;")
-        guest.add_init_script("window.__GOMOKU_DISABLE_RELAY__ = true; window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;")
 
         try:
             for name, page in (("host", host), ("guest", guest)):
-                page.add_init_script(
-                    f"window.__gomokuMockRole = {json.dumps(name)}; "
-                    f"window.__gomokuMockClientId = {json.dumps(name)}; "
-                    "window.__GOMOKU_DISABLE_RELAY__ = true; "
-                    "window.__GOMOKU_ENABLE_LEGACY_MQTT__ = true;"
-                )
-                page.add_init_script(MOCK_MQTT_INIT)
-                page.route("**/js/mqtt.min.js", lambda route: route.fulfill(status=200, content_type="application/javascript", body="window.mqtt = window.__gomokuMockMqtt;"))
+                install_local_relay_mocks(page, name)
                 page.on("console", lambda message, name=name: logs[name].append({"type": message.type, "text": message.text}))
                 page.on("pageerror", lambda error, name=name: errors[name].append(str(error)))
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)
@@ -59,7 +50,7 @@ def main():
                       conn: conn ? {
                         open: conn.open,
                         ready: conn.ready,
-                        mqtt: Boolean(conn.client && conn.client.connected),
+                        relayConnected: Boolean(conn.client && conn.client.connected),
                         p2p: Boolean(conn.isP2pReady),
                         dc: conn.dc ? conn.dc.readyState : null,
                         pc: conn.pc ? conn.pc.connectionState : null,
@@ -121,7 +112,7 @@ def main():
             host.wait_for_timeout(900)
             fallback_move = host.evaluate("({ piece: board[7][8], steps: history.length, turn })")
             if fallback_move != {"piece": 2, "steps": 2, "turn": 1}:
-                raise AssertionError(f"MQTT fallback move did not arrive after P2P close: {fallback_move}")
+                raise AssertionError(f"WebSocket relay fallback move did not arrive after P2P close: {fallback_move}")
 
             recovered_states = degraded_states
             deadline = time.time() + 24
@@ -150,6 +141,8 @@ def main():
                 "recovered": recovered_states,
                 "fallbackMove": fallback_move,
                 "recoveredMove": recovered_move,
+                "transport": "local WebSocket relay mock",
+                "mqttCompatibilityAdapterUsed": False,
                 "pageErrors": errors
             }, ensure_ascii=False, indent=2))
         finally:

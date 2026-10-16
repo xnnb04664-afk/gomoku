@@ -1,12 +1,58 @@
-    // 点击【查看棋局】直接跳转到主棋盘！
-    function openReplayModalByIndex(idx) {
-      try {
-        const key = getHistoryStorageKey();
-        const list = JSON.parse(localStorage.getItem(key) || "[]");
-        const item = list[idx];
-        if (!item) return;
+    const AI_REPLAY_PROFILES = [
+      { name: '云岫', avatar: 'ai_cloud_fox' },
+      { name: '青翎', avatar: 'ai_jade_crane' },
+      { name: '松果', avatar: 'ai_red_panda' },
+      { name: '碧游', avatar: 'ai_koi' },
+      { name: '月兔', avatar: 'ai_moon_rabbit' },
+      { name: '昭麟', avatar: 'ai_qilin' }
+    ];
 
-        // 1. 关掉所有弹窗与浮层
+    function historyOpponentProfile(item, index) {
+      if (!item || item.mode !== 'ai') return { name: item?.oppName || '对手', avatar: item?.oppAvatar || '👤' };
+      const seedText = `${item.date || ''}|${item.time || ''}|${index}|${item.oppName || ''}`;
+      let seed = 0;
+      for (const char of seedText) seed = (seed * 31 + char.codePointAt(0)) >>> 0;
+      const fallback = AI_REPLAY_PROFILES[seed % AI_REPLAY_PROFILES.length];
+      const oldName = !item.oppName || item.oppName === '大师AI';
+      const oldAvatar = !item.oppAvatar
+        || /🤖|👾/.test(String(item.oppAvatar))
+        || ['anime_boy', 'anime_girl', 'img/anime_avatar_boy.jpg', 'img/anime_avatar_girl.jpg', 'img/avatar_boy.png', 'img/avatar_girl.png'].includes(String(item.oppAvatar));
+      return {
+        name: oldName ? fallback.name : item.oppName,
+        avatar: oldAvatar ? fallback.avatar : item.oppAvatar
+      };
+    }
+
+    function findWinningLineOnBoard(boardData, color) {
+      if (!Array.isArray(boardData) || (color !== BLACK && color !== WHITE)) return null;
+      const directions = [[0, 1], [1, 0], [1, 1], [1, -1]];
+      for (let row = 0; row < 15; row++) {
+        for (let col = 0; col < 15; col++) {
+          if (Number(boardData[row]?.[col]) !== color) continue;
+          for (const [dr, dc] of directions) {
+            const line = [];
+            for (let offset = 0; offset < 5; offset++) {
+              const r = row + dr * offset;
+              const c = col + dc * offset;
+              if (r < 0 || r >= 15 || c < 0 || c >= 15 || Number(boardData[r]?.[c]) !== color) break;
+              line.push({ r, c });
+            }
+            if (line.length === 5) return line;
+          }
+        }
+      }
+      return null;
+    }
+
+    function startMainBoardReplay(item, requestedStep = null) {
+      try {
+        const moves = Array.isArray(item?.movesData) ? item.movesData.map(move => ({ ...move })) : [];
+        if (moves.length === 0) {
+          showGameNotice("📜 本局未记录详细走法，暂时无法逐手复盘！");
+          return false;
+        }
+
+        // 1. 关掉所有弹窗与技能浮层；待结算战绩仍保留，复盘不会提前提交。
         cancelPendingGameResultModal();
         if (typeof closeGameResultModal === 'function') closeGameResultModal();
         closeHistoryModal();
@@ -16,43 +62,64 @@
         if (skillBanner) skillBanner.style.display = 'none';
         const skillPromptBar = document.getElementById('skillPromptBar');
         if (skillPromptBar) skillPromptBar.style.display = 'none';
+        if (Array.isArray(activeVFX)) activeVFX = [];
 
-        // 2. 检查是否有全盘落子谱数据
-        replayAllMoves = Array.isArray(item.movesData) ? item.movesData.map(m => ({ ...m })) : [];
-        if (replayAllMoves.length === 0) {
-          showGameNotice("📜 本局为早期极速战报，未记录详细走法谱；最新对局均支持完整单步复盘！");
-          return;
-        }
-
-        // 🛡️ 兼容旧战绩自我修复：若旧记录开头第一手异常记录为白子且无身份互换标记，自动校正开头色盘
-        if (replayAllMoves[0] && replayAllMoves[0].p === WHITE && !replayAllMoves.some(m => m.action === 'identity_swap')) {
-          replayAllMoves.forEach(m => {
-            if (m.p === BLACK) m.p = WHITE;
-            else if (m.p === WHITE) m.p = BLACK;
+        // 旧战绩兼容：第一手异常记录为白子且无身份互换标记时校正色盘。
+        if (moves[0] && moves[0].p === WHITE && !moves.some(move => move.action === 'identity_swap' || move.type === 'identity_swap')) {
+          moves.forEach(move => {
+            if (move.p === BLACK) move.p = WHITE;
+            else if (move.p === WHITE) move.p = BLACK;
           });
         }
 
-        // 3. 备份当前对局状态（以便退出复盘时完美恢复）
+        // 大厅隐藏棋盘时，先切回游戏页再打开回放控制条。
+        if (typeof window.SkyIslandUI?.showGame === 'function') {
+          window.SkyIslandUI.showGame();
+        } else {
+          document.getElementById('skyLobby')?.setAttribute('hidden', '');
+          document.body.classList.remove('sky-lobby-open');
+          document.body.classList.add('sky-game-open');
+        }
+
+        // 2. 备份完整终局状态；退出时能恢复棋盘、胜利光效与结算状态。
         if (!isReplayMode) {
           replaySavedState = {
-            board: board.map(r => [...r]),
-            history: history.map(h => ({ ...h })),
-            turn, isOver, gameMode,
+            board: board.map(row => [...row]),
+            history: history.map(move => ({ ...move })),
+            turn, isOver, gameMode, gameWinnerColor, gameResultIsDraw,
+            winningLine: Array.isArray(winningLine) ? winningLine.map(point => ({ ...point })) : null,
             p1Name, p2Name, p1Avatar, p2Avatar
           };
         }
 
-        // 4. 激活主棋盘复盘模式
+        replayAllMoves = moves;
+        const replayWinnerColor = Number(item.winnerColor) || 0;
+        const replayWinningLine = Array.isArray(item.winningLine)
+          ? item.winningLine.map(point => ({ ...point }))
+          : findWinningLineOnBoard(item.boardData, replayWinnerColor);
+        window.__GOMOKU_REPLAY_CONTEXT__ = {
+          winnerColor: replayWinnerColor,
+          isDraw: item.isDraw === true,
+          winningLine: replayWinningLine,
+          opponentName: item.oppName || '对手',
+          opponentAvatar: item.oppAvatar || '👤'
+        };
         isReplayMode = true;
-        replayStepIndex = replayAllMoves.length; // 默认展示终局决胜盘面
+        isOver = false;
+        gameWinnerColor = 0;
+        gameResultIsDraw = false;
+        winningLine = null;
+        const initialStep = requestedStep === null || requestedStep === undefined || !Number.isFinite(Number(requestedStep))
+          ? moves.length
+          : Number(requestedStep);
+        replayStepIndex = Math.max(0, Math.min(moves.length, initialStep));
 
-        // 更新顶部状态栏与 Dock
+        // 更新顶部状态栏与回放 Dock。
         const topBar = document.getElementById("replayTopBar");
         const dock = document.getElementById("replayControlDock");
         const oppLabel = document.getElementById("replayOppLabel");
         const badgeLabel = document.getElementById("replayBadgeLabel");
         const slider = document.getElementById("replayMainSlider");
-
         if (oppLabel) oppLabel.textContent = `VS ${item.oppName || "对手"}`;
         if (badgeLabel) {
           badgeLabel.textContent = item.isDraw ? "🤝 和棋" : (item.isWin ? "🏆 胜利" : "💔 惜败");
@@ -60,34 +127,66 @@
         }
         if (slider) {
           slider.min = 0;
-          slider.max = replayAllMoves.length;
+          slider.max = moves.length;
           slider.value = replayStepIndex;
         }
-
         if (topBar) topBar.style.display = "flex";
         if (dock) dock.style.display = "flex";
 
-        // 隐藏常规对战底部控制栏，避免干扰
         const bottomCtrls = document.querySelector(".bottom-controls");
-        if (bottomCtrls) bottomCtrls.style.display = "none";
         const cardArea = document.querySelector(".card-area-wrapper");
+        if (bottomCtrls) bottomCtrls.style.display = "none";
         if (cardArea) cardArea.style.display = "none";
 
-        // 5. 页面平滑跳转聚焦到主棋盘！
         setTimeout(() => {
-          const bWrap = document.getElementById("islandWrapper") || document.getElementById("cvs");
-          if (bWrap) {
-            bWrap.scrollIntoView({ behavior: "smooth", block: "center" });
-          } else {
-            window.scrollTo({ top: 0, behavior: "smooth" });
-          }
+          const boardWrap = document.getElementById("islandWrapper") || document.getElementById("cvs");
+          if (boardWrap) boardWrap.scrollIntoView({ behavior: "smooth", block: "center" });
+          else window.scrollTo({ top: 0, behavior: "smooth" });
         }, 50);
 
         applyMainReplayStep(replayStepIndex);
-        showGameNotice(`🔍 已载入【VS ${item.oppName || "对手"}】棋局，支持动态复盘回放！`);
-      } catch(e) {
-        console.error("Main board replay error:", e);
+        if (item.notice !== false) showGameNotice(`🔍 已载入【VS ${item.oppName || "对手"}】棋局，支持逐手回放！`, false);
+        return true;
+      } catch (error) {
+        console.error("Main board replay error:", error);
+        showGameNotice("棋局复盘启动失败，请稍后重试", true);
+        return false;
       }
+    }
+
+    // 点击【查看棋局】从历史战绩载入主棋盘复盘。
+    function openReplayModalByIndex(idx) {
+      try {
+        const key = getHistoryStorageKey();
+        const list = JSON.parse(localStorage.getItem(key) || "[]");
+        const storedItem = list[idx];
+        if (!storedItem) return false;
+        const opponent = historyOpponentProfile(storedItem, idx);
+        return startMainBoardReplay({ ...storedItem, oppName: opponent.name, oppAvatar: opponent.avatar });
+      } catch (error) {
+        console.error("Main board replay error:", error);
+        return false;
+      }
+    }
+
+    // 结算页“返回棋盘复盘”与星轨节点共用当前对局，不写入待确认战绩。
+    function openCurrentGameReplay(step = null) {
+      const snapshot = typeof window.getReplayInsightSnapshot === 'function' ? window.getReplayInsightSnapshot() : null;
+      if (!snapshot || !snapshot.moves.length) {
+        showGameNotice("📜 本局没有可回看的棋谱！");
+        return false;
+      }
+      const resultTitle = document.getElementById('resultModalTitle')?.textContent || '';
+      return startMainBoardReplay({
+        movesData: snapshot.moves,
+        winnerColor: snapshot.winnerColor,
+        winningLine: snapshot.winningLine,
+        isDraw: snapshot.isDraw,
+        isWin: !snapshot.isDraw && resultTitle.includes('获胜'),
+        oppName: snapshot.opponentName,
+        oppAvatar: snapshot.opponentAvatar,
+        notice: false
+      }, step);
     }
 
     function applyMainReplayStep(step) {
@@ -267,7 +366,8 @@
     }
 
     // 退出复盘模式，丝滑切回正常游戏
-    function exitReplayMode() {
+    function exitReplayMode(options = {}) {
+      const silent = options === true || Boolean(options && options.silent);
       if (replayAutoTimer) {
         clearInterval(replayAutoTimer);
         replayAutoTimer = null;
@@ -293,16 +393,22 @@
         turn = replaySavedState.turn;
         isOver = replaySavedState.isOver;
         gameMode = replaySavedState.gameMode;
+        gameWinnerColor = replaySavedState.gameWinnerColor || 0;
+        gameResultIsDraw = replaySavedState.gameResultIsDraw === true;
+        winningLine = Array.isArray(replaySavedState.winningLine) ? replaySavedState.winningLine.map(point => ({ ...point })) : null;
         p1Name = replaySavedState.p1Name;
         p2Name = replaySavedState.p2Name;
         p1Avatar = replaySavedState.p1Avatar;
         p2Avatar = replaySavedState.p2Avatar;
         replaySavedState = null;
       }
+      replayAllMoves = [];
+      replayStepIndex = 0;
+      window.__GOMOKU_REPLAY_CONTEXT__ = null;
 
       draw();
       updateUI();
-      showGameNotice("已退出复盘模式");
+      if (!silent) showGameNotice("已退出复盘模式");
     }
 
     function closeReplayModal() {
@@ -312,6 +418,8 @@
         m.style.display = "none";
       }
     }
+
+    window.openCurrentGameReplay = openCurrentGameReplay;
 
     // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回，仅限正式账号)
     async function syncCloudHistory() {
@@ -411,16 +519,17 @@
           : isWin
           ? `<span style="background:#10b981; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:900;">🏆 胜利</span>`
           : `<span style="background:#ef4444; color:#fff; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:900;">💔 惜败</span>`;
-        const modeName = item.mode === "online" ? "🌐 全服联机" : (item.mode === "ai" ? "🤖 大师AI" : "👥 同屏对战");
+        const opponent = historyOpponentProfile(item, idx);
+        const modeName = item.mode === "online" ? "🌐 全服联机" : (item.mode === "ai" ? "♟ AI 对局" : "👥 同屏对战");
         return `
           <div style="background:rgba(255,255,255,0.85); border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center;">
             <div style="display:flex; align-items:center; gap:8px;">
               <div style="width:32px; height:32px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                ${renderAvatarElement(item.oppAvatar, 32)}
+                ${renderAvatarElement(opponent.avatar, 32)}
               </div>
               <div style="text-align:left; line-height:1.3;">
                 <div style="font-size:12.5px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px;">
-                  <span>VS ${escapeRankHTML(item.oppName)}</span>
+                  <span>VS ${escapeRankHTML(opponent.name)}</span>
                   ${tagBadge}
                 </div>
                 <div style="font-size:10px; color:#64748b; font-weight:700;">

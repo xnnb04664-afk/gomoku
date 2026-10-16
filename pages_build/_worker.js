@@ -39,6 +39,7 @@ const TURN_CREDENTIAL_TTL_SECONDS = 3600;
 const TURN_REQUEST_TIMEOUT_MS = 7000;
 const TURN_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const TURN_RATE_LIMIT_MAX_REQUESTS = 30;
+const MATCH_RESULT_TTL_MS = 24 * 60 * 60 * 1000;
 const TURN_API_ORIGIN = 'https://rtc.live.cloudflare.com';
 const turnRateLimitBuckets = new Map();
 const ROOM_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -70,6 +71,22 @@ const CHECKIN_BASE_COINS = 10;
 const CHECKIN_STREAK_BONUS = 2;
 const CHECKIN_STREAK_CAP = 7;
 const SOCIAL_AFFINITY_MAX_POINTS = 10000;
+const PRIVATE_GAME_UNCONFIGURED_USERNAMES = Object.freeze([
+  '__private_game_unconfigured_a__',
+  '__private_game_unconfigured_b__'
+]);
+function configuredPrivateGameUsernames(value) {
+  const names = String(value || '').split(',').map(name => name.trim());
+  if (names.length !== 2 || names.some(name => !name || name.length > 32) || names[0] === names[1]) return [];
+  return names;
+}
+function privateGameSqlUsernames(env) {
+  const names = configuredPrivateGameUsernames(env?.PRIVATE_GAME_USERNAMES);
+  return names.length === 2 ? names : PRIVATE_GAME_UNCONFIGURED_USERNAMES;
+}
+const PRIVATE_GAME_COUPLE_AFFINITY_LEVEL = 521;
+const PRIVATE_GAME_COUPLE_AFFINITY_POINTS = 1314;
+const ROOM_SOCKET_TICKET_TTL_MS = 30000;
 // 付费货币只保留服务端账本模型。当前没有接入支付渠道，因此默认关闭；
 // 只有部署到明确的沙盒环境时才允许创建 sandbox_pending 订单，任何模式都
 // 不会因为客户端请求直接增加 diamonds。正式支付回调接入前不要新增“模拟到账”接口。
@@ -387,10 +404,15 @@ export class SocialHub {
         INSERT INTO user_social_settings (uid, presence_online, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(uid) DO UPDATE SET presence_online = excluded.presence_online, updated_at = excluded.updated_at
       `).bind(uid, online ? 1 : 0, now).run();
+      const privateOnly = String(this.env.PRIVATE_GAME_MODE || '1').trim() !== '0';
+      const privateNames = privateOnly ? privateGameSqlUsernames(this.env) : [];
       const rows = await this.env.DB.prepare(`
-        SELECT CASE WHEN user_a_uid = ? THEN user_b_uid ELSE user_a_uid END AS friend_uid
-        FROM friendships WHERE user_a_uid = ? OR user_b_uid = ? LIMIT ${SOCIAL_MAX_FRIENDS}
-      `).bind(uid, uid, uid).all();
+        SELECT CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END AS friend_uid
+        FROM friendships f
+        JOIN users u ON u.uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
+        WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)${privateOnly ? ' AND u.username IN (?, ?)' : ''}
+        LIMIT ${SOCIAL_MAX_FRIENDS}
+      `).bind(uid, uid, uid, uid, ...privateNames).all();
       await Promise.all((rows.results || []).map(async row => {
         const friendUid = String(row.friend_uid || '');
         if (!friendUid) return;
@@ -489,6 +511,11 @@ export class SocialHub {
 export default {
     async fetch(request, env) {
       const url = new URL(request.url);
+      const configuredPrivateNames = configuredPrivateGameUsernames(env?.PRIVATE_GAME_USERNAMES);
+      const privateGameConfigured = configuredPrivateNames.length === 2;
+      const PRIVATE_GAME_ALLOWED_USERNAMES = privateGameConfigured
+        ? configuredPrivateNames
+        : PRIVATE_GAME_UNCONFIGURED_USERNAMES;
 
       const corsHeaders = {
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
@@ -545,23 +572,6 @@ export default {
           serverTime: Date.now()
         }
       });
-    }
-
-    // 自有 Durable Object 房间中继优先于公共 MQTT。它只转发经过房间/角色/会话
-    // 校验的消息，不保存密码、账号或棋局历史；P2P 成功后大部分棋局流量仍不经过这里。
-    if (url.pathname === '/api/room/socket') {
-      if (request.method !== 'GET') return json({ code: 405, msg: '仅支持 WebSocket GET' }, 405);
-      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-        return json({ code: 426, msg: '需要 WebSocket 升级' }, 426);
-      }
-      if (requestOrigin && requestOrigin !== 'null' && !originAllowed) {
-        return json({ code: 403, msg: '房间中继来源不受信任' }, 403);
-      }
-      if (!env.GOMOKU_ROOMS) return json({ code: 503, msg: '房间中继尚未部署' }, 503);
-      const roomCode = String(url.searchParams.get('room') || '');
-      if (!/^\d{6}$/.test(roomCode)) return json({ code: 400, msg: '房间码无效' }, 400);
-      const roomId = env.GOMOKU_ROOMS.idFromName(`gomoku-room:${roomCode}`);
-      return env.GOMOKU_ROOMS.get(roomId).fetch(request);
     }
 
     const publicServerError = (label, error) => {
@@ -803,6 +813,9 @@ export default {
             matched_score INTEGER,
             room_code TEXT,
             match_id TEXT,
+            match_claim_id TEXT,
+            reported_outcome TEXT,
+            settlement_claim_id TEXT,
             updated_at INTEGER
           )
         `).run();
@@ -812,6 +825,11 @@ export default {
           const hasMatchId = Array.isArray(queueSchema?.results) && queueSchema.results.some(column => column?.name === 'match_id');
           if (!hasMatchId) await env.DB.prepare(`ALTER TABLE match_queue ADD COLUMN match_id TEXT`).run();
         } catch(e) {}
+        // Internal per-pair claim marker keeps simultaneous join requests from
+        // claiming each other (or two different opponents) in separate writes.
+        try { await env.DB.prepare(`ALTER TABLE match_queue ADD COLUMN match_claim_id TEXT`).run(); } catch(e) {}
+        try { await env.DB.prepare(`ALTER TABLE match_queue ADD COLUMN reported_outcome TEXT`).run(); } catch(e) {}
+        try { await env.DB.prepare(`ALTER TABLE match_queue ADD COLUMN settlement_claim_id TEXT`).run(); } catch(e) {}
         // 匹配查询始终按状态和心跳时间过滤；索引可显著降低用户量增长后的撮合扫描成本。
         try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_match_queue_status_updated ON match_queue(status, updated_at)`).run(); } catch(e) {}
         await env.DB.prepare(`
@@ -873,11 +891,37 @@ export default {
           CREATE TABLE IF NOT EXISTS friendships (
             user_a_uid TEXT NOT NULL,
             user_b_uid TEXT NOT NULL,
+            relationship_type TEXT NOT NULL DEFAULT 'friend',
             created_at INTEGER NOT NULL,
             PRIMARY KEY (user_a_uid, user_b_uid)
           )
         `).run();
+        try { await env.DB.prepare(`ALTER TABLE friendships ADD COLUMN relationship_type TEXT NOT NULL DEFAULT 'friend'`).run(); } catch (_) {}
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_friendships_b ON friendships(user_b_uid, created_at DESC)`).run();
+        // Couple initialization is limited to the two explicitly configured
+        // private accounts. Missing or invalid configuration remains fail-closed.
+        if (privateGameConfigured) {
+          await env.DB.prepare(`
+            INSERT OR IGNORE INTO friendships (user_a_uid, user_b_uid, relationship_type, created_at)
+            SELECT CASE WHEN a.uid < b.uid THEN a.uid ELSE b.uid END,
+                   CASE WHEN a.uid < b.uid THEN b.uid ELSE a.uid END,
+                   'couple', ?
+            FROM users a JOIN users b ON a.username = ? AND b.username = ?
+          `).bind(Date.now(), PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1]).run();
+          await env.DB.prepare(`
+            UPDATE friendships SET relationship_type = 'couple'
+            WHERE (
+              user_a_uid = (SELECT uid FROM users WHERE username = ?) AND
+              user_b_uid = (SELECT uid FROM users WHERE username = ?)
+            ) OR (
+              user_a_uid = (SELECT uid FROM users WHERE username = ?) AND
+              user_b_uid = (SELECT uid FROM users WHERE username = ?)
+            )
+          `).bind(
+            PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1],
+            PRIVATE_GAME_ALLOWED_USERNAMES[1], PRIVATE_GAME_ALLOWED_USERNAMES[0]
+          ).run();
+        }
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS user_blocks (
             blocker_uid TEXT NOT NULL,
@@ -995,6 +1039,20 @@ export default {
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_tickets_expiry ON social_socket_tickets(expires_at)`).run();
         try { await env.DB.prepare(`ALTER TABLE social_socket_tickets ADD COLUMN channel TEXT NOT NULL DEFAULT 'friends'`).run(); } catch (_) {}
         await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS room_socket_tickets (
+            ticket_hash TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            room_code TEXT NOT NULL,
+            role TEXT NOT NULL,
+            session_id TEXT NOT NULL DEFAULT '',
+            join_ticket TEXT NOT NULL DEFAULT '',
+            expires_at INTEGER NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_room_socket_tickets_expiry ON room_socket_tickets(expires_at, used)`).run();
+        await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS game_invites (
             id TEXT PRIMARY KEY,
             sender_uid TEXT NOT NULL,
@@ -1051,6 +1109,30 @@ export default {
           )
         `).run();
         await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_social_affinity_users ON social_affinity(user_a_uid, user_b_uid)`).run();
+        // The configured couple stays fixed at affinity level 521 and 1314 points.
+        // Resolve the pair by username so UID differences across databases are safe.
+        if (privateGameConfigured) await env.DB.prepare(`
+          INSERT INTO social_affinity (pair_key, user_a_uid, user_b_uid, points, updated_at)
+          SELECT CASE WHEN a.uid < b.uid THEN a.uid || ':' || b.uid ELSE b.uid || ':' || a.uid END,
+                 CASE WHEN a.uid < b.uid THEN a.uid ELSE b.uid END,
+                 CASE WHEN a.uid < b.uid THEN b.uid ELSE a.uid END,
+                 ?, ?
+          FROM users a JOIN users b ON a.username = ? AND b.username = ?
+          WHERE EXISTS (
+            SELECT 1 FROM friendships f
+            WHERE f.relationship_type = 'couple'
+              AND ((f.user_a_uid = a.uid AND f.user_b_uid = b.uid)
+                OR (f.user_a_uid = b.uid AND f.user_b_uid = a.uid))
+          )
+          ON CONFLICT(pair_key) DO UPDATE SET
+            points = excluded.points,
+            updated_at = excluded.updated_at
+        `).bind(
+          PRIVATE_GAME_COUPLE_AFFINITY_POINTS,
+          Date.now(),
+          PRIVATE_GAME_ALLOWED_USERNAMES[0],
+          PRIVATE_GAME_ALLOWED_USERNAMES[1]
+        ).run();
         // 付费货币与订单只做不可伪造的服务端账本骨架。当前支付模式为
         // disabled（生产默认）或 sandbox；没有支付回调时绝不写入 diamonds。
         await env.DB.prepare(`
@@ -1473,6 +1555,52 @@ export default {
       return candidate.length <= 256 ? candidate : '';
     }
 
+    // 私人游戏默认开启；仅显式 PRIVATE_GAME_MODE=0 的本地调试环境可关闭。
+    const privateGameMode = () => String(env.PRIVATE_GAME_MODE || '1').trim() !== '0';
+    const isPrivateGameUsername = username => privateGameConfigured && PRIVATE_GAME_ALLOWED_USERNAMES.includes(String(username || '').trim());
+    const isAllowedPrivateGameUser = user => !privateGameMode() || isPrivateGameUsername(user?.username);
+    const isPrivateGameCouple = (leftUsername, rightUsername) => {
+      const left = String(leftUsername || '').trim();
+      const right = String(rightUsername || '').trim();
+      return left !== right && isPrivateGameUsername(left) && isPrivateGameUsername(right);
+    };
+    const privateGameDenied = () => json({ code: 403, msg: '本游戏为私人游戏，仅限指定账号使用' }, 403);
+    const hashRoomSocketTicket = ticket => hashWithSalt(ticket, 'room-socket');
+
+    async function deleteMatchQueuePair(uid, matchId = '') {
+      const scopedMatch = matchId ? ' AND match_id = ?' : '';
+      const matchBindings = matchId ? [matchId] : [];
+      return env.DB.batch([
+        env.DB.prepare(`
+          DELETE FROM match_queue
+          WHERE uid = (
+            SELECT matched_with FROM match_queue
+            WHERE uid = ? AND status = 'matched'${scopedMatch}
+              AND matched_with IS NOT NULL AND room_code IS NOT NULL
+          )
+            AND status = 'matched'
+            AND matched_with = ?
+            AND room_code = (
+              SELECT room_code FROM match_queue
+              WHERE uid = ? AND status = 'matched'${scopedMatch}
+                AND matched_with IS NOT NULL AND room_code IS NOT NULL
+            )
+        `).bind(
+          uid, ...matchBindings,
+          uid,
+          uid, ...matchBindings
+        ),
+        env.DB.prepare(`DELETE FROM match_queue WHERE uid = ?${matchId ? ' AND match_id = ?' : ''}`)
+          .bind(uid, ...matchBindings)
+      ]);
+    }
+
+    async function isAllowedPrivateGameUid(uid) {
+      if (!privateGameMode()) return true;
+      const row = await env.DB.prepare('SELECT username FROM users WHERE uid = ?').bind(String(uid || '').trim()).first();
+      return isPrivateGameUsername(row?.username);
+    }
+
     async function requireUser(uid, token) {
       const cleanUid = String(uid || '').trim();
       const cleanToken = String(token || '').trim();
@@ -1484,6 +1612,7 @@ export default {
         FROM users WHERE uid = ? AND token = ?
       `).bind(cleanUid, cleanToken).first();
       if (!user) return { response: json({ code: 403, msg: '未授权：Token 无效' }, 403) };
+      if (!isAllowedPrivateGameUser(user)) return { response: privateGameDenied() };
       if (user.token_expires_at && Number(user.token_expires_at) <= Date.now()) {
         return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
       }
@@ -1499,6 +1628,108 @@ export default {
       }
       const auth = await requireUser(cleanUid, token);
       return auth.response ? auth : { uid: cleanUid, user: auth.user };
+    }
+
+    async function incrementCredentialFailure(uid, kind, now = Date.now()) {
+      // The column identifiers come only from these fixed rules. Incrementing
+      // in SQL avoids stale SELECT-then-write counters under parallel guesses.
+      const rule = kind === 'reset'
+        ? { count: 'failed_reset_count', lock: 'reset_locked_until', limit: 3, duration: 10 * 60 * 1000 }
+        : { count: 'failed_login_count', lock: 'locked_until', limit: 5, duration: 5 * 60 * 1000 };
+      const updated = await env.DB.prepare(`
+        UPDATE users
+        SET ${rule.count} = COALESCE(${rule.count}, 0) + 1,
+            ${rule.lock} = CASE
+              WHEN COALESCE(${rule.count}, 0) + 1 >= ? THEN ?
+              ELSE COALESCE(${rule.lock}, 0)
+            END
+        WHERE uid = ? AND COALESCE(${rule.lock}, 0) <= ?
+      `).bind(rule.limit, now + rule.duration, String(uid), now).run();
+      const state = await env.DB.prepare(`
+        SELECT ${rule.count} AS failure_count, ${rule.lock} AS locked_until
+        FROM users WHERE uid = ?
+      `).bind(String(uid)).first();
+      return {
+        changed: Number(updated?.meta?.changes) === 1,
+        failureCount: Math.max(0, Number(state?.failure_count) || 0),
+        lockedUntil: Math.max(0, Number(state?.locked_until) || 0),
+        limit: rule.limit
+      };
+    }
+
+    if (url.pathname === '/api/room/socket-ticket' && request.method === 'POST') {
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      try {
+        const body = await readJsonBody(request);
+        const uid = String(body.uid || '').trim();
+        const roomCode = String(body.roomCode || '').trim();
+        const role = String(body.role || '').trim();
+        const sessionId = String(body.sessionId || '').trim();
+        const joinTicket = String(body.joinTicket || '').trim();
+        if (!/^\d{6}$/.test(roomCode) || !['host', 'client'].includes(role) || sessionId.length > 96 || joinTicket.length > 96) {
+          return json({ code: 400, msg: '房间连接参数无效' }, 400);
+        }
+        const auth = await requireRegisteredUser(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        if (!consumeSocialRequestRate(auth.user.uid, 'room-socket-ticket', 30, 60000, 120)) {
+          return json({ code: 429, msg: '房间连接请求过于频繁' }, 429);
+        }
+        const ticket = generateSecureHex(32);
+        const now = Date.now();
+        const ticketHash = await hashRoomSocketTicket(ticket);
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM room_socket_tickets WHERE expires_at <= ? OR used != 0').bind(now),
+          env.DB.prepare(`
+            INSERT INTO room_socket_tickets
+              (ticket_hash, uid, room_code, role, session_id, join_ticket, expires_at, used, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+          `).bind(ticketHash, auth.user.uid, roomCode, role, sessionId, joinTicket, now + ROOM_SOCKET_TICKET_TTL_MS, now)
+        ]);
+        return json({ code: 0, data: { ticket, expiresAt: now + ROOM_SOCKET_TICKET_TTL_MS } });
+      } catch (error) {
+        return publicServerError('房间连接授权异常', error);
+      }
+    }
+
+    // WebSocket 本身不能带 Bearer 头，因此只接受由登录账号提前领取、
+    // 绑定房间和角色、30 秒内只能使用一次的短期票据。
+    if (url.pathname === '/api/room/socket') {
+      if (request.method !== 'GET') return json({ code: 405, msg: '仅支持 WebSocket GET' }, 405);
+      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ code: 426, msg: '需要 WebSocket 升级' }, 426);
+      if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
+      if (!env.GOMOKU_ROOMS) return json({ code: 503, msg: '房间中继尚未部署' }, 503);
+      const roomCode = String(url.searchParams.get('room') || '').trim();
+      const role = String(url.searchParams.get('role') || '').trim();
+      const sessionId = String(url.searchParams.get('session') || '').trim();
+      const joinTicket = String(url.searchParams.get('ticket') || '').trim();
+      const ticket = String(url.searchParams.get('socketTicket') || '').trim();
+      if (!/^\d{6}$/.test(roomCode) || !['host', 'client'].includes(role) || !/^[A-Fa-f0-9]{64}$/.test(ticket)) {
+        return json({ code: 401, msg: '房间连接票据无效' }, 401);
+      }
+      try {
+        const now = Date.now();
+        const ticketHash = await hashRoomSocketTicket(ticket);
+        const record = await env.DB.prepare(`
+          SELECT t.uid, t.room_code, t.role, t.session_id, t.join_ticket, u.username
+          FROM room_socket_tickets t JOIN users u ON u.uid = t.uid
+          WHERE t.ticket_hash = ? AND t.used = 0 AND t.expires_at > ?
+        `).bind(ticketHash, now).first();
+        if (!record) return json({ code: 401, msg: '房间连接票据已失效' }, 401);
+        if (privateGameMode() && !isPrivateGameUsername(record.username)) return privateGameDenied();
+        if (String(record.room_code) !== roomCode || String(record.role) !== role ||
+            String(record.session_id || '') !== sessionId || String(record.join_ticket || '') !== joinTicket) {
+          return json({ code: 403, msg: '房间连接票据与本次连接不匹配' }, 403);
+        }
+        const claimed = await env.DB.prepare(`
+          UPDATE room_socket_tickets SET used = 1
+          WHERE ticket_hash = ? AND used = 0 AND expires_at > ?
+        `).bind(ticketHash, now).run();
+        if (!Number(claimed?.meta?.changes)) return json({ code: 401, msg: '房间连接票据已使用' }, 401);
+        const roomId = env.GOMOKU_ROOMS.idFromName(`gomoku-room:${roomCode}`);
+        return env.GOMOKU_ROOMS.get(roomId).fetch(request);
+      } catch (error) {
+        return publicServerError('房间连接校验异常', error);
+      }
     }
 
     const socialPairKey = (left, right) => [String(left), String(right)].sort().join(':');
@@ -1538,6 +1769,7 @@ export default {
     }
 
     async function areFriends(left, right) {
+      if (privateGameMode() && (!await isAllowedPrivateGameUid(left) || !await isAllowedPrivateGameUid(right))) return false;
       const [a, b] = socialPair(left, right);
       return Boolean(await env.DB.prepare('SELECT 1 AS ok FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?').bind(a, b).first());
     }
@@ -1587,9 +1819,12 @@ export default {
 
     async function notifySocialFriends(uid, event) {
       const rows = await env.DB.prepare(`
-        SELECT CASE WHEN user_a_uid = ? THEN user_b_uid ELSE user_a_uid END AS friend_uid
-        FROM friendships WHERE user_a_uid = ? OR user_b_uid = ? LIMIT ${SOCIAL_MAX_FRIENDS}
-      `).bind(uid, uid, uid).all();
+        SELECT CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END AS friend_uid
+        FROM friendships f
+        JOIN users u ON u.uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
+        WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)${privateGameMode() ? ' AND u.username IN (?, ?)' : ''}
+        LIMIT ${SOCIAL_MAX_FRIENDS}
+      `).bind(uid, uid, uid, uid, ...(privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [])).all();
       await Promise.all((rows.results || []).map(row => notifySocialUser(row.friend_uid, event)));
     }
 
@@ -1608,6 +1843,7 @@ export default {
     }
 
     async function acceptPendingFriendRequest(requestId, receiverUid, senderUid, now) {
+      if (privateGameMode() && (!await isAllowedPrivateGameUid(receiverUid) || !await isAllowedPrivateGameUid(senderUid))) return false;
       const [a, b] = socialPair(receiverUid, senderUid);
       const results = await env.DB.batch([
         env.DB.prepare(`
@@ -1667,8 +1903,10 @@ export default {
       const parsed = new Date(`${String(day)}T00:00:00Z`);
       return new Date(parsed.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     };
-    const readEconomySummary = async (uid) => {
+    const readEconomySummary = async (uid, ownerUsername = '') => {
       const day = beijingDay();
+      const privateFriendFilter = privateGameMode() ? ' AND u.username IN (?, ?)' : '';
+      const privateFriendBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
       const [wallet, checkin, friendRows, premiumWallet] = await Promise.all([
         env.DB.prepare('SELECT coins FROM user_wallets WHERE uid = ?').bind(uid).first(),
         env.DB.prepare('SELECT checkin_day, streak, total_days, last_reward FROM daily_checkins WHERE uid = ?').bind(uid).first(),
@@ -1684,6 +1922,7 @@ export default {
             ELSE f.user_b_uid || ':' || f.user_a_uid
           END
           WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)
+            ${privateFriendFilter}
             AND NOT EXISTS (
               SELECT 1 FROM user_blocks b
               WHERE (b.blocker_uid = ? AND b.blocked_uid = u.uid)
@@ -1691,7 +1930,7 @@ export default {
             )
           ORDER BY affinity_points DESC, u.username ASC
           LIMIT ${SOCIAL_MAX_FRIENDS}
-        `).bind(uid, uid, uid, uid, uid, uid).all(),
+        `).bind(uid, uid, uid, uid, ...privateFriendBindings, uid, uid).all(),
         env.DB.prepare('SELECT diamonds, purchased_diamonds FROM premium_wallets WHERE uid = ?').bind(uid).first()
       ]);
       const row = checkin || {};
@@ -1705,14 +1944,23 @@ export default {
         totalDays: Math.max(0, Number(row.total_days) || 0),
         lastReward: Math.max(0, Number(row.last_reward) || 0),
         day,
-        affinity: (friendRows.results || []).map(friend => ({
-          uid: String(friend.friend_uid || ''),
-          username: String(friend.username || ''),
-          nickname: String(friend.nickname || friend.username || '棋友').slice(0, 32),
-          avatar: compactAvatar(friend.avatar),
-          points: Math.min(SOCIAL_AFFINITY_MAX_POINTS, Math.max(0, Number(friend.affinity_points) || 0)),
-          level: Math.min(100, 1 + Math.floor(Math.max(0, Number(friend.affinity_points) || 0) / 100))
-        }))
+        affinity: (friendRows.results || []).map(friend => {
+          const fixedCoupleAffinity = isPrivateGameCouple(ownerUsername, friend.username);
+          const affinityPoints = fixedCoupleAffinity
+            ? PRIVATE_GAME_COUPLE_AFFINITY_POINTS
+            : Math.min(SOCIAL_AFFINITY_MAX_POINTS, Math.max(0, Number(friend.affinity_points) || 0));
+          return {
+            uid: String(friend.friend_uid || ''),
+            username: String(friend.username || ''),
+            nickname: String(friend.nickname || friend.username || '棋友').slice(0, 32),
+            avatar: compactAvatar(friend.avatar),
+            points: affinityPoints,
+            level: fixedCoupleAffinity
+              ? PRIVATE_GAME_COUPLE_AFFINITY_LEVEL
+              : Math.min(100, 1 + Math.floor(affinityPoints / 100)),
+            fixed: fixedCoupleAffinity
+          };
+        })
       };
     };
 
@@ -1911,7 +2159,7 @@ export default {
       const auth = await requireRegisteredUser(uid, getRequestToken(request));
       if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(uid, 'economy-summary', 60, 60000, 240)) return json({ code: 429, msg: '数据读取过于频繁' }, 429);
-      return json({ code: 0, data: await readEconomySummary(uid) });
+      return json({ code: 0, data: await readEconomySummary(uid, auth.user.username) });
     }
 
     if (url.pathname === '/api/economy/checkin' && request.method === 'POST') {
@@ -1936,7 +2184,7 @@ export default {
         env.DB.prepare('UPDATE daily_checkins SET checkin_day = ?, streak = ?, total_days = total_days + 1, last_reward = ?, updated_at = ? WHERE uid = ? AND EXISTS (SELECT 1 FROM daily_checkin_claims WHERE uid = ? AND checkin_day = ? AND claim_nonce = ?)').bind(day, streak, reward, now, uid, uid, day, claimNonce)
       ]);
       const claimed = Number(results?.[0]?.meta?.changes) > 0;
-      const data = await readEconomySummary(uid);
+      const data = await readEconomySummary(uid, auth.user.username);
       return json({ code: 0, data: { ...data, reward: claimed ? reward : 0, alreadyCheckedIn: !claimed } });
     }
 
@@ -1955,7 +2203,7 @@ export default {
         SELECT uid, username, nickname, avatar, score FROM users
         WHERE username = ? AND username IS NOT NULL AND username != ''
       `).bind(username).first();
-      if (!target || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) {
+      if (!target || (privateGameMode() && !isPrivateGameUsername(target.username)) || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) {
         return json({ code: 404, msg: '未找到可添加的账号' }, 404);
       }
       const [a, b] = socialPair(uid, target.uid);
@@ -1972,7 +2220,8 @@ export default {
         avatar: compactAvatar(target.avatar),
         score: Number(target.score) || 1000,
         relationship: friendship ? 'friend' : (pending ? (pending.sender_uid === uid ? 'outgoing' : 'incoming') : 'none'),
-        requestId: pending?.id || ''
+        requestId: pending?.id || '',
+        relationshipType: friendship && isPrivateGameCouple(auth.user.username, target.username) ? 'couple' : (friendship ? 'friend' : '')
       }});
     }
 
@@ -1980,24 +2229,26 @@ export default {
       const uid = String(url.searchParams.get('uid') || '').trim();
       const auth = await requireRegisteredUser(uid, getRequestToken(request));
       if (auth.response) return auth.response;
+      const privateFriendFilter = privateGameMode() ? ' AND u.username IN (?, ?)' : '';
+      const privateFriendBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
       const friendsResult = await env.DB.prepare(`
-        SELECT u.uid, u.username, u.nickname, u.avatar, u.score, f.created_at,
+        SELECT u.uid, u.username, u.nickname, u.avatar, u.score, f.created_at, f.relationship_type,
                COALESCE(s.presence_hidden, 0) AS presence_hidden,
                COALESCE(s.presence_online, 0) AS presence_online
         FROM friendships f
         JOIN users u ON u.uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
         LEFT JOIN user_social_settings s ON s.uid = u.uid
-        WHERE f.user_a_uid = ? OR f.user_b_uid = ?
+        WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)${privateFriendFilter}
         ORDER BY f.created_at DESC LIMIT ${SOCIAL_MAX_FRIENDS}
-      `).bind(uid, uid, uid).all();
+      `).bind(uid, uid, uid, ...privateFriendBindings).all();
       const requestResult = await env.DB.prepare(`
         SELECT r.id, r.sender_uid, r.receiver_uid, r.created_at,
                u.uid AS user_uid, u.username, u.nickname, u.avatar
         FROM friend_requests r
         JOIN users u ON u.uid = CASE WHEN r.sender_uid = ? THEN r.receiver_uid ELSE r.sender_uid END
-        WHERE (r.sender_uid = ? OR r.receiver_uid = ?) AND r.status = 'pending'
+        WHERE (r.sender_uid = ? OR r.receiver_uid = ?) AND r.status = 'pending'${privateFriendFilter}
         ORDER BY r.created_at DESC LIMIT 100
-      `).bind(uid, uid, uid).all();
+      `).bind(uid, uid, uid, ...privateFriendBindings).all();
       const unreadResult = await env.DB.prepare(`
         SELECT m.sender_uid, COUNT(*) AS cnt
         FROM private_messages m
@@ -2009,9 +2260,9 @@ export default {
       const inviteResult = await env.DB.prepare(`
         SELECT i.id, i.sender_uid, i.room_code, i.expires_at, u.username, u.nickname, u.avatar
         FROM game_invites i JOIN users u ON u.uid = i.sender_uid
-        WHERE i.receiver_uid = ? AND i.status = 'pending' AND i.expires_at > ?
+        WHERE i.receiver_uid = ? AND i.status = 'pending' AND i.expires_at > ?${privateFriendFilter}
         ORDER BY i.created_at DESC LIMIT 20
-      `).bind(uid, now).all();
+      `).bind(uid, now, ...privateFriendBindings).all();
       const unreadMap = new Map((unreadResult.results || []).map(row => [String(row.sender_uid), Number(row.cnt) || 0]));
       const friends = (friendsResult.results || []).map(row => ({
         uid: String(row.uid),
@@ -2019,6 +2270,7 @@ export default {
         nickname: sanitizeText(row.nickname || row.username, 16),
         avatar: compactAvatar(row.avatar),
         score: Number(row.score) || 1000,
+        relationshipType: String(row.relationship_type || 'friend'),
         online: Number(row.presence_hidden) === 0 && Number(row.presence_online) !== 0,
         presenceHidden: Number(row.presence_hidden) !== 0,
         unread: unreadMap.get(String(row.uid)) || 0
@@ -2061,7 +2313,7 @@ export default {
       if (!consumeSocialRequestRate(uid, 'friend-request', 20, 86400000, 100)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
       const targetUsername = String(body.targetUsername || '').trim().slice(0, 32);
       const target = await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
-      if (!target || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) return json({ code: 404, msg: '未找到可添加的账号' }, 404);
+      if (!target || (privateGameMode() && !isPrivateGameUsername(target.username)) || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) return json({ code: 404, msg: '未找到可添加的账号' }, 404);
       if (await areFriends(uid, target.uid)) return json({ code: 409, msg: '你们已经是好友' }, 409);
       if (await friendCount(uid) >= SOCIAL_MAX_FRIENDS || await friendCount(target.uid) >= SOCIAL_MAX_FRIENDS) return json({ code: 409, msg: '好友数量已达上限' }, 409);
       const reverse = await env.DB.prepare(`SELECT id FROM friend_requests WHERE sender_uid = ? AND receiver_uid = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`).bind(target.uid, uid).first();
@@ -2123,6 +2375,10 @@ export default {
       const uid = String(auth.user.uid);
       const peerUid = decodeURIComponent(friendDeleteMatch[1]).slice(0, 64);
       if (!peerUid || peerUid === uid) return json({ code: 400, msg: '好友身份无效' }, 400);
+      const peerUser = await env.DB.prepare('SELECT username FROM users WHERE uid = ?').bind(peerUid).first();
+      if (privateGameMode() && isPrivateGameCouple(auth.user.username, peerUser?.username)) {
+        return json({ code: 403, msg: '私人游戏的情侣好友关系已固定' }, 403);
+      }
       const [a, b] = socialPair(uid, peerUid);
       const now = Date.now();
       const results = await env.DB.batch([
@@ -2143,8 +2399,9 @@ export default {
       const rows = await env.DB.prepare(`
         SELECT u.uid, u.username, u.nickname, u.avatar, b.created_at
         FROM user_blocks b JOIN users u ON u.uid = b.blocked_uid
-        WHERE b.blocker_uid = ? ORDER BY b.created_at DESC LIMIT 200
-      `).bind(uid).all();
+        WHERE b.blocker_uid = ?${privateGameMode() ? ' AND u.username IN (?, ?)' : ''}
+        ORDER BY b.created_at DESC LIMIT 200
+      `).bind(uid, ...(privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [])).all();
       return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatar(row.avatar) })) });
     }
 
@@ -2156,8 +2413,12 @@ export default {
       if (!consumeSocialRequestRate(uid, 'block', 60, 3600000, 240)) return json({ code: 429, msg: '黑名单操作过于频繁' }, 429);
       const targetUid = String(body.targetUid || '').trim().slice(0, 64);
       if (!targetUid || targetUid === uid) return json({ code: 400, msg: '拉黑对象无效' }, 400);
-      const target = await env.DB.prepare(`SELECT uid FROM users WHERE uid = ? AND username IS NOT NULL AND username != ''`).bind(targetUid).first();
+      const target = await env.DB.prepare(`SELECT uid, username FROM users WHERE uid = ? AND username IS NOT NULL AND username != ''`).bind(targetUid).first();
       if (!target) return json({ code: 404, msg: '账号不存在' }, 404);
+      if (privateGameMode() && !isPrivateGameUsername(target.username)) return json({ code: 404, msg: '账号不存在' }, 404);
+      if (privateGameMode() && isPrivateGameCouple(auth.user.username, target.username)) {
+        return json({ code: 403, msg: '私人游戏的情侣关系不能加入黑名单' }, 403);
+      }
       const [a, b] = socialPair(uid, targetUid);
       const now = Date.now();
       await env.DB.batch([
@@ -2331,21 +2592,28 @@ export default {
       const before = Number.isSafeInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : Number.MAX_SAFE_INTEGER;
       const requestedLimit = Number(url.searchParams.get('limit'));
       const limit = Number.isSafeInteger(requestedLimit) ? Math.min(WORLD_MAX_PAGE_SIZE, Math.max(1, requestedLimit)) : WORLD_MAX_PAGE_SIZE;
+      const privateWorldSenderFilter = privateGameMode() ? ' AND m.sender_uid IN (SELECT uid FROM users WHERE username IN (?, ?))' : '';
+      const privateWorldSenderBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
       const state = await env.DB.prepare('SELECT last_read_id, cleared_before_id FROM world_message_state WHERE uid = ?').bind(uid).first();
-      const latest = await env.DB.prepare('SELECT MAX(id) AS max_id FROM world_messages WHERE channel = ? AND created_at >= ?').bind(WORLD_CHANNEL, Date.now() - WORLD_HISTORY_WINDOW_MS).first();
+      const latest = await env.DB.prepare(`
+        SELECT MAX(m.id) AS max_id FROM world_messages m
+        WHERE m.channel = ? AND m.created_at >= ?${privateWorldSenderFilter}
+      `).bind(WORLD_CHANNEL, Date.now() - WORLD_HISTORY_WINDOW_MS, ...privateWorldSenderBindings).first();
       const floorId = Math.max(Number(state?.cleared_before_id) || 0, Math.max(0, (Number(latest?.max_id) || 0) - WORLD_HISTORY_MAX_ID_SPAN));
       const rows = await env.DB.prepare(`
         SELECT m.id, m.sender_uid, u.username, u.nickname, u.avatar, m.body, m.created_at
         FROM world_messages m JOIN users u ON u.uid = m.sender_uid
         WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id < ? AND m.id > ? AND m.created_at >= ?
+          ${privateWorldSenderFilter}
           AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
         ORDER BY m.id DESC LIMIT ?
-      `).bind(WORLD_CHANNEL, before, floorId, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, limit).all();
+      `).bind(WORLD_CHANNEL, before, floorId, Date.now() - WORLD_HISTORY_WINDOW_MS, ...privateWorldSenderBindings, uid, limit).all();
       const unread = await env.DB.prepare(`
         SELECT COUNT(*) AS cnt FROM world_messages m
         WHERE m.channel = ? AND m.moderation_state = 'visible' AND m.id > MAX(?, ?) AND m.created_at >= ? AND m.sender_uid != ?
+          ${privateWorldSenderFilter}
           AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE b.blocker_uid = ? AND b.blocked_uid = m.sender_uid)
-      `).bind(WORLD_CHANNEL, Number(state?.last_read_id) || 0, Number(state?.cleared_before_id) || 0, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, uid, uid).first();
+      `).bind(WORLD_CHANNEL, Number(state?.last_read_id) || 0, Number(state?.cleared_before_id) || 0, Date.now() - WORLD_HISTORY_WINDOW_MS, uid, ...privateWorldSenderBindings, uid).first();
       const page = (rows.results || []).reverse().map(row => ({
         id: Number(row.id) || 0,
         senderUid: String(row.sender_uid || ''),
@@ -2416,11 +2684,22 @@ export default {
       const uid = String(auth.user.uid);
       const lastMessageId = Number(body.lastMessageId);
       if (!Number.isSafeInteger(lastMessageId) || lastMessageId < 0) return json({ code: 400, msg: '已读位置无效' }, 400);
+      const privateWorldSenderFilter = privateGameMode() ? ' AND sender_uid IN (SELECT uid FROM users WHERE username IN (?, ?))' : '';
+      const privateWorldSenderBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
+      const latest = await env.DB.prepare(`
+        SELECT MAX(id) AS max_id FROM world_messages
+        WHERE channel = ? AND moderation_state = 'visible' AND created_at >= ?${privateWorldSenderFilter}
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks b
+            WHERE b.blocker_uid = ? AND b.blocked_uid = world_messages.sender_uid
+          )
+      `).bind(WORLD_CHANNEL, Date.now() - WORLD_HISTORY_WINDOW_MS, ...privateWorldSenderBindings, uid).first();
+      const boundedLastMessageId = Math.min(lastMessageId, Math.max(0, Number(latest?.max_id) || 0));
       await env.DB.prepare(`
         INSERT INTO world_message_state (uid, last_read_id, cleared_before_id) VALUES (?, ?, 0)
         ON CONFLICT(uid) DO UPDATE SET last_read_id = MAX(world_message_state.last_read_id, excluded.last_read_id)
-      `).bind(uid, lastMessageId).run();
-      return json({ code: 0 });
+      `).bind(uid, boundedLastMessageId).run();
+      return json({ code: 0, data: { lastReadId: boundedLastMessageId } });
     }
 
     if (url.pathname === '/api/world/messages/clear' && request.method === 'POST') {
@@ -2506,15 +2785,26 @@ export default {
         return json({ code: 409, msg: '客户端消息 ID 已用于另一条消息' }, 409);
       }
       if (Number(insertResult?.meta?.changes) > 0) {
-        // 私聊是双方明确的互动信号：只给真实好友关系增加固定 1 点，
-        // 不接受客户端提交的好感度数值，也不在日志中记录消息正文。
-        await env.DB.prepare(`
-          INSERT INTO social_affinity (pair_key, user_a_uid, user_b_uid, points, updated_at)
-          VALUES (?, ?, ?, 1, ?)
-          ON CONFLICT(pair_key) DO UPDATE SET
-            points = MIN(?, social_affinity.points + 1),
-            updated_at = excluded.updated_at
-        `).bind(pairKey, friendA, friendB, now, SOCIAL_AFFINITY_MAX_POINTS).run();
+        // 指定情侣关系固定为 1314 点、521 级；其他好友仍按真实私聊互动累计 1 点。
+        // 两种路径都只接受服务端判定，不读取客户端提交的好感度数值。
+        const receiver = await env.DB.prepare('SELECT username FROM users WHERE uid = ?').bind(receiverUid).first();
+        if (isPrivateGameCouple(auth.user.username, receiver?.username)) {
+          await env.DB.prepare(`
+            INSERT INTO social_affinity (pair_key, user_a_uid, user_b_uid, points, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(pair_key) DO UPDATE SET
+              points = excluded.points,
+              updated_at = excluded.updated_at
+          `).bind(pairKey, friendA, friendB, PRIVATE_GAME_COUPLE_AFFINITY_POINTS, now).run();
+        } else {
+          await env.DB.prepare(`
+            INSERT INTO social_affinity (pair_key, user_a_uid, user_b_uid, points, updated_at)
+            VALUES (?, ?, ?, 1, ?)
+            ON CONFLICT(pair_key) DO UPDATE SET
+              points = MIN(?, social_affinity.points + 1),
+              updated_at = excluded.updated_at
+          `).bind(pairKey, friendA, friendB, now, SOCIAL_AFFINITY_MAX_POINTS).run();
+        }
         await notifySocialUser(receiverUid, { kind: 'message', fromUid: uid, messageId: Number(message?.id) || 0, at: now });
       }
       return json({ code: 0, data: message });
@@ -2530,11 +2820,13 @@ export default {
       const lastMessageId = Number.isSafeInteger(requestedMessageId) && requestedMessageId > 0 ? requestedMessageId : 0;
       if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid)) return json({ code: 403, msg: '好友关系无效' }, 403);
       const pairKey = socialPairKey(uid, friendUid);
+      const latest = await env.DB.prepare('SELECT MAX(id) AS max_id FROM private_messages WHERE pair_key = ?').bind(pairKey).first();
+      const boundedLastMessageId = Math.min(lastMessageId, Math.max(0, Number(latest?.max_id) || 0));
       await env.DB.prepare(`
         INSERT INTO message_state (uid, pair_key, last_read_id, cleared_before_id) VALUES (?, ?, ?, 0)
         ON CONFLICT(uid, pair_key) DO UPDATE SET last_read_id = MAX(message_state.last_read_id, excluded.last_read_id)
-      `).bind(uid, pairKey, lastMessageId).run();
-      return json({ code: 0 });
+      `).bind(uid, pairKey, boundedLastMessageId).run();
+      return json({ code: 0, data: { lastReadId: boundedLastMessageId } });
     }
 
     if (url.pathname === '/api/messages/clear' && request.method === 'POST') {
@@ -2563,10 +2855,10 @@ export default {
       const rows = await env.DB.prepare(`
         SELECT u.uid, u.username, u.nickname, u.avatar, u.score, r.games_count, r.last_played_at
         FROM recent_opponents r JOIN users u ON u.uid = r.opponent_uid
-        WHERE r.uid = ? AND NOT EXISTS (
+        WHERE r.uid = ? AND (? = 0 OR u.username IN (?, ?)) AND NOT EXISTS (
           SELECT 1 FROM user_blocks b WHERE (b.blocker_uid = ? AND b.blocked_uid = u.uid) OR (b.blocker_uid = u.uid AND b.blocked_uid = ?)
         ) ORDER BY r.last_played_at DESC LIMIT 30
-      `).bind(uid, uid, uid).all();
+      `).bind(uid, privateGameMode() ? 1 : 0, ...PRIVATE_GAME_ALLOWED_USERNAMES, uid, uid).all();
       return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatar(row.avatar) })) });
     }
 
@@ -2583,7 +2875,7 @@ export default {
       const unconfirmed = () => json({ code: 0, data: { confirmed: false } });
       if (await isBlockedEitherWay(uid, opponentUid)) return unconfirmed();
       const opponent = await env.DB.prepare(`SELECT uid FROM users WHERE uid = ? AND username IS NOT NULL AND username != ''`).bind(opponentUid).first();
-      if (!opponent) return unconfirmed();
+      if (!opponent || (privateGameMode() && !await isAllowedPrivateGameUid(opponentUid))) return unconfirmed();
       const now = Date.now();
       const cutoff = now - 10 * 60 * 1000;
       await env.DB.batch([
@@ -2729,8 +3021,13 @@ export default {
       if (!/^[A-Fa-f0-9]{48}$/.test(ticket)) return json({ code: 401, msg: '连接票据无效' }, 401);
       const ticketHash = await hashWithSalt(ticket, 'social-ticket');
       const now = Date.now();
-      const record = await env.DB.prepare(`SELECT uid, COALESCE(channel, 'friends') AS channel FROM social_socket_tickets WHERE ticket_hash = ? AND used = 0 AND expires_at > ?`).bind(ticketHash, now).first();
+      const record = await env.DB.prepare(`
+        SELECT t.uid, COALESCE(t.channel, 'friends') AS channel, u.username
+        FROM social_socket_tickets t JOIN users u ON u.uid = t.uid
+        WHERE t.ticket_hash = ? AND t.used = 0 AND t.expires_at > ?
+      `).bind(ticketHash, now).first();
       if (!record) return json({ code: 401, msg: '连接票据已失效' }, 401);
+      if (!isAllowedPrivateGameUser(record)) return privateGameDenied();
       const ticketChannel = String(record.channel || 'friends');
       if ((isWorldSocket && ticketChannel !== WORLD_CHANNEL) || (!isWorldSocket && ticketChannel === WORLD_CHANNEL)) {
         return json({ code: 403, msg: '连接频道不匹配' }, 403);
@@ -2815,6 +3112,7 @@ async function allocateNextAvailableUid(env) {
 
     // ── 2. 游客免密快速入场（纯本地处理，绝不存入数据库，不上天梯榜） ──
     if (url.pathname === '/api/auth/guest' && request.method === 'POST') {
+      if (privateGameMode()) return privateGameDenied();
       try {
         const defaultName = generateRandomNickname();
         const defaultAvatar = generateRandomAvatar();
@@ -2839,6 +3137,7 @@ async function allocateNextAvailableUid(env) {
 
     // ── 3. 注册正式账号 ─────────────────────────────────
     if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+      if (privateGameMode()) return privateGameDenied();
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
         const body = await readJsonBody(request);
@@ -2942,6 +3241,10 @@ async function allocateNextAvailableUid(env) {
         const safeNick = nickname ? sanitizeText(nickname, 16) : null;
         const safeAvatar = avatar ? sanitizeAvatar(avatar) : null;
 
+        if (privateGameMode() && safeNick && safeNick !== String(user.username || '')) {
+          return json({ code: 403, msg: '私人游戏账号名固定，不能修改' }, 403);
+        }
+
         if (safeNick) {
           // 检查该账号名/昵称是否已被其他注册用户占用
           const exist = await env.DB.prepare('SELECT uid FROM users WHERE (username = ? OR nickname = ?) AND uid != ?').bind(safeNick, safeNick, String(uid)).first();
@@ -2992,6 +3295,7 @@ async function allocateNextAvailableUid(env) {
         if (!user) {
           return json({ code: 1, msg: "用户不存在" });
         }
+        if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
         const now = Date.now();
         const oneYear = AUTH_SESSION_TTL_MS;
@@ -3003,7 +3307,40 @@ async function allocateNextAvailableUid(env) {
             const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
             const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
             const expiresAt = now + oneYear;
-            await env.DB.prepare("UPDATE users SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?").bind(freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
+            const refreshed = await env.DB.prepare(`
+              UPDATE users
+              SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE uid = ? AND token = ? AND refresh_token_hash IS ?
+                AND (token_expires_at IS NULL OR token_expires_at = 0 OR token_expires_at > ?)
+            `).bind(freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid, user.token, user.refresh_token_hash ?? null, now).run();
+            if (Number(refreshed?.meta?.changes) !== 1) {
+              // Several tabs can verify one access token at the same time. Only
+              // one may rotate the refresh token; a loser must never return a
+              // token that another request has already replaced.
+              const current = await env.DB.prepare(`
+                SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at
+                FROM users WHERE uid = ?
+              `).bind(user.uid).first();
+              if (!current || current.token !== user.token ||
+                  (current.token_expires_at && Number(current.token_expires_at) <= now)) {
+                return json({ code: 2, msg: "登录状态已更新，请重新验证" }, 401);
+              }
+              return json({
+                code: 0,
+                msg: "正式账号凭证有效",
+                data: {
+                  uid: current.uid,
+                  username: current.username,
+                  nickname: current.nickname,
+                  avatar: sanitizeAvatar(current.avatar),
+                  score: current.score,
+                  wins: current.wins,
+                  total_games: current.total_games,
+                  security_q: user.security_q,
+                  token: current.token
+                }
+              });
+            }
 
             return json({
               code: 0,
@@ -3065,6 +3402,7 @@ async function allocateNextAvailableUid(env) {
         const user = await env.DB.prepare(
           "SELECT uid, username, nickname, avatar, score, wins, total_games, security_q, refresh_token_hash, refresh_token_expires_at FROM users WHERE uid = ? AND username IS NOT NULL AND username != ?"
         ).bind(uid, '').first();
+        if (privateGameMode() && !isPrivateGameUsername(user?.username)) return privateGameDenied();
         const now = Date.now();
         if (!user || !user.refresh_token_hash || !user.refresh_token_expires_at || Number(user.refresh_token_expires_at) <= now) {
           return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
@@ -3072,16 +3410,30 @@ async function allocateNextAvailableUid(env) {
 
         const calculatedHash = await hashWithSalt(refreshToken, String(user.uid));
         if (calculatedHash !== user.refresh_token_hash) {
-          return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
+          // The other tab may have rotated the token before this request read
+          // the user row. This is only a retry hint; the server never returns
+          // or accepts the superseded token.
+          return json({ code: 2, retryable: true, msg: "登录凭证已失效，请重新登录" }, 401);
         }
 
         const freshToken = generateSecureHex(24);
         const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
         const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
         const expiresAt = now + AUTH_SESSION_TTL_MS;
-        await env.DB.prepare(
-          "UPDATE users SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?"
-        ).bind(freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
+        const refreshed = await env.DB.prepare(`
+          UPDATE users
+          SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE uid = ? AND refresh_token_hash = ? AND refresh_token_expires_at > ?
+        `).bind(
+          freshToken, expiresAt, freshRefreshTokenHash, expiresAt,
+          user.uid, user.refresh_token_hash, now
+        ).run();
+        if (Number(refreshed?.meta?.changes) !== 1) {
+          // A same-browser tab may have won the single-use refresh-token CAS.
+          // The client may retry only after it observes that tab's new token
+          // in shared localStorage; the old token itself remains unusable.
+          return json({ code: 2, retryable: true, msg: "登录凭证已在其他请求中更新，请重试" }, 401);
+        }
 
         return json({
           code: 0,
@@ -3120,6 +3472,7 @@ async function allocateNextAvailableUid(env) {
         if (!user) {
           return json({ code: 1, msg: '账号或密码不正确' });
         }
+        if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
         if (user.locked_until && user.locked_until > now) {
           const remain = Math.ceil((user.locked_until - now) / 1000);
@@ -3128,15 +3481,11 @@ async function allocateNextAvailableUid(env) {
 
         const calcHash = await hashPassword(password, user.salt);
         if (calcHash !== user.password_hash) {
-          const newFailCount = (user.failed_login_count || 0) + 1;
-          if (newFailCount >= 5) {
-            const lockTime = now + 5 * 60 * 1000;
-            await env.DB.prepare('UPDATE users SET failed_login_count = ?, locked_until = ? WHERE uid = ?').bind(newFailCount, lockTime, user.uid).run();
+          const failure = await incrementCredentialFailure(user.uid, 'login', now);
+          if (failure.lockedUntil > Date.now() || failure.failureCount >= failure.limit) {
             return json({ code: 429, msg: '密码连续错误满 5 次！为防止被盗，账号已被锁定 5 分钟' });
-          } else {
-            await env.DB.prepare('UPDATE users SET failed_login_count = ? WHERE uid = ?').bind(newFailCount, user.uid).run();
-            return json({ code: 1, msg: `账号或密码错误（连续错误 5 次锁定，还可尝试 ${5 - newFailCount} 次）` });
           }
+          return json({ code: 1, msg: `账号或密码错误（连续错误 5 次锁定，还可尝试 ${Math.max(0, failure.limit - failure.failureCount)} 次）` });
         }
 
         const freshToken = generateSecureHex(24);
@@ -3203,6 +3552,7 @@ async function allocateNextAvailableUid(env) {
         if (!user) {
           return json({ code: 401, msg: '登录状态已失效，请重新登录' }, 401);
         }
+        if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
         const now = Date.now();
         if (user.token_expires_at && user.token_expires_at <= now) {
@@ -3215,14 +3565,11 @@ async function allocateNextAvailableUid(env) {
 
         const currentHash = await hashPassword(currentPassword, user.salt);
         if (currentHash !== user.password_hash) {
-          const newFailCount = (user.failed_login_count || 0) + 1;
-          if (newFailCount >= 5) {
-            const lockTime = now + 5 * 60 * 1000;
-            await env.DB.prepare('UPDATE users SET failed_login_count = ?, locked_until = ? WHERE uid = ?').bind(newFailCount, lockTime, user.uid).run();
+          const failure = await incrementCredentialFailure(user.uid, 'login', now);
+          if (failure.lockedUntil > Date.now() || failure.failureCount >= failure.limit) {
             return json({ code: 429, msg: '当前密码连续错误满 5 次！账号已锁定 5 分钟' }, 429);
           }
-          await env.DB.prepare('UPDATE users SET failed_login_count = ? WHERE uid = ?').bind(newFailCount, user.uid).run();
-          return json({ code: 1, msg: `当前密码不正确（还可尝试 ${5 - newFailCount} 次）` });
+          return json({ code: 1, msg: `当前密码不正确（还可尝试 ${Math.max(0, failure.limit - failure.failureCount)} 次）` });
         }
 
         const newSalt = generateSecureHex(16);
@@ -3271,6 +3618,7 @@ async function allocateNextAvailableUid(env) {
         if (!user) {
           return json({ code: 1, msg: '该账号不存在' });
         }
+        if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
         const now = Date.now();
         if (user.reset_locked_until && user.reset_locked_until > now) {
@@ -3303,6 +3651,7 @@ async function allocateNextAvailableUid(env) {
         const now = Date.now();
         const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
         if (!user) return json({ code: 1, msg: '账号不存在' });
+        if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
         if (user.reset_locked_until && user.reset_locked_until > now) {
           const remain = Math.ceil((user.reset_locked_until - now) / 1000);
@@ -3313,15 +3662,11 @@ async function allocateNextAvailableUid(env) {
         const calcAnswerHash = await hashWithSalt(cleanAnswer, user.security_salt);
 
         if (calcAnswerHash !== user.security_a_hash) {
-          const newFail = (user.failed_reset_count || 0) + 1;
-          if (newFail >= 3) {
-            const lockUntil = now + 10 * 60 * 1000;
-            await env.DB.prepare('UPDATE users SET failed_reset_count = ?, reset_locked_until = ? WHERE uid = ?').bind(newFail, lockUntil, user.uid).run();
+          const failure = await incrementCredentialFailure(user.uid, 'reset', now);
+          if (failure.lockedUntil > Date.now() || failure.failureCount >= failure.limit) {
             return json({ code: 429, msg: '密保连续答错已满 3 次！为防破解，找回密码功能已锁定 10 分钟' });
-          } else {
-            await env.DB.prepare('UPDATE users SET failed_reset_count = ? WHERE uid = ?').bind(newFail, user.uid).run();
-            return json({ code: 1, msg: `密保答案不正确（还可尝试 ${3 - newFail} 次）` });
           }
+          return json({ code: 1, msg: `密保答案不正确（还可尝试 ${Math.max(0, failure.limit - failure.failureCount)} 次）` });
         }
 
         const newSalt = generateSecureHex(16);
@@ -3518,7 +3863,8 @@ async function allocateNextAvailableUid(env) {
           ? body.matchId.trim()
           : '';
 
-        // 清理超时等待记录；匹配成功但客户端没及时消费的旧记录也一并清掉。
+        // 清理超时等待记录；matched 记录保留一天，让耗时较长的合法在线对局
+        // 仍可进行双方确认结算。结算票据保存在这一对互相匹配的行上。
         // 清理动作限频，避免每个 join 都额外产生一次 D1 写入争用；查询本身仍由 updated_at 条件兜底。
         if (now - lastMatchQueueCleanupAt >= 30000) {
           lastMatchQueueCleanupAt = now;
@@ -3527,7 +3873,7 @@ async function allocateNextAvailableUid(env) {
               DELETE FROM match_queue
               WHERE (status = "waiting" AND updated_at < ?)
                  OR (status = "matched" AND updated_at < ?)
-            `).bind(now - 25000, now - 120000).run();
+            `).bind(now - 25000, now - MATCH_RESULT_TTL_MS).run();
           } catch (cleanupError) {
             lastMatchQueueCleanupAt = 0;
             console.warn('[match] 清理超时队列失败:', cleanupError?.message || cleanupError);
@@ -3553,69 +3899,118 @@ async function allocateNextAvailableUid(env) {
         const existingBeforeMatch = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
         if (existingBeforeMatch?.status === 'matched') {
           const sameRequest = !matchId || existingBeforeMatch.match_id === matchId;
-          if (sameRequest) return json(formatMatched(existingBeforeMatch));
-          await env.DB.prepare('DELETE FROM match_queue WHERE uid = ? AND status = "matched"').bind(matchUid).run();
+          const allowedOpponent = !privateGameMode() || await isAllowedPrivateGameUid(existingBeforeMatch.matched_with);
+          if (sameRequest && allowedOpponent) return json(formatMatched(existingBeforeMatch));
+          await deleteMatchQueuePair(matchUid, String(existingBeforeMatch.match_id || ''));
         }
 
         // 寻找正在等待的真人对手 (非自己)
+        const privateMatchFilter = privateGameMode() ? ' AND uid IN (SELECT uid FROM users WHERE username IN (?, ?))' : '';
+        const privateMatchBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
         const opponent = await env.DB.prepare(
-          'SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1'
-        ).bind(matchUid, now - 20000).first();
+          `SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ?${privateMatchFilter} ORDER BY updated_at ASC LIMIT 1`
+        ).bind(matchUid, now - 20000, ...privateMatchBindings).first();
 
-        let claimedOpponent = false;
         if (opponent) {
-          // 只有仍处于 waiting 且未超时的记录才能被领取，避免两个请求同时匹配到同一个人。
+          // 候选领取与请求方写入必须在同一事务里完成。match_claim_id 是
+          // 本次操作的随机闸门：第二条语句只有看到候选仍由本请求领取时才
+          // 能写入请求方；若条件未满足，第三条语句会撤销任何单侧候选状态。
           const roomCode = generateRoomCode();
-          const claim = await env.DB.prepare(`
-            UPDATE match_queue
-            SET status = 'matched', matched_with = ?, matched_color = 'black',
-                matched_nickname = ?, matched_avatar = ?, matched_score = ?,
-                room_code = ?, updated_at = ?
-            WHERE uid = ? AND status = 'waiting' AND updated_at > ?
-          `).bind(matchUid, safeNick, safeAvatar, safeScore, roomCode, now, opponent.uid, now - 20000).run();
-          claimedOpponent = Number(claim.meta?.changes || 0) === 1;
-
-          if (claimedOpponent) {
-            // 当前玩家若已被另一请求匹配，不覆盖已有对局；否则写入白方记录。
-            await env.DB.prepare(`
-              INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, match_id, updated_at)
-              VALUES (?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?, ?)
+          const claimId = generateSecureHex(16);
+          await env.DB.batch([
+            env.DB.prepare(`
+              UPDATE match_queue
+              SET status = 'matched', matched_with = ?, matched_color = 'black',
+                  matched_nickname = ?, matched_avatar = ?, matched_score = ?,
+                  room_code = ?, match_claim_id = ?, reported_outcome = NULL,
+                  settlement_claim_id = NULL, updated_at = ?
+              WHERE uid = ? AND status = 'waiting' AND updated_at > ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM match_queue WHERE uid = ? AND status = 'matched'
+                )
+            `).bind(
+              matchUid, safeNick, safeAvatar, safeScore, roomCode, claimId, now,
+              opponent.uid, now - 20000, matchUid
+            ),
+            env.DB.prepare(`
+              INSERT INTO match_queue (
+                uid, nickname, avatar, score, status, matched_with, matched_color,
+                matched_nickname, matched_avatar, matched_score, room_code, match_id,
+                match_claim_id, reported_outcome, settlement_claim_id, updated_at
+              )
+              SELECT ?, ?, ?, ?, 'matched', ?, 'white', ?, ?, ?, ?, ?, ?, NULL, NULL, ?
+              WHERE EXISTS (
+                SELECT 1 FROM match_queue
+                WHERE uid = ? AND status = 'matched' AND matched_with = ?
+                  AND room_code = ? AND match_claim_id = ? AND updated_at = ?
+              )
+                AND NOT EXISTS (
+                  SELECT 1 FROM match_queue WHERE uid = ? AND status = 'matched'
+                )
               ON CONFLICT(uid) DO UPDATE SET
                 status = 'matched', matched_with = excluded.matched_with, matched_color = 'white',
                 matched_nickname = excluded.matched_nickname, matched_avatar = excluded.matched_avatar,
                 matched_score = excluded.matched_score, room_code = excluded.room_code,
-                match_id = excluded.match_id, updated_at = excluded.updated_at
+                match_id = excluded.match_id, match_claim_id = excluded.match_claim_id,
+                reported_outcome = NULL, settlement_claim_id = NULL,
+                updated_at = excluded.updated_at
               WHERE match_queue.status != 'matched'
-            `).bind(matchUid, safeNick, safeAvatar, safeScore, opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score, roomCode, matchId, now).run();
+            `).bind(
+              matchUid, safeNick, safeAvatar, safeScore,
+              opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score,
+              roomCode, matchId, claimId, now,
+              opponent.uid, matchUid, roomCode, claimId, now, matchUid
+            ),
+            env.DB.prepare(`
+              UPDATE match_queue
+              SET status = 'waiting', matched_with = NULL, matched_color = NULL,
+                  matched_nickname = NULL, matched_avatar = NULL, matched_score = NULL,
+                  room_code = NULL, match_claim_id = NULL, reported_outcome = NULL,
+                  settlement_claim_id = NULL, updated_at = ?
+              WHERE uid = ? AND status = 'matched' AND match_claim_id = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM match_queue WHERE uid = ? AND match_claim_id = ? AND status = 'matched'
+                )
+            `).bind(now, opponent.uid, claimId, matchUid, claimId)
+          ]);
 
-            const current = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
-            if (current?.status === 'matched' && (!matchId || current.match_id === matchId)) {
+          const current = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
+          if (current?.status === 'matched' && (!matchId || current.match_id === matchId)) {
+            if (!privateGameMode() || await isAllowedPrivateGameUid(current.matched_with)) {
               return json(formatMatched(current));
             }
+            await deleteMatchQueuePair(matchUid, String(current.match_id || ''));
           }
         }
 
         // 抢占失败时可能已经被其他请求匹配；先读取现状，绝不把已匹配记录重置为 waiting。
         const existing = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
         if (existing?.status === 'matched' && (!matchId || existing.match_id === matchId)) {
-          return json(formatMatched(existing));
+          if (!privateGameMode() || await isAllowedPrivateGameUid(existing.matched_with)) {
+            return json(formatMatched(existing));
+          }
+          await deleteMatchQueuePair(matchUid, String(existing.match_id || ''));
         }
 
         // 暂无可领取的等待对手，将自己放入队列；ON CONFLICT 条件防止覆盖并发产生的 matched 状态。
         await env.DB.prepare(`
-          INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, match_id, updated_at)
-          VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
+          INSERT INTO match_queue (uid, nickname, avatar, score, status, matched_with, matched_color, matched_nickname, matched_avatar, matched_score, room_code, match_id, match_claim_id, reported_outcome, settlement_claim_id, updated_at)
+          VALUES (?, ?, ?, ?, 'waiting', NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?)
           ON CONFLICT(uid) DO UPDATE SET
             nickname = excluded.nickname, avatar = excluded.avatar, score = excluded.score,
             status = 'waiting', matched_with = NULL, matched_color = NULL, matched_nickname = NULL,
-            matched_avatar = NULL, matched_score = NULL, room_code = NULL,
+            matched_avatar = NULL, matched_score = NULL, room_code = NULL, match_claim_id = NULL,
+            reported_outcome = NULL, settlement_claim_id = NULL,
             match_id = excluded.match_id, updated_at = excluded.updated_at
             WHERE match_queue.status != 'matched'
         `).bind(matchUid, safeNick, safeAvatar, safeScore, matchId, now).run();
 
         const finalRecord = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
         if (finalRecord?.status === 'matched' && (!matchId || finalRecord.match_id === matchId)) {
-          return json(formatMatched(finalRecord));
+          if (!privateGameMode() || await isAllowedPrivateGameUid(finalRecord.matched_with)) {
+            return json(formatMatched(finalRecord));
+          }
+          await deleteMatchQueuePair(matchUid, String(finalRecord.match_id || ''));
         }
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
@@ -3645,6 +4040,10 @@ async function allocateNextAvailableUid(env) {
         }
 
         if (record.status === 'matched') {
+          if (privateGameMode() && !await isAllowedPrivateGameUid(record.matched_with)) {
+            await deleteMatchQueuePair(matchUid, String(record.match_id || ''));
+            return json({ code: 0, status: 'cancelled' });
+          }
           // 轮询结果允许幂等重试；只有相同 matchId 才能消费本次结果，避免网络丢包后变成“对方断开”。
           if (requestedMatchId && record.match_id !== requestedMatchId) {
             return json({ code: 0, status: 'cancelled' });
@@ -3685,11 +4084,13 @@ async function allocateNextAvailableUid(env) {
         if (uid) {
           const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
           if (auth.response) return auth.response;
-          if (requestedMatchId) {
-            await env.DB.prepare('DELETE FROM match_queue WHERE uid = ? AND (match_id = ? OR match_id IS NULL)').bind(auth.uid, requestedMatchId).run();
-          } else {
-            await env.DB.prepare('DELETE FROM match_queue WHERE uid = ?').bind(auth.uid).run();
-          }
+          // A late join response may be cancelled after the server has already
+          // written both sides as matched. Delete the reciprocal peer first,
+          // while the requester's row is still available to identify it, then
+          // delete the requester in one atomic D1/SQLite batch. A newer pairing
+          // is left untouched because the requester's matchId, peer UID and
+          // room code must all still agree.
+          await deleteMatchQueuePair(auth.uid, requestedMatchId);
         }
         return json({ code: 0, msg: '已成功取消匹配' });
       } catch (err) {
@@ -3700,6 +4101,8 @@ async function allocateNextAvailableUid(env) {
     // ── 7. 全服天梯榜（仅正式注册账号上榜，游客与未注册用户绝不上榜） ──
     if (url.pathname === '/api/rank' && request.method === 'GET') {
       if (!env.DB) return leaderboardJson({ code: 0, data: [] });
+      const privateRankFilter = privateGameMode() ? 'AND username IN (?, ?)' : '';
+      const privateRankBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
 
       const cacheNow = Date.now();
       if (Array.isArray(cachedLeaderboard) && cacheNow - lastLeaderboardTime < LEADERBOARD_CACHE_TTL_MS) {
@@ -3712,16 +4115,18 @@ async function allocateNextAvailableUid(env) {
           const { results } = await env.DB.prepare(`
             SELECT uid, nickname AS name,
                    CASE
+                     WHEN username = ? THEN 'anime_boy'
+                     WHEN username = ? THEN 'anime_girl'
                      WHEN avatar IS NULL OR avatar = '' OR avatar LIKE 'data:image/%' OR length(avatar) > ${MAX_LEADERBOARD_AVATAR_CHARS}
                      THEN '👦'
                      ELSE avatar
                    END AS avatar,
                    score, wins, total_games
             FROM users
-            WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL
+            WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL ${privateRankFilter}
             ORDER BY score DESC, wins DESC, uid ASC
             LIMIT 30
-          `).all();
+          `).bind(PRIVATE_GAME_ALLOWED_USERNAMES[1], PRIVATE_GAME_ALLOWED_USERNAMES[0], ...privateRankBindings).all();
           const data = Array.isArray(results) ? results : [];
           cachedLeaderboard = data;
           lastLeaderboardTime = Date.now();
@@ -3740,69 +4145,156 @@ async function allocateNextAvailableUid(env) {
       }
     }
 
-    // ── 8. 战绩安全上报（Token 验证 + 15 秒冷却防刷） ─────
+    // ── 8. 战绩结算：只结算服务端撮合且双方一致确认的真实对局 ──
     if (url.pathname === '/api/report_game' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
-        const { uid, token, isWin, isDraw = false } = await readJsonBody(request);
-
-        if (!uid || !token) {
-          return json({ code: 401, msg: '未授权：缺失身份凭证' }, 401);
-        }
+        const body = await readJsonBody(request);
+        const { uid, isWin, isDraw = false } = body;
+        if (!uid) return json({ code: 401, msg: '未授权：缺失身份凭证' }, 401);
         if (typeof isWin !== 'boolean' || typeof isDraw !== 'boolean' || (isDraw && isWin)) {
           return json({ code: 400, msg: '战绩结果必须是布尔值' }, 400);
         }
 
+        const auth = await requireMatchIdentity(uid, getRequestToken(request, body));
+        if (auth.response) return auth.response;
+        const matchUid = String(auth.uid);
+        const outcome = isDraw ? 'draw' : (isWin ? 'win' : 'loss');
+        const opponentOutcome = outcome === 'win' ? 'loss' : outcome === 'loss' ? 'win' : 'draw';
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT uid, username, score, last_game_at, token_expires_at FROM users WHERE uid = ? AND token = ?').bind(String(uid), String(token)).first();
-        if (!user) {
-          return json({ code: 403, msg: '未授权：Token 无效或已失效' });
+        const cutoff = now - MATCH_RESULT_TTL_MS;
+        const match = await env.DB.prepare(`
+          SELECT q.uid, q.matched_with, q.room_code, q.reported_outcome,
+                 q.settlement_claim_id, p.reported_outcome AS opponent_outcome,
+                 p.settlement_claim_id AS opponent_settlement_claim_id
+          FROM match_queue q
+          JOIN match_queue p ON p.uid = q.matched_with
+          WHERE q.uid = ? AND q.status = 'matched' AND p.status = 'matched'
+            AND p.matched_with = q.uid AND p.room_code = q.room_code
+            AND q.room_code IS NOT NULL AND q.updated_at > ? AND p.updated_at > ?
+        `).bind(matchUid, cutoff, cutoff).first();
+        if (!match) {
+          return json({ code: 409, msg: '此战绩没有有效的服务器匹配记录，未计入天梯' }, 409);
+        }
+        if (match.reported_outcome && match.reported_outcome !== outcome) {
+          return json({ code: 409, msg: '本场战绩已提交过不同结果' }, 409);
         }
 
-        // 🛡️ 仅注册账号可上天梯榜，游客只做本地存储
-        if (!user.username) {
-          return json({ code: 403, msg: '游客模式不上天梯榜，请注册账号后参与排名' });
+        const scoreDelta = outcome === 'win' ? 25 : outcome === 'loss' ? -15 : 0;
+        const readSettledData = async (oldScoreHint = Number(auth.user.score)) => {
+          const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(matchUid).first();
+          if (!updated) return null;
+          const currentScore = Number.isFinite(Number(updated.score)) ? Number(updated.score) : 1000;
+          return {
+            score: currentScore,
+            wins: Number(updated.wins) || 0,
+            total_games: Number(updated.total_games) || 0,
+            oldScore: Number.isFinite(oldScoreHint) ? oldScoreHint : currentScore - scoreDelta,
+            newScore: currentScore,
+            scoreDelta,
+            isDraw: outcome === 'draw'
+          };
+        };
+
+        // A settled room is idempotent: replaying the same report returns the
+        // current score but cannot apply points or game counts a second time.
+        if (match.settlement_claim_id || match.opponent_settlement_claim_id) {
+          if (match.settlement_claim_id && match.settlement_claim_id === match.opponent_settlement_claim_id &&
+              match.reported_outcome === outcome && match.opponent_outcome === opponentOutcome) {
+            const data = await readSettledData();
+            if (data) return json({ code: 0, msg: '本场战绩已结算', data });
+          }
+          return json({ code: 409, msg: '本场结算状态已变化，请刷新战绩' }, 409);
         }
 
-        if (user.token_expires_at && user.token_expires_at <= now) {
-          return json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401);
+        const settlementClaimId = generateSecureHex(16);
+        const settlementBatch = await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE match_queue SET reported_outcome = ?
+            WHERE uid = ? AND status = 'matched' AND settlement_claim_id IS NULL
+              AND reported_outcome IS NULL AND updated_at > ?
+              AND EXISTS (
+                SELECT 1 FROM match_queue p
+                WHERE p.uid = match_queue.matched_with AND p.status = 'matched'
+                  AND p.matched_with = match_queue.uid AND p.room_code = match_queue.room_code
+                  AND p.updated_at > ?
+              )
+          `).bind(outcome, matchUid, cutoff, cutoff),
+          env.DB.prepare(`
+            UPDATE match_queue SET settlement_claim_id = ?
+            WHERE uid IN (?, ?) AND status = 'matched' AND settlement_claim_id IS NULL
+              AND updated_at > ?
+              AND EXISTS (
+                SELECT 1 FROM match_queue a
+                JOIN match_queue b ON b.uid = ?
+                WHERE a.uid = ? AND a.status = 'matched' AND b.status = 'matched'
+                  AND a.matched_with = b.uid AND b.matched_with = a.uid
+                  AND a.room_code = b.room_code AND a.room_code IS NOT NULL
+                  AND a.updated_at > ? AND b.updated_at > ?
+                  AND a.reported_outcome = ? AND b.reported_outcome = ?
+              )
+              AND (SELECT COUNT(*) FROM users WHERE uid IN (?, ?)) = 2
+          `).bind(
+            settlementClaimId, matchUid, match.matched_with, cutoff,
+            matchUid, match.matched_with, cutoff, cutoff, outcome, opponentOutcome,
+            matchUid, match.matched_with
+          ),
+          env.DB.prepare(`
+            UPDATE users
+            SET score = MAX(0, COALESCE(score, 1000) + CASE
+                  WHEN (SELECT reported_outcome FROM match_queue WHERE uid = users.uid) = 'win' THEN 25
+                  WHEN (SELECT reported_outcome FROM match_queue WHERE uid = users.uid) = 'loss' THEN -15
+                  ELSE 0 END),
+                wins = COALESCE(wins, 0) + CASE
+                  WHEN (SELECT reported_outcome FROM match_queue WHERE uid = users.uid) = 'win' THEN 1 ELSE 0 END,
+                total_games = COALESCE(total_games, 0) + 1,
+                last_game_at = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE uid IN (?, ?)
+              AND EXISTS (
+                SELECT 1 FROM match_queue a
+                JOIN match_queue b ON b.uid = ?
+                WHERE a.uid = ? AND a.status = 'matched' AND b.status = 'matched'
+                  AND a.matched_with = b.uid AND b.matched_with = a.uid
+                  AND a.room_code = b.room_code
+                  AND a.settlement_claim_id = ? AND b.settlement_claim_id = ?
+                  AND a.reported_outcome = ? AND b.reported_outcome = ?
+              )
+          `).bind(
+            now, matchUid, match.matched_with,
+            match.matched_with, matchUid, settlementClaimId, settlementClaimId,
+            outcome, opponentOutcome
+          )
+        ]);
+
+        const settled = await env.DB.prepare(`
+          SELECT q.reported_outcome, q.settlement_claim_id,
+                 p.reported_outcome AS opponent_outcome,
+                 p.settlement_claim_id AS opponent_settlement_claim_id
+          FROM match_queue q JOIN match_queue p ON p.uid = q.matched_with
+          WHERE q.uid = ? AND q.status = 'matched' AND p.status = 'matched'
+            AND p.matched_with = q.uid AND p.room_code = q.room_code
+        `).bind(matchUid).first();
+        if (settled?.reported_outcome !== outcome) {
+          return json({ code: 409, msg: '本场战绩已提交过不同结果' }, 409);
         }
-
-        const oldScore = Number.isFinite(Number(user.score)) ? Number(user.score) : 1000;
-        const scoreDelta = isDraw ? 0 : (isWin ? 25 : -15);
-        const newScore = Math.max(0, oldScore + scoreDelta);
-
-        // 15 秒冷却放进 UPDATE 条件，避免并发请求同时通过预检查刷分。
-        const updateResult = await env.DB.prepare(`
-          UPDATE users
-          SET score = ?,
-              wins = wins + ?,
-              total_games = total_games + 1,
-              last_game_at = ?,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE uid = ? AND token = ?
-            AND (last_game_at IS NULL OR last_game_at = 0 OR last_game_at <= ?)
-        `).bind(newScore, isWin ? 1 : 0, now, String(uid), String(token), now - 15000).run();
-        if (!updateResult.meta || updateResult.meta.changes !== 1) {
-          return json({ code: 429, msg: '对局结算过于频繁，请 15 秒后再试' }, 429);
+        if (settled?.opponent_outcome && settled.opponent_outcome !== opponentOutcome) {
+          return json({ code: 409, msg: '双方上报结果不一致，未计入天梯' }, 409);
+        }
+        if (!settled?.settlement_claim_id ||
+            settled.settlement_claim_id !== settled.opponent_settlement_claim_id) {
+          return json({ code: 202, msg: '战绩已记录，等待对手确认后结算' }, 202);
+        }
+        if (Number(settlementBatch?.[2]?.meta?.changes) !== 2 && settled.settlement_claim_id === settlementClaimId) {
+          return json({ code: 500, msg: '对局结算未能完整写入，请稍后重试' }, 500);
         }
 
         cachedLeaderboard = null;
         lastLeaderboardTime = 0;
-        const updated = await env.DB.prepare('SELECT score, wins, total_games FROM users WHERE uid = ?').bind(String(uid)).first();
-        return json({
-          code: 0,
-          msg: isDraw ? '和棋战绩安全归档成功' : '战绩安全归档成功',
-          data: {
-            score: updated.score,
-            wins: updated.wins,
-            total_games: updated.total_games,
-            oldScore,
-            newScore: updated.score,
-            scoreDelta,
-            isDraw
-          }
-        });
+        const data = await readSettledData(Number(auth.user.score));
+        return data
+          ? json({ code: 0, msg: outcome === 'draw' ? '双方确认和棋，天梯战绩已归档' : '双方确认结果，天梯战绩已归档', data })
+          : json({ code: 500, msg: '结算完成但无法读取最新战绩' }, 500);
       } catch (err) {
         return publicServerError('结算异常', err);
       }
@@ -3825,19 +4317,22 @@ async function allocateNextAvailableUid(env) {
         const userAgent = request.headers.get('user-agent') ? request.headers.get('user-agent').slice(0, 250) : '';
         const ip = String(request.headers.get('cf-connecting-ip') || 'unknown').slice(0, 64);
 
-        if (env.DB) {
-          try {
-            const recent = await env.DB.prepare("SELECT COUNT(*) AS cnt FROM feedback WHERE ip = ? AND created_at >= datetime('now', '-1 hour')").bind(ip).first();
-            if (recent && Number(recent.cnt) >= 5) {
-              return json({ code: 429, msg: '反馈提交过于频繁，请稍后再试' }, 429);
-            }
-            await env.DB.prepare(`
-              INSERT INTO feedback (uid, nickname, feedback_type, content, contact, client_version, user_agent, ip)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(uid, nickname, feedbackType, content, contact, version, userAgent, ip).run();
-          } catch (dbErr) {
-            console.error('Feedback DB insert error:', dbErr.message);
+        if (!env.DB) {
+          return json({ code: 503, msg: '反馈服务暂不可用，内容未提交' }, 503);
+        }
+
+        try {
+          const recent = await env.DB.prepare("SELECT COUNT(*) AS cnt FROM feedback WHERE ip = ? AND created_at >= datetime('now', '-1 hour')").bind(ip).first();
+          if (recent && Number(recent.cnt) >= 5) {
+            return json({ code: 429, msg: '反馈提交过于频繁，请稍后再试' }, 429);
           }
+          await env.DB.prepare(`
+            INSERT INTO feedback (uid, nickname, feedback_type, content, contact, client_version, user_agent, ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(uid, nickname, feedbackType, content, contact, version, userAgent, ip).run();
+        } catch (dbErr) {
+          console.error('Feedback DB insert error:', dbErr.message);
+          return json({ code: 503, msg: '反馈暂未保存到服务器，请稍后重试' }, 503);
         }
 
         return json({

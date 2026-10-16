@@ -1,4 +1,5 @@
 import json
+import json
 import os
 import time
 
@@ -106,12 +107,26 @@ def main():
             page.on("pageerror", lambda error, role=role: errors[role].append(str(error)))
             page.on("console", lambda message, role=role: logs[role].append({"type": message.type, "text": message.text}))
             page.add_init_script(
+                "localStorage.setItem('gomoku_user_uid', 'user_local_relay_test'); "
+                "localStorage.setItem('gomoku_user_username', 'local.relay'); "
+                "localStorage.setItem('gomoku_user_token', 'local-test-token'); "
+                "localStorage.setItem('gomoku_user_refresh_token', 'local-test-refresh'); "
                 f"window.__gomokuRelayRole = {json.dumps(role)}; "
                 f"window.__gomokuRelayClientId = {json.dumps(role)}; "
                 "try { Object.defineProperty(window, 'RTCPeerConnection', { configurable: true, value: undefined }); } catch (_) {} "
                 "try { Object.defineProperty(window, 'webkitRTCPeerConnection', { configurable: true, value: undefined }); } catch (_) {}"
             )
             page.add_init_script(MOCK_RELAY_INIT)
+            def mock_api(route):
+                url = route.request.url
+                if "/api/room/socket-ticket" in url:
+                    data = {"ticket": "a" * 64, "expiresAt": int(time.time() * 1000) + 30_000}
+                elif "/api/auth/verify_session" in url:
+                    data = {"uid": "user_local_relay_test", "username": "local.relay", "nickname": "Local Relay Test", "avatar": "anime_boy", "score": 1000, "token": "local-test-token"}
+                else:
+                    data = {}
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"code": 0, "data": data}))
+            page.route("**/api/**", mock_api)
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             try:
                 page.wait_for_load_state("networkidle", timeout=15_000)

@@ -98,7 +98,7 @@ function runPreflightChecks() {
       }
     }
 
-  for (const relativePath of ['js/app.js', 'js/app.min.js', 'js/account.js', 'js/account.min.js', 'js/replay.js', 'js/replay.min.js', 'js/settings.js', 'js/settings.min.js', 'js/online.js', 'js/online.min.js', 'js/social.js', 'js/social.min.js', 'js/voice.js', 'js/cross.js', 'js/sky-hub.js', 'js/expedition.js']) {
+  for (const relativePath of ['js/app.js', 'js/app.min.js', 'js/account.js', 'js/account.min.js', 'js/replay.js', 'js/replay.min.js', 'js/settings.js', 'js/settings.min.js', 'js/online.js', 'js/online.min.js', 'js/social.js', 'js/social.min.js', 'js/voice.js', 'js/sky-hub.js']) {
       const scriptPath = path.join(ROOT_DIR, relativePath);
       if (!fs.existsSync(scriptPath)) {
         console.error(`\n❌ [发布致命拦截] 缺失应用脚本: ${relativePath}`);
@@ -302,13 +302,12 @@ const releaseHighlights = [
   `🎮 【好友实时邀战】邀请方自动创建房间并发送 2 分钟有效邀请；接受后自动进房，P2P 失败仍可通过 TURN/WebSocket 继续`,
   `⚡ 【启动性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包；4× CPU、5 次冷启动中位 FCP 1468ms、可操作 2369.4ms`,
   `🚀 【首屏稳态修复】非关键增强延迟到首帧后执行，首次棋盘使用轻量绘制并预加载核心脚本，修复延迟加载下的入口时序问题`,
-  `📱 【MuMu 验收】公告入口、AI 落子、十字棋实验入口与 Android 生命周期已完成模拟器回归，保持原签名覆盖升级`,
+  `📱 【MuMu 验收】公告入口、AI 落子与 Android 生命周期已完成模拟器回归，保持原签名覆盖升级`,
   `🎨 【自动画质】新增自动/高清/流畅三档，Canvas DPR 上限分别按设备能力控制，弱机和后台场景降低发热与内存占用`,
   `📡 【联机入口与重连】并行探测 Worker/Pages 并缓存 30 分钟较快入口；断线按 0、1、2、4、8、12 秒退避恢复`,
   `🛡️ 【社交隐私安全】完整关系/拉黑复验、精确账号搜索、防枚举最近对手、消息幂等与 60 秒一次性 WebSocket 票据`,
   `🔐 【官网安全加固】官网来源白名单、跨站写请求拦截、账号/IP 分层限频和社交 WebSocket 来源校验`,
   `🎙️ 【房间语音】联机房间内可选 WebRTC 语音，默认关闭、用户授权后开启，断线自动清理音轨`,
-  `✚ 【十字棋实验】十字轴十连获胜、每方每回合两次行动、缩放/拖拽、提示与干扰牌；对方落子自动跟随视角`,
   `✨ 【Android 开屏】原生棋盘动画与 WebView 并行启动，支持减少动画、轻触跳过和后台暂停`,
   `📊 【匿名质量统计】只采样启动区间、画质档位、入口、链路类型、RTT 和重连结果，不上传账号、房号、聊天或棋盘，可关闭`,
   `📱 【Android 内存治理】内存回收只清理特效、Canvas 和空闲 AI Worker，不再强制清 WebView 缓存或调用 System.gc()`,
@@ -400,7 +399,6 @@ try {
     'js/app.js',
     'js/app.min.js',
     'js/sky-hub.js',
-    'js/expedition.js',
     'official-site/index.html',
     'official-site/privacy/index.html',
     'official-site/site.js',

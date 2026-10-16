@@ -58,6 +58,7 @@
       return `v${major}.${Math.max(0, Math.floor(patch / 10) - 10)}.${patch % 10}`;
     }
     const DISPLAY_VERSION_TAG = formatDisplayVersionTag(CURRENT_VERSION_TAG);
+    window.GOMOKU_VERSION_DISPLAY = DISPLAY_VERSION_TAG;
     const BOARD_SIZE = 15;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     let board = Array.from({length: 15}, () => Array(15).fill(0));
@@ -67,13 +68,75 @@
     let gameWinnerColor = 0;
     let resultModalTimer = null;
     let resultModalGeneration = 0;
-    let soundEnabled = true;
+    const GAME_SOUND_SETTINGS_KEY = 'gomoku_sound_settings_v1';
+    const DEFAULT_GAME_SOUND_SETTINGS = Object.freeze({ enabled: true, volume: 0.62 });
+    function readGameSoundSettings() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(GAME_SOUND_SETTINGS_KEY) || 'null');
+        return {
+          enabled: saved && typeof saved.enabled === 'boolean' ? saved.enabled : DEFAULT_GAME_SOUND_SETTINGS.enabled,
+          volume: saved && typeof saved.volume === 'number' && Number.isFinite(saved.volume)
+            ? Math.max(0, Math.min(1, saved.volume))
+            : DEFAULT_GAME_SOUND_SETTINGS.volume
+        };
+      } catch (_) {
+        return { ...DEFAULT_GAME_SOUND_SETTINGS };
+      }
+    }
+    const gameSoundSettings = readGameSoundSettings();
+    let soundEnabled = gameSoundSettings.enabled;
+    let gameSoundVolume = gameSoundSettings.volume;
+    const GAME_MUSIC_SETTINGS_KEY = 'gomoku_music_settings_v1';
+    const DEFAULT_GAME_MUSIC_SETTINGS = Object.freeze({ enabled: true, volume: 0.38 });
+    function readGameMusicSettings() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(GAME_MUSIC_SETTINGS_KEY) || 'null');
+        return {
+          enabled: saved && typeof saved.enabled === 'boolean' ? saved.enabled : DEFAULT_GAME_MUSIC_SETTINGS.enabled,
+          volume: saved && typeof saved.volume === 'number' && Number.isFinite(saved.volume)
+            ? Math.max(0, Math.min(1, saved.volume))
+            : DEFAULT_GAME_MUSIC_SETTINGS.volume
+        };
+      } catch (_) {
+        return { ...DEFAULT_GAME_MUSIC_SETTINGS };
+      }
+    }
+    const gameMusicSettings = readGameMusicSettings();
+    let gameMusicEnabled = gameMusicSettings.enabled;
+    let gameMusicVolume = gameMusicSettings.volume;
 
     // 自定义玩家昵称与头像
-    let p1Name = localStorage.getItem('gomoku_p1Name') || '小能';
-    let p1Avatar = localStorage.getItem('gomoku_p1Avatar') || '👦';
+    let p1Name = localStorage.getItem('gomoku_p1Name') || '棋手';
+    let p1Avatar = localStorage.getItem('gomoku_p1Avatar') || 'anime_boy';
     let p2Name = localStorage.getItem('gomoku_p2Name') || '零碎小土豆';
-    let p2Avatar = localStorage.getItem('gomoku_p2Avatar') || '👧';
+    let p2Avatar = localStorage.getItem('gomoku_p2Avatar') || 'anime_girl';
+
+    const AI_OPPONENT_PROFILES = [
+      { name: '云岫', avatar: 'ai_cloud_fox' },
+      { name: '青翎', avatar: 'ai_jade_crane' },
+      { name: '松果', avatar: 'ai_red_panda' },
+      { name: '碧游', avatar: 'ai_koi' },
+      { name: '月兔', avatar: 'ai_moon_rabbit' },
+      { name: '昭麟', avatar: 'ai_qilin' }
+    ];
+    const AI_AVATAR_SPRITE_POSITIONS = Object.freeze({
+      ai_cloud_fox: '0% 0%',
+      ai_jade_crane: '50% 0%',
+      ai_red_panda: '100% 0%',
+      ai_koi: '0% 100%',
+      ai_moon_rabbit: '50% 100%',
+      ai_qilin: '100% 100%'
+    });
+    let aiOpponentProfile = AI_OPPONENT_PROFILES[Math.floor(Math.random() * AI_OPPONENT_PROFILES.length)];
+
+    function assignRandomAiOpponent() {
+      const options = AI_OPPONENT_PROFILES.filter(profile => profile.name !== aiOpponentProfile?.name);
+      aiOpponentProfile = options[Math.floor(Math.random() * options.length)] || AI_OPPONENT_PROFILES[0];
+      return aiOpponentProfile;
+    }
+
+    // 联机模块在独立脚本中延迟加载；为快速匹配兜底提供同一套 AI 名称与精灵头像。
+    window.getRandomAiOpponentProfile = () => ({ ...assignRandomAiOpponent() });
 
     let editingPlayer = 1;
     let selectedAvatarData = p1Avatar;
@@ -290,6 +353,7 @@
       document.body.classList.toggle('low-spec-mode', effective === 'smooth');
       document.querySelectorAll('[data-quality]').forEach(button => {
         const active = button.dataset.quality === graphicsQuality;
+        button.classList.toggle('is-active', active);
         button.style.background = active ? '#0284c7' : '#f1f5f9';
         button.style.color = active ? '#fff' : '#475569';
       });
@@ -358,17 +422,24 @@
       return normalized || fallback;
     }
 
+    function isRenderableAvatar(value) {
+      return typeof value === 'string' && (!!AI_AVATAR_SPRITE_POSITIONS[value] || !!getSafeAvatarSource(value));
+    }
+
     function isSafeNetworkAvatar(value) {
       if (typeof value !== 'string' || value.length > MAX_NETWORK_AVATAR_CHARS) return false;
-      // 短文本/Emoji 只会作为转义后的文本渲染；长值必须通过头像来源校验。
-      return value.length <= 64 || !!getSafeAvatarSource(value);
+      // 仅接受已知 AI 精灵、照片或头像图片；旧 Emoji 字符串不再作为头像数据传输。
+      return isRenderableAvatar(value);
     }
 
     function getSafeAvatarSource(avatar) {
-      if (avatar === "anime_boy" || avatar === "img/avatar_boy.png" || avatar === "img/anime_avatar_boy.jpg") {
-        avatar = window.ANIME_AVATAR_BOY;
-      } else if (avatar === "anime_girl" || avatar === "img/avatar_girl.png" || avatar === "img/anime_avatar_girl.jpg") {
-        avatar = window.ANIME_AVATAR_GIRL;
+      if (avatar === "img/avatar_boy.png" || avatar === "img/avatar_girl.png") {
+        return avatar;
+      }
+      if (avatar === "anime_boy" || avatar === "img/anime_avatar_boy.jpg") {
+        avatar = window.ANIME_AVATAR_BOY || "img/anime_avatar_boy.jpg";
+      } else if (avatar === "anime_girl" || avatar === "img/anime_avatar_girl.jpg") {
+        avatar = window.ANIME_AVATAR_GIRL || "img/anime_avatar_girl.jpg";
       }
       if (typeof avatar !== "string") return null;
       if (avatar === "img/anime_avatar_boy.jpg" || avatar === "img/anime_avatar_girl.jpg") return avatar;
@@ -386,13 +457,23 @@
     }
 
     function renderAvatarElement(avatar, size = null) {
+      const aiSpritePosition = AI_AVATAR_SPRITE_POSITIONS[avatar];
+      if (aiSpritePosition) {
+        const dimensions = size ? `${size}px` : '100%';
+        return `<span role="img" aria-label="AI 棋手头像" style="display:block; flex:0 0 auto; width:${dimensions}; height:${dimensions}; border-radius:50%; background-image:url('img/game/ai-opponent-avatars.webp'); background-size:300% 200%; background-position:${aiSpritePosition}; background-repeat:no-repeat;"></span>`;
+      }
       const src = getSafeAvatarSource(avatar);
       if (src) {
         const sStyle = size ? `width:${size}px; height:${size}px;` : "width:100%; height:100%;";
         return `<img src="${escapeHtml(src)}" alt="avatar" style="${sStyle} border-radius:50%; object-fit:cover; display:block;" />`;
       }
-      const label = String(avatar == null ? '👦' : avatar).slice(0, 32);
-      return `<span style="display:inline-block; line-height:1; font-size:${size ? Math.round(size * 0.75) : 22}px;">${escapeHtml(label)}</span>`;
+      const dimensions = size ? `${size}px` : '100%';
+      return `<span role="img" aria-label="默认头像" style="display:flex; flex:0 0 auto; align-items:center; justify-content:center; width:${dimensions}; height:${dimensions}; border-radius:50%; overflow:hidden; background:#e8eef1;"><svg aria-hidden="true" viewBox="0 0 64 64" width="100%" height="100%"><circle cx="32" cy="23" r="12" fill="#9aabb5"/><path d="M9 60c1.8-13.7 10.8-21 23-21s21.2 7.3 23 21" fill="#9aabb5"/></svg></span>`;
+    }
+
+    function getAssignedCoupleAvatar() {
+      const avatar = getAvatarSyncValue(p1Avatar);
+      return avatar === 'anime_boy' || avatar === 'anime_girl' ? avatar : '';
     }
 
     function updatePlayerHeaderUI() {
@@ -416,11 +497,23 @@
       let p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
       let p2DisplayName = p2Name;
 
+      // 这两个固定账号使用指定的情侣头像，资料同步或旧版默认表情都不能把头像退回 Emoji。
+      const assignedAvatar = getAssignedCoupleAvatar();
+      if (assignedAvatar && p1Avatar !== assignedAvatar) {
+        p1Avatar = assignedAvatar;
+        selectedAvatarData = assignedAvatar;
+        localStorage.setItem('gomoku_p1Avatar', assignedAvatar);
+      } else if (!isRenderableAvatar(p1Avatar)) {
+        p1Avatar = 'anime_boy';
+        selectedAvatarData = p1Avatar;
+        localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+      }
+
       if (gameMode === 'ai') {
         p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
         p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
-        p2DisplayName = '大师AI';
-        document.getElementById('p2AvatarIcon').innerHTML = '🤖';
+        p2DisplayName = aiOpponentProfile.name;
+        document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(aiOpponentProfile.avatar);
       } else if (gameMode === 'online') {
         // 联机对战：黑白子明确展示，且绝不显示“房主”，双方直接呈现真实昵称！
         if (myOnlineColor === BLACK) {
@@ -476,7 +569,7 @@
           return (p2Name && p2Name.trim()) ? p2Name : '好友';
         }
       } else if (gameMode === 'ai') {
-        return color === BLACK ? (p1Name || '玩家') : '大师AI';
+        return color === BLACK ? (p1Name || '玩家') : aiOpponentProfile.name;
       } else {
         // 双人同屏 pvp
         return color === BLACK ? (p1Name || '黑方') : (p2Name || '白方');
@@ -542,8 +635,8 @@
     function addMessage(sender, text) {
       const normalizedText = String(text == null ? '' : text).trim().slice(0, MAX_CHAT_MESSAGE_CHARS);
       if (!normalizedText) return;
-      const name = sender === 1 ? p1Name : (gameMode === 'ai' ? '大师AI' : p2Name);
-      const avatar = sender === 1 ? p1Avatar : (gameMode === 'ai' ? '🤖' : p2Avatar);
+      const name = sender === 1 ? p1Name : (gameMode === 'ai' ? aiOpponentProfile.name : p2Name);
+      const avatar = sender === 1 ? p1Avatar : (gameMode === 'ai' ? aiOpponentProfile.avatar : p2Avatar);
       chatHistory.push({ sender, name, avatar, text: normalizedText, time: getNowTime() });
       if (chatHistory.length > MAX_CHAT_HISTORY) {
         chatHistory.splice(0, chatHistory.length - MAX_CHAT_HISTORY);
@@ -604,7 +697,7 @@
           if (prevEl) {
             prevEl.innerHTML = renderAvatarElement(compressedBase64);
           }
-          document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
+          document.querySelectorAll('.anime-avatar-card').forEach(el => el.classList.remove('selected'));
           _applyAvatarChange(compressedBase64);
           showGameNotice("🎉 真实照片头像设置成功！已实时生效~");
         };
@@ -662,7 +755,7 @@
         if (hasRegisteredAccountSession()) {
           syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · 修改后登录账号与全服天梯将同步变更`;
         } else {
-          syncTip.innerHTML = `⚠️ <span style="color:#d97706;">当前为游客模式 (未登录)</span> · 修改仅在本地生效，登录正式账号后方可上天梯榜`;
+          syncTip.innerHTML = `🔒 <span style="color:#d97706;">当前未登录</span> · 本地修改保存在设备，联网功能需指定账号登录`;
         }
       }
       const inputEl = document.getElementById('inputProfileName');
@@ -671,11 +764,6 @@
       if (prevEl) {
         prevEl.innerHTML = renderAvatarElement(selectedAvatarData);
       }
-
-      const opts = document.querySelectorAll('.avatar-opt');
-      opts.forEach(el => {
-        el.classList.toggle('selected', el.textContent.trim() === selectedAvatarData);
-      });
 
       const boyVal = window.ANIME_AVATAR_BOY;
       const girlVal = window.ANIME_AVATAR_GIRL;
@@ -704,11 +792,8 @@
       void initAnimeThumbnails();
     }
 
-    // 选 Emoji 头像 → 立即更新预览 + 保存 + 同步
-
         const RANDOM_NICK_PREFIXES = ["逍遥", "灵动", "悠然", "天元", "太极", "青云", "星月", "清风", "傲雪", "弈心", "落子", "指尖", "妙手", "执白", "弈仙", "玄武", "朱雀", "白虎", "青龙", "昆仑"];
     const RANDOM_NICK_SUFFIXES = ["弈客", "先锋", "棋王", "行者", "少侠", "剑客", "棋神", "大师", "隐士", "居士", "仙友", "棋圣", "游侠", "国手", "棋尊", "神童", "棋痴", "高足"];
-    const RANDOM_DEFAULT_AVATARS = ["👦", "👧", "🐱", "🐶", "🦊", "🐼", "🦁", "🐯", "🦄", "🐲", "🧙‍♂️", "🥷", "👑", "🐧", "🐰", "🦉", "🦋"];
 
     function getRandomDefaultNickname() {
       const p = RANDOM_NICK_PREFIXES[Math.floor(Math.random() * RANDOM_NICK_PREFIXES.length)];
@@ -717,13 +802,14 @@
       return p + s + "_" + n;
     }
 
-    function getRandomDefaultAvatar() {
-      return RANDOM_DEFAULT_AVATARS[Math.floor(Math.random() * RANDOM_DEFAULT_AVATARS.length)];
+    function getRandomProfileAvatar() {
+      const avatars = ['anime_boy', 'anime_girl'];
+      return avatars[Math.floor(Math.random() * avatars.length)];
     }
 
     function randomizeProfileNameAndAvatar() {
       const newName = getRandomDefaultNickname();
-      const newAvatar = getRandomDefaultAvatar();
+      const newAvatar = getAssignedCoupleAvatar() || getRandomProfileAvatar();
       p1Name = newName;
       p1Avatar = newAvatar;
       selectedAvatarData = newAvatar;
@@ -734,33 +820,21 @@
       if (inputEl) inputEl.value = newName;
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) prevEl.innerHTML = renderAvatarElement(newAvatar);
-      document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => {
-        el.classList.toggle('selected', el.textContent.trim() === newAvatar);
+      document.querySelectorAll('.anime-avatar-card').forEach(el => {
+        el.classList.toggle('selected', el.id === (newAvatar === 'anime_girl' ? 'animeCardGirl' : 'animeCardBoy'));
       });
       updatePlayerHeaderUI();
       if (gameMode === 'online' && conn && conn.open) {
         conn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(selectedAvatarData) });
       }
-      showGameNotice(`🎲 已为您随机分配昵称【${newName}】与头像 ${newAvatar}`);
-    }
-
-    function selectAvatar(elem, char) {
-      selectedAvatarData = char;
-      document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
-      elem.classList.add('selected');
-      const prevEl = document.getElementById('bigAvatarPreview');
-      if (prevEl) {
-        prevEl.innerHTML = renderAvatarElement(char);
-      }
-      _applyAvatarChange(char);
-      showGameNotice('✨ 头像已更换！');
+      showGameNotice(`🎲 已为您随机分配昵称【${newName}】与动漫头像`);
     }
 
     // 选图片头像 → 立即更新预览 + 保存 + 同步
     function selectImgAvatar(elem, dataUrl) {
       if (!dataUrl) dataUrl = (elem && elem.id === 'animeCardGirl') ? window.ANIME_AVATAR_GIRL : window.ANIME_AVATAR_BOY;
       selectedAvatarData = dataUrl;
-      document.querySelectorAll('.avatar-opt, .anime-avatar-card').forEach(el => el.classList.remove('selected'));
+      document.querySelectorAll('.anime-avatar-card').forEach(el => el.classList.remove('selected'));
       elem.classList.add('selected');
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
@@ -794,7 +868,7 @@
 
     function getNetworkAvatarValue(avatar) {
       const value = getAvatarSyncValue(avatar);
-      return isSafeNetworkAvatar(value) ? value : '👦';
+      return isSafeNetworkAvatar(value) ? value : (getAssignedCoupleAvatar() || 'anime_boy');
     }
 
     async function saveProfile() {
@@ -879,7 +953,7 @@
           localStorage.setItem('gomoku_p1Avatar', p1Avatar);
           updatePlayerHeaderUI();
           updateAccountUI();
-          showGameNotice('💾 游客昵称已保存在本地。登录正式账号即可同步至全服天梯榜！', false);
+          showGameNotice('💾 本地资料已保存在设备。好友、匹配和云端功能需指定账号登录', false);
         }
       } else {
         p2Name = nameInput;
@@ -2273,6 +2347,27 @@
     // ==========================================
     // 🟩 15x15 方格中央落子 渲染与几何计算
     // ==========================================
+    function configureBoardGeometry() {
+      // 按云石棋台底图的草坪内沿布网格，并在四周留出边缘棋子的半径。
+      // 让网格、星位、棋子、首页预览和触摸判定共用同一组等距坐标。
+      const boardSide = Math.min(cWidth, cHeight);
+      const artworkX = (cWidth - boardSide) / 2;
+      const artworkY = (cHeight - boardSide) / 2;
+      const edgeInset = boardSide * 0.004;
+      const grassLeft = artworkX + boardSide * 0.126 + edgeInset;
+      const grassRight = artworkX + boardSide * 0.873 - edgeInset;
+      const grassTop = artworkY + boardSide * 0.128 + edgeInset;
+      const grassBottom = artworkY + boardSide * 0.789 - edgeInset;
+      const gridStep = Math.min((grassRight - grassLeft) / 15, (grassBottom - grassTop) / 15);
+      gridX = gridStep;
+      gridY = gridStep;
+      const firstX = (grassLeft + grassRight) / 2 - 7 * gridStep;
+      const firstY = grassTop + 0.5 * gridStep;
+      paddingX = firstX - gridX * 0.5;
+      paddingY = firstY - gridY * 0.5;
+      radius = gridX * 0.44;
+    }
+
     function resizeBoard() {
       const isMobile = window.innerWidth <= 600;
       const screenW = window.innerWidth;
@@ -2295,12 +2390,7 @@
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
 
-      // 手机端将内边距压缩到 2.2%（原 4.5%），棋盘网格扩展铺满 96% 屏幕宽！
-      paddingX = cWidth * (isMobile ? 0.022 : 0.038);
-      paddingY = cHeight * (isMobile ? 0.022 : 0.038);
-      gridX = (cWidth - 2 * paddingX) / 15;
-      gridY = (cHeight - 2 * paddingY) / 15;
-      radius = gridX * 0.44; // 棋子饱满大号，触摸体验极佳
+      configureBoardGeometry();
       invalidateBoardCache();
       // 冷启动先绘制一个轻量可见棋盘，丰富主题底盘移到首个交互帧后，
       // 让 gomoku_board_ready/交互标记对应真实可操作的棋盘而不是空白画布。
@@ -2316,34 +2406,389 @@
       }
     }
 
-    const actx = new (window.AudioContext || window.webkitAudioContext)();
-    window.addEventListener('pointerdown', () => {
-      // 音频 Base64 仅在用户第一次操作后加载，避免冷启动解析 80KB 数据。
-      if (typeof window.ensureGomokuResource === 'function') {
+    const GameAudioContext = window.AudioContext || window.webkitAudioContext;
+    const actx = GameAudioContext ? new GameAudioContext() : null;
+    let gameSoundOutput = null;
+    function getGameSoundOutput() {
+      if (!actx) return null;
+      if (!gameSoundOutput) {
+        gameSoundOutput = actx.createGain();
+        gameSoundOutput.gain.value = 0;
+        try {
+          const compressor = actx.createDynamicsCompressor();
+          compressor.threshold.setValueAtTime(-18, actx.currentTime);
+          compressor.knee.setValueAtTime(12, actx.currentTime);
+          compressor.ratio.setValueAtTime(3.5, actx.currentTime);
+          compressor.attack.setValueAtTime(0.004, actx.currentTime);
+          compressor.release.setValueAtTime(0.18, actx.currentTime);
+          gameSoundOutput.connect(compressor);
+          compressor.connect(actx.destination);
+        } catch (_) {
+          gameSoundOutput.connect(actx.destination);
+        }
+        setGameSoundOutputLevel();
+      }
+      return gameSoundOutput;
+    }
+    function setGameSoundOutputLevel() {
+      if (gameSoundOutput && actx) {
+        const param = gameSoundOutput.gain;
+        const now = actx.currentTime;
+        const level = soundEnabled ? gameSoundVolume * 0.42 : 0;
+        try {
+          param.cancelScheduledValues(now);
+          param.setTargetAtTime(level, now, 0.025);
+        } catch (_) { param.value = level; }
+      }
+      if (window._cherryBombAudio) {
+        window._cherryBombAudio.volume = soundEnabled ? gameSoundVolume * 0.58 : 0;
+      }
+    }
+    function saveGameSoundSettings() {
+      try {
+        localStorage.setItem(GAME_SOUND_SETTINGS_KEY, JSON.stringify({ enabled: soundEnabled, volume: gameSoundVolume }));
+      } catch (_) {}
+    }
+    function syncGameSoundControls() {
+      const enabledInput = document.getElementById('gameSoundEnabled');
+      const volumeInput = document.getElementById('gameSoundVolume');
+      const volumeText = document.getElementById('gameSoundVolumeValue');
+      if (enabledInput) enabledInput.checked = soundEnabled;
+      if (volumeInput) volumeInput.value = String(Math.round(gameSoundVolume * 100));
+      if (volumeText) volumeText.textContent = `${Math.round(gameSoundVolume * 100)}%`;
+    }
+    function setGameSoundEnabled(enabled) {
+      soundEnabled = Boolean(enabled);
+      setGameSoundOutputLevel();
+      saveGameSoundSettings();
+      syncGameSoundControls();
+      if (soundEnabled && typeof window.ensureGomokuResource === 'function') {
         void window.ensureGomokuResource('audio').catch(() => {});
       }
-      if (actx && actx.state === 'suspended') {
-        actx.resume().catch(() => {});
+      return soundEnabled;
+    }
+    function setGameSoundVolume(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return gameSoundVolume;
+      gameSoundVolume = Math.max(0, Math.min(1, parsed / 100));
+      setGameSoundOutputLevel();
+      saveGameSoundSettings();
+      syncGameSoundControls();
+      return gameSoundVolume;
+    }
+    let gameMusicOutput = null;
+    let gameMusicDelay = null;
+    let gameMusicEcho = null;
+    let gameMusicFeedback = null;
+    let gameMusicScheduler = null;
+    let gameMusicStartedAt = 0;
+    let gameMusicCycle = 0;
+    let gameMusicActiveChord = -1;
+    let gameMusicMelodyIndex = 0;
+    let gameMusicChordVoice = null;
+    let gameMusicUnlocked = false;
+    let gameMusicLifecyclePaused = false;
+    const GAME_MUSIC_BPM = 64;
+    const GAME_MUSIC_BEAT_SECONDS = 60 / GAME_MUSIC_BPM;
+    const GAME_MUSIC_BAR_SECONDS = GAME_MUSIC_BEAT_SECONDS * 4;
+    const GAME_MUSIC_LOOP_SECONDS = GAME_MUSIC_BAR_SECONDS * 8;
+    const GAME_MUSIC_CHORDS = [
+      [146.83, 220.00, 293.66, 369.99], // D 云海开阔
+      [123.47, 185.00, 220.00, 293.66], // Bm 浮岛远影
+      [98.00, 146.83, 185.00, 246.94],  // G 云层铺底
+      [110.00, 164.81, 220.00, 246.94], // A 轻轻回望
+      [146.83, 220.00, 293.66, 369.99],
+      [98.00, 146.83, 185.00, 246.94],
+      [164.81, 246.94, 293.66, 369.99], // Em
+      [110.00, 164.81, 220.00, 246.94]
+    ];
+    // D 大调五声音阶：疏朗的古筝泛音旋律，不加入鼓点，保持对弈时的安静感。
+    const GAME_MUSIC_NOTES = [587.33, 659.25, 739.99, 880.00, 987.77, 1174.66];
+    const GAME_MUSIC_MELODY = [
+      [0, 2, 0.82], [1.5, 4, 0.56], [3, 3, 0.48],
+      [4, 4, 0.72], [6.5, 2, 0.5],
+      [8, 5, 0.7], [10, 4, 0.52], [11.5, 2, 0.42],
+      [12, 3, 0.66], [14, 1, 0.46], [15.5, 2, 0.4],
+      [16, 4, 0.68], [18, 5, 0.48], [19.5, 3, 0.44],
+      [20, 2, 0.64], [22, 1, 0.48], [23.5, 0, 0.4],
+      [24, 3, 0.68], [26, 4, 0.5], [27.5, 5, 0.42],
+      [28, 4, 0.62], [30, 2, 0.46], [31.5, 0, 0.38]
+    ];
+    function getGameMusicOutput() {
+      if (!actx) return null;
+      if (!gameMusicOutput) {
+        gameMusicOutput = actx.createGain();
+        gameMusicOutput.gain.value = 0;
+        gameMusicOutput.connect(actx.destination);
+        try {
+          gameMusicDelay = actx.createDelay(0.6);
+          gameMusicDelay.delayTime.value = 0.24;
+          gameMusicEcho = actx.createGain();
+          gameMusicEcho.gain.value = 0.16;
+          gameMusicFeedback = actx.createGain();
+          gameMusicFeedback.gain.value = 0.18;
+          gameMusicOutput.connect(gameMusicDelay);
+          gameMusicDelay.connect(gameMusicEcho);
+          gameMusicEcho.connect(actx.destination);
+          gameMusicDelay.connect(gameMusicFeedback);
+          gameMusicFeedback.connect(gameMusicDelay);
+        } catch (_) {
+          gameMusicDelay = null;
+          gameMusicEcho = null;
+          gameMusicFeedback = null;
+        }
       }
+      return gameMusicOutput;
+    }
+    function setGameMusicOutputLevel(timeConstant = 0.45) {
+      if (!gameMusicOutput || !actx) return;
+      const canPlay = gameMusicEnabled && gameMusicVolume > 0 && gameMusicUnlocked &&
+        !gameMusicLifecyclePaused && !document.hidden && gameMusicScheduler !== null && actx.state === 'running';
+      const now = actx.currentTime;
+      const target = canPlay ? gameMusicVolume * 0.32 : 0;
+      try {
+        gameMusicOutput.gain.cancelScheduledValues(now);
+        gameMusicOutput.gain.setTargetAtTime(target, now, Math.max(0.02, timeConstant));
+      } catch (_) { gameMusicOutput.gain.value = target; }
+    }
+    function saveGameMusicSettings() {
+      try {
+        localStorage.setItem(GAME_MUSIC_SETTINGS_KEY, JSON.stringify({ enabled: gameMusicEnabled, volume: gameMusicVolume }));
+      } catch (_) {}
+    }
+    function syncGameMusicControls() {
+      const enabledInput = document.getElementById('gameMusicEnabled');
+      const volumeInput = document.getElementById('gameMusicVolume');
+      const volumeText = document.getElementById('gameMusicVolumeValue');
+      if (enabledInput) enabledInput.checked = gameMusicEnabled;
+      if (volumeInput) volumeInput.value = String(Math.round(gameMusicVolume * 100));
+      if (volumeText) volumeText.textContent = `${Math.round(gameMusicVolume * 100)}%`;
+    }
+    function releaseGameMusicChord(fadeSeconds = 0.7) {
+      const voice = gameMusicChordVoice;
+      if (!voice || !actx) return;
+      gameMusicChordVoice = null;
+      const now = actx.currentTime;
+      try {
+        voice.gain.gain.cancelScheduledValues(now);
+        voice.gain.gain.setTargetAtTime(0.0001, now, Math.max(0.02, fadeSeconds / 3));
+        voice.oscillators.forEach(osc => { try { osc.stop(now + fadeSeconds); } catch (_) {} });
+      } catch (_) {}
+    }
+    function playGameMusicChord(notes, atTime) {
+      const output = getGameMusicOutput();
+      if (!output || !actx) return;
+      releaseGameMusicChord(0.85);
+      const gain = actx.createGain();
+      gain.gain.setValueAtTime(0.0001, atTime);
+      gain.gain.linearRampToValueAtTime(0.105, atTime + 0.85);
+      gain.connect(output);
+      const oscillators = [];
+      notes.forEach((frequency, index) => {
+        const osc = actx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(frequency, atTime);
+        osc.detune.setValueAtTime(index % 2 ? -2.5 : 2.5, atTime);
+        osc.connect(gain);
+        osc.start(atTime);
+        oscillators.push(osc);
+      });
+      gameMusicChordVoice = { gain, oscillators };
+    }
+    function playGameMusicPluck(frequency, atTime, velocity) {
+      const output = getGameMusicOutput();
+      if (!output || !actx) return;
+      try {
+        const envelope = actx.createGain();
+        envelope.gain.setValueAtTime(0.0001, atTime);
+        envelope.gain.linearRampToValueAtTime(0.24 * velocity, atTime + 0.018);
+        envelope.gain.exponentialRampToValueAtTime(0.0001, atTime + 1.15);
+        envelope.connect(output);
+        const stringTone = actx.createOscillator();
+        stringTone.type = 'triangle';
+        stringTone.frequency.setValueAtTime(frequency, atTime);
+        stringTone.connect(envelope);
+        const overtone = actx.createOscillator();
+        const overtoneGain = actx.createGain();
+        overtone.type = 'sine';
+        overtone.frequency.setValueAtTime(frequency * 2, atTime);
+        overtoneGain.gain.value = 0.13;
+        overtone.connect(overtoneGain);
+        overtoneGain.connect(envelope);
+        stringTone.start(atTime);
+        overtone.start(atTime);
+        stringTone.stop(atTime + 1.2);
+        overtone.stop(atTime + 1.2);
+      } catch (_) {}
+    }
+    function scheduleGameMusic() {
+      if (!actx || actx.state !== 'running' || document.hidden || gameMusicLifecyclePaused || !gameMusicEnabled) {
+        stopGameMusic();
+        return;
+      }
+      const now = actx.currentTime;
+      const elapsed = Math.max(0, now - gameMusicStartedAt);
+      const cycle = Math.floor(elapsed / GAME_MUSIC_LOOP_SECONDS);
+      if (cycle !== gameMusicCycle) {
+        gameMusicCycle = cycle;
+        gameMusicActiveChord = -1;
+        gameMusicMelodyIndex = 0;
+      }
+      const loopPosition = elapsed % GAME_MUSIC_LOOP_SECONDS;
+      const chordIndex = Math.min(GAME_MUSIC_CHORDS.length - 1, Math.floor(loopPosition / GAME_MUSIC_BAR_SECONDS));
+      if (chordIndex !== gameMusicActiveChord) {
+        gameMusicActiveChord = chordIndex;
+        playGameMusicChord(GAME_MUSIC_CHORDS[chordIndex], now + 0.035);
+      }
+      while (gameMusicMelodyIndex < GAME_MUSIC_MELODY.length) {
+        const [beat, noteIndex, velocity] = GAME_MUSIC_MELODY[gameMusicMelodyIndex];
+        const noteAt = gameMusicStartedAt + cycle * GAME_MUSIC_LOOP_SECONDS + beat * GAME_MUSIC_BEAT_SECONDS;
+        if (noteAt > now + 0.12) break;
+        if (noteAt >= now - 0.22) {
+          playGameMusicPluck(GAME_MUSIC_NOTES[noteIndex], now + 0.035, velocity);
+        }
+        gameMusicMelodyIndex += 1;
+      }
+    }
+    function startGameMusic() {
+      if (!actx || actx.state !== 'running' || !gameMusicEnabled || gameMusicVolume <= 0 ||
+          !gameMusicUnlocked || gameMusicLifecyclePaused || document.hidden || gameMusicScheduler !== null) return;
+      getGameMusicOutput();
+      gameMusicStartedAt = actx.currentTime;
+      gameMusicCycle = 0;
+      gameMusicActiveChord = -1;
+      gameMusicMelodyIndex = 0;
+      gameMusicScheduler = window.setInterval(scheduleGameMusic, 100);
+      setGameMusicOutputLevel(0.7);
+      scheduleGameMusic();
+    }
+    function stopGameMusic() {
+      if (gameMusicScheduler !== null) {
+        clearInterval(gameMusicScheduler);
+        gameMusicScheduler = null;
+      }
+      releaseGameMusicChord(0.18);
+      setGameMusicOutputLevel(0.025);
+    }
+    function setGameMusicEnabled(enabled) {
+      gameMusicEnabled = Boolean(enabled);
+      saveGameMusicSettings();
+      syncGameMusicControls();
+      if (gameMusicEnabled && gameMusicUnlocked && gameMusicVolume > 0) resumeGameAudio();
+      else stopGameMusic();
+      return gameMusicEnabled;
+    }
+    function setGameMusicVolume(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return gameMusicVolume;
+      gameMusicVolume = Math.max(0, Math.min(1, parsed / 100));
+      saveGameMusicSettings();
+      syncGameMusicControls();
+      if (gameMusicVolume <= 0) stopGameMusic();
+      else if (gameMusicEnabled && gameMusicUnlocked) resumeGameAudio();
+      setGameMusicOutputLevel(0.08);
+      return gameMusicVolume;
+    }
+    function setGameMusicLifecyclePaused(paused) {
+      gameMusicLifecyclePaused = Boolean(paused);
+      if (gameMusicLifecyclePaused) stopGameMusic();
+      else if (gameMusicEnabled && gameMusicUnlocked) resumeGameAudio();
+    }
+    if (actx && typeof actx.addEventListener === 'function') {
+      actx.addEventListener('statechange', () => {
+        if (actx.state === 'running') {
+          if (gameMusicEnabled && gameMusicUnlocked && !gameMusicLifecyclePaused && !document.hidden) startGameMusic();
+        } else if (gameMusicScheduler !== null) {
+          stopGameMusic();
+        }
+      });
+    }
+    window.setGameMusicEnabled = setGameMusicEnabled;
+    window.setGameMusicVolume = setGameMusicVolume;
+    window.syncGameMusicControls = syncGameMusicControls;
+    window.__gomokuSetMusicLifecyclePaused = setGameMusicLifecyclePaused;
+    window.addEventListener('pagehide', () => setGameMusicLifecyclePaused(true));
+    document.addEventListener('visibilitychange', () => setGameMusicLifecyclePaused(document.hidden));
+    syncGameMusicControls();
+    function resumeGameAudio() {
+      if (!actx) return;
+      const maybeStartMusic = () => {
+        if (gameMusicEnabled && gameMusicVolume > 0 && gameMusicUnlocked && !gameMusicLifecyclePaused && !document.hidden) {
+          startGameMusic();
+        }
+      };
+      if (actx.state === 'running') {
+        maybeStartMusic();
+        return;
+      }
+      try {
+        const resumed = actx.resume();
+        if (resumed && resumed.then) resumed.then(maybeStartMusic).catch(() => {});
+        else maybeStartMusic();
+      } catch (_) {}
+    }
+    window.addEventListener('pointerdown', () => {
+      // 音频 Base64 仅在首次交互且启用音效后加载，避免静音用户额外解析音频资源。
+      if (soundEnabled && typeof window.ensureGomokuResource === 'function') {
+        void window.ensureGomokuResource('audio').catch(() => {});
+      }
+      gameMusicUnlocked = true;
+      resumeGameAudio();
     }, { once: true });
     function playPopSound() {
-      if (!soundEnabled) return;
-      if (actx.state === 'suspended') actx.resume();
-      const t = actx.currentTime;
-      const osc = actx.createOscillator(); const gain = actx.createGain();
-      osc.type = 'sine'; osc.frequency.setValueAtTime(520, t);
-      osc.frequency.exponentialRampToValueAtTime(1250, t + 0.035);
-      osc.frequency.exponentialRampToValueAtTime(600, t + 0.08);
-      gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-      osc.connect(gain); gain.connect(actx.destination);
-      osc.start(t); osc.stop(t + 0.1);
+      if (!soundEnabled || !actx) return;
+      try {
+        resumeGameAudio();
+        const output = getGameSoundOutput();
+        if (!output) return;
+        const t = actx.currentTime;
+        const osc = actx.createOscillator(); const gain = actx.createGain();
+        osc.type = 'sine'; osc.frequency.setValueAtTime(520, t);
+        osc.frequency.exponentialRampToValueAtTime(880, t + 0.028);
+        osc.frequency.exponentialRampToValueAtTime(610, t + 0.075);
+        gain.gain.setValueAtTime(0.24, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.085);
+        osc.connect(gain); gain.connect(output);
+        osc.start(t); osc.stop(t + 0.09);
+      } catch (_) {}
     }
+    function playMoveSound(color) {
+      if (!soundEnabled || !actx) return;
+      try {
+        resumeGameAudio();
+        const output = getGameSoundOutput();
+        if (!output) return;
+        const t = actx.currentTime;
+        const pitch = color === WHITE ? 1.08 : 1;
+        const body = actx.createOscillator(); const bodyGain = actx.createGain();
+        body.type = 'sine';
+        body.frequency.setValueAtTime(285 * pitch, t);
+        body.frequency.exponentialRampToValueAtTime(115 * pitch, t + 0.065);
+        bodyGain.gain.setValueAtTime(0.28, t);
+        bodyGain.gain.exponentialRampToValueAtTime(0.001, t + 0.075);
+        body.connect(bodyGain); bodyGain.connect(output);
+        body.start(t); body.stop(t + 0.08);
+
+        const tap = actx.createOscillator(); const tapGain = actx.createGain();
+        tap.type = 'triangle';
+        tap.frequency.setValueAtTime(720 * pitch, t);
+        tap.frequency.exponentialRampToValueAtTime(420 * pitch, t + 0.035);
+        tapGain.gain.setValueAtTime(0.11, t);
+        tapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+        tap.connect(tapGain); tapGain.connect(output);
+        tap.start(t); tap.stop(t + 0.05);
+      } catch (_) {}
+    }
+    window.setGameSoundEnabled = setGameSoundEnabled;
+    window.setGameSoundVolume = setGameSoundVolume;
+    window.previewGameSound = () => playMoveSound(BLACK);
+    window.syncGameSoundControls = syncGameSoundControls;
+    syncGameSoundControls();
 
     // 🔔 治愈系 Q 弹提示音效 (水滴双音升调)
     function playNoticeSound() {
-      if (!soundEnabled) return;
+      if (!soundEnabled || !actx) return;
       try {
-        if (actx.state === 'suspended') actx.resume();
+        resumeGameAudio();
         const t = actx.currentTime;
         const osc = actx.createOscillator(); const gain = actx.createGain();
         osc.type = 'sine';
@@ -2352,7 +2797,7 @@
         osc.frequency.exponentialRampToValueAtTime(840, t + 0.12);
         gain.gain.setValueAtTime(0.35, t);
         gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-        osc.connect(gain); gain.connect(actx.destination);
+        osc.connect(gain); gain.connect(getGameSoundOutput());
         osc.start(t); osc.stop(t + 0.16);
       } catch (e) {}
     }
@@ -2367,12 +2812,15 @@
 
       let raw = String(message || '').trim();
       let icon = '🌟';
+      let useAiAvatar = false;
+      const aiNotice = /人机对弈|大师AI|转为单人人机|切回人机/.test(raw);
 
       // 智能识别前导 emoji，单独作为高亮弹性图标
       const emojiMatch = raw.match(/^(\p{Extended_Pictographic}|\p{Emoji}|[\uD800-\uDBFF][\uDC00-\uDFFF])/u);
       if (emojiMatch) {
         icon = emojiMatch[0];
         raw = raw.slice(emojiMatch[0].length).trim();
+        useAiAvatar = aiNotice && Boolean(AI_AVATAR_SPRITE_POSITIONS[aiOpponentProfile?.avatar]);
       } else {
         if (raw.includes('胜利') || raw.includes('恭喜') || raw.includes('成功') || raw.includes('已')) {
           icon = '🎉';
@@ -2381,7 +2829,11 @@
         }
       }
 
-      if (iconEl) iconEl.textContent = icon;
+      if (iconEl) {
+        iconEl.classList.toggle('notice-ai-avatar', useAiAvatar);
+        if (useAiAvatar) iconEl.innerHTML = renderAvatarElement(aiOpponentProfile.avatar, 32);
+        else iconEl.textContent = icon;
+      }
       textEl.textContent = raw;
 
       // 播放清脆治愈提示音
@@ -2428,9 +2880,9 @@
 
     // 🔊 干扰技能专属音效合成器（每张卡独立设计，乾坤大乱保持原爆炸音频）
     function playSkillSound(type) {
-      if (!soundEnabled) return;
+      if (!soundEnabled || !actx) return;
       try {
-        if (actx.state === 'suspended') actx.resume();
+        resumeGameAudio();
         const t = actx.currentTime;
 
         if (type === 'bomb') {
@@ -2445,7 +2897,7 @@
             subGain.gain.setValueAtTime(0.75, t);
             subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
             subOsc.connect(subGain);
-            subGain.connect(actx.destination);
+            subGain.connect(getGameSoundOutput());
             subOsc.start(t);
             subOsc.stop(t + 0.72);
 
@@ -2468,7 +2920,7 @@
 
             whiteNoise.connect(filter);
             filter.connect(noiseGain);
-            noiseGain.connect(actx.destination);
+            noiseGain.connect(getGameSoundOutput());
             whiteNoise.start(t);
             whiteNoise.stop(t + 0.52);
           } catch(err) {
@@ -2482,6 +2934,7 @@
                 window._cherryBombAudio = new Audio(window.CHERRY_BOMB_AUDIO_DATA);
                 window._cherryBombAudio.preload = 'auto';
               }
+              window._cherryBombAudio.volume = soundEnabled ? gameSoundVolume * 0.58 : 0;
               window._cherryBombAudio.currentTime = 0;
               window._cherryBombAudio.play().catch(() => {});
             } catch(e) {}
@@ -2495,7 +2948,7 @@
             osc.type = 'triangle'; osc.frequency.setValueAtTime(freq, t + idx * 0.09);
             gain.gain.setValueAtTime(0.38, t + idx * 0.09);
             gain.gain.exponentialRampToValueAtTime(0.001, t + idx * 0.09 + 0.4);
-            osc.connect(gain); gain.connect(actx.destination);
+            osc.connect(gain); gain.connect(getGameSoundOutput());
             osc.start(t + idx * 0.09); osc.stop(t + idx * 0.09 + 0.42);
           });
 
@@ -2512,7 +2965,7 @@
             osc.type = 'sine'; osc.frequency.setValueAtTime(freq, t + time);
             gain.gain.setValueAtTime(0.35, t + time);
             gain.gain.exponentialRampToValueAtTime(0.001, t + time + dur);
-            osc.connect(gain); gain.connect(actx.destination);
+            osc.connect(gain); gain.connect(getGameSoundOutput());
             osc.start(t + time); osc.stop(t + time + dur + 0.02);
           });
           const slideOsc = actx.createOscillator(); const slideGain = actx.createGain();
@@ -2522,7 +2975,7 @@
           slideGain.gain.setValueAtTime(0.001, t + 0.55);
           slideGain.gain.linearRampToValueAtTime(0.32, t + 0.62);
           slideGain.gain.exponentialRampToValueAtTime(0.001, t + 1.18);
-          slideOsc.connect(slideGain); slideGain.connect(actx.destination);
+          slideOsc.connect(slideGain); slideGain.connect(getGameSoundOutput());
           slideOsc.start(t + 0.55); slideOsc.stop(t + 1.2);
 
         } else if (type === 'rewind') {
@@ -2534,7 +2987,7 @@
           gain.gain.setValueAtTime(0.0, t);
           gain.gain.linearRampToValueAtTime(0.5, t + 0.04);
           gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-          osc.connect(gain); gain.connect(actx.destination);
+          osc.connect(gain); gain.connect(getGameSoundOutput());
           osc.start(t); osc.stop(t + 0.52);
           // 叠加颤音感（LFO 效果）
           const lfo = actx.createOscillator(); const lfoGain = actx.createGain();
@@ -2552,7 +3005,7 @@
           osc.frequency.exponentialRampToValueAtTime(3200, t + 0.18);
           gain.gain.setValueAtTime(0.35, t);
           gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
-          osc.connect(gain); gain.connect(actx.destination);
+          osc.connect(gain); gain.connect(getGameSoundOutput());
           osc.start(t); osc.stop(t + 0.24);
           // 冰晶碎裂：3个高频短脉冲
           [0.08, 0.15, 0.22].forEach((dt, i) => {
@@ -2561,7 +3014,7 @@
             c.frequency.setValueAtTime(2800 + i * 400, t + dt);
             g.gain.setValueAtTime(0.22, t + dt);
             g.gain.exponentialRampToValueAtTime(0.001, t + dt + 0.06);
-            c.connect(g); g.connect(actx.destination);
+            c.connect(g); g.connect(getGameSoundOutput());
             c.start(t + dt); c.stop(t + dt + 0.07);
           });
 
@@ -2574,7 +3027,7 @@
           charge.frequency.exponentialRampToValueAtTime(520, t + 0.18);
           cGain.gain.setValueAtTime(0.3, t);
           cGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-          charge.connect(cGain); cGain.connect(actx.destination);
+          charge.connect(cGain); cGain.connect(getGameSoundOutput());
           charge.start(t); charge.stop(t + 0.21);
           // 爆发音（高频三角波短促清响）
           const burst = actx.createOscillator(); const bGain = actx.createGain();
@@ -2583,7 +3036,7 @@
           burst.frequency.exponentialRampToValueAtTime(600, t + 0.42);
           bGain.gain.setValueAtTime(0.55, t + 0.18);
           bGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
-          burst.connect(bGain); bGain.connect(actx.destination);
+          burst.connect(bGain); bGain.connect(getGameSoundOutput());
           burst.start(t + 0.18); burst.stop(t + 0.46);
 
         } else if (type === 'boom') {
@@ -2595,7 +3048,7 @@
           osc.frequency.exponentialRampToValueAtTime(35, t + 0.3);
           gain.gain.setValueAtTime(0.85, t);
           gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-          osc.connect(gain); gain.connect(actx.destination);
+          osc.connect(gain); gain.connect(getGameSoundOutput());
           osc.start(t); osc.stop(t + 0.36);
           // 噪声冲击（用白噪声模拟）
           const bufSize = actx.sampleRate * 0.25;
@@ -2606,7 +3059,7 @@
           const nGain = actx.createGain();
           nGain.gain.setValueAtTime(0.4, t);
           nGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
-          noise.connect(nGain); nGain.connect(actx.destination);
+          noise.connect(nGain); nGain.connect(getGameSoundOutput());
           noise.start(t); noise.stop(t + 0.26);
 
         } else if (type === 'magic') {
@@ -2619,7 +3072,7 @@
             osc.frequency.exponentialRampToValueAtTime(freq * 1.3, t + i * 0.08 + 0.1);
             gain.gain.setValueAtTime(0.28, t + i * 0.08);
             gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.18);
-            osc.connect(gain); gain.connect(actx.destination);
+            osc.connect(gain); gain.connect(getGameSoundOutput());
             osc.start(t + i * 0.08); osc.stop(t + i * 0.08 + 0.2);
           });
 
@@ -2636,7 +3089,7 @@
           gain.gain.setValueAtTime(0.0, t + 0.11); // 瞬断
           gain.gain.linearRampToValueAtTime(0.45, t + 0.14);
           gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
-          osc.connect(gain); gain.connect(actx.destination);
+          osc.connect(gain); gain.connect(getGameSoundOutput());
           osc.start(t); osc.stop(t + 0.4);
 
         } else if (type === 'dice') {
@@ -2647,7 +3100,7 @@
             osc.frequency.setValueAtTime(freq, t + i * 0.055);
             gain.gain.setValueAtTime(0.3, t + i * 0.055);
             gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.055 + (i < 4 ? 0.08 : 0.3));
-            osc.connect(gain); gain.connect(actx.destination);
+            osc.connect(gain); gain.connect(getGameSoundOutput());
             osc.start(t + i * 0.055); osc.stop(t + i * 0.055 + (i < 4 ? 0.09 : 0.32));
           });
 
@@ -2657,18 +3110,21 @@
           osc.type = 'sine'; osc.frequency.setValueAtTime(620, t);
           osc.frequency.exponentialRampToValueAtTime(1600, t + 0.2);
           gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-          osc.connect(gain); gain.connect(actx.destination);
+          osc.connect(gain); gain.connect(getGameSoundOutput());
           osc.start(t); osc.stop(t + 0.3);
         }
       } catch(e) {}
     }
     // ══════════════════════════════════════════════════════════════════
-    // 🌐 全球双通道极速连接器 (Cloudflare Pages 优先 + Workers 双重容灾)
+    // 🌐 游戏 API 使用 ECS 主入口，Cloudflare Pages/Worker 保留故障回退
     // ══════════════════════════════════════════════════════════════════
     const CLOUDFLARE_API_HOSTS = [
       "https://gomoku-api.pages.dev",
       "https://gomoku-backend.xnnb04664.workers.dev"
     ];
+    const ECS_API_HOST = String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '').replace(/\/+$/, '');
+    const API_HOSTS = [...new Set([ECS_API_HOST, ...CLOUDFLARE_API_HOSTS].filter(Boolean))];
+    const API_PRIMARY_HOST = API_HOSTS[0] || CLOUDFLARE_API_HOSTS[0];
     const API_HOST_STORAGE_KEY = 'gomoku_api_host_v1';
     const API_HOST_HINT_AT_STORAGE_KEY = 'gomoku_api_host_hint_at_v1';
     const API_HOST_HINT_MAX_AGE_MS = 30 * 60 * 1000;
@@ -2679,7 +3135,41 @@
     const API_PROBE_PATH = '/api/network/probe';
 
     function isAllowedApiHost(host) {
-      return CLOUDFLARE_API_HOSTS.includes(host);
+      return API_HOSTS.includes(host);
+    }
+
+    function getAllowedApiHostForUrl(url) {
+      if (!url || url.protocol !== 'https:') return '';
+      return API_HOSTS.find(host => {
+        try {
+          const base = new URL(host);
+          const basePath = base.pathname.replace(/\/+$/, '');
+          const path = url.pathname.replace(/\/+$/, '') || '/';
+          return url.origin === base.origin && (!basePath || path === basePath || path.startsWith(basePath + '/'));
+        } catch (_) {
+          return false;
+        }
+      }) || '';
+    }
+
+    function getApiPathname(url) {
+      const host = getAllowedApiHostForUrl(url);
+      if (!host) return url.pathname;
+      const basePath = new URL(host).pathname.replace(/\/+$/, '');
+      return basePath ? (url.pathname.slice(basePath.length) || '/') : url.pathname;
+    }
+
+    function resolveApiUrl(endpoint, host) {
+      const endpointText = String(endpoint || '');
+      const base = new URL(host);
+      const parsed = new URL(endpointText, 'https://gomoku.invalid');
+      if (parsed.origin !== 'https://gomoku.invalid') return new URL(endpointText);
+      const prefix = base.pathname.replace(/\/+$/, '');
+      const url = new URL(base.origin);
+      url.pathname = prefix + (parsed.pathname.startsWith('/') ? parsed.pathname : '/' + parsed.pathname);
+      url.search = parsed.search;
+      url.hash = parsed.hash;
+      return url;
     }
 
     function readStoredApiHost() {
@@ -2706,7 +3196,7 @@
       try {
         const saved = JSON.parse(localStorage.getItem(API_HOST_FAILURES_STORAGE_KEY) || '{}');
         const now = Date.now();
-        for (const host of CLOUDFLARE_API_HOSTS) {
+        for (const host of API_HOSTS) {
           const failedAt = Number(saved && saved[host]);
           if (Number.isFinite(failedAt) && failedAt > 0 && now - failedAt < API_HOST_FAILURE_COOLDOWN_MS) {
             result[host] = failedAt;
@@ -2727,7 +3217,7 @@
       try {
         const now = Date.now();
         const compact = {};
-        for (const host of CLOUDFLARE_API_HOSTS) {
+        for (const host of API_HOSTS) {
           const failedAt = Number(apiHostFailures[host]);
           if (Number.isFinite(failedAt) && failedAt > 0 && now - failedAt < API_HOST_FAILURE_COOLDOWN_MS) {
             compact[host] = failedAt;
@@ -2758,10 +3248,8 @@
     }
 
     function getOrderedApiHosts() {
-      // Pages 是当前正式入口；Worker 备用出口只在 Pages 失败或进入冷却时接管。
-      // 不能仅凭 OPTIONS 谁先返回就把功能未完全配置的备用出口提升为默认，
-      // 否则登录/匹配可能被导向一个“能预检、业务不完整”的节点。
-      const primaryHost = CLOUDFLARE_API_HOSTS[0];
+      // ECS 是主服务，Cloudflare Pages/Worker 仅在 ECS 失败时接管。
+      const primaryHost = API_PRIMARY_HOST;
       const preferredHost = !isApiHostCoolingDown(primaryHost)
         ? primaryHost
         : (isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost) ? activeApiHost : '');
@@ -2770,6 +3258,34 @@
       const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host) && !preferred.includes(host));
       return [...preferred, ...healthy, ...cooling];
     }
+
+    window.GomokuBackendRouting = Object.freeze({
+      primaryHost: API_PRIMARY_HOST,
+      getActiveHost: () => activeApiHost,
+      getOrderedHosts: () => getOrderedApiHosts(),
+      getHostForUrl: value => {
+        try { return getAllowedApiHostForUrl(new URL(value)); }
+        catch (_) { return ''; }
+      },
+      socketUrl: (path, host = activeApiHost) => {
+        try {
+          const url = resolveApiUrl(path, host);
+          url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+          return url.href;
+        } catch (_) {
+          return '';
+        }
+      },
+      markFailureForUrl: value => {
+        try {
+          const host = getAllowedApiHostForUrl(new URL(value));
+          if (host) markApiHostFailure(host);
+          return host || '';
+        } catch (_) {
+          return '';
+        }
+      }
+    });
 
     function isApiAbortError(error) {
       const message = String(error && error.message || '').toLowerCase();
@@ -2804,25 +3320,30 @@
       return { host, elapsed: samples[Math.floor(samples.length / 2)] };
     }
 
-    // 登录弹窗打开时并行探测两个官方出口，只选择最快的一个；登录请求本身不会并发发送，避免重复刷新 Token。
+    // 登录弹窗打开时优先探测 ECS，再按 Cloudflare Pages/Worker 顺序回退；登录请求不会并发发送。
     function warmApiHost(force = false) {
       const now = Date.now();
-      if (!force && hasApiHostHint) return Promise.resolve(activeApiHost);
+      if (!force && hasApiHostHint && activeApiHost === API_PRIMARY_HOST && !isApiHostCoolingDown(API_PRIMARY_HOST)) {
+        return Promise.resolve(activeApiHost);
+      }
       if (apiHostWarmPromise) return apiHostWarmPromise;
       if (!force && apiHostWarmAt && now - apiHostWarmAt < 30 * 1000) {
         return Promise.resolve(activeApiHost);
       }
 
       apiHostWarmAt = now;
-      const probePromises = CLOUDFLARE_API_HOSTS.map(host => probeApiHost(host));
-      apiHostWarmPromise = Promise.allSettled(probePromises).then(results => {
-        const successful = results.filter(item => item.status === 'fulfilled').map(item => item.value);
-        successful.sort((a, b) => a.elapsed - b.elapsed);
-        const winner = successful[0];
-        if (!winner) return null;
-        markApiHostSuccess(winner.host);
-        return winner.host;
-      }).finally(() => {
+      apiHostWarmPromise = (async () => {
+        for (const host of getOrderedApiHosts()) {
+          try {
+            await probeApiHost(host);
+            markApiHostSuccess(host);
+            return host;
+          } catch (_) {
+            markApiHostFailure(host);
+          }
+        }
+        return null;
+      })().finally(() => {
         apiHostWarmPromise = null;
       });
       return apiHostWarmPromise;
@@ -2830,7 +3351,6 @@
 
     async function safeApiFetch(endpoint, options = {}) {
       let lastErr = null;
-      const orderedHosts = getOrderedApiHosts();
       const parsedTimeout = Number(options.timeoutMs);
       const timeoutMs = Number.isFinite(parsedTimeout)
         ? Math.max(1500, Math.min(15000, parsedTimeout))
@@ -2848,24 +3368,35 @@
           throw new Error('官方 API 地址格式无效');
         }
         if (fixedEndpointUrl.protocol !== "https:" ||
-            !isAllowedApiHost(fixedEndpointUrl.origin) ||
+            !getAllowedApiHostForUrl(fixedEndpointUrl) ||
             fixedEndpointUrl.username || fixedEndpointUrl.password) {
           throw new Error('拒绝访问非官方 API 地址');
         }
       }
       const requestMethod = String(requestOptions.method || 'GET').toUpperCase();
+      // ECS 与 Cloudflare 使用彼此独立的数据库。只有不会改变服务端状态的请求可以跨主备回退。
+      const canFailover = ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod);
+      const explicitEndpointHost = fixedEndpointUrl ? getAllowedApiHostForUrl(fixedEndpointUrl) : '';
+      const orderedHosts = canFailover
+        ? getOrderedApiHosts()
+        : [explicitEndpointHost || API_PRIMARY_HOST];
       const isLoginRequest = requestMethod === 'POST' &&
-        (fixedEndpointUrl ? fixedEndpointUrl.pathname : endpointText.split('?')[0]) === API_LOGIN_PATH;
+        (fixedEndpointUrl ? getApiPathname(fixedEndpointUrl) : endpointText.split('?')[0]) === API_LOGIN_PATH;
       const attemptErrors = [];
       let lastServerResponse = null;
 
       for (const [hostIndex, host] of orderedHosts.entries()) {
         let timer = null;
+        let dispatchAttempted = false;
         try {
           const controller = new AbortController();
           timer = setTimeout(() => controller.abort(), timeoutMs);
-          const endpointUrl = fixedEndpointUrl || new URL(endpointText, host);
-          if (endpointUrl.protocol !== "https:" || !isAllowedApiHost(endpointUrl.origin) || endpointUrl.username || endpointUrl.password) {
+          const endpointUrl = fixedEndpointUrl
+            ? (canFailover
+              ? resolveApiUrl(getApiPathname(fixedEndpointUrl) + fixedEndpointUrl.search, host)
+              : fixedEndpointUrl)
+            : resolveApiUrl(endpointText, host);
+          if (endpointUrl.protocol !== "https:" || !getAllowedApiHostForUrl(endpointUrl) || endpointUrl.username || endpointUrl.password) {
             throw new Error('拒绝访问非官方 API 地址');
           }
           const mergedHeaders = {
@@ -2880,13 +3411,25 @@
               mergedHeaders.Authorization = 'Bearer ' + sessionToken;
             }
           } catch (_) {}
+          dispatchAttempted = true;
           const res = await fetch(endpointUrl.href, {
             ...requestOptions,
             headers: mergedHeaders,
             signal: controller.signal
           });
 
-          // 仅对服务端错误尝试备用出口；4xx 是业务响应，应原样交给调用方处理。
+          // 变更请求遇到 5xx 时保留原响应并停止，避免把可能已提交的操作重放到另一套数据库。
+          if (res.status >= 500 && !canFailover) {
+            lastServerResponse = res;
+            markApiHostFailure(host);
+            try {
+              if (!anonymousRequest && typeof showGameNotice === 'function') {
+                showGameNotice(`⚠️ 服务端返回 HTTP ${res.status}。请求可能已被处理，提交状态无法确认；请刷新核对后再决定是否重试。`, true);
+              }
+            } catch (_) {}
+            return res;
+          }
+          // 只对安全方法的服务端错误尝试备用出口；4xx 是业务响应，应原样交给调用方处理。
           if (res.status >= 500 && hostIndex < orderedHosts.length - 1) {
             lastServerResponse = res;
             markApiHostFailure(host);
@@ -2903,14 +3446,25 @@
           return res;
         } catch(err) {
           lastErr = err;
-          attemptErrors.push({ error: err, timedOut: isApiAbortError(err) });
+          attemptErrors.push({ error: err, timedOut: isApiAbortError(err), dispatchAttempted });
           markApiHostFailure(host);
-          console.warn('Host ' + host + ' failed: ' + (err && err.message || err) + ', trying fallback...');
+          console.warn('Host ' + host + ' failed: ' + (err && err.message || err) +
+            (canFailover ? ', trying fallback...' : '; mutation will not be replayed'));
+          if (!canFailover) break;
         } finally {
           if (timer) clearTimeout(timer);
         }
       }
       if (lastServerResponse) return lastServerResponse;
+      if (!canFailover && attemptErrors.some(item => item.dispatchAttempted)) {
+        const unknownError = new Error('与主服务连接中断；服务端是否已处理无法确认。请刷新核对状态后再决定是否重试。');
+        unknownError.code = 'API_COMMIT_UNKNOWN';
+        unknownError.cause = lastErr;
+        try {
+          if (!anonymousRequest && typeof showGameNotice === 'function') showGameNotice('⚠️ ' + unknownError.message, true);
+        } catch (_) {}
+        throw unknownError;
+      }
       if (attemptErrors.length && attemptErrors.every(item => item.timedOut)) {
         const timeoutError = new Error('官方服务响应超时，请检查手机网络后重试');
         timeoutError.code = 'API_TIMEOUT';
@@ -3007,6 +3561,8 @@
     let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
     let currentUserRefreshToken = localStorage.getItem('gomoku_user_refresh_token') || '';
     let currentUserScore = parseInt(localStorage.getItem('gomoku_user_score') || '1000', 10);
+    const PRIVATE_GAME_LOGIN_ONLY = true;
+    const PRIVATE_GAME_LOGIN_NOTICE = '🔒 私人游戏，仅限指定账号登录';
 
     function updateLadderBadgeUI(score) {
       if (typeof score === 'number') currentUserScore = score;
@@ -3051,24 +3607,53 @@
       } catch(e) {}
     }
 
+    async function waitForRotatedRefreshToken(uid, previousToken) {
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        if (String(localStorage.getItem('gomoku_user_uid') || '') !== uid) return '';
+        const latestToken = String(localStorage.getItem('gomoku_user_refresh_token') || '');
+        if (latestToken && latestToken !== previousToken) return latestToken;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return '';
+    }
+
     async function refreshUserSession() {
       if (!currentUserUid || !currentUserRefreshToken || String(currentUserUid).startsWith('guest_')) return false;
+      const sessionUid = String(currentUserUid);
+      let refreshToken = String(currentUserRefreshToken);
+      let retriedAfterConcurrentRotation = false;
       try {
-        const res = await safeApiFetch('/api/auth/refresh_session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: currentUserUid, refreshToken: currentUserRefreshToken }),
-          timeoutMs: 7000
-        });
-        const json = await res.json();
-        if (json && json.code === 0 && json.data) {
-          applyUserData(json.data);
-          return true;
-        }
-        if (json && json.code === 2) {
-          console.warn('refresh_session token invalid:', json.msg);
-        } else {
-          console.warn('refresh_session temporarily unavailable:', json && json.msg);
+        while (true) {
+          const res = await safeApiFetch('/api/auth/refresh_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: sessionUid, refreshToken }),
+            timeoutMs: 7000
+          });
+          const json = await res.json();
+          if (json && json.code === 0 && json.data) {
+            applyUserData(json.data);
+            return true;
+          }
+          if (json && json.retryable === true && !retriedAfterConcurrentRotation) {
+            // A concurrent tab consumed the old single-use token. Wait briefly
+            // for its successful response to publish the replacement locally;
+            // never retry with or recover a token from the server.
+            const latestToken = await waitForRotatedRefreshToken(sessionUid, refreshToken);
+            if (latestToken && String(currentUserUid) === sessionUid) {
+              refreshToken = latestToken;
+              currentUserRefreshToken = latestToken;
+              retriedAfterConcurrentRotation = true;
+              continue;
+            }
+          }
+          if (json && json.code === 2) {
+            console.warn('refresh_session token invalid:', json.msg);
+          } else {
+            console.warn('refresh_session temporarily unavailable:', json && json.msg);
+          }
+          return false;
         }
       } catch (e) {
         console.warn('refresh_session offline fallback, keep local session:', e);
@@ -3093,9 +3678,23 @@
             // 云端验证成功，静默校准天梯积分与头像
             applyUserData(json.data);
             return;
-          } else if (res.status === 401 || (json && json.code === 2)) {
+          } else if (res.status === 401 || res.status === 403 || (json && (json.code === 2 || json.code === 403))) {
             if (await refreshUserSession()) return;
-            showGameNotice('⚠️ 登录状态已失效，请重新登录账号', true);
+            if (PRIVATE_GAME_LOGIN_ONLY && (res.status === 403 || Number(json?.code) === 403)) {
+              currentUsername = '';
+              currentUserUid = '';
+              currentUserToken = '';
+              currentUserRefreshToken = '';
+              ['gomoku_user_username', 'gomoku_user_uid', 'gomoku_user_token', 'gomoku_user_refresh_token'].forEach(key => localStorage.removeItem(key));
+              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.clearUserLogin) {
+                try { AndroidNativeApp.clearUserLogin(); } catch (_) {}
+              }
+              updateAccountUI();
+              openAuthModal('login');
+            } else {
+              showGameNotice('⚠️ 登录状态已失效，请重新登录账号', true);
+              openAuthModal('login');
+            }
           } else if (json && json.code === 1) {
             // “用户不存在/缺少 uid”是服务端数据问题，不等同于凭证过期，避免误导用户。
             console.warn('verify_session account sync failed:', json.msg);
@@ -3112,9 +3711,13 @@
         if (await refreshUserSession()) return;
       }
 
-      // 2. 游客模式：完全本地化，不创建数据库记录，不上天梯榜
-      // 只有注册/登录的真实账号才和服务器交互
       if (!currentUserUid && !currentUsername) {
+        if (PRIVATE_GAME_LOGIN_ONLY) {
+          updateAccountUI();
+          setTimeout(() => openAuthModal('login'), 120);
+          return;
+        }
+        // 非私人开发构建保留原来的纯本地访客昵称。
         // 从本地 localStorage 读取或生成游客昵称（纯本地，零服务器请求）
         let guestNick = localStorage.getItem('gomoku_guest_nickname');
         if (!guestNick) {
@@ -3249,15 +3852,15 @@
       } else {
         if (icon) icon.textContent = "👤";
         if (title) {
-          title.textContent = "游客身份 (未绑定)";
-          title.title = "游客身份 (未绑定)";
+          title.textContent = "未登录";
+          title.title = PRIVATE_GAME_LOGIN_NOTICE;
         }
         if (subText) {
-          subText.textContent = "💡 注册绑定后战绩永不丢失";
-          subText.title = "注册绑定账号密码，换手机重装不丢积分";
+          subText.textContent = PRIVATE_GAME_LOGIN_NOTICE;
+          subText.title = PRIVATE_GAME_LOGIN_NOTICE;
         }
         if (btnAuth) {
-          btnAuth.textContent = "🔑 登录/注册";
+          btnAuth.textContent = "🔑 指定账号登录";
           btnAuth.onclick = () => openAuthModal("login");
         }
         if (btnChangePassword) {
@@ -3321,9 +3924,34 @@
       const modal = document.getElementById('authModal');
       if (modal) {
         modal.classList.add('show');
+        ensurePrivateGameAuthUI();
         switchAuthTab(tab);
         // 提前探测官方出口，让用户填写账号密码的时间与网络探测并行。
         void warmApiHost();
+      }
+    }
+
+    function ensurePrivateGameAuthUI() {
+      if (!PRIVATE_GAME_LOGIN_ONLY) return;
+      const registerTab = document.getElementById('tabAuthRegister');
+      if (registerTab) {
+        registerTab.style.display = 'none';
+        registerTab.disabled = true;
+        registerTab.setAttribute('aria-hidden', 'true');
+        registerTab.tabIndex = -1;
+      }
+      const registerView = document.getElementById('viewAuthRegister');
+      if (registerView) registerView.style.display = 'none';
+
+      const loginView = document.getElementById('viewAuthLogin');
+      if (loginView && !document.getElementById('privateGameAuthNotice')) {
+        const notice = document.createElement('div');
+        notice.id = 'privateGameAuthNotice';
+        notice.setAttribute('role', 'status');
+        notice.setAttribute('aria-live', 'polite');
+        notice.textContent = PRIVATE_GAME_LOGIN_NOTICE;
+        notice.style.cssText = 'margin:0 0 10px;padding:8px 10px;border:1px solid #bfdbfe;border-radius:9px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:800;text-align:center;';
+        loginView.insertBefore(notice, loginView.firstChild);
       }
     }
 
@@ -3438,6 +4066,8 @@
     }
 
     function switchAuthTab(tab) {
+      if (PRIVATE_GAME_LOGIN_ONLY && tab === 'register') tab = 'login';
+      ensurePrivateGameAuthUI();
       ['login', 'register', 'reset'].forEach(t => {
         const btn = document.getElementById('tabAuth' + t.charAt(0).toUpperCase() + t.slice(1));
         const view = document.getElementById('viewAuth' + t.charAt(0).toUpperCase() + t.slice(1));
@@ -3522,6 +4152,15 @@
     }
 
     async function submitRegister() {
+      if (PRIVATE_GAME_LOGIN_ONLY) {
+        switchAuthTab('login');
+        const loginError = document.getElementById('loginErrorMsg');
+        if (loginError) {
+          loginError.textContent = PRIVATE_GAME_LOGIN_NOTICE;
+          loginError.style.display = 'block';
+        }
+        return;
+      }
       const u = (document.getElementById('regUsername').value || '').trim();
       const p = (document.getElementById('regPassword').value || '');
       let q = selectedSecurityQValue;
@@ -3574,7 +4213,7 @@
             username: u,
             password: p,
             nickname: p1Name || u,
-            avatar: getAvatarSyncValue(p1Avatar || "👦"),
+            avatar: getAvatarSyncValue(p1Avatar || 'anime_boy'),
             uid: currentUserUid,
             token: currentUserToken,
             securityQuestion: q,
@@ -4128,6 +4767,24 @@
     let replayStepIndex = 0;
     let replayAutoTimer = null;
 
+    window.getReplayInsightSnapshot = () => {
+      const isActiveReplay = Boolean(isReplayMode);
+      const replayContext = isActiveReplay ? (window.__GOMOKU_REPLAY_CONTEXT__ || {}) : {};
+      const moves = isActiveReplay ? replayAllMoves : history;
+      return {
+        moves: Array.isArray(moves) ? moves.map(move => ({ ...move })) : [],
+        currentStep: isActiveReplay ? replayStepIndex : (Array.isArray(moves) ? moves.length : 0),
+        isReplay: isActiveReplay,
+        winnerColor: isActiveReplay ? (replayContext.winnerColor || 0) : gameWinnerColor,
+        isDraw: isActiveReplay ? replayContext.isDraw === true : gameResultIsDraw === true,
+        winningLine: isActiveReplay
+          ? (Array.isArray(replayContext.winningLine) ? replayContext.winningLine.map(point => ({ ...point })) : null)
+          : (Array.isArray(winningLine) ? winningLine.map(point => ({ ...point })) : null),
+        opponentName: isActiveReplay ? (replayContext.opponentName || p2Name) : (gameMode === 'ai' ? aiOpponentProfile.name : p2Name),
+        opponentAvatar: isActiveReplay ? (replayContext.opponentAvatar || p2Avatar) : (gameMode === 'ai' ? aiOpponentProfile.avatar : p2Avatar)
+      };
+    };
+
     function ensureReplayFeature() {
       return window.ensureGomokuFeature('replay');
     }
@@ -4137,6 +4794,21 @@
         if (window.openReplayModalByIndex === proxy) throw new Error('复盘模块加载后未注册');
         return window.openReplayModalByIndex(index);
       }).catch(error => showGameNotice(error.message || '复盘模块加载失败', true));
+    }
+    function openCurrentGameReplayAtStep(step) {
+      const snapshot = window.getReplayInsightSnapshot?.();
+      if (!snapshot || !snapshot.moves.length) {
+        showGameNotice('📜 本局还没有可回看的棋谱', true);
+        return false;
+      }
+      if (snapshot.isReplay && typeof window.mainReplayJump === 'function') {
+        window.mainReplayJump(step);
+        return true;
+      }
+      return ensureReplayFeature().then(() => {
+        if (typeof window.openCurrentGameReplay !== 'function') throw new Error('复盘模块加载后未注册');
+        return window.openCurrentGameReplay(step);
+      }).catch(error => showGameNotice(error.message || '棋局复盘加载失败', true));
     }
     function openHistoryModal() {
       const proxy = openHistoryModal;
@@ -4182,11 +4854,12 @@
         isDraw: true,
         winnerColor: 0,
         myColor: (gameMode === 'online' ? myOnlineColor : BLACK),
-        oppName: (gameMode === 'ai' ? '大师AI' : (p2Name || '棋友')),
-        oppAvatar: (gameMode === 'ai' ? '🤖' : (p2Avatar || '👧')),
+        oppName: (gameMode === 'ai' ? aiOpponentProfile.name : (p2Name || '棋友')),
+        oppAvatar: (gameMode === 'ai' ? aiOpponentProfile.avatar : (p2Avatar || 'anime_girl')),
         moves: history ? history.filter(h => h && h.r >= 0 && !h.action).length : 0,
         movesData: movesSnapshot,
         boardData: boardSnapshot,
+        winningLine: null,
         time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
         date: new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
         reportLadder: (gameMode === 'online' || gameMode === 'ai'),
@@ -4250,11 +4923,12 @@
         isDraw: false,
         winnerColor: winnerColor,
         myColor: (gameMode === "online" ? myOnlineColor : BLACK),
-        oppName: (gameMode === "ai" ? "大师AI" : (p2Name || "棋友")),
-        oppAvatar: (gameMode === "ai" ? "🤖" : (p2Avatar || "👧")),
+        oppName: (gameMode === "ai" ? aiOpponentProfile.name : (p2Name || "棋友")),
+        oppAvatar: (gameMode === "ai" ? aiOpponentProfile.avatar : (p2Avatar || "anime_girl")),
         moves: history ? history.filter(h => h && h.r >= 0 && !h.action).length : 0,
         movesData: movesSnapshot,
         boardData: boardSnapshot,
+        winningLine: Array.isArray(winningLine) ? winningLine.map(point => ({ ...point })) : null,
         time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
         date: new Date().toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }),
         reportLadder: (gameMode === 'online' || gameMode === 'ai'),
@@ -4769,73 +5443,212 @@
       updateUI();
     }
 
-    // --- 1. 经典手绘晴空草坪棋盘 ---
-    function drawHandmadeGrassBoard() {
-      const bx = paddingX - 2, by = paddingY - 2;
-      const bw = cWidth - 2 * bx, bh = cHeight - 2 * by;
+    // --- 1. ImageGen 晴空云石棋台：底图固定，网格和棋子继续实时绘制 ---
+    const skyBoardArtwork = new Image();
+    skyBoardArtwork.decoding = 'async';
+    skyBoardArtwork.onload = () => {
+      invalidateBoardCache();
+      draw(true);
+      // 首页 Canvas 与实战棋盘共用这份底图，图片到达后重绘一次预览。
+      window.dispatchEvent(new Event('gomoku-board-preview-ready'));
+    };
+    skyBoardArtwork.src = 'img/game/sky-board-cloudstone.webp';
 
-      ctx.fillStyle = '#9aaab7'; ctx.strokeStyle = '#576574'; ctx.lineWidth = Math.max(1.2, cWidth * 0.004);
-      const stoneCount = 7; const sW = (cWidth - 16) / stoneCount; const stoneH = Math.max(8, cHeight * 0.03);
-      for (let i = 0; i < stoneCount; i++) {
-        const sx = 8 + i * sW;
-        ctx.beginPath(); ctx.roundRect(sx + 1, cHeight - stoneH - 3, sW - 2, stoneH, 4); ctx.fill(); ctx.stroke();
-        ctx.beginPath(); ctx.roundRect(sx + 1, 3, sW - 2, stoneH * 0.9, 4); ctx.fill(); ctx.stroke();
+    function drawHandmadeGrassBoard() {
+      const scale = Math.max(0.72, Math.min(1.5, Math.min(cWidth, cHeight) / 380));
+      const fieldX = paddingX, fieldY = paddingY;
+      const fieldW = gridX * 15, fieldH = gridY * 15;
+
+      if (skyBoardArtwork.complete && skyBoardArtwork.naturalWidth > 0) {
+        ctx.drawImage(skyBoardArtwork, 0, 0, cWidth, cHeight);
+
+        const firstX = fieldX + 0.5 * gridX;
+        const firstY = fieldY + 0.5 * gridY;
+        const lastX = fieldX + 14.5 * gridX;
+        const lastY = fieldY + 14.5 * gridY;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(55, 73, 44, 0.64)';
+        ctx.lineWidth = Math.max(0.8, 0.9 * scale);
+        ctx.beginPath();
+        for (let i = 0; i < 15; i++) {
+          const x = firstX + i * gridX;
+          const y = firstY + i * gridY;
+          ctx.moveTo(x, firstY);
+          ctx.lineTo(x, lastY);
+          ctx.moveTo(firstX, y);
+          ctx.lineTo(lastX, y);
+        }
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(55, 73, 44, 0.68)';
+        for (const row of [3, 7, 11]) {
+          for (const col of [3, 7, 11]) {
+            ctx.beginPath();
+            ctx.arc(firstX + col * gridX, firstY + row * gridY, Math.max(1.5, 1.7 * scale), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+        return;
       }
 
-      ctx.fillStyle = '#78c82e'; ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 8); ctx.fill();
+      const stoneInset = 13 * scale;
+      const stoneX = Math.max(2 * scale, fieldX - stoneInset);
+      const stoneY = Math.max(2 * scale, fieldY - stoneInset);
+      const stoneW = Math.min(cWidth - stoneX * 2, fieldW + stoneInset * 2);
+      const stoneH = Math.min(cHeight - stoneY * 2, fieldH + stoneInset * 2);
+      const stoneRadius = 12 * scale;
 
+      // 云石底座落在柔和阴影上，替代旧版连续尖草边和分段灰条。
+      ctx.save();
+      ctx.shadowColor = 'rgba(20, 61, 91, 0.28)';
+      ctx.shadowBlur = 13 * scale;
+      ctx.shadowOffsetY = 6 * scale;
+      ctx.fillStyle = '#7f9ead';
+      ctx.beginPath();
+      ctx.roundRect(stoneX, stoneY + 2 * scale, stoneW, stoneH, stoneRadius);
+      ctx.fill();
+      ctx.restore();
+
+      const stoneGradient = ctx.createLinearGradient(stoneX, stoneY, stoneX + stoneW, stoneY + stoneH);
+      stoneGradient.addColorStop(0, '#f1f8f8');
+      stoneGradient.addColorStop(0.46, '#d5e5e8');
+      stoneGradient.addColorStop(1, '#9bb8c2');
+      ctx.fillStyle = stoneGradient;
+      ctx.beginPath();
+      ctx.roundRect(stoneX, stoneY, stoneW, stoneH, stoneRadius);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.86)';
+      ctx.lineWidth = Math.max(0.9, 1.2 * scale);
+      ctx.stroke();
+
+      // 一圈窄暖木沿把绿面和冷色云海接起来，同时保留原来的草坪棋盘识别度。
+      const woodInset = 8.5 * scale;
+      const woodX = Math.max(stoneX + 2 * scale, fieldX - woodInset);
+      const woodY = Math.max(stoneY + 2 * scale, fieldY - woodInset);
+      const woodW = Math.min(stoneX + stoneW - woodX - 2 * scale, fieldW + woodInset * 2);
+      const woodH = Math.min(stoneY + stoneH - woodY - 2 * scale, fieldH + woodInset * 2);
+      const woodGradient = ctx.createLinearGradient(woodX, woodY, woodX + woodW, woodY + woodH);
+      woodGradient.addColorStop(0, '#e4b36f');
+      woodGradient.addColorStop(0.42, '#c88d50');
+      woodGradient.addColorStop(1, '#a96d3f');
+      ctx.fillStyle = woodGradient;
+      ctx.beginPath();
+      ctx.roundRect(woodX, woodY, woodW, woodH, 8 * scale);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 241, 207, 0.72)';
+      ctx.lineWidth = Math.max(0.7, 0.9 * scale);
+      ctx.stroke();
+
+      // 草地保持明亮，但改用柔和的青绿层次，避免和天空抢色。
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(fieldX, fieldY, fieldW, fieldH, 5 * scale);
+      ctx.clip();
+      const grassGradient = ctx.createLinearGradient(fieldX, fieldY, fieldX + fieldW, fieldY + fieldH);
+      grassGradient.addColorStop(0, '#9bd47d');
+      grassGradient.addColorStop(0.52, '#8cc86f');
+      grassGradient.addColorStop(1, '#7fbb65');
+      ctx.fillStyle = grassGradient;
+      ctx.fillRect(fieldX, fieldY, fieldW, fieldH);
+
+      // 非棋盘式强对比，只留很轻的明暗变化，网格承担主要的格位提示。
       for (let r = 0; r < 15; r++) {
         for (let c = 0; c < 15; c++) {
-          const gx = paddingX + c * gridX, gy = paddingY + r * gridY;
-          const isLight = (r + c) % 2 === 0;
-
-          ctx.fillStyle = isLight ? '#8cd63e' : '#77c42b';
-          ctx.fillRect(gx, gy, gridX, gridY);
-
-          ctx.fillStyle = isLight ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.06)';
-          ctx.fillRect(gx, gy, gridX, 1);
-          ctx.fillRect(gx, gy, 1, gridY);
-
-          ctx.strokeStyle = 'rgba(76, 139, 22, 0.25)';
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(gx, gy, gridX, gridY);
+          ctx.fillStyle = (r + c) % 2 === 0
+            ? 'rgba(247, 255, 232, 0.035)'
+            : 'rgba(45, 91, 50, 0.035)';
+          ctx.fillRect(fieldX + c * gridX, fieldY + r * gridY, gridX, gridY);
         }
       }
-      drawGrassFringe(bx, by, bw, bh);
-    }
+      ctx.restore();
 
-    function drawGrassFringe(bx, by, bw, bh) {
+      // 清楚、连续的苔绿网格，不再给每格描一圈造成拼块感。
       ctx.save();
-      const countX = Math.round(cWidth / 10), countY = Math.round(cHeight / 10);
-      drawEdgeTufts(bx, by, bx + bw, by, 0, -1, countX);
-      drawEdgeTufts(bx, by + bh, bx + bw, by + bh, 0, 1, countX);
-      drawEdgeTufts(bx, by, bx, by + bh, -1, 0, countY);
-      drawEdgeTufts(bx + bw, by, bx + bw, by + bh, 1, 0, countY);
+      ctx.strokeStyle = 'rgba(54, 86, 50, 0.68)';
+      ctx.lineWidth = Math.max(0.8, 0.9 * scale);
+      const firstX = fieldX + 0.5 * gridX;
+      const firstY = fieldY + 0.5 * gridY;
+      const lastX = fieldX + 14.5 * gridX;
+      const lastY = fieldY + 14.5 * gridY;
+      ctx.beginPath();
+      for (let i = 0; i < 15; i++) {
+        const x = firstX + i * gridX;
+        const y = firstY + i * gridY;
+        ctx.moveTo(x, firstY);
+        ctx.lineTo(x, lastY);
+        ctx.moveTo(firstX, y);
+        ctx.lineTo(lastX, y);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(247, 255, 238, 0.48)';
+      ctx.lineWidth = Math.max(0.55, 0.65 * scale);
+      ctx.beginPath();
+      ctx.roundRect(fieldX + 0.6 * scale, fieldY + 0.6 * scale, fieldW - 1.2 * scale, fieldH - 1.2 * scale, 4 * scale);
+      ctx.stroke();
       ctx.restore();
     }
 
-    function drawEdgeTufts(x1, y1, x2, y2, nx, ny, count) {
-      const dx = (x2 - x1) / count, dy = (y2 - y1) / count, scale = cWidth / 380;
-      ctx.fillStyle = '#4c8b16'; ctx.beginPath();
-      for (let i = 0; i <= count; i++) {
-        const cx = x1 + i * dx, cy = y1 + i * dy;
-        const len = (7 + Math.sin(i * 1.8) * 3 + Math.cos(i * 3.4) * 2) * scale;
-        ctx.lineTo(cx - dx * 0.5, cy - dy * 0.5);
-        ctx.lineTo(cx + nx * len + (Math.sin(i * 2.5) * 2 * scale), cy + ny * len + (Math.cos(i * 2.5) * 2 * scale));
-        ctx.lineTo(cx + dx * 0.5, cy + dy * 0.5);
-      }
-      ctx.fill();
+    function renderHomeBoardPreview(canvas) {
+      if (!canvas || typeof canvas.getContext !== 'function') return false;
+      const bounds = canvas.getBoundingClientRect();
+      const size = Math.floor(Math.min(bounds.width || 0, bounds.height || 0));
+      if (size < 80) return false;
 
-      ctx.fillStyle = '#8cd63e'; ctx.beginPath();
-      for (let i = 0; i <= count; i++) {
-        const cx = x1 + (i + 0.3) * dx, cy = y1 + (i + 0.3) * dy;
-        const len = (6 + Math.cos(i * 2.1) * 2.5) * scale;
-        ctx.lineTo(cx - dx * 0.4, cy - dy * 0.4);
-        ctx.lineTo(cx + nx * len, cy + ny * len);
-        ctx.lineTo(cx + dx * 0.4, cy + dy * 0.4);
+      const previous = { ctx, cWidth, cHeight, paddingX, paddingY, gridX, gridY, radius, dpr };
+      const previewDpr = getEffectiveCanvasDpr();
+      const pixelSize = Math.round(size * previewDpr);
+      if (canvas.width !== pixelSize) canvas.width = pixelSize;
+      if (canvas.height !== pixelSize) canvas.height = pixelSize;
+      const previewCtx = canvas.getContext('2d');
+      if (!previewCtx) return false;
+
+      try {
+        ctx = previewCtx;
+        cWidth = size;
+        cHeight = size;
+        dpr = previewDpr;
+        configureBoardGeometry();
+
+        if (ctx.resetTransform) ctx.resetTransform(); else ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.scale(previewDpr, previewDpr);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.clearRect(0, 0, cWidth, cHeight);
+        drawHandmadeGrassBoard();
+
+        const sampleStones = [
+          [6, 6, BLACK], [6, 7, WHITE], [6, 8, BLACK],
+          [7, 7, WHITE], [7, 6, BLACK]
+        ];
+        sampleStones.forEach(([row, col, color]) => {
+          drawThemedStone(
+            paddingX + (col + 0.5) * gridX,
+            paddingY + (row + 0.5) * gridY,
+            radius,
+            color,
+            activeThemeKey
+          );
+        });
+      } catch (error) {
+        console.warn('[sky board preview]', error?.message || error);
+        return false;
+      } finally {
+        ctx = previous.ctx;
+        cWidth = previous.cWidth;
+        cHeight = previous.cHeight;
+        paddingX = previous.paddingX;
+        paddingY = previous.paddingY;
+        gridX = previous.gridX;
+        gridY = previous.gridY;
+        radius = previous.radius;
+        dpr = previous.dpr;
       }
-      ctx.fill();
+      return true;
     }
+
+    window.GomokuBoardPreview = Object.freeze({ draw: renderHomeBoardPreview });
+    window.dispatchEvent(new Event('gomoku-board-preview-ready'));
 
 
 
@@ -5454,20 +6267,7 @@
 
     function drawFirstFrame() {
       ctx.clearRect(0, 0, cWidth, cHeight);
-      ctx.fillStyle = '#78c82e';
-      ctx.fillRect(0, 0, cWidth, cHeight);
-      ctx.strokeStyle = 'rgba(36, 78, 12, 0.46)';
-      ctx.lineWidth = Math.max(0.6, 1 / Math.max(1, dpr));
-      ctx.beginPath();
-      for (let i = 0; i < 15; i++) {
-        const x = paddingX + i * gridX;
-        const y = paddingY + i * gridY;
-        ctx.moveTo(x, paddingY);
-        ctx.lineTo(x, paddingY + 14 * gridY);
-        ctx.moveTo(paddingX, y);
-        ctx.lineTo(paddingX + 14 * gridX, y);
-      }
-      ctx.stroke();
+      drawHandmadeGrassBoard();
     }
 
     function drawNow() {
@@ -5598,7 +6398,7 @@
       }
 
       // 5. 绘制【预言封锁】水晶球标记（在预言的空格上显示 🔮 标记）
-      if (prophecyPoint) {
+      if (!isReplayMode && prophecyPoint) {
         const fx = paddingX + (prophecyPoint.c + 0.5) * gridX;
         const fy = paddingY + (prophecyPoint.r + 0.5) * gridY;
         ctx.save();
@@ -5612,7 +6412,7 @@
       }
 
       // 7. 绘制【五子连珠】连线金光激光与胜利光环
-      if (isOver && winningLine && winningLine.length >= 5) {
+      if (!isReplayMode && isOver && winningLine && winningLine.length >= 5) {
         ctx.save();
         ctx.beginPath();
         const p0 = winningLine[0];
@@ -5643,7 +6443,7 @@
       }
 
       // 8. 实时渲染全屏高能粒子与技能动画特效（帧率由画质档位控制）
-      renderActiveVFX(ctx);
+      if (!isReplayMode) renderActiveVFX(ctx);
     }
 
     function draw(immediate = false) {
@@ -5788,7 +6588,7 @@
       saveUndoSnapshot('move', { r, c, p, turn });
       board[r][c] = p;
       history.push({r, c, p});
-      playPopSound();
+      playMoveSound(p);
       triggerStoneDropVFX(r, c, p); // 💫 落子波纹与微光微粒反馈
       draw();
 
@@ -6027,10 +6827,10 @@
       showGameNotice("🚪 您已退出联机房间，已切回人机对弈模式~", false);
     }
 
-    // 👤 退出当前账号功能 (切回安全游客模式)
+    // 👤 退出当前账号功能
     function confirmLogoutAccount() {
       if (!hasRegisteredAccountSession()) return;
-      showCustomConfirm(`确定要退出账号【${currentUsername}】吗？\n退出后将切换为游客模式，随时可重新输入密码登录。`, () => {
+      showCustomConfirm(`确定要退出账号【${currentUsername}】吗？\n退出后需使用两个指定账号之一重新登录。`, () => {
         logoutAccount();
       }, null, { title: '退出当前账号', icon: '👤', okText: '确认退出', cancelText: '取消' });
     }
@@ -6059,37 +6859,19 @@
         try { AndroidNativeApp.clearUserLogin(); } catch(e) {}
       }
 
-      // 分配全新的纯净游客身份
-      try {
-        const res = await safeApiFetch("/api/auth/guest", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({})
-        });
-        const json = await res.json();
-        if (json && json.code === 0 && json.data) {
-          applyUserData(json.data);
-        }
-      } catch(e) {
-        let guestNick = localStorage.getItem('gomoku_guest_nickname') || '逍遥弈客';
-        p1Name = guestNick;
-        localStorage.setItem('gomoku_p1Name', p1Name);
-        currentUserUid = 'guest_' + Math.random().toString(36).substring(2, 9);
-        localStorage.setItem('gomoku_user_uid', currentUserUid);
-        currentUserScore = 1000;
-        updatePlayerHeaderUI();
-        updateAccountUI();
-      }
-
       updatePlayerHeaderUI();
       updateAccountUI();
       updateHistoryCountUI();
-      closeAuthModal();
-      showGameNotice(`🚪 已退出账号【${oldName}】，战绩已在云端安全归档`, true);
+      showGameNotice(`🚪 已退出账号【${oldName}】，请使用指定账号重新登录`, true);
+      openAuthModal('login');
     }
 
     function resetBoardOnly(nextRoundId = null) {
       if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
+      if (gameMode === 'ai') {
+        assignRandomAiOpponent();
+        updatePlayerHeaderUI();
+      }
       aiTurnSeq++;
       aiThinking = false;
       activeSkill = null;
@@ -6662,7 +7444,7 @@
             p1Name = session.p1Name || p1Name;
             p1Avatar = session.p1Avatar || p1Avatar;
             p2Name = session.p2Name || '好友';
-            p2Avatar = session.p2Avatar || '👧';
+            p2Avatar = session.p2Avatar || 'anime_girl';
             if (session.board) board = session.board;
             if (session.history) history = session.history;
             if (session.turn) turn = session.turn;
@@ -6778,7 +7560,7 @@
     enableHorizontalDrag(document.getElementById('quickPhrasesContainer'));
     enableHorizontalDrag(document.querySelector('.emoji-row'));
 
-    // 🚀 Cloudflare Worker 私有仓库更新中转
+    // 🚀 Cloudflare 保留私有仓库更新文件中转；游戏业务 API 以 ECS 为主。
         // 📜 当前版本官方更新内容说明（用于开机公告、弹窗展示与日志回顾）
     const CURRENT_UPDATE_NOTES = [
       "👥 【完整好友系统】支持精确账号查找、好友申请、在线状态、最近对手、删除与黑名单管理",
@@ -6845,8 +7627,13 @@
     function invokeProtectedNativeApkUpdate(ticket) {
       if (typeof AndroidNativeApp === 'undefined' || !ticket) return false;
       if (typeof AndroidNativeApp.downloadAndInstallApkWithTicket !== 'function') return false;
-      AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
-      return true;
+      try {
+        AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
+        return true;
+      } catch (error) {
+        console.warn('[UpdateCheck] 原生安装通道未能启动:', error?.message || error);
+        return false;
+      }
     }
 
     async function sha256Hex(value) {
@@ -6930,12 +7717,20 @@
           };
           if (typeof AbortController === 'function') {
             controller = new AbortController();
-            timeoutId = setTimeout(() => controller.abort(), UPDATE_MANIFEST_TIMEOUTS_MS[attempt]);
             requestOptions.signal = controller.signal;
           }
-          const response = await fetch(manifestUrl, requestOptions);
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          return normalizeUpdateManifest(await response.json());
+          const timeoutPromise = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => {
+              if (controller) controller.abort();
+              reject(new Error('更新服务响应超时'));
+            }, UPDATE_MANIFEST_TIMEOUTS_MS[attempt]);
+          });
+          const requestPromise = (async () => {
+            const response = await fetch(manifestUrl, requestOptions);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return normalizeUpdateManifest(await response.json());
+          })();
+          return await Promise.race([requestPromise, timeoutPromise]);
         } catch (error) {
           lastError = error;
           if (attempt + 1 < UPDATE_MANIFEST_TIMEOUTS_MS.length) continue;
@@ -6948,6 +7743,31 @@
 
     let isCheckingAppUpdate = false;
     let isAppDownloading = false;
+    let updateManifestRequest = null;
+
+    function getUpdateManifest() {
+      if (!updateManifestRequest) {
+        isCheckingAppUpdate = true;
+        updateManifestRequest = fetchUpdateManifest().finally(() => {
+          isCheckingAppUpdate = false;
+          updateManifestRequest = null;
+        });
+      }
+      return updateManifestRequest;
+    }
+
+    function resetUpdateDownloadUI(message) {
+      isAppDownloading = false;
+      const btn = document.getElementById('btnFastDownload');
+      const progressStatus = document.getElementById('updateProgressStatusText');
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerHTML = '<span>🔄 重试更新</span>';
+      }
+      if (progressStatus) progressStatus.textContent = message || '更新失败，可以点击上方按钮重试';
+      if (message) showGameNotice(message, true);
+    }
 
     // 原生下载进度实时通知
         window.onApkDownloadProgress = function(percent, status) {
@@ -6975,13 +7795,16 @@
       }
     };
 
+    window.onApkDownloadFailure = function(message) {
+      resetUpdateDownloadUI(String(message || '安装包下载失败，请重试更新').slice(0, 120));
+    };
+
     async function checkAppUpdate(isManual = false) {
       if (isAppDownloading) {
         if (isManual) showGameNotice('🚀 正在全自动下载最新安装包中，请稍候...');
         return;
       }
-      if (isCheckingAppUpdate) return;
-      isCheckingAppUpdate = true;
+      if (isCheckingAppUpdate && !isManual) return;
 
       if (isManual) {
         showGameNotice('🔍 正在连接官方云端检查最新更新...');
@@ -6991,12 +7814,10 @@
 
       // 0. 版本清单走无预检 GET；首次冷启动较慢时自动重试一次，避免旧版常见的静默漏检。
       try {
-        versionData = await fetchUpdateManifest();
+        versionData = await getUpdateManifest();
       } catch(error) {
         console.warn('[UpdateCheck] 无法获取版本清单:', error?.message || error);
       }
-
-      isCheckingAppUpdate = false;
 
       // 检查当前应用版本
       // 当前加载的 HTML 才是实际运行版本；旧版遗留的本地标记不能把新版本误判为已安装。
@@ -7073,10 +7894,6 @@
         return;
       }
 
-      const fastLink = versionData.fastUrl || '';
-      const htmlLink = versionData.htmlUrl || '';
-      const hasUpdateTickets = Boolean(versionData.apkTicket && versionData.htmlTicket);
-
       if (hasNewVersion) {
         // 发现新版本！
         if (modalIcon) modalIcon.textContent = "🚀";
@@ -7098,48 +7915,80 @@
             btnFast.onclick = async (e) => {
               e.preventDefault();
               if (btnFast.disabled) return;
+              let clickVersionData = null;
+              let incompatibleHotUpdate = false;
               btnFast.disabled = true;
               btnFast.style.opacity = "0.8";
-              btnFast.innerHTML = "<span>⏳ 正在多路高速竞速下载...</span>";
-              setVisualProgress(15, "🚀 正在启动 4 路极速 CDN 并发竞速...");
+              btnFast.innerHTML = "<span>⏳ 正在刷新安全下载授权...</span>";
+              setVisualProgress(12, "🔐 正在连接更新服务并刷新下载授权...");
               isAppDownloading = true;
 
               try {
-                // ⚡ 4 路高可用 CDN 镜像并发竞速（彻底消灭单点阻塞，哪个最快就用哪个，1次点击秒成！）
-                const hotUrls = htmlLink ? [htmlLink + (htmlLink.includes('?') ? '&' : '?') + '_t=' + Date.now()] : [];
+                // 更新票据只有短时有效；用户确认更新时重新取一张，避免继续用过期授权。
+                clickVersionData = await fetchUpdateManifest();
+                if (compareVersions(clickVersionData.tag, effectiveVersion) <= 0) {
+                  isAppDownloading = false;
+                  btnFast.disabled = false;
+                  btnFast.style.opacity = "1";
+                  showGameNotice('当前已是最新版本，更新列表已刷新', false);
+                  checkAppUpdate(true);
+                  return;
+                }
+                if (!clickVersionData.apkTicket) throw new Error('更新服务未签发有效下载授权');
 
-                const fetchCandidate = (url, timeoutMs = 7000) => {
-                  const controller = new AbortController();
-                  const tId = setTimeout(() => controller.abort(), timeoutMs);
-                  return fetch(url, {
-                    signal: controller.signal,
-                    cache: 'no-store',
-                    headers: getUpdateHeaders(versionData.htmlTicket)
-                  })
-                    .then(async (res) => {
-                      clearTimeout(tId);
-                      if (!res.ok) throw new Error("HTTP " + res.status);
-                      const txt = await readLimitedResponseText(res, 4 * 1024 * 1024);
-                      if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
-                        throw new Error("Invalid html payload");
-                      }
-                      if (versionData.htmlSha256) {
-                        const actualHash = await sha256Hex(txt);
-                        if (actualHash !== versionData.htmlSha256) {
-                          throw new Error("HTML integrity check failed");
-                        }
-                      } else {
-                        throw new Error("Missing HTML integrity digest");
-                      }
-                      return txt;
-                    });
+                const hotUrls = clickVersionData.htmlUrl
+                  ? [clickVersionData.htmlUrl + (clickVersionData.htmlUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()]
+                  : [];
+
+                const fetchCandidate = (url, timeoutMs = 20000) => {
+                  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+                  let timeoutId = null;
+                  const timeoutPromise = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                      if (controller) controller.abort();
+                      reject(new Error('更新文件下载超时'));
+                    }, timeoutMs);
+                  });
+                  const downloadPromise = (async () => {
+                    const requestOptions = {
+                      cache: 'no-store',
+                      headers: getUpdateHeaders(clickVersionData.htmlTicket)
+                    };
+                    if (controller) requestOptions.signal = controller.signal;
+                    const res = await fetch(url, requestOptions);
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    const txt = await readLimitedResponseText(res, 4 * 1024 * 1024);
+                    if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
+                      throw new Error("更新文件内容无效");
+                    }
+                    if (!clickVersionData.htmlSha256) throw new Error("更新文件缺少完整性摘要");
+                    const actualHash = await sha256Hex(txt);
+                    if (actualHash !== clickVersionData.htmlSha256) {
+                      throw new Error("更新文件完整性校验失败");
+                    }
+                    return txt;
+                  })();
+                  return Promise.race([downloadPromise, timeoutPromise]).finally(() => {
+                    if (timeoutId) clearTimeout(timeoutId);
+                  });
                 };
 
-                setVisualProgress(35, "📥 正在极速接收最新代码包 (毫秒级直连)...");
-                if (hotUrls.length === 0) throw new Error("Worker 未提供热更新文件地址");
+                setVisualProgress(30, "📥 正在接收并校验最新版游戏...");
+                if (hotUrls.length === 0 || !clickVersionData.htmlTicket) throw new Error("更新服务未提供完整热更新授权");
                 const newHtml = await Promise.any(hotUrls.map(u => fetchCandidate(u)));
 
-                setVisualProgress(80, "💾 正在极速写入本地沙盒存储...");
+                const startupScriptBlocks = newHtml.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
+                const hasSafeStartupBootstrap = startupScriptBlocks.some(script =>
+                  script.includes('GOMOKU_STARTUP_SPLASH_BOOTSTRAP_V1')
+                  && /function\s+hasNativeBridge/.test(script)
+                  && script.includes('DOMContentLoaded')
+                );
+                if (!hasSafeStartupBootstrap) {
+                  incompatibleHotUpdate = true;
+                  throw new Error('云端更新页缺少安全开屏初始化，已阻止覆盖');
+                }
+
+                setVisualProgress(80, "💾 正在安全写入本地更新...");
                 const ok = AndroidNativeApp.saveHotUpdateFile("index.html", newHtml);
                 if (ok) {
                   setVisualProgress(100, "🎉 免安装秒更成功！正在重载进入新版...");
@@ -7151,30 +8000,41 @@
                 }
                 throw new Error("沙盒写入失败");
               } catch(err) {
-                console.warn('[HotUpdate Concurrent Fallback]', err);
-                setVisualProgress(50, "🔄 自动转入 APK 完整通道下载...");
-                if (hasUpdateTickets && !invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
-                  isAppDownloading = false;
-                  showGameNotice('当前安装包需要先安装新版安全客户端，请先手动安装最新版 APK', true);
+                console.warn('[HotUpdate Fallback]', err?.message || err);
+                if (!incompatibleHotUpdate && clickVersionData?.apkTicket && invokeProtectedNativeApkUpdate(clickVersionData.apkTicket)) {
+                  setVisualProgress(50, "🔄 热更新暂不可用，正在通过安全安装包通道继续...");
+                  return;
                 }
+                const failureText = err?.message ? `更新失败：${err.message}` : '更新失败，请检查网络后重试';
+                resetUpdateDownloadUI(failureText);
               }
             };
           } else {
             btnFast.innerHTML = "<span>⚡ 极速全自动下载更新 (推荐)</span>";
-            btnFast.onclick = (e) => {
+            btnFast.onclick = async (e) => {
               e.preventDefault();
               setVisualProgress(5, "🚀 正在启动全自动极速下载...");
               isAppDownloading = true;
-              if (hasUpdateTickets && typeof AndroidNativeApp !== "undefined" && invokeProtectedNativeApkUpdate(versionData.apkTicket)) {
-                showGameNotice(`🚀 正在全自动下载最新版 (${versionData.tag})，下载完成后将自动弹出安装！`, true);
-              } else if (hasUpdateTickets && fastLink) {
-                downloadProtectedApk(fastLink, versionData.apkTicket)
-                  .then(() => showGameNotice('✅ 安装包已开始下载，请在浏览器下载列表中安装', false))
-                  .catch(() => showGameNotice('更新下载授权已失效，请重新检查更新', true))
-                  .finally(() => { isAppDownloading = false; });
-              } else {
-                isAppDownloading = false;
-                showGameNotice('更新服务暂未提供有效授权，请重新检查更新', true);
+              let handedOffToNative = false;
+              try {
+                const freshData = await fetchUpdateManifest();
+                if (compareVersions(freshData.tag, effectiveVersion) <= 0) {
+                  showGameNotice('当前已是最新版本', false);
+                  return;
+                }
+                if (!freshData.apkTicket) throw new Error('更新服务未签发有效下载授权');
+                if (typeof AndroidNativeApp !== "undefined" && invokeProtectedNativeApkUpdate(freshData.apkTicket)) {
+                  handedOffToNative = true;
+                  showGameNotice(`🚀 正在全自动下载最新版 (${freshData.tag})，下载完成后将弹出安装确认`, true);
+                  return;
+                }
+                if (!freshData.fastUrl) throw new Error('更新服务未提供安装包地址');
+                await downloadProtectedApk(freshData.fastUrl, freshData.apkTicket);
+                showGameNotice('✅ 安装包已下载，请从浏览器下载列表中安装', false);
+              } catch (error) {
+                resetUpdateDownloadUI(error?.message ? `更新失败：${error.message}` : '更新失败，请重试');
+              } finally {
+                if (!handedOffToNative) isAppDownloading = false;
               }
             };
           }
@@ -7212,6 +8072,8 @@
       openUpdateModal();
     }
 
+    // Sky Island 的独立“我的”页通过 window 调用手动检查，显式导出以避免加载器/打包方式改变后变成静默无响应。
+    window.checkAppUpdate = checkAppUpdate;
 
     // 🌟 自动检查：如果是刚更新后的首次打开，主动弹出新版本更新内容公告
     function checkPostUpdateAnnouncement() {

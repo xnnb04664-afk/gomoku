@@ -483,9 +483,13 @@ public class LocalWebServer extends Thread {
 
     private static void sendError(OutputStream out, int code, String msg) {
         try {
-            byte[] body = msg.getBytes("UTF-8");
+            // The request path is included in 404 details and has already been URL-decoded.
+            // Strip control characters so an encoded CR/LF cannot inject response headers.
+            String safeMessage = msg == null ? "" : msg.replaceAll("[\\u0000-\\u001f\\u007f]", " ").trim();
+            if (safeMessage.length() > 256) safeMessage = safeMessage.substring(0, 256);
+            byte[] body = safeMessage.getBytes("UTF-8");
             PrintWriter pw = new PrintWriter(new OutputStreamWriter(out, "UTF-8"), false);
-            pw.print("HTTP/1.1 " + code + " " + msg + "\r\n");
+            pw.print("HTTP/1.1 " + code + " " + safeMessage + "\r\n");
             pw.print("Content-Type: text/plain; charset=utf-8\r\n");
             pw.print("Content-Length: " + body.length + "\r\n");
             pw.print("Connection: close\r\n");

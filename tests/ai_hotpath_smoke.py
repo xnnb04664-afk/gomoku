@@ -101,7 +101,7 @@ const flat = Uint8Array.from(quiet.flat());
 const started = performance.now();
 const result = GomokuFastAI.getBestMove(flat, 2, 'master', false, [], {
   size: 15,
-  budgetMs: 80,
+  budgetMs: 520,
   maxDepth: 3,
   rootLimit: 14,
   candidateLimit: 48,

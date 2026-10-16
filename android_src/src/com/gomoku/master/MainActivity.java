@@ -1182,6 +1182,7 @@ public class MainActivity extends Activity {
         if (mWebView != null) {
             mWebView.onResume();
             mWebView.resumeTimers();
+            notifyWebMusicLifecycle(false);
             if (!mNetworkMonitorRegistered || mNetworkCallback == null) {
                 registerNetworkMonitor();
             }
@@ -1213,6 +1214,7 @@ public class MainActivity extends Activity {
             // COMPLETE 表示后台进程已接近被系统回收。此时只暂停定时器；onResume
             // 会恢复它们。避免 freeMemory/System.gc 造成前台卡顿或破坏热更新缓存。
             if (trimLevel >= TRIM_MEMORY_COMPLETE && !hasWindowFocus()) {
+                notifyWebMusicLifecycle(true);
                 mWebView.pauseTimers();
             }
         });
@@ -1228,6 +1230,7 @@ public class MainActivity extends Activity {
             mSplashView.pauseAnimation();
         }
         if (mWebView != null) {
+            notifyWebMusicLifecycle(true);
             mWebView.onPause();
             mWebView.pauseTimers();
         }
@@ -1236,6 +1239,15 @@ public class MainActivity extends Activity {
         unregisterNetworkMonitor();
     }
 
+    private void notifyWebMusicLifecycle(boolean paused) {
+        if (mWebView == null) return;
+        mWebView.evaluateJavascript(
+                "try{if(typeof window.__gomokuSetMusicLifecyclePaused==='function')" +
+                        "window.__gomokuSetMusicLifecyclePaused(" + paused + ");}catch(e){}",
+                null);
+    }
+
+    private static final Object sDownloadLock = new Object();
     private static volatile boolean sIsDownloading = false;
     private static File sLastDownloadedFile = null;
 
@@ -1248,6 +1260,15 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void notifyWebDownloadFailure(final String status) {
+        runOnUiThread(() -> {
+            if (mWebView != null) {
+                String safeStatus = org.json.JSONObject.quote(status == null ? "更新失败，请重试" : status);
+                mWebView.evaluateJavascript("if (window.onApkDownloadFailure) window.onApkDownloadFailure(" + safeStatus + ");", null);
+            }
+        });
+    }
+
     public void startApkDownload() {
         startApkDownload("");
     }
@@ -1255,28 +1276,42 @@ public class MainActivity extends Activity {
     public void startApkDownload(String updateTicket) {
         final String cleanUpdateTicket = updateTicket == null ? "" : updateTicket.trim();
         if (cleanUpdateTicket.isEmpty()) {
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新授权已失效，请重新检查更新", Toast.LENGTH_LONG).show());
+            runOnUiThread(() -> {
+                Toast.makeText(MainActivity.this, "更新授权已失效，请重新检查更新", Toast.LENGTH_LONG).show();
+                notifyWebDownloadFailure("更新授权已失效，请重新点击更新");
+            });
             return;
         }
-        // 防重入锁必须先于删除旧文件，避免第二次点击破坏正在进行的下载。
-        if (sIsDownloading) {
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
-            return;
+        // 原生桥可能在 WebView 后台线程被快速连续调用；检查和置位必须原子完成，
+        // 并且要先于删除旧文件，避免两个下载同时写入同一路径。
+        synchronized (sDownloadLock) {
+            if (sIsDownloading) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
+                return;
+            }
+            sIsDownloading = true;
         }
         File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (destDir == null) destDir = getFilesDir();
         if (!destDir.exists() && !destDir.mkdirs()) {
-            Toast.makeText(MainActivity.this, "更新目录不可用，请稍后重试", Toast.LENGTH_SHORT).show();
+            sIsDownloading = false;
+            runOnUiThread(() -> {
+                Toast.makeText(MainActivity.this, "更新目录不可用，请稍后重试", Toast.LENGTH_SHORT).show();
+                notifyWebDownloadFailure("更新目录不可用，请稍后重试");
+            });
             return;
         }
         final File destFile = new File(destDir, "gomoku_latest.apk");
 
         // 每次重新下载前清理旧缓存，确保进度条 100% 完整展示
-        if (destFile.exists()) {
-            destFile.delete();
+        if (destFile.exists() && !destFile.delete()) {
+            sIsDownloading = false;
+            runOnUiThread(() -> {
+                Toast.makeText(MainActivity.this, "旧更新文件无法清理，请稍后重试", Toast.LENGTH_SHORT).show();
+                notifyWebDownloadFailure("旧更新文件无法清理，请稍后重试");
+            });
+            return;
         }
-
-        sIsDownloading = true;
 
         runOnUiThread(() -> {
             Toast.makeText(MainActivity.this, "🚀 正在全自动下载最新版，完成后将自动弹出安装...", Toast.LENGTH_LONG).show();
@@ -1336,8 +1371,14 @@ public class MainActivity extends Activity {
                 android.util.Log.e("MainActivity", "Direct download or integrity check failed: " + e.getMessage());
                 if (expectedHash != null && !expectedHash.isEmpty()) {
                     handedOffToDownloadManager = fallbackDownloadManager(expectedHash, cleanUpdateTicket);
+                    if (!handedOffToDownloadManager) {
+                        notifyWebDownloadFailure("备用下载启动失败，请重试更新");
+                    }
                 } else {
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "更新清单校验失败，已停止安装", Toast.LENGTH_LONG).show());
+                    runOnUiThread(() -> {
+                        Toast.makeText(MainActivity.this, "更新清单校验失败，已停止安装", Toast.LENGTH_LONG).show();
+                        notifyWebDownloadFailure("更新清单校验失败，请重试更新");
+                    });
                 }
             } finally {
                 if (!handedOffToDownloadManager) sIsDownloading = false;
@@ -1350,6 +1391,7 @@ public class MainActivity extends Activity {
             if (!isVerifiedApk(apkFile, sExpectedApkSha256)) {
                 if (apkFile != null && apkFile.exists()) apkFile.delete();
                 Toast.makeText(MainActivity.this, "更新包完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
+                notifyWebDownloadFailure("更新包校验失败，已停止安装");
                 return;
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1372,6 +1414,7 @@ public class MainActivity extends Activity {
             Toast.makeText(MainActivity.this, "🎉 正在唤起系统安装更新，请点击确认！", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(MainActivity.this, "自动呼起安装失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            notifyWebDownloadFailure("无法启动系统安装，请重试更新");
         }
     }
 
@@ -1413,6 +1456,7 @@ public class MainActivity extends Activity {
                             } else {
                                 if (destFile.exists()) destFile.delete();
                                 Toast.makeText(MainActivity.this, "下载完成但完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
+                                notifyWebDownloadFailure("下载校验失败，请重试更新");
                             }
                         }
                     }
@@ -1421,6 +1465,7 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 sIsDownloading = false;
                 Toast.makeText(MainActivity.this, "备用下载启动失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                notifyWebDownloadFailure("备用下载启动失败，请重试更新");
             }
         });
         return true;

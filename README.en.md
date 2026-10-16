@@ -2,7 +2,7 @@
 
 [简体中文版](README.md)
 
-A Chinese-language Gomoku (Five in a Row) game with a bright sky-island setting and a grass-style board. Play against a local AI, take on campaign levels, or challenge friends online. Android and standalone HTML builds are available.
+A Chinese-language Gomoku (Five in a Row) game with a bright sky-island setting and a grass-style board. Play against a local AI, match online, or challenge friends. Android and standalone HTML builds are available.
 
 ## Play
 

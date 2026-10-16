@@ -76,7 +76,7 @@ def main():
         assert "targetObserver.observe(target, { attributes: true" in sky
         assert "prefers-reduced-motion: reduce" in source
         assert "low-spec-mode" in source
-        assert "非引擎判定" in sky
+        assert "真实棋谱节点" in sky
         result_gate = sky.index("result.classList.contains('show')")
         afterglow = sky.index("playVictoryAfterglow()", result_gate)
         assert afterglow > result_gate, f"{path}: victory glow runs before visible result gate"

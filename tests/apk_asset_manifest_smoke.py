@@ -27,7 +27,6 @@ REQUIRED = {
     "js/ai.js",
     "js/ai_worker.js",
     "js/voice.js",
-    "js/cross.js",
     "js/assets/anime_avatars.js",
     "js/assets/cherry_bomb_audio.js",
     # Standard online/P2P modes still load the legacy adapter scripts when
@@ -40,7 +39,6 @@ REQUIRED = {
     "img/avatar_boy.png",
     "img/avatar_girl.png",
     "js/sky-hub.js",
-    "js/expedition.js",
     "js/sky-island.css",
     "js/startup-splash.css",
     "js/startup-splash.js",
@@ -56,6 +54,11 @@ REMOVED_THEME_ASSETS = {
     "theme3_luxury_glass.html",
     "theme4_clean_ios.html",
     "theme5_sweet_romance.html",
+}
+
+RETIRED_GAME_ASSETS = {
+    "js/cross.js",
+    "js/expedition.js",
 }
 
 LEGACY = {
@@ -116,6 +119,7 @@ def main() -> None:
     assert minimal["entry"] == "index.html"
     assert not minimal["missing"], minimal["missing"]
     assert REQUIRED <= minimal_files, sorted(REQUIRED - minimal_files)
+    assert not (RETIRED_GAME_ASSETS & minimal_files)
     assert not (REMOVED_THEME_ASSETS & minimal_files)
     assert not (LEGACY & minimal_files), sorted(LEGACY & minimal_files)
     assert minimal["sourceBytes"] > 0
@@ -136,6 +140,7 @@ def main() -> None:
 
     full = manifest("all")
     assert set(full["files"]) == all_web_assets()
+    assert not (RETIRED_GAME_ASSETS & set(full["files"]))
     assert not (REMOVED_THEME_ASSETS & set(full["files"]))
     assert not full["missing"], full["missing"]
 

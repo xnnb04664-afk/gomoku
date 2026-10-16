@@ -1,6 +1,6 @@
 # 五子棋项目交接手册：从零启动
 
-更新日期：2026-10-08
+更新日期：2026-10-15
 项目目录：D:\小游戏\五子棋
 本手册替代旧版按日期堆叠的长交接日志。历史记录与当前代码不一致时，以当前代码、测试和重新核验的线上状态为准。
 
@@ -14,7 +14,7 @@
 
 ## 项目概况
 
-中文优先的五子棋游戏，提供本地人机对弈、残局远征、好友/在线对局、账号与社交，以及官网、Android APK 和离线单文件版。网页在线功能调用 Cloudflare API；本地 Node 服务只托管静态文件，不会启动本地账号或 D1 后端。
+中文优先的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 现在优先连接 ECS；Cloudflare Worker、Pages 和 D1 保留为客户端故障回退。仓库里的本地 Node 服务仍只托管静态文件。
 
 - 源码仓库：https://github.com/xnnb04664-afk/gomoku
 - 官网：https://gomoku-home.pages.dev/
@@ -42,8 +42,10 @@ node server.js
 
 | 路径 | 用途 |
 | --- | --- |
-| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。js/expedition.js 提供 48 个本地残局关卡；img/startup/ 提供四帧启动画面 |
+| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供四帧启动画面，img/game/sky-island-match-background.png 提供对局云海背景 |
 | backend/worker.js | Cloudflare API、账号/社交/聊天、房间路由及 Durable Object 实现 |
+| backend/ecs-host/ | 在 Node ECS 上运行同一 Worker 的 SQLite、WebSocket 与内存 Durable Object 适配层 |
+| js/ecs-config.js | ECS 公共 API 地址；需随网页、单文件和 Android 构建同步 |
 | migrations/ | D1 SQL 迁移；Worker 也有幂等建表逻辑，改表前需检查两处 |
 | android_src/ | Android WebView 容器、Java 源码、Manifest 和资源镜像 |
 | build_apk.js | 同步 Android 资源、构建并使用正式签名密钥签 APK |
@@ -57,8 +59,29 @@ node server.js
 | 五子棋.apk | Android 构建产物；包名 com.gomoku.master |
 | 五子棋大师_单文件版.html | 离线交付产物 |
 
-好友私聊修复提交 e5296d8：js/social.js 由 WebSocket 事件触发增量拉取，并每 4 秒轮询兜底；请求中的事件会排队重试，消息合并去重，保留个人清空位置。backend/worker.js 的 /api/messages 支持 after 游标。js/social.min.js、Android 资源和官网副本必须从源重新生成，不要只改压缩副本。
+## 当前玩法与已退役模块
 
+- 游戏页首页只显示 AI 对战、匹配对决、跟好友玩三个标准五子棋入口；底部游戏、好友、棋谱、我的四页保持独立。
+- 好友页的“创建好友房间/加入房间”使用全屏棋友专房界面，不切回棋盘、不透出棋盘背景；入口状态在 `js/sky-hub.js`，房间码/加入页逻辑在 `js/online.js`，布局在 `js/sky-island.css`。修改后仍从源文件同步 Android、单文件和官网游戏副本。
+- 好友列表头像与情侣徽章由服务端返回的头像标识和关系类型驱动；不按账号名硬编码。
+- 游戏、好友、棋谱、我的四页保持各自独立入口与原功能，统一使用 ImageGen 浮岛背景和云石卡片材质。实际对局与首页预览共用 `js/app.js` 的 `drawHandmadeGrassBoard()`、`drawThemedStone()`；`window.GomokuBoardPreview` 将同一 Canvas 绘制器用于 `js/sky-hub.js` 的首页预览。`img/game/sky-board-cloudstone.webp` 提供金边云石棋台底图，Canvas 继续实时绘制与落子位置对齐的 15×15 网格、星位和黑白棋子；`body.sky-game-open` 使用 `img/game/sky-island-match-background.png` 作为对局专属云海浮岛背景。
+- 背景音乐在 `js/app.js` 用 Web Audio 按晴空浮岛云海主题合成：D 大调五声音阶、舒缓和弦与轻回响，无鼓点；与落子/提示音效分开设置，默认开启低音量，首次触摸后解锁播放，页面隐藏或 Android `onPause()` 时暂停，回前台时按开关状态恢复。入口在“我的 → 设置”和游戏功能区“⚙ 设置”；Android 生命周期通知由 `MainActivity.notifyWebMusicLifecycle()` 发给网页。
+- 残局远征和实验十字棋已于 2026-10-14 从当前产品入口、运行时加载器、APK/单文件构建和官网文案中移除。旧模块、专用测试和截图已移出当前项目并归档到本机回收目录。
+- 未清理手机或浏览器里的远征进度/棋局存档。旧版更新兼容 meta 暂留在网页和单文件输出中；新版本更新校验不再要求 48 关。
+
+## ECS 主后端与 Cloudflare 备用
+
+- `js/ecs-config.js` 是 ECS API 地址的唯一前端配置。修改后运行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js` 和 `npm run build:official-site`，不要手改压缩或生成文件。
+- 只读 GET/HEAD/OPTIONS 请求先走 ECS，失败时可回退到 Cloudflare Pages/Worker。写请求固定发往一个后端；ECS 超时或返回 5xx 时不会把同一写操作重放到独立数据库，客户端会提示提交状态未知。好友与世界频道 WebSocket 使用发出票据的同一后端地址；房间中继按主备顺序连接。
+- ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
+- Cloudflare 数据库与 ECS SQLite 相互独立。客户端不会把 ECS 写入请求回放到 Cloudflare；不要据此假定两边数据会自动同步。
+- 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新清单与受保护下载当前仍走 Cloudflare 更新服务；这与 ECS 游戏 API 的读写路由是两条独立路径。
+## 账号访问边界
+
+- 生产环境启用 `PRIVATE_GAME_MODE=1`，允许名单只从 ECS 运行时环境变量 `PRIVATE_GAME_USERNAMES` 读取；缺失时 fail closed。账号名不得写入源码、文档、测试样例或 GitHub。
+- 游客注册、改名等公开账号入口关闭。需要保留的好友关系和专属亲密度由服务端按私有运行配置初始化，前端只读取 API 返回的通用关系元数据。
+- 房间 WebSocket 先通过账号凭证申请 30 秒一次性票据；票据绑定账号、房间码、角色、会话和房主入房票。
+- 生产数据库、账号统计、聊天记录、运行时允许名单和备份均属于私有数据。ECS 操作前先将 SQLite 备份到权限受限的服务器备份目录；不要把数据库、导出、账号数或本机备份路径放进 Git。
 ## 安装测试依赖与验证
 
 Node 依赖由 package-lock.json 锁定。仓库没有 Python requirements 文件；浏览器测试需要 Playwright 和 Chromium：
@@ -148,49 +171,20 @@ adb install .\五子棋.apk
 
 不要用不带 -k 的卸载命令。安装后用 dumpsys package、pidof 和实际屏幕检查版本、进程和首页，确认没有停在启动页。
 
-### 本次设备操作（2026-10-06）
+### 设备验收状态
 
-当时连接着一台 Android 设备。项目 APK 的 v1/v2/v3 签名有效，且与原安装包证书相同。手机原装 v1.0.127 / code 128，仓库 APK 是 v1.0.126 / code 127，因此通过 pm uninstall -k 保留数据后安装。新包启动成功，前台为 com.gomoku.master/.MainActivity，首页截图确认已加载。旧 APK 回退备份在 %TEMP%\gomoku-before-adb-install-20261006.apk。后续接手必须重新运行 adb devices -l 并检查版本，不能假设设备状态没变。
+过去的 ADB 安装记录只代表当时的设备状态，不作为当前版本或存档状态。安装前重新运行 `adb devices -l`、检查已安装版本和签名；保留数据覆盖安装后，再从实际设备核对版本、启动页和功能。不要用旧截图、旧安装日志或测试启动替代当前设备检查。
+## Cloudflare 备用环境
 
-## Cloudflare 结构与发布
+- `wrangler.worker.toml`、`wrangler.toml`、`deploy_worker.js` 和 `pages_build` 用于 Cloudflare API 备用环境；`official-site/_worker.js` 是独立的官网目标。
+- Cloudflare 部署脚本不会更新 ECS。本次 ECS 发布不要运行 Wrangler，也不要迁移、重置或写入 Cloudflare 数据库。
+- Cloudflare 账号配置、令牌和更新服务密钥只存放在运维者管理的本机或云端 Secret 中。不要把凭据写入前端、Git、日志或交接文档。
+- `backup_d1.js` 只用于 Cloudflare D1 备用环境。ECS 发布前要单独备份 ECS SQLite 和运行配置；任何生产数据库备份均留在受限服务器目录。
+- 当前客户端的更新清单与受保护下载仍由 Cloudflare 更新接口提供；游戏 API 的 ECS 主站/只读备用策略不会自动切换更新文件托管。
 
-- wrangler.worker.toml：Worker gomoku-backend，D1 binding DB 指向 gomoku-db；Durable Objects 是 GOMOKU_ROOMS/GomokuRoom 和 GOMOKU_SOCIAL/SocialHub，迁移标签 v1、v2。
-- wrangler.toml：Pages 项目 gomoku-api，产物目录 pages_build，绑定同一 D1 和 Worker Durable Objects。
-- official-site/_worker.js：官网 Worker；它与 API Pages 和 backend Worker 是不同部署目标。
+## 线上状态核验
 
-API Worker 与 API Pages 部署前先 dry-run：
-
-~~~powershell
-npx wrangler deploy --config wrangler.worker.toml --dry-run
-~~~
-
-node deploy_worker.js 是生产部署：部署 gomoku-backend，把 backend/worker.js 同步为 pages_build/_worker.js，再部署 gomoku-api 的 main 分支；不会部署官网。生产 D1 有变更时先备份，并核对 Wrangler 当前账户与项目。
-
-官网构建和生产部署：
-
-~~~powershell
-npm run build:official-site
-npx wrangler pages deploy official-site --project-name gomoku-home --branch master --commit-dirty=true
-~~~
-
-官网与 API 是不同项目，不能把 API 部署当成官网部署。部署后检查正式域名和最新 deployment source，不能只凭上传成功声称线上修复有效。
-
-### 云端凭据和数据
-
-- .cloudflare_config.json 被 Git 忽略，存放 accountId、d1DatabaseId、scriptName 等配置字段；部署 Token 从环境变量或仓库外 DPAPI 文件 cloudflare-api-token.dpapi 加载。
-- 首次配置本机 Cloudflare Token 可运行 powershell -ExecutionPolicy Bypass -File .\setup_gomoku_secret.ps1 -Type Cloudflare。新机器仍需维护者授权的本地配置和权限；克隆仓库无法取得凭据。
-- 更新服务依赖 Cloudflare Secret GITHUB_READ_TOKEN；UPDATE_TICKET_SECRET 可独立配置，缺省时代码回退到 GITHUB_READ_TOKEN。不要把任何密钥放进前端、Git 或本手册。
-- 生产 D1 保存账号、好友和聊天等数据。改表前阅读 backup_d1.js，检查 migrations/ 与 Worker 初始化逻辑并完成备份；不要为调试打印玩家表或聊天正文。
-
-## 最近核对过的线上状态
-
-以下是 2026-10-06 快照，继续工作时必须重新查询：
-
-- gomoku-home 最新 Production 来自 master / e5296d8；稳定站和 /play/ 返回正常，线上 js/social.min.js 与本地生成文件 SHA-256 一致。
-- gomoku-api 最新 Production 来自 main / e5296d8；gomoku-backend Worker 已部署支持好友聊天增量游标的代码。
-- 已知待修：线上 https://gomoku-api.pages.dev/api/version 返回 HTTP 503，错误为“私有仓库版本读取失败 (401)”。GitHub Releases 请求收到 401；没有读取 Secret 值，不能推断令牌内容。官网静态 /api/site-version 曾返回 200，但 APK/HTML 下载代理需要先获取短时票据，因此不能把静态版本接口正常说成下载链路正常。私下修复并验证 GITHUB_READ_TOKEN 后，还要分别验 /api/version 与官网 APK/HTML 下载。
-- 未授权请求 /api/messages 返回 401 属于预期访问控制，不代表私聊接口异常。
-
+线上服务状态会随部署和配置变化。每次更新都要从服务器读取当前服务与反向代理配置、先完成受限备份，再用健康检查和 SQLite 完整性检查验收。数据库内容、账号统计、主机地址、备份路径和密钥不应复制到公开文档或 GitHub。源码或构建成功不等于 ECS 已更新，也不等于真实客户端验收通过。
 ## Git 与提交边界
 
 最近业务代码基线是 master 上的 e5296d8（好友私聊实时刷新修复）。当时 tracked 工作区干净；已有未跟踪 .codex-diagnostics/，它是本地诊断资料，保留且不提交。当前手册修改需单独检查和提交，不要把其他文件一起带上。
@@ -204,3 +198,10 @@ npx wrangler pages deploy official-site --project-name gomoku-home --branch mast
 3. 先定位唯一真实源码，再同步相应产物；不要只编辑 min.js、APK 内 assets 或 official-site/play。
 4. 运行与改动相关的单元、浏览器和 Android 测试，区分模拟回归与生产真账号验证。
 5. 完成后清楚说明现象、根因、改动、验证结果和部署边界。
+
+## 2026-10-16 最新验收补记
+
+- ECS 更新前需重新探测服务健康状态、备份 SQLite 与当前 Worker；本轮更新后记录实际提交 SHA 和健康检查结果。生产数据库备份只留在 ECS 权限受限目录，不记录备份文件名或生产账号统计到公开文档。
+- AI 对手使用 `img/game/ai-opponent-avatars.webp` 的原创灵兽头像；对局与棋谱共用映射，旧 AI 棋谱若保存了玩家头像路径则换用 AI 头像。单文件版内嵌图集，APK 清单显式包含图集。
+- 2026-10-16 复盘修复：从结算页进入逐手回放，退出时恢复终局状态；复盘不绘制终局五连光效、技能提示标记和临时 VFX。星轨按真实落子与技能记录生成可点击节点；不伪造“转折手/失误手”。切换人机的提示使用当前 AI 灵兽头像。
+- APK 正式签名、版本和 MuMu 安装状态需每次现场复核；上次构建/安装记录不能代替本轮设备验收。

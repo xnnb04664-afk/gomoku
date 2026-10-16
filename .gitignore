@@ -1,5 +1,6 @@
 node_modules/
 .wrangler/
+.codex-diagnostics/
 official-site/play/
 android_build_tmp/
 android_src/classes/

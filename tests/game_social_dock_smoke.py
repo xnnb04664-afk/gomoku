@@ -57,6 +57,9 @@ def main():
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
         page.wait_for_selector("#cvs", state="attached", timeout=15_000)
+        page.wait_for_selector("#authModal.show", timeout=10_000)
+        page.evaluate("() => { if (typeof closeAuthModal === 'function') closeAuthModal(); else document.getElementById('authModal')?.classList.remove('show'); }")
+        page.wait_for_selector("#authModal.show", state="hidden", timeout=5_000)
 
         # The old eight-button dock remains mounted for compatibility, but the
         # new product surface is the four-item lobby navigation and sheets.
@@ -66,44 +69,62 @@ def main():
         assert [page.locator("#skyLobby [data-sky-nav]").nth(i).get_attribute("data-sky-nav") for i in range(4)] == [
             "game", "friends", "records", "me"
         ]
-        assert "今日岛讯" in page.locator("#skyLobby").inner_text()
+        home_actions = page.locator("#skyLobby .sky-route-list [data-sky-action]")
+        assert home_actions.count() == 3
+        home_text = page.locator("#skyLobby .sky-route-list").inner_text()
+        assert all(label in home_text for label in ("AI 对战", "匹配对决", "跟好友玩"))
 
-        page.locator("[data-sky-action='quick']").click()
+        page.locator("[data-sky-action='friend-play']").click()
         page.wait_for_selector("#skySheetBackdrop.show", state="visible")
-        assert "与大师 AI 对弈" in page.locator("#skySheetBody").inner_text()
-        assert "双人同屏" in page.locator("#skySheetBody").inner_text()
+        sheet_text = page.locator("#skySheetBody").inner_text()
+        assert all(label in sheet_text for label in ("从好友列表邀战", "创建好友房间", "加入好友房间"))
         page.locator("#skySheetBackdrop").click(position={"x": 4, "y": 4})
 
+        # Matching opens its online dialog and waits for the user to start;
+        # it must not jump straight into a board.
+        page.locator("#skyLobby .sky-route-list [data-sky-action='match']").click()
+        page.wait_for_selector("#onlineModal.show", state="visible")
+        assert page.locator("#skyLobby").is_visible()
+        assert not page.locator("body").evaluate("node => node.classList.contains('sky-game-open')")
+        page.evaluate("window.closeOnlineModal?.()")
+
         # Entering a standard game keeps the board and all existing controls.
-        page.locator("[data-sky-action='quick']").click()
-        page.locator("[data-sheet-action='pvp']").click()
+        page.locator("[data-sky-action='ai']").click()
         page.wait_for_selector("#skyLobby", state="hidden", timeout=15_000)
         page.wait_for_selector("#cvs", state="visible", timeout=15_000)
+        page.wait_for_function("document.body.classList.contains('sky-cards-open')")
+        assert page.locator(".card-area-wrapper").is_visible()
+        page.locator(".sky-game-topbar [data-game-action='more']").click()
+        page.wait_for_function("!document.body.classList.contains('sky-cards-open')")
         page.locator(".sky-game-topbar [data-game-action='more']").click()
         page.wait_for_function("document.body.classList.contains('sky-cards-open')")
         page.wait_for_function("getComputedStyle(document.querySelector('.card-area-wrapper')).visibility === 'visible'")
         assert page.locator(".card-area-wrapper").is_visible()
-        page.locator(".sky-game-topbar [data-game-action='more']").click()
         page.locator(".sky-game-topbar [data-game-action='lobby']").click()
         page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
 
-        # Guest social access still routes through the official account sheet.
+        # Each navigation tab changes the main page independently. Private
+        # account checks apply only when opening account-bound social actions.
         page.locator("#skyLobby [data-sky-nav='friends']").click()
+        page.wait_for_function("document.getElementById('skyLobby')?.dataset.activePage === 'friends'")
+        page.locator("#skyLobby [data-sky-action='friend-center']").click()
         page.wait_for_selector("#authModal.show", state="visible", timeout=10_000)
         page.wait_for_function("getComputedStyle(document.querySelector('#authModal')).opacity === '1'")
         page.locator("#authModal").click(position={"x": 2, "y": 2})
 
         page.locator("#skyLobby [data-sky-nav='records']").click()
+        page.wait_for_function("document.getElementById('skyLobby')?.dataset.activePage === 'records'")
+        page.locator("#skyLobby [data-sky-action='history']").click()
         page.wait_for_selector("#historyModal.show", state="visible", timeout=10_000)
         history_z = page.evaluate("""() => { const e=document.querySelector('#historyModal'),s=getComputedStyle(e); return {inline:e.style.zIndex,computed:s.zIndex,body:document.body.className,top:document.elementFromPoint(2,2)?.id}; }""")
         assert history_z["computed"] == "100040", history_z
         page.evaluate("window.closeHistoryModal()")
 
         page.locator("#skyLobby [data-sky-nav='me']").click()
-        page.wait_for_selector("#skySheetBackdrop.show", state="visible")
-        assert "我的棋岛" in page.locator("#skySheetBody").inner_text()
-        assert "显示与声音" in page.locator("#skySheetBody").inner_text()
-        page.locator("#skySheetBackdrop").click(position={"x": 4, "y": 4})
+        page.wait_for_function("document.getElementById('skyLobby')?.dataset.activePage === 'me'")
+        me_text = page.locator("#skyLobby [data-sky-page='me']").inner_text()
+        assert "我的棋岛" in me_text
+        assert "背景音乐" in me_text and "棋盘画质" in me_text
 
         overflow = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
         assert overflow <= 1, f"new lobby causes horizontal overflow: {overflow}px"

@@ -28,6 +28,9 @@ def main():
 
         # 默认大厅首屏先展示天空棋岛；旧优化断言仍从标准棋局开始。
         page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
+        page.wait_for_selector("#authModal.show", timeout=10_000)
+        page.evaluate("() => { if (typeof closeAuthModal === 'function') closeAuthModal(); else document.getElementById('authModal')?.classList.remove('show'); }")
+        page.wait_for_selector("#authModal.show", state="hidden", timeout=5_000)
         page.evaluate("() => window.SkyIslandUI?.showGame()")
         page.locator("#cvs").wait_for(state="visible", timeout=10_000)
         critical = page.evaluate(
@@ -277,7 +280,7 @@ def main():
                 open: true,
                 ready: true,
                 isP2pReady: false,
-                client: { connected: true },
+                client: { connected: true, transportType: 'relay' },
                 on(type, handler) { (listeners[type] ||= []).push(handler); },
                 send(message) { sent.push({ ...message }); return true; },
                 emit(type, value) { (listeners[type] || []).forEach(handler => handler(value)); },
@@ -289,7 +292,7 @@ def main():
               history = [];
               isOver = false;
               p2Name = '旧昵称';
-              p2Avatar = '👧';
+              p2Avatar = 'anime_girl';
               conn = fakeConn;
               setupConn();
               await new Promise(resolve => setTimeout(resolve, 20));
@@ -297,14 +300,14 @@ def main():
               fakeConn.emit('data', {
                 type: 'profile_sync',
                 name: '新昵称',
-                avatar: '👦',
+                avatar: 'anime_boy',
                 roundId: 'round_network'
               });
               fakeConn.emit('data', {
                 type: 'ping',
                 pingId: 'peer_ping',
                 sentAt: Date.now() - 40,
-                networkState: 'MQTT中继',
+                networkState: 'WebSocket中继',
                 roundId: 'round_network'
               });
               const pong = sent.find(message => message.type === 'pong');
@@ -428,7 +431,7 @@ def main():
               return {
                 immediatePingSent,
                 pongEchoesPing: Boolean(pong && pong.pingId === 'peer_ping'),
-                pongReportsState: pong && pong.peerState === 'MQTT中继',
+                pongReportsState: pong && pong.peerState === 'WebSocket中继',
                 pongReportsLatency: pong && Object.prototype.hasOwnProperty.call(pong, 'peerLatencyMs'),
                 heartbeatP2pOnly: heartbeatSent && heartbeatP2pPayloads.length === 1 && heartbeatMqttPayloads.length === 0,
                 profileMirrorOk: mirrored && p2pMessage && mqttMessage && p2pMessage._mid === mqttMessage._mid,

@@ -79,6 +79,10 @@ def main():
         request = route.request
         parsed = urlparse(request.url)
         path = parsed.path
+        # The app now prefixes ECS requests with /gomoku-api; keep this local
+        # API fixture compatible with both ECS and Cloudflare URL shapes.
+        if path.startswith("/gomoku-api/"):
+            path = path[len("/gomoku-api"):]
         query = parse_qs(parsed.query)
         body = {}
         if request.post_data:
@@ -90,7 +94,11 @@ def main():
 
         response = payload({})
         status = 200
-        if path == "/api/auth/verify_session":
+        if path == "/api/version":
+            # Keep automatic update checks deterministic and prevent a live
+            # manifest from replacing the toast under test.
+            response = {"code": 0, "tag": "v1.0.126", "updateLog": "smoke fixture"}
+        elif path == "/api/auth/verify_session":
             response = payload({"uid": UID, "username": "smoke.owner", "nickname": "冒烟账号", "avatar": "🙂", "score": 1200, "token": TOKEN})
         elif path == "/api/friends" and request.method == "GET":
             response = payload({"friends": friends, "requests": requests, "invites": pending_invites, **settings})
@@ -185,7 +193,7 @@ def main():
 
         # 游客必须被正式账号门槛拦截并引导登录。
         guest = browser.new_page(viewport={"width": 390, "height": 844})
-        guest.route("https://*/api/**", api_handler)
+        guest.route("**/api/**", api_handler)
         guest.goto(test_url, wait_until="domcontentloaded", timeout=30_000)
         guest.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
         guest.evaluate("() => window.SkyIslandUI?.showGame()")
@@ -202,7 +210,7 @@ def main():
         page = browser.new_page(viewport={"width": 390, "height": 844})
         page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
-        page.route("https://*/api/**", api_handler)
+        page.route("**/api/**", api_handler)
         page.add_init_script(
             f"""
             localStorage.setItem('gomoku_user_uid', {json.dumps(UID)});
@@ -236,10 +244,20 @@ def main():
             pass
         page.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
         page.evaluate("() => window.SkyIslandUI?.showGame()")
-        page.wait_for_function("typeof window.hasRegisteredAccountSession === 'function' && window.hasRegisteredAccountSession()")
         page.evaluate("() => { window.showCustomConfirm = (_message, yes) => yes(); return true; }")
         page.evaluate("window.openFriendsModal()")
-        page.wait_for_selector("#friendsModal.show")
+        try:
+            page.wait_for_selector("#friendsModal.show", timeout=8000)
+        except PlaywrightTimeoutError:
+            raise AssertionError(json.dumps({
+                "apiCalls": [{"method": call["method"], "path": call["path"]} for call in calls[-20:]],
+                "authModalOpen": "show" in (page.locator("#authModal").get_attribute("class") or ""),
+                "friendsModalClass": page.locator("#friendsModal").get_attribute("class"),
+                "localSessionFlags": page.evaluate("() => ({ uid: Boolean(localStorage.getItem('gomoku_user_uid')), username: Boolean(localStorage.getItem('gomoku_user_username')), token: Boolean(localStorage.getItem('gomoku_user_token')) })"),
+                "accountTitle": page.locator("#accountStatusTitle").inner_text(),
+                "consoleErrors": errors[-8:],
+                "pageErrors": page_errors[-8:],
+            }, ensure_ascii=False))
         page.wait_for_selector("#socialFriendsList >> text=云端棋友")
 
         # 未读总数要同时出现在弹窗入口、底部好友按钮和收起后的悬浮入口。
@@ -279,7 +297,9 @@ def main():
         page.locator("#socialSearchInput").fill("Exact.Target")
         page.locator("#socialSearchInput").press("Enter")
         page.wait_for_selector("#socialSearchResult >> text=精确目标")
-        with page.expect_response(lambda response: urlparse(response.url).path == "/api/friends/requests" and response.request.method == "POST"):
+        with page.expect_response(lambda response: response.request.method == "POST" and (
+            urlparse(response.url).path.removeprefix("/gomoku-api") == "/api/friends/requests"
+        )):
             page.locator('#socialSearchResult [data-social-action="request"]').click()
         try:
             page.wait_for_function("document.querySelector('#socialSearchResult')?.textContent.includes('申请已发送')", timeout=5000)

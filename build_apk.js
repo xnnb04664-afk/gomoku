@@ -66,6 +66,7 @@ if (!['minimal', 'conservative', 'all'].includes(APK_RESOURCE_MODE)) {
 
 const APK_REQUIRED_ASSETS = Object.freeze([
   // 首屏和延迟功能的压缩运行包。
+  'js/ecs-config.js',
   'js/app.min.js',
   'js/account.min.js',
   'js/replay.min.js',
@@ -76,9 +77,8 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   'js/ai_fast.js',
   'js/ai.js',
   'js/ai_worker.js',
-  // 当前入口仍按需加载的语音、十字棋、音效和头像资源。
+  // 当前入口仍按需加载的语音、音效和头像资源。
   'js/voice.js',
-  'js/cross.js',
   'js/assets/anime_avatars.js',
   'js/assets/cherry_bomb_audio.js',
   // 标准对局、P2P 与实验室模式仍按需使用这些联机适配层，不能在 APK 中裁掉。
@@ -89,9 +89,9 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   'img/anime_avatar_girl.jpg',
   'img/avatar_boy.png',
   'img/avatar_girl.png',
-  // 晴空浮岛大厅与残局远征是新的首屏体验，必须随包提供。
+  'img/social/couple-badge.png',
+  // 晴空浮岛大厅是首屏入口，必须随包提供。
   'js/sky-hub.js',
-  'js/expedition.js',
   'js/sky-island.css',
   // 启动动画四帧：网页与 Android 原生 splash 共用同一组离线画面。
   'js/startup-splash.css',
@@ -99,7 +99,16 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   'img/startup/startup-01.webp',
   'img/startup/startup-02.webp',
   'img/startup/startup-03.webp',
-  'img/startup/startup-04.webp'
+  'img/startup/startup-04.webp',
+  // 对局模式专用云海背景，网页与首页大厅之外的游戏舞台共用。
+  'img/game/sky-island-match-background.png',
+  // AI 对手使用独立的原创灵兽头像图集，不复用情侣头像。
+  'img/game/ai-opponent-avatars.webp',
+  // ImageGen 棋台、四页浮岛背景与共用云石界面材质。
+  'img/game/sky-board-cloudstone.webp',
+  'img/game/sky-island-lobby-background.webp',
+  'img/game/sky-island-lobby-background-v2.webp',
+  'img/game/sky-cloudstone-panel-texture.webp'
 ]);
 
 const APK_LEGACY_COMPAT_ASSETS = Object.freeze([

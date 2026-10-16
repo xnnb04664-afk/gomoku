@@ -116,6 +116,7 @@
 
       try {
         let submitSuccess = false;
+        let failureMessage = '';
         try {
           const res = await safeApiFetch('/api/feedback', {
             method: 'POST',
@@ -123,31 +124,44 @@
             body: JSON.stringify(payload)
           });
           const data = await res.json().catch(() => ({}));
-          if (data && data.code === 0) {
+          if (res.ok && data && data.code === 0) {
             submitSuccess = true;
+          } else {
+            failureMessage = data && data.msg ? String(data.msg) : '服务器未确认收到反馈';
           }
         } catch (netErr) {
-          console.warn('Feedback online submit fallback to local save:', netErr);
+          console.warn('Feedback online submit failed:', netErr);
+          failureMessage = '网络连接失败';
         }
 
-        // 离线兜底留存（无论网络与否，绝不丢失用户反馈）
-        try {
-          const offlineList = JSON.parse(localStorage.getItem('gomoku_feedback_offline_list') || '[]');
-          offlineList.unshift({ ...payload, submittedOnline: submitSuccess });
-          if (offlineList.length > 20) offlineList.length = 20;
-          localStorage.setItem('gomoku_feedback_offline_list', JSON.stringify(offlineList));
-        } catch (storageErr) {}
+        if (submitSuccess) {
+          if (contentEl) contentEl.value = '';
+          if (contactEl) contactEl.value = '';
+          const counter = document.getElementById('feedbackCharCount');
+          if (counter) counter.textContent = '0 / 300';
+          closeFeedbackModal();
+          showGameNotice('🎉 反馈已提交，感谢您的宝贵意见！', false);
+        } else {
+          let savedLocally = false;
+          try {
+            const stored = JSON.parse(localStorage.getItem('gomoku_feedback_offline_list') || '[]');
+            const offlineList = Array.isArray(stored) ? stored : [];
+            offlineList.unshift({ ...payload, submittedOnline: false });
+            if (offlineList.length > 20) offlineList.length = 20;
+            localStorage.setItem('gomoku_feedback_offline_list', JSON.stringify(offlineList));
+            savedLocally = true;
+          } catch (storageErr) {
+            console.warn('Feedback local fallback save failed:', storageErr);
+          }
 
-        if (contentEl) contentEl.value = '';
-        if (contactEl) contactEl.value = '';
-        const counter = document.getElementById('feedbackCharCount');
-        if (counter) counter.textContent = '0 / 300';
-
-        closeFeedbackModal();
-        showGameNotice('🎉 感谢您的宝贵反馈！我们会尽快评估与优化', false);
+          const notice = savedLocally
+            ? `⚠️ ${failureMessage}，未提交到服务器；反馈已暂存在本机，请稍后重试。`
+            : `⚠️ ${failureMessage}，未提交到服务器；内容仍保留在表单中，请稍后重试。`;
+          showGameNotice(notice, true);
+        }
       } catch (err) {
-        showGameNotice('🎉 反馈已收到，感谢您的支持与厚爱！', false);
-        closeFeedbackModal();
+        console.error('Feedback submission handling failed:', err);
+        showGameNotice('⚠️ 反馈未确认提交，内容仍保留在表单中，请稍后重试。', true);
       } finally {
         isSubmittingFeedback = false;
         if (submitBtn) {
@@ -214,9 +228,10 @@
 
       if (list.length === 0) {
         listEl.innerHTML = `
-          <div style="text-align:center; padding:36px 0; color:#64748b; font-size:12px; font-weight:800;">
-            <div style="font-size:32px; margin-bottom:8px;">🌱</div>
-            暂无玩家上榜，快去赢下一局荣登榜首吧！
+          <div class="sky-rank-empty">
+            <span aria-hidden="true">♟</span>
+            <strong>棋榜暂时安静</strong>
+            <small>赢下一局后，名字就会出现在这里。</small>
           </div>
         `;
         return;
@@ -230,60 +245,44 @@
         // 🌟 优先通过不变的专属 UID 判定是否是本人（改名后依然百分之百精准命中自己）
         // 只能用不可变 UID 识别本人，绝不能用昵称匹配，否则游客改成他人昵称会冒领对方排名。
         const isP1 = hasRegisteredAccountSession() && currentUserUid && String(item.uid) === String(currentUserUid);
+        const displayName = String((isP1 ? (p1Name || currentUsername || item.name) : item.name) || '棋友');
         if (isP1) {
           myRankNum = rank;
           myScore = item.score;
-          // 若本人已在本地改了新名字，天梯榜即刻以最新名字展示
-          item.name = p1Name;
         }
 
-        let rankBadge = `<span style="font-size:13px; font-weight:900; color:#64748b; min-width:22px; text-align:center;">#${rank}</span>`;
-        let cardBg = 'background:rgba(255,255,255,0.85); border:1px solid #e2e8f0;';
+        const rankClass = rank <= 3 ? ` is-top-${rank}` : '';
+        const rankBadge = rank === 1 ? 'Ⅰ' : rank === 2 ? 'Ⅱ' : rank === 3 ? 'Ⅲ' : String(rank).padStart(2, '0');
+        let tierName = '初窥门径';
+        let tierClass = 'seedling';
+        if (item.score >= 1400) { tierName = '绝代棋圣'; tierClass = 'master'; }
+        else if (item.score >= 1200) { tierName = '妙手大师'; tierClass = 'expert'; }
+        else if (item.score >= 1100) { tierName = '棋坛新秀'; tierClass = 'rising'; }
 
-        if (rank === 1) {
-          rankBadge = `<span style="font-size:20px;">🥇</span>`;
-          cardBg = 'background:linear-gradient(135deg, #fef3c7, #fffbeb); border:1.5px solid #f59e0b; box-shadow:0 2px 6px rgba(245,158,11,0.2);';
-        } else if (rank === 2) {
-          rankBadge = `<span style="font-size:20px;">🥈</span>`;
-          cardBg = 'background:linear-gradient(135deg, #f1f5f9, #f8fafc); border:1.5px solid #94a3b8;';
-        } else if (rank === 3) {
-          rankBadge = `<span style="font-size:20px;">🥉</span>`;
-          cardBg = 'background:linear-gradient(135deg, #ffedd5, #fff7ed); border:1.5px solid #ea580c;';
-        }
-
-        // 段位标签计算
-        let tierName = '🌱 初窥门径';
-        let tierColor = '#10b981';
-        if (item.score >= 1400) { tierName = '👑 绝代棋圣'; tierColor = '#e11d48'; }
-        else if (item.score >= 1200) { tierName = '⚔️ 妙手大师'; tierColor = '#8b5cf6'; }
-        else if (item.score >= 1100) { tierName = '🌟 棋坛新秀'; tierColor = '#3b82f6'; }
-
-        // 头像展示：支持动漫头像、emoji 或图片
-        let avatarEl = renderAvatarElement(item.avatar, 28);
-
-        const winRate = item.total_games > 0 ? Math.round((item.wins / item.total_games) * 100) : 0;
+        // 头像以服务端返回的账号资料为准；不要在前端按昵称识别私人账号。
+        const avatar = item.avatar || 'anime_boy';
+        const avatarEl = renderAvatarElement(avatar, 42);
+        const wins = Math.max(0, Number(item.wins) || 0);
+        const totalGames = Math.max(0, Number(item.total_games) || 0);
+        const winRate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
+        const score = Math.max(0, Number(item.score) || 0);
 
         return `
-          <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; border-radius:10px; ${cardBg}">
-            <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0; margin-right:8px;">
-              ${rankBadge}
-              <div style="width:28px; height:28px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                ${avatarEl}
+          <article class="sky-rank-row${rankClass}${isP1 ? ' is-self' : ''}">
+            <div class="sky-rank-place"><span>${rankBadge}</span><small>${rank <= 3 ? '棋位' : '排名'}</small></div>
+            <div class="sky-rank-avatar">${avatarEl}</div>
+            <div class="sky-rank-main">
+              <div class="sky-rank-name-line">
+                <strong>${escapeRankHTML(displayName)}</strong>
+                ${isP1 ? '<span class="sky-rank-self-badge">我</span>' : ''}
+                <span class="sky-rank-tier is-${tierClass}">${tierName}</span>
               </div>
-              <div style="text-align:left; line-height:1.25; flex:1; min-width:0;">
-                <div style="font-size:12.5px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:5px; min-width:0;">
-                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex-shrink:1;">${escapeRankHTML(item.name)}</span>
-                  ${isP1 ? '<span style="font-size:9.5px; background:#ef4444; color:#fff; padding:1px 4px; border-radius:4px; font-weight:800; flex-shrink:0; white-space:nowrap;">我</span>' : ''}
-                  <span style="font-size:9.5px; color:${tierColor}; font-weight:800; border:1px solid ${tierColor}; padding:0 3px; border-radius:4px; flex-shrink:0; white-space:nowrap;">${tierName}</span>
-                </div>
-                <div style="font-size:10px; color:#64748b; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">胜率: ${winRate}% (${item.wins}胜/${item.total_games}局)</div>
-              </div>
+              <div class="sky-rank-record">${wins} 胜 · ${totalGames} 局 <span>胜率 ${winRate}%</span></div>
+              <div class="sky-rank-progress" aria-label="胜率 ${winRate}%"><i style="width:${winRate}%"></i></div>
             </div>
-            <div style="text-align:right; flex-shrink:0;">
-              <div style="font-size:13px; font-weight:900; color:#b45309; white-space:nowrap;">🏆 ${item.score}</div>
-              <div style="font-size:9px; color:#94a3b8; font-weight:800;">积分</div>
+            <div class="sky-rank-score"><strong>${score}</strong><small>积分</small>
             </div>
-          </div>
+          </article>
         `;
       }).join('');
 

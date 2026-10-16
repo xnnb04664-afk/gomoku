@@ -24,13 +24,83 @@
     // 兼容适配器沿用 MQTT 的 publish/subscribe 形状：业务报文按 QoS 1 语义，
     // ICE 信令按 QoS 0 语义；项目自有 WebSocket 中继会忽略 QoS 参数。
     const MQTT_ROOM_DATA_QOS = 1;
-    // 自有 Cloudflare Durable Object 是生产信令/可靠中继；公共 MQTT 只保留为
-    // 老版本过渡和自动化测试兼容层，正常构建不会自动启用。
+    // ECS Durable Object 兼容层承担生产房间信令；Cloudflare Durable Object
+    // 保留故障回退，公共 MQTT 只保留给旧版迁移和自动化兼容。
     const ONLINE_RELAY_ENDPOINTS = [
       'wss://gomoku-backend.xnnb04664.workers.dev/api/room/socket',
       'wss://gomoku-api.pages.dev/api/room/socket'
     ];
     const ONLINE_RELAY_CONNECT_TIMEOUT_MS = 2800;
+
+    function getOnlineRelayEndpoints() {
+      const routing = window.GomokuBackendRouting;
+      if (!routing || typeof routing.getOrderedHosts !== 'function' || typeof routing.socketUrl !== 'function') {
+        return ONLINE_RELAY_ENDPOINTS.slice();
+      }
+      const routed = routing.getOrderedHosts()
+        .map(host => routing.socketUrl('/api/room/socket', host))
+        .filter(Boolean);
+      return [...new Set([...routed, ...ONLINE_RELAY_ENDPOINTS])];
+    }
+
+    function roomSocketTicketApiUrl(endpoint) {
+      const url = new URL(endpoint);
+      if (url.protocol === 'wss:') url.protocol = 'https:';
+      else if (url.protocol === 'ws:') url.protocol = 'http:';
+      url.pathname = url.pathname.replace(/\/api\/room\/socket\/?$/, '/api/room/socket-ticket');
+      url.search = '';
+      url.hash = '';
+      return url.href;
+    }
+
+    async function requestRoomSocketTicket(endpoint, roomCode, role, sessionId, joinTicket) {
+      const send = async () => {
+        const token = getMatchSessionToken();
+        if (!currentUserUid || !token) throw new Error('请先登录私人游戏账号');
+        const url = roomSocketTicketApiUrl(endpoint);
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), 8000) : null;
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              uid: String(currentUserUid),
+              token,
+              roomCode: String(roomCode || ''),
+              role: String(role || ''),
+              sessionId: String(sessionId || ''),
+              joinTicket: String(joinTicket || '')
+            }),
+            cache: 'no-store',
+            signal: controller?.signal
+          });
+          let data = null;
+          try { data = await response.json(); } catch (_) {}
+          if (!response.ok || Number(data?.code) !== 0 || !data?.data?.ticket) {
+            const error = new Error(data?.msg || `房间授权失败（${response.status}）`);
+            error.status = response.status;
+            throw error;
+          }
+          return String(data.data.ticket);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+      };
+
+      try {
+        return await send();
+      } catch (error) {
+        if (Number(error?.status) === 401 && currentUserRefreshToken &&
+            typeof refreshUserSession === 'function' && await refreshUserSession()) {
+          return await send();
+        }
+        throw error;
+      }
+    }
 
     const MAX_ONLINE_PAYLOAD_BYTES = 60 * 1024;
     const MAX_ONLINE_MESSAGES_PER_SECOND = 80;
@@ -152,13 +222,14 @@
     // 最小接口，这样既能复用已有的 ACK、去重、P2P 探测和重连状态机，
     // 以便复用旧业务层，同时把生产信令固定在项目自己的 Cloudflare 入口。
     class RoomRelayClient {
-      constructor(endpoint, roomCode, role, sessionId = '', joinTicket = '') {
+      constructor(endpoint, roomCode, role, sessionId = '', joinTicket = '', socketTicket = '') {
         this.url = endpoint;
         this.roomKey = String(roomCode || '');
         this.roomCode = this.roomKey;
         this.role = role;
         this.sessionId = String(sessionId || '');
         this.joinTicket = String(joinTicket || '');
+        this.socketTicket = String(socketTicket || '');
         this.transportType = 'relay';
         this.connected = false;
         this.closed = false;
@@ -214,6 +285,7 @@
         url.searchParams.set('role', this.role);
         if (this.sessionId) url.searchParams.set('session', this.sessionId);
         if (this.joinTicket) url.searchParams.set('ticket', this.joinTicket);
+        if (this.socketTicket) url.searchParams.set('socketTicket', this.socketTicket);
         return url.href;
       }
 
@@ -773,29 +845,34 @@
     async function connectRoomRelay(roomKey, role, sessionId = '') {
       // 同一房间的同一角色不能并行连接两个 DO 入口：后建立的连接会让
       // 前一个连接被判定为重复会话，表现为“一边进房、另一边断开”。
-      // 因此这里按主入口 -> Pages 备用入口串行切换。
+      // 因此这里按 ECS 主入口 -> Cloudflare 备用入口串行切换。
       let lastError = null;
-      const preferredRelayOrigin = typeof activeApiHost === 'string' ? activeApiHost.replace(/^http/, 'ws') : '';
-      const orderedRelayEndpoints = [...ONLINE_RELAY_ENDPOINTS].sort((left, right) => {
-        const leftPreferred = preferredRelayOrigin && left.startsWith(preferredRelayOrigin) ? 1 : 0;
-        const rightPreferred = preferredRelayOrigin && right.startsWith(preferredRelayOrigin) ? 1 : 0;
-        return rightPreferred - leftPreferred;
-      });
+      const orderedRelayEndpoints = getOnlineRelayEndpoints();
       for (const endpoint of orderedRelayEndpoints) {
-        const relay = new RoomRelayClient(endpoint, roomKey, role, sessionId, role === 'host' ? onlineJoinTicket : '');
+        let relay = null;
         try {
+          const joinTicket = role === 'host' ? onlineJoinTicket : '';
+          const socketTicket = await requestRoomSocketTicket(endpoint, roomKey, role, sessionId, joinTicket);
+          relay = new RoomRelayClient(endpoint, roomKey, role, sessionId, joinTicket, socketTicket);
           return await relay.readyPromise;
         } catch (error) {
           lastError = error;
-          try { relay.end(true); } catch (_) {}
+          const status = Number(error?.status);
+          // API host routing only accepts HTTPS URLs. The relay endpoint is WSS,
+          // so marking it directly silently leaves a failed ECS host at the front
+          // of every subsequent connection attempt.
+          if (!Number.isFinite(status) || status === 429 || status >= 500) {
+            try { window.GomokuBackendRouting?.markFailureForUrl(roomSocketTicketApiUrl(endpoint)); } catch (_) {}
+          }
+          try { relay?.end(true); } catch (_) {}
         }
       }
       throw lastError || new Error('自有房间中继不可用');
     }
 
     function isLegacyMqttFallbackEnabled() {
-      // 公共 MQTT 只保留给旧版迁移/自动化测试，正常构建和用户流程默认关闭。
-      try { return window.__GOMOKU_ENABLE_LEGACY_MQTT__ === true; } catch (_) { return false; }
+      // 私人游戏只使用带账号票据的 ECS/Cloudflare 房间中继。
+      return false;
     }
 
     // 生产联机只使用项目自有 Durable Object WebSocket 中继。
@@ -2002,6 +2079,7 @@
     }
 
     async function initHostMqttPeer(targetCode = null, forceNew = false) {
+      if (!(await ensurePrivateGameAccountSession())) return false;
       const isDifferentRoom = targetCode && String(targetCode) !== String(currentRoomCode);
       // 手动刷新房间/新匹配要换会话；断线重连沿用原会话，保证旧棋局可以恢复。
       if (isDifferentRoom || !onlineSessionId || (forceNew && !isReconnecting)) {
@@ -2025,14 +2103,17 @@
 
       const displayEl = document.getElementById('myRoomCodeDisplay');
       const badgeEl = document.getElementById('roomStatusBadge');
-      if (displayEl) displayEl.textContent = currentRoomCode;
+      if (displayEl) {
+        displayEl.textContent = currentRoomCode;
+        displayEl.classList.remove('is-pending');
+      }
 
       if (!forceNew && conn && conn.open && currentRoomCode === lastActiveRoomCode) {
         if (badgeEl) {
           badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
           badgeEl.style.color = '#10b981';
         }
-        return;
+        return true;
       }
 
       if (badgeEl) {
@@ -2152,7 +2233,7 @@
               }
               clearPendingGuestReady();
               p2Name = normalizeNetworkName(data.name, pending.name || '好友');
-              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (pending.avatar || '👧');
+              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : (pending.avatar || 'anime_girl');
               updatePlayerHeaderUI();
               if (gameMode !== 'online') setMode('online');
               else updateOnlineNetworkUI();
@@ -2216,7 +2297,7 @@
               myOnlineColor = BLACK;
               lastActiveRoomCode = roomCode;
               const guestName = normalizeNetworkName(data.name, '好友');
-              const guestAvatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👧';
+              const guestAvatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : 'anime_girl';
               setupConn();
               await nextConn.readyPromise;
               if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode ||
@@ -2246,8 +2327,9 @@
                   try { nextConn.close(true); } catch (_) {}
                   if (conn === nextConn) conn = null;
                   if (gameMode !== 'online') {
-                    p2Name = '大师AI';
-                    p2Avatar = '🤖';
+                    const aiProfile = window.getRandomAiOpponentProfile?.() || { name: '云岫', avatar: 'ai_cloud_fox' };
+                    p2Name = aiProfile.name;
+                    p2Avatar = aiProfile.avatar;
                     updatePlayerHeaderUI();
                   }
                   if (badgeEl) {
@@ -2286,6 +2368,7 @@
           badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
           badgeEl.style.color = '#10b981';
         }
+        return true;
 
       } catch(err) {
         console.error('[initHostPeer error]', err);
@@ -2294,6 +2377,10 @@
           badgeEl.innerHTML = `⚠️ 极速网络连接受阻 <span style="cursor:pointer;color:#3b82f6;text-decoration:underline;" onclick="initHostPeer(null, true)">[点击重试]</span>`;
           badgeEl.style.color = '#ef4444';
         }
+        // During automatic reconnect this failure must reach doAutoReconnect,
+        // otherwise the retry loop treats the swallowed error as success.
+        if (isReconnecting) throw err;
+        return false;
       }
     }
 
@@ -2397,7 +2484,14 @@
           if (conn === nextConn && nextConn.open) startReconnectHandshakeLoop(nextConn);
         } else {
           // 房主必须重新挂载原始入房监听，等待客方的 reconnect_handshake。
-          await initHostMqttPeer(roomCode, true);
+          const hostReady = await initHostMqttPeer(roomCode, true);
+          if (hostReady === false && isReconnecting) {
+            // Authentication failure is terminal until the player signs in again.
+            // Keep the reconnect sheet available so they can retry after login.
+            isReconnecting = false;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            showReconnectOverlay(true, '🔒 登录状态已失效，请重新登录后点击“立即重试”。');
+          }
         }
       } catch(e) {
         console.warn('[doAutoReconnect error]', e);
@@ -2425,6 +2519,7 @@
     }
 
     function manualTriggerReconnect() {
+      isReconnecting = true;
       reconnectAttempts = 0;
       reconnectMetricStartedAt = performance.now ? performance.now() : Date.now();
       reconnectMetricFinished = false;
@@ -2544,8 +2639,9 @@
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
       
       gameMode = 'ai';
-      p2Name = '大师AI';
-      p2Avatar = '🤖';
+      const aiProfile = window.getRandomAiOpponentProfile?.() || { name: '云岫', avatar: 'ai_cloud_fox' };
+      p2Name = aiProfile.name;
+      p2Avatar = aiProfile.avatar;
       updatePlayerHeaderUI();
       showGameNotice("🤖 已成功转为单人人机对弈模式，局势已完整继承！", false);
       if (turn === WHITE && !isOver) {
@@ -3666,6 +3762,7 @@
     // 🎴 干扰技能卡执行与棋盘交互核心逻辑
     // ==========================================
     async function joinMqttRoom(code, btn) {
+      if (!(await ensurePrivateGameAccountSession())) return false;
       if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
 
       // 手动加入是一个全新的传输世代；先作废旧连接的异步回调。
@@ -3846,7 +3943,7 @@
               onlineRoundId = acceptedRoundId;
               resetChatHistoryForRoom();
               p2Name = normalizeNetworkName(data.name, '房主');
-              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : '👦';
+              p2Avatar = isSafeNetworkAvatar(data.avatar) ? data.avatar : 'anime_girl';
               updatePlayerHeaderUI();
               // 先挂载数据/断线监听，再等待 ready，避免 ready 后到达的首条资料消息丢失。
               setupConn();
@@ -3972,7 +4069,8 @@
     let matchStartTime = 0;
     let currentActiveMatchUid = "";
     let currentActiveMatchId = "";
-    let matchPollInFlight = false;
+    let matchStartPending = false;
+    let matchAttemptGeneration = 0;
 
     function isMatchAuthFailure(response, data) {
       const status = Number(response && response.status);
@@ -3996,6 +4094,15 @@
         await refreshUserSession();
       }
       return Boolean(currentUserUid && !String(currentUserUid).startsWith('guest_') && getMatchSessionToken());
+    }
+
+    async function ensurePrivateGameAccountSession() {
+      if (typeof hasRegisteredAccountSession === 'function' && hasRegisteredAccountSession()) {
+        if (await ensureMatchAccountSession()) return true;
+      }
+      showGameNotice('🔒 私人游戏仅限指定账号登录后联机', true);
+      if (typeof openAuthModal === 'function') openAuthModal('login');
+      return false;
     }
 
     async function requestMatchApi(endpoint, payload, retryState, timeoutMs = 10000) {
@@ -4041,134 +4148,393 @@
       return uid;
     }
 
-    async function startQuickMatch() {
-      if (isMatchmaking) return;
-      if (!(await ensureMatchAccountSession())) {
-        showGameNotice('⚡ 全服匹配需要先登录正式账号，游客仍可使用房间联机。', true);
-        if (typeof openAuthModal === 'function') openAuthModal('login');
-        return;
-      }
-      isMatchmaking = true;
-      activeMatchRoomKey = '';
-      matchStartTime = Date.now();
-      clearInterval(matchPollInterval);
-      clearInterval(matchTimerInterval);
-      matchPollInFlight = false;
+    const PENDING_QUICK_MATCH_STORAGE_KEY = 'gomoku_pending_match_v1';
+    const QUICK_MATCH_MAX_DURATION_MS = 60 * 60 * 1000;
+    let pendingQuickMatchResumePromise = null;
 
+    function isPersistableMatchUid(value) {
+      const uid = String(value || '').trim();
+      return Boolean(uid && uid.length <= 128 && !/^guest_/i.test(uid) && !/[\u0000-\u0020\u007f]/.test(uid));
+    }
+
+    function clearPendingQuickMatch(expectedUid = '', expectedMatchId = '') {
+      try {
+        const raw = localStorage.getItem(PENDING_QUICK_MATCH_STORAGE_KEY);
+        if (!raw) return false;
+        if (expectedUid || expectedMatchId) {
+          let current;
+          try { current = JSON.parse(raw); } catch (_) { current = null; }
+          if (!current) return false;
+          if (expectedUid && String(current.uid || '') !== String(expectedUid)) return false;
+          if (expectedMatchId && String(current.matchId || '') !== String(expectedMatchId)) return false;
+        }
+        localStorage.removeItem(PENDING_QUICK_MATCH_STORAGE_KEY);
+        return true;
+      } catch (error) {
+        console.warn('[match persistence] unable to clear pending match', error?.message || error);
+        return false;
+      }
+    }
+
+    function savePendingQuickMatch(record) {
+      if (!record || !isPersistableMatchUid(record.uid) || !/^[A-Za-z0-9_-]{8,80}$/.test(String(record.matchId || ''))) return false;
+      try {
+        localStorage.setItem(PENDING_QUICK_MATCH_STORAGE_KEY, JSON.stringify({
+          version: 1,
+          state: 'waiting',
+          uid: String(record.uid),
+          matchId: String(record.matchId),
+          startedAt: Number(record.startedAt),
+          nickname: String(record.nickname || '棋友').slice(0, 32),
+          avatar: String(record.avatar || 'anime_boy').slice(0, 12000),
+          score: Math.max(0, Math.min(10000000, Number(record.score) || 1000))
+        }));
+        return true;
+      } catch (error) {
+        console.warn('[match persistence] unable to save pending match', error?.message || error);
+        return false;
+      }
+    }
+
+    function readPendingQuickMatch() {
+      let raw = '';
+      try { raw = localStorage.getItem(PENDING_QUICK_MATCH_STORAGE_KEY) || ''; } catch (_) { return null; }
+      if (!raw) return null;
+
+      let stored;
+      try { stored = JSON.parse(raw); } catch (_) {
+        clearPendingQuickMatch();
+        return null;
+      }
+      const now = Date.now();
+      const startedAt = Number(stored?.startedAt);
+      const uid = String(stored?.uid || '').trim();
+      const matchId = String(stored?.matchId || '').trim();
+      const age = now - startedAt;
+      if (stored?.version !== 1 || stored?.state !== 'waiting' || !isPersistableMatchUid(uid)
+        || !/^[A-Za-z0-9_-]{8,80}$/.test(matchId) || !Number.isFinite(startedAt)
+        || startedAt > now + 60000 || age < 0 || age >= QUICK_MATCH_MAX_DURATION_MS) {
+        clearPendingQuickMatch();
+        return null;
+      }
+
+      let nickname = '棋友';
+      let avatar = 'anime_boy';
+      try { nickname = normalizeNetworkName(String(stored.nickname || ''), '棋友'); } catch (_) {}
+      try { avatar = getNetworkAvatarValue(String(stored.avatar || 'anime_boy')); } catch (_) {}
+      const score = Number(stored.score);
+      return {
+        version: 1,
+        state: 'waiting',
+        uid,
+        matchId,
+        startedAt,
+        nickname,
+        avatar: String(avatar || 'anime_boy').slice(0, 12000),
+        score: Number.isFinite(score) ? Math.max(0, Math.min(10000000, score)) : 1000
+      };
+    }
+
+    function quickMatchPayload(record) {
+      return {
+        uid: record.uid,
+        matchId: record.matchId,
+        nickname: record.nickname,
+        avatar: record.avatar,
+        score: record.score
+      };
+    }
+
+    function resetQuickMatchControls() {
       const btnStart = document.getElementById('btnStartMatch');
       const btnCancel = document.getElementById('btnCancelMatch');
+      const btnPlayAi = document.getElementById('btnPlayWithAi');
+      const statusEl = document.getElementById('matchStatusText');
+      const timerEl = document.getElementById('matchTimerText');
+      const vsCard = document.getElementById('matchVsCard');
+      if (btnStart) btnStart.style.display = 'block';
+      if (btnCancel) btnCancel.style.display = 'none';
+      if (btnPlayAi) btnPlayAi.style.display = 'none';
+      if (statusEl) statusEl.textContent = '⚡ 寻找全国实力相当的对手';
+      if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
+      if (vsCard) vsCard.style.display = 'none';
+      updateQuickMatchQueueHint(false);
+    }
+
+    function updateQuickMatchQueueHint(active = isMatchmaking) {
+      const hint = document.querySelector('#onlineModal .match-queue-hint span:last-child');
+      if (!hint) return;
+      hint.textContent = active
+        ? '匹配已启动；关闭大厅后继续，重启会自动恢复'
+        : '开始匹配后可关闭大厅，搜寻会在后台继续';
+    }
+
+    function renderQuickMatchState(showFloatingBar = false, refreshAvatar = true) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000));
+      const btnStart = document.getElementById('btnStartMatch');
+      const btnCancel = document.getElementById('btnCancelMatch');
+      const btnPlayAi = document.getElementById('btnPlayWithAi');
       const statusEl = document.getElementById('matchStatusText');
       const vsCard = document.getElementById('matchVsCard');
       const prevAvatar = document.getElementById('matchMyAvatarPreview');
-
       if (btnStart) btnStart.style.display = 'none';
       if (btnCancel) btnCancel.style.display = 'block';
-      if (statusEl) statusEl.textContent = '🔍 正在全服搜寻对手...';
+      if (btnPlayAi) btnPlayAi.style.display = elapsed >= 8 ? 'block' : 'none';
       if (vsCard) vsCard.style.display = 'none';
-      if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
+      updateQuickMatchQueueHint(true);
+      if (refreshAvatar && prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
+      if (statusEl) {
+        if (elapsed < 8) statusEl.textContent = '🔍 正在全服搜寻实力相当的真实对手...';
+        else if (elapsed < 20) statusEl.textContent = '⚡ 正在扩大搜寻范围，邀请全国在线棋友...';
+        else if (elapsed < 40) statusEl.textContent = '🌐 持续全网搜寻中，随时为您秒级接通...';
+        else statusEl.textContent = '☕ 正在全服耐心等候棋友，可关闭界面保持挂起...';
+      }
+      if (showFloatingBar) showMatchingFloatingBar();
+    }
 
-      // 实时计时器 (纯真人全服匹配，绝不自动转假人)
-      matchTimerInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - matchStartTime) / 1000);
-        const m = String(Math.floor(elapsed / 60)).padStart(2, "0");
-        const s = String(elapsed % 60).padStart(2, "0");
-        const timerEl = document.getElementById("matchTimerText");
-        if (timerEl) timerEl.textContent = "正在全服搜寻：" + m + ":" + s;
-
-        const floatTimer = document.getElementById("matchingFloatingTimer");
-        if (floatTimer) floatTimer.textContent = "正在全服匹配：" + m + ":" + s;
-
-        const statusEl = document.getElementById("matchStatusText");
-        if (statusEl) {
-          if (elapsed < 8) statusEl.textContent = "🔍 正在全服搜寻实力相当的真实对手...";
-          else if (elapsed < 20) statusEl.textContent = "⚡ 正在扩大搜寻范围，邀请全国在线棋友...";
-          else if (elapsed < 40) statusEl.textContent = "🌐 持续全网搜寻中，随时为您秒级接通...";
-          else statusEl.textContent = "☕ 正在全服耐心等候棋友，可关闭界面保持挂起...";
+    function startQuickMatchTimer() {
+      clearInterval(matchTimerInterval);
+      const update = () => {
+        if (!isMatchmaking) return;
+        const elapsed = Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000));
+        const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const s = String(elapsed % 60).padStart(2, '0');
+        const timerEl = document.getElementById('matchTimerText');
+        const floatTimer = document.getElementById('matchingFloatingTimer');
+        if (timerEl) timerEl.textContent = `正在全服搜寻：${m}:${s}`;
+        if (floatTimer) floatTimer.textContent = `正在全服匹配：${m}:${s}`;
+        renderQuickMatchState(false, false);
+        if (elapsed >= QUICK_MATCH_MAX_DURATION_MS / 1000) {
+          clearInterval(matchTimerInterval);
+          void cancelQuickMatch().finally(() => showGameNotice('⏰ 匹配已满 1 小时，已自动结束本次搜寻', true));
         }
+      };
+      update();
+      if (isMatchmaking) matchTimerInterval = setInterval(update, 1000);
+    }
 
-        // 超过 8 秒后，提供可选的“与智能棋友切磋”按钮（完全由玩家主动选择，绝不强行匹配假人）
-        const btnPlayAi = document.getElementById("btnPlayWithAi");
-        if (elapsed >= 8 && btnPlayAi && isMatchmaking) {
-          btnPlayAi.style.display = "block";
+    function finishMatchAuthenticationFailure(record, message = '🔑 登录状态已失效，请重新登录后再匹配') {
+      const uid = String(record?.uid || currentActiveMatchUid || '');
+      const matchId = String(record?.matchId || currentActiveMatchId || '');
+      clearPendingQuickMatch(uid, matchId);
+      matchAttemptGeneration++;
+      matchStartPending = false;
+      isMatchmaking = false;
+      clearInterval(matchPollInterval);
+      clearInterval(matchTimerInterval);
+      matchPollInterval = null;
+      matchTimerInterval = null;
+      currentActiveMatchUid = '';
+      currentActiveMatchId = '';
+      hideMatchingFloatingBar();
+      resetQuickMatchControls();
+      showGameNotice(message, true);
+      if (typeof openAuthModal === 'function') openAuthModal('login');
+    }
+
+    function startQuickMatchPolling(record, attemptGeneration, retryState = { authRetried: false }) {
+      clearInterval(matchPollInterval);
+      let pollInFlight = false;
+      const isCurrent = () => attemptGeneration === matchAttemptGeneration && isMatchmaking && currentActiveMatchId === record.matchId;
+      const handleAuthFailure = () => {
+        clearInterval(matchPollInterval);
+        finishMatchAuthenticationFailure(record);
+      };
+      matchPollInterval = setInterval(async () => {
+        if (!isCurrent()) {
+          clearInterval(matchPollInterval);
+          return;
         }
-
-        // 达到 1 小时 (3600秒) 上限保护
-        if (elapsed >= 3600 && isMatchmaking) {
-          cancelQuickMatch();
-          showGameNotice("⏰ 匹配已满 1 小时，已自动结束本次搜寻", true);
-        }
-      }, 1000);
-
-      currentActiveMatchUid = getOrCreateMatchUid();
-      const matchUid = currentActiveMatchUid;
-      currentActiveMatchId = generateSecureId(12, 'match_');
-      const matchId = currentActiveMatchId;
-      const matchRequestState = { authRetried: false };
-
-      try {
-        const joinResult = await requestMatchApi('/api/match/join', {
-          uid: matchUid,
-          matchId,
-          nickname: normalizeNetworkName(p1Name, '棋友'),
-          avatar: getNetworkAvatarValue(p1Avatar),
-          score: currentUserScore || 1000
-        }, matchRequestState, 12000);
-        const res = joinResult.response;
-        const data = joinResult.data;
-        if (data.code === 0) {
-          if (data.status === 'matched') {
-            onMatchFound(data);
-          } else {
-            // 定时轮询对手是否加入（严格使用统一的 matchUid）
-            matchPollInterval = setInterval(async () => {
-              if (!isMatchmaking || matchPollInFlight) {
-                clearInterval(matchPollInterval);
-                return;
-              }
-              matchPollInFlight = true;
-              try {
-                const pollResult = await requestMatchApi('/api/match/poll', {
-                  uid: matchUid,
-                  matchId
-                }, matchRequestState, 10000);
-                const pRes = pollResult.response;
-                const pData = pollResult.data;
-                if (pData.code === 0 && pData.status === 'matched' && isMatchmaking) {
-                  clearInterval(matchPollInterval);
-                  onMatchFound(pData);
-                } else if (isMatchAuthFailure(pRes, pData)) {
-                  clearInterval(matchPollInterval);
-                  if (isMatchmaking) {
-                    isMatchmaking = false;
-                    clearInterval(matchTimerInterval);
-                    hideMatchingFloatingBar();
-                    showGameNotice('🔑 登录状态已失效，请重新登录后再匹配', true);
-                    openAuthModal('login');
-                  }
-                }
-              } catch(e) {
-                console.warn('[match poll]', e);
-              } finally {
-                matchPollInFlight = false;
-              }
-            }, 1200);
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          let result = await requestMatchApi('/api/match/poll', {
+            uid: record.uid,
+            matchId: record.matchId
+          }, retryState, 10000);
+          if (!isCurrent()) return;
+          if (isMatchAuthFailure(result.response, result.data)) return handleAuthFailure();
+          if (result.data.code === 0 && result.data.status === 'matched') {
+            clearInterval(matchPollInterval);
+            onMatchFound(result.data);
+            return;
           }
-        } else {
-          const error = new Error(data?.msg || '匹配服务暂时不可用');
-          error.response = res;
-          error.data = data;
+          if (result.data.code === 0 && result.data.status === 'cancelled') {
+            // 服务端可能已清理长时间离线的等待行；用原 matchId 幂等重入并继续心跳。
+            result = await requestMatchApi('/api/match/join', quickMatchPayload(record), retryState, 12000);
+            if (!isCurrent()) return;
+            if (isMatchAuthFailure(result.response, result.data)) return handleAuthFailure();
+            if (result.data.code === 0 && result.data.status === 'matched') {
+              clearInterval(matchPollInterval);
+              onMatchFound(result.data);
+              return;
+            }
+          }
+          if (Number(result.data?.code) !== 0) {
+            const error = new Error(result.data?.msg || '匹配服务暂时不可用');
+            error.response = result.response;
+            error.data = result.data;
+            throw error;
+          }
+        } catch (error) {
+          if (!isCurrent()) return;
+          if (isMatchAuthFailure(error?.response, error?.data)) return handleAuthFailure();
+          console.warn('[match poll]', error);
+        } finally {
+          pollInFlight = false;
+        }
+      }, 1200);
+    }
+
+    async function submitQuickMatchJoin(record, attemptGeneration) {
+      const retryState = { authRetried: false };
+      const isCurrent = () => attemptGeneration === matchAttemptGeneration && isMatchmaking && currentActiveMatchId === record.matchId;
+      try {
+        const joinResult = await requestMatchApi('/api/match/join', quickMatchPayload(record), retryState, 12000);
+        if (!isCurrent()) {
+          void safeApiFetch('/api/match/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: record.uid, matchId: record.matchId })
+          }).catch(() => {});
+          return false;
+        }
+        if (isMatchAuthFailure(joinResult.response, joinResult.data)) {
+          finishMatchAuthenticationFailure(record);
+          return false;
+        }
+        if (joinResult.data.code !== 0) {
+          const error = new Error(joinResult.data?.msg || '匹配服务暂时不可用');
+          error.response = joinResult.response;
+          error.data = joinResult.data;
           throw error;
         }
-      } catch (err) {
-        console.warn('Match join error:', err);
-        if (isMatchmaking) await cancelQuickMatch();
-        if (isMatchAuthFailure(err.response, err.data)) {
-          showGameNotice('🔑 登录状态已失效，请重新登录后再匹配', true);
-          if (typeof openAuthModal === 'function') openAuthModal('login');
-        } else {
-          showGameNotice(`⚠️ ${err.message || '匹配连接失败，请稍后重试'}`, true);
+        if (joinResult.data.status === 'matched') {
+          onMatchFound(joinResult.data);
+          return true;
         }
+        startQuickMatchPolling(record, attemptGeneration, retryState);
+        return true;
+      } catch (error) {
+        if (!isCurrent()) {
+          void safeApiFetch('/api/match/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: record.uid, matchId: record.matchId })
+          }).catch(() => {});
+          return false;
+        }
+        if (isMatchAuthFailure(error?.response, error?.data)) {
+          finishMatchAuthenticationFailure(record);
+          return false;
+        }
+        console.warn('[match join]', error);
+        showGameNotice('⚠️ 网络暂时不稳定，已保留匹配并自动重试', true);
+        showMatchingFloatingBar();
+        startQuickMatchPolling(record, attemptGeneration, retryState);
+        return true;
       }
+    }
+
+    async function resumePendingQuickMatch() {
+      if (pendingQuickMatchResumePromise) return pendingQuickMatchResumePromise;
+      if (isMatchmaking && currentActiveMatchId) {
+        showMatchingFloatingBar();
+        return true;
+      }
+      if (matchStartPending) return false;
+
+      const resumePromise = (async () => {
+        const record = readPendingQuickMatch();
+        if (!record) return false;
+        const activeUid = String(currentUserUid || '').trim();
+        if (!activeUid || activeUid !== record.uid) return false;
+
+        const attemptGeneration = ++matchAttemptGeneration;
+        matchStartPending = true;
+        let authorized = false;
+        try { authorized = await ensurePrivateGameAccountSession(); }
+        catch (error) { console.warn('[match resume account check]', error); }
+        if (attemptGeneration !== matchAttemptGeneration || !matchStartPending) return false;
+        if (!authorized || String(currentUserUid || '').trim() !== record.uid) {
+          matchStartPending = false;
+          return false;
+        }
+
+        matchStartPending = false;
+        isMatchmaking = true;
+        currentActiveMatchUid = record.uid;
+        currentActiveMatchId = record.matchId;
+        matchStartTime = record.startedAt;
+        activeMatchRoomKey = '';
+        clearInterval(matchPollInterval);
+        clearInterval(matchTimerInterval);
+        savePendingQuickMatch(record);
+        renderQuickMatchState(true);
+        startQuickMatchTimer();
+        await submitQuickMatchJoin(record, attemptGeneration);
+        return true;
+      })();
+
+      pendingQuickMatchResumePromise = resumePromise;
+      try { return await resumePromise; }
+      catch (error) {
+        console.warn('[match resume]', error);
+        return false;
+      }
+      finally {
+        if (pendingQuickMatchResumePromise === resumePromise) pendingQuickMatchResumePromise = null;
+      }
+    }
+
+    async function startQuickMatch() {
+      if (isMatchmaking || matchStartPending) return;
+      const attemptGeneration = ++matchAttemptGeneration;
+      matchStartPending = true;
+      let authorized = false;
+      try {
+        authorized = await ensurePrivateGameAccountSession();
+      } catch (error) {
+        console.warn('[match account check]', error);
+        showGameNotice('🔑 登录状态检查失败，请重新登录后再匹配', true);
+      }
+      if (!authorized) {
+        if (attemptGeneration === matchAttemptGeneration) matchStartPending = false;
+        return;
+      }
+      if (attemptGeneration !== matchAttemptGeneration || !matchStartPending) return;
+
+      const matchUid = String(getOrCreateMatchUid() || '').trim();
+      if (!isPersistableMatchUid(matchUid) || matchUid !== String(currentUserUid || '').trim()) {
+        matchStartPending = false;
+        showGameNotice('🔒 当前账号无法加入全服匹配，请重新登录后再试', true);
+        return;
+      }
+      const matchRecord = {
+        version: 1,
+        state: 'waiting',
+        uid: matchUid,
+        matchId: generateSecureId(12, 'match_'),
+        startedAt: Date.now(),
+        nickname: normalizeNetworkName(p1Name, '棋友'),
+        avatar: getNetworkAvatarValue(p1Avatar),
+        score: Math.max(0, Math.min(10000000, Number(currentUserScore) || 1000))
+      };
+      if (!savePendingQuickMatch(matchRecord)) {
+        console.warn('[match persistence] pending match could not be saved; restart resume will be unavailable');
+      }
+
+      matchStartPending = false;
+      isMatchmaking = true;
+      activeMatchRoomKey = '';
+      matchStartTime = matchRecord.startedAt;
+      currentActiveMatchUid = matchRecord.uid;
+      currentActiveMatchId = matchRecord.matchId;
+      clearInterval(matchPollInterval);
+      clearInterval(matchTimerInterval);
+      renderQuickMatchState(false);
+      startQuickMatchTimer();
+      await submitQuickMatchJoin(matchRecord, attemptGeneration);
     }
 
     let activeMatchRoomKey = '';
@@ -4182,11 +4548,11 @@
       activeMatchRoomKey = matchKey;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
-      matchPollInFlight = false;
+      clearPendingQuickMatch(currentActiveMatchUid, currentActiveMatchId);
       isMatchmaking = false;
       hideMatchingFloatingBar();
 
-      const opp = data.opponent || { nickname: '棋圣隐士', avatar: '🐱' };
+      const opp = data.opponent || { nickname: '云端棋友', avatar: null };
       activeOnlineOpponentUid = typeof opp.uid === 'string' ? opp.uid : '';
       const statusEl = document.getElementById('matchStatusText');
       const vsCard = document.getElementById('matchVsCard');
@@ -4220,7 +4586,12 @@
         p2Avatar = opp.avatar;
         updatePlayerHeaderUI();
         setMode("online", true);
-        initHostMqttPeer(roomCode, true).then(() => {
+        initHostMqttPeer(roomCode, true).then(hostReady => {
+          if (hostReady === false) {
+            switchOnlineTab('create');
+            showGameNotice('❌ 房间中继暂不可用，重试连接后再开始对局', true);
+            return;
+          }
           closeOnlineModal();
         }).catch(() => {
           showGameNotice('❌ 房间信道连接失败，请点击重试或更换网络后再匹配', true);
@@ -4234,12 +4605,15 @@
 
     function matchWithAiOpponent() {
       if (!isMatchmaking) return;
+      matchAttemptGeneration++;
+      matchStartPending = false;
       const queuedUid = currentActiveMatchUid;
       const queuedMatchId = currentActiveMatchId;
+      clearPendingQuickMatch(queuedUid, queuedMatchId);
       isMatchmaking = false;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
-      matchPollInFlight = false;
+      hideMatchingFloatingBar();
       currentActiveMatchUid = '';
       currentActiveMatchId = '';
       if (queuedUid) {
@@ -4250,11 +4624,14 @@
         }).catch(() => {});
       }
 
-      let aiName = "弈林少侠";
-      let aiAvatar = "👦";
+      let aiName = '云岫';
+      let aiAvatar = 'ai_cloud_fox';
       try {
-        aiName = getRandomDefaultNickname();
-        aiAvatar = getRandomDefaultAvatar();
+        const aiProfile = window.getRandomAiOpponentProfile?.();
+        if (aiProfile && typeof aiProfile.name === 'string' && typeof aiProfile.avatar === 'string') {
+          aiName = aiProfile.name;
+          aiAvatar = aiProfile.avatar;
+        }
       } catch(e) {
         console.warn("randomize error:", e);
       }
@@ -4287,10 +4664,19 @@
     }
 
     async function cancelQuickMatch() {
+      const wasMatchmaking = isMatchmaking;
+      const wasStartPending = matchStartPending;
+      if (!wasMatchmaking && !wasStartPending) return;
+      const cancelUid = currentActiveMatchUid || String(currentUserUid || getOrCreateMatchUid() || '');
+      const cancelMatchId = currentActiveMatchId;
+      clearPendingQuickMatch(cancelUid, cancelMatchId);
+      matchAttemptGeneration++;
+      matchStartPending = false;
       isMatchmaking = false;
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
-      matchPollInFlight = false;
+      matchPollInterval = null;
+      matchTimerInterval = null;
       hideMatchingFloatingBar();
 
       const btnStart = document.getElementById('btnStartMatch');
@@ -4307,27 +4693,35 @@
       if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
       if (vsCard) vsCard.style.display = 'none';
 
-      const cancelUid = currentActiveMatchUid || getOrCreateMatchUid();
-      const cancelMatchId = currentActiveMatchId;
       currentActiveMatchUid = '';
       currentActiveMatchId = '';
-      try {
-        await safeApiFetch('/api/match/cancel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: cancelUid, matchId: cancelMatchId })
-        });
-      } catch(e) {}
+      if (wasMatchmaking) {
+        try {
+          await safeApiFetch('/api/match/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: cancelUid, matchId: cancelMatchId })
+          });
+        } catch(e) {}
+      }
       showGameNotice('已取消匹配');
     }
 
     function switchOnlineTab(tab) {
+      const onlineModal = document.getElementById('onlineModal');
       const tabMatch = document.getElementById('tabMatch');
       const tabCreate = document.getElementById('tabCreateRoom');
       const tabJoin = document.getElementById('tabJoinRoom');
       const viewMatch = document.getElementById('viewMatch');
       const viewCreate = document.getElementById('viewCreateRoom');
       const viewJoin = document.getElementById('viewJoinRoom');
+      const hallEyebrow = document.querySelector('#onlineModal .online-hall-eyebrow');
+      const hallTitle = document.getElementById('onlineHallTitle');
+
+      if (!['match', 'create', 'join'].includes(tab)) tab = 'match';
+      if (onlineModal) onlineModal.dataset.onlineView = tab;
+      if (hallEyebrow) hallEyebrow.textContent = tab === 'create' || tab === 'join' ? '晴空棋岛 · 棋友专房' : '晴空棋岛 · 在线对局';
+      if (hallTitle) hallTitle.textContent = tab === 'create' ? '创建好友房间' : tab === 'join' ? '加入好友房间' : '🌐 联机对战 · 房间大厅';
 
       if (tabMatch) tabMatch.classList.toggle('active', tab === 'match');
       if (tabCreate) tabCreate.classList.toggle('active', tab === 'create');
@@ -4343,14 +4737,14 @@
       if (tab === 'create') {
         initPeer();
       } else if (tab !== 'match') {
-        if (isMatchmaking) cancelQuickMatch();
+        if (isMatchmaking || matchStartPending) cancelQuickMatch();
       }
     }
 
     function copyRoomCode() {
       const codeEl = document.getElementById('myRoomCodeDisplay');
       const code = codeEl ? codeEl.textContent.trim() : '';
-      if (!code || code === '------') {
+      if (!/^\d{6}$/.test(code)) {
         initPeer();
         return;
       }
@@ -4363,9 +4757,18 @@
       document.getElementById('onlineModal').classList.add('show');
       void warmApiHost(false);
       switchOnlineTab(tab);
+      // Account/session restoration may finish after the app startup hook; entering
+      // the matchmaking view gives any explicitly saved queue another safe attempt.
+      if (tab === 'match') void resumePendingQuickMatch();
     }
     function closeOnlineModal() {
-      document.getElementById("onlineModal").classList.remove("show");
+      const modal = document.getElementById('onlineModal');
+      modal?.classList.remove('show');
+      modal?.removeAttribute('data-online-view');
+      if (matchStartPending) {
+        matchAttemptGeneration++;
+        matchStartPending = false;
+      }
       if (isMatchmaking) {
         showMatchingFloatingBar();
         showGameNotice("⚡ 匹配已挂起在后台持续搜寻中...", false);
@@ -4373,6 +4776,34 @@
     }
 
     function setMode(mode, silent = false) {
+      // 切换到新对局时兜底退出复盘。大厅/按钮可能绕过复盘页的“退出”动作；
+      // 若只重置棋盘，回放控制条与 isReplayMode 会残留并继续锁住落子。
+      if (typeof isReplayMode !== 'undefined' && isReplayMode) {
+        if (typeof exitReplayMode === 'function') {
+          exitReplayMode({ silent: true });
+        } else {
+          // 复盘模块异常未注册时仍确保新对局可见、可操作，并停止残留的自动播放。
+          if (typeof replayAutoTimer !== 'undefined' && replayAutoTimer) {
+            clearInterval(replayAutoTimer);
+            replayAutoTimer = null;
+          }
+          isReplayMode = false;
+          if (typeof replaySavedState !== 'undefined') replaySavedState = null;
+          if (typeof replayAllMoves !== 'undefined') replayAllMoves = [];
+          if (typeof replayStepIndex !== 'undefined') replayStepIndex = 0;
+          const replayTopBar = document.getElementById('replayTopBar');
+          const replayDock = document.getElementById('replayControlDock');
+          const replayAutoButton = document.getElementById('btnMainReplayAuto');
+          if (replayTopBar) replayTopBar.style.display = 'none';
+          if (replayDock) replayDock.style.display = 'none';
+          if (replayAutoButton) replayAutoButton.textContent = '▶️ 播放';
+          const bottomControls = document.querySelector('.bottom-controls');
+          const cardArea = document.querySelector('.card-area-wrapper');
+          if (bottomControls) bottomControls.style.display = '';
+          if (cardArea) cardArea.style.display = '';
+        }
+      }
+
       const previousMode = gameMode;
       gameMode = mode;
       if (previousMode === 'online' && mode !== 'online') {
@@ -4391,4 +4822,5 @@
     }
 
 
+window.resumePendingQuickMatch = resumePendingQuickMatch;
 window.__GOMOKU_ONLINE_READY__ = true;

@@ -6,10 +6,12 @@
   const SEARCH_DEBOUNCE_MS = 320;
   const SEARCH_CACHE_TTL_MS = 15000;
   const SOCKET_RETRY_DELAYS = [0, 1000, 2000, 4000, 8000, 12000];
+  const FIXED_COUPLE_AFFINITY = Object.freeze({ level: 521, points: 1314, fixed: true });
   const state = {
     started: false,
     stopping: false,
     friends: [],
+    affinity: new Map(),
     requests: [],
     recent: [],
     blocks: [],
@@ -60,7 +62,7 @@
   function cacheDom() {
     const ids = [
       'friendsModal', 'socialChatModal', 'socialConnectionStatus', 'socialSearchInput',
-      'socialSearchResult', 'socialFriendsList', 'socialRequestsList', 'socialRecentList',
+      'socialSearchResult', 'socialFriendsList', 'socialAffinityList', 'socialRequestsList', 'socialRecentList',
       'socialBlocksList', 'socialPresenceHidden', 'socialMetricsEnabled',
       'socialChatInput', 'socialChatMessages', 'socialChatTitle'
     ];
@@ -150,10 +152,89 @@
     return String(person && (person.nickname || person.username || person.uid) || '棋友').slice(0, 32);
   }
 
-  function avatarGlyph(person) {
-    const value = String(person && person.avatar || '👤');
-    if (/^[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F\u200D]{1,16}$/u.test(value)) return value;
-    return '👤';
+  function isFixedCoupleAccount(...people) {
+    return people.filter(Boolean).some(person =>
+      person.fixed === true || person.relationshipType === 'couple' || person.relationship === 'couple'
+    );
+  }
+
+  function affinityFor(person, fallback) {
+    const affinity = fallback || null;
+    if (!isFixedCoupleAccount(person, affinity)) return affinity;
+    return { ...affinity, ...person, ...FIXED_COUPLE_AFFINITY };
+  }
+
+  function affinityEntriesForDisplay() {
+    const entries = new Map();
+    state.affinity.forEach((item, friendUid) => {
+      const friend = state.friends.find(person => String(person.uid || '') === String(friendUid));
+      const person = { ...item, ...(friend || {}), uid: String(friendUid) };
+      entries.set(String(friendUid), affinityFor(person, item));
+    });
+    state.friends.forEach(friend => {
+      const friendUid = String(friend && friend.uid || '');
+      if (friendUid && isFixedCoupleAccount(friend) && !entries.has(friendUid)) {
+        entries.set(friendUid, { ...friend, uid: friendUid, ...FIXED_COUPLE_AFFINITY });
+      }
+    });
+    return Array.from(entries.values()).map(person => affinityFor(person, person));
+  }
+
+  function renderAffinitySummary() {
+    const panel = byId('socialAffinitySummary');
+    if (!panel) return;
+    const entries = affinityEntriesForDisplay();
+    const totalPoints = entries.reduce((sum, item) => sum + Math.max(0, Number(item.points) || 0), 0);
+    const bestLevel = entries.length ? Math.max(...entries.map(item => Number(item.level) || 1)) : 0;
+    const hasFixedCouple = entries.some(item => item.fixed === true);
+    const headline = entries.length
+      ? `${entries.length} 位好友 · ${totalPoints.toLocaleString()} 总亲密度 · 最高 Lv.${bestLevel}`
+      : '和好友开始私聊后，这里会记录你们的亲密进度';
+    const rule = hasFixedCouple
+      ? '已配置的情侣亲密度固定为 Lv.521、亲密度 1314；其他好友每 100 点升 1 级。'
+      : '每条成功私聊 +1 点 · 每 100 点升 1 级 · 最高 Lv.100';
+    panel.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;"><strong style="font-size:12px;color:#9d174d;">💞 好感度系统</strong><span style="font-size:10.5px;font-weight:800;color:#64748b;">${headline}</span></div><div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;"><span style="color:#64748b;font-size:10px;font-weight:700;">${rule}</span><button type="button" onclick="GomokuSocial.switchTab('affinity')" style="border:0;background:transparent;color:#be185d;padding:2px 0;font-size:10px;font-weight:900;cursor:pointer;">查看等级 ›</button></div>`;
+  }
+
+  function avatarImageKey(person) {
+    const avatar = String(person && person.avatar || '');
+    if (avatar === 'anime_boy' || avatar === 'img/avatar_boy.png' || avatar === 'img/anime_avatar_boy.jpg') return 'boy';
+    if (avatar === 'anime_girl' || avatar === 'img/avatar_girl.png' || avatar === 'img/anime_avatar_girl.jpg') return 'girl';
+    return '';
+  }
+
+  function avatarMarkup(person) {
+    const key = avatarImageKey(person);
+    const source = key === 'boy' ? window.ANIME_AVATAR_BOY : key === 'girl' ? window.ANIME_AVATAR_GIRL : '';
+    if (typeof source === 'string' && source) {
+      const border = key === 'boy' ? '#93c5fd' : '#f9a8d4';
+      return `<img src="${attr(source)}" alt="${key === 'boy' ? '男生头像' : '女生头像'}" style="width:30px;height:30px;flex:none;border-radius:50%;object-fit:cover;border:2px solid ${border};background:#fff;" />`;
+    }
+    return '<span role="img" aria-label="默认头像" style="display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:50%;color:#668174;background:#edf3ed;"><svg viewBox="0 0 24 24" aria-hidden="true" style="display:block;width:20px;height:20px;"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 21c.5-4.4 3.4-7 8-7s7.5 2.6 8 7" fill="currentColor"/></svg></span>';
+  }
+
+  async function ensureAvatarAssets() {
+    if (typeof window.ANIME_AVATAR_BOY === 'string' && typeof window.ANIME_AVATAR_GIRL === 'string') return true;
+    if (typeof window.ensureGomokuResource !== 'function') return false;
+    try {
+      await window.ensureGomokuResource('avatars');
+      return typeof window.ANIME_AVATAR_BOY === 'string' && typeof window.ANIME_AVATAR_GIRL === 'string';
+    } catch (error) {
+      console.warn('好友头像资源加载失败，将使用默认头像:', error);
+      return false;
+    }
+  }
+
+  function isCoupleFriend(person) {
+    if (person && person.relationshipType === 'couple') return true;
+    const uid = String(person && person.uid || '');
+    return Boolean(uid && state.friends.some(friend => String(friend.uid || '') === uid && friend.relationshipType === 'couple'));
+  }
+
+  function coupleBadge(person) {
+    return isCoupleFriend(person)
+      ? '<img class="sky-social-couple-badge" src="img/social/couple-badge.png" alt="情侣关系" title="你们已绑定为情侣" draggable="false" />'
+      : '';
   }
 
   function button(action, label, extra, tone) {
@@ -167,11 +248,52 @@
 
   function personHeading(person, suffix) {
     const username = person && person.username ? ` @${person.username}` : '';
-    return `<div style="min-width:0;flex:1"><div style="font-weight:900;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(avatarGlyph(person))} ${escapeHtml(displayName(person))}</div><div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(username)}${suffix ? ` · ${escapeHtml(suffix)}` : ''}</div></div>`;
+    return `<div class="sky-social-person-heading" style="min-width:0;flex:1"><div style="display:flex;align-items:center;gap:7px;min-width:0;font-weight:900;color:#1e293b">${avatarMarkup(person)}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(displayName(person))}</span>${coupleBadge(person)}</div><div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(username)}${suffix ? ` · ${escapeHtml(suffix)}` : ''}</div></div>`;
   }
 
   function card(content) {
     return `<div style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-bottom:1px solid rgba(148,163,184,.28)">${content}</div>`;
+  }
+
+  function renderLobbyRoster() {
+    const root = byId('skyFriendRoster');
+    if (!root) return;
+    const count = byId('skyFriendCount');
+    if (!isRegistered()) {
+      if (count) count.textContent = '登录后同步';
+      root.innerHTML = '<div class="sky-friend-roster-empty"><span aria-hidden="true">♙</span><b>登录后显示你的棋友</b><small>好友头像、在线状态和情侣标记会自动同步。</small><button type="button" data-sky-action="profile">登录账号 <span>→</span></button></div>';
+      return;
+    }
+    if (count) count.textContent = `${state.friends.length} 位棋友`;
+    if (!state.friends.length) {
+      root.innerHTML = '<div class="sky-friend-roster-empty"><span aria-hidden="true">☁</span><b>棋友还没有到齐</b><small>搜索好友账号，邀请熟悉的人来一局。</small><button type="button" data-sky-action="friend-center">查找好友 <span>→</span></button></div>';
+      return;
+    }
+    root.innerHTML = state.friends.slice(0, 4).map(friend => {
+      const online = friend.presenceHidden ? '状态已隐藏' : (friend.online ? '在线' : '离线');
+      const bond = affinityFor(friend, state.affinity.get(String(friend.uid)));
+      const level = bond ? (bond.fixed ? Number(bond.level) : Math.max(1, Math.min(100, Number(bond.level) || 1))) : 0;
+      const points = bond ? (bond.fixed ? Number(bond.points) : Math.max(0, Math.min(10000, Number(bond.points) || 0))) : 0;
+      const bondMarkup = bond ? `<span class="sky-friend-bond">💞 Lv.${level} · ${points}</span>` : '';
+      const unread = Number(friend.unread) > 0 ? ` · ${Math.min(99, Number(friend.unread))} 条未读` : '';
+      return `<button type="button" class="sky-friend-preview-row" data-sky-friend-preview data-uid="${attr(friend.uid)}" aria-label="与 ${attr(displayName(friend))} 私聊">
+        <span class="sky-friend-preview-avatar">${avatarMarkup(friend)}</span>
+        <span class="sky-friend-preview-copy"><strong>${escapeHtml(displayName(friend))}</strong><small><i class="${friend.online ? 'is-online' : ''}"></i>${escapeHtml(online + unread)}</small></span>
+        <span class="sky-friend-preview-badges">${coupleBadge(friend)}${bondMarkup}</span><span class="sky-friend-preview-arrow" aria-hidden="true">›</span>
+      </button>`;
+    }).join('');
+    if (!window.ANIME_AVATAR_BOY || !window.ANIME_AVATAR_GIRL) {
+      void ensureAvatarAssets().then(loaded => {
+        if (loaded && root.isConnected) renderLobbyRoster();
+      });
+    }
+  }
+
+  function onLobbyRosterClick(event) {
+    const friend = event.target?.closest?.('[data-sky-friend-preview]');
+    if (!friend) return;
+    const uid = friend.dataset.uid;
+    if (uid) void openChat(uid);
   }
 
   function renderFriends() {
@@ -185,16 +307,62 @@
       const online = friend.presenceHidden ? '状态已隐藏' : (friend.online ? '在线' : '离线');
       const unread = Number(friend.unread) > 0 ? ` · ${Math.min(99, Number(friend.unread))}${Number(friend.unread) > 99 ? '+' : ''} 条未读` : '';
       const id = `data-uid="${attr(friend.uid)}"`;
-      return card(
-        personHeading(friend, online + unread) +
-        `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">` +
+      const bond = affinityFor(friend, state.affinity.get(String(friend.uid)));
+      const bondBadge = bond
+        ? `<span class="sky-social-friend-bond" title="打开亲密度详情">💞 Lv.${bond.level} · ${Number(bond.points).toLocaleString()}</span>`
+        : '';
+      return `<div class="sky-social-friend-row"><div class="sky-social-friend-summary">${personHeading(friend, online + unread)}${bondBadge}</div>` +
+        `<div class="sky-social-friend-actions">` +
         button('chat', '私聊', id, 'primary') +
         button('invite', '邀战', id, 'primary') +
         button('delete-friend', '删除', id) +
         button('block', '拉黑', id, 'danger') +
-        `</div>`
-      );
+        `</div></div>`;
     }).join('');
+  }
+
+  function renderAffinity() {
+    const root = byId('socialAffinityList');
+    if (!root) return;
+    const entries = affinityEntriesForDisplay()
+      .sort((left, right) => right.points - left.points || displayName(left).localeCompare(displayName(right), 'zh-CN'));
+    const hasFixedCouple = entries.some(friend => friend.fixed === true);
+    const rulesText = hasFixedCouple
+      ? '已配置的情侣亲密度固定为 1314（Lv.521），不会随私聊变化。'
+      : '每条成功发送的好友私聊 +1 点，双方共同累计；每 100 点升 1 级，最高 Lv.100。';
+    const rules = `<div style="margin-bottom:8px;padding:9px 10px;border:1px solid #fbcfe8;border-radius:11px;background:linear-gradient(135deg,#fff7fb,#fff);color:#9d174d;font-size:11px;font-weight:800;line-height:1.5;">${rulesText}</div>`;
+    if (!entries.length) {
+      root.innerHTML = rules + emptyMarkup(state.friends.length ? '和好友成功发送私聊后，好感度会从 0 点开始累计。' : '先添加一位好友，再通过私聊开始累计好感度。');
+      return;
+    }
+    root.innerHTML = rules + entries.map(friend => {
+      const fixed = friend.fixed === true;
+      const level = fixed ? Number(friend.level) : Math.max(1, Math.min(100, Number(friend.level) || 1));
+      const points = fixed ? Number(friend.points) : Math.max(0, Math.min(10000, Number(friend.points) || 0));
+      const maxed = !fixed && level >= 100;
+      const current = fixed || maxed ? 100 : points % 100;
+      const remaining = maxed ? 0 : 100 - current;
+      return `<div style="padding:10px 8px;border-bottom:1px solid rgba(148,163,184,.24);"><div style="display:flex;align-items:center;gap:8px;">${personHeading(friend, `Lv.${level} · ${points.toLocaleString()} 点`)}<strong style="flex:none;color:#be185d;font-size:11px;">${fixed ? '🔒 已固定' : (maxed ? '满级' : `还差 ${remaining} 点`)}</strong></div><div style="height:7px;margin:7px 0 0;border-radius:999px;background:#f1f5f9;overflow:hidden;"><span style="display:block;width:${current}%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#f472b6,#db2777);"></span></div><div style="margin-top:4px;color:#94a3b8;font-size:10px;font-weight:700;">${fixed ? '情侣亲密度固定为 1314（Lv.521）' : (maxed ? '已达到当前最高等级' : `距离 Lv.${level + 1}：${current} / 100`)}</div></div>`;
+    }).join('');
+  }
+
+  function setAffinity(items) {
+    const next = new Map();
+    (Array.isArray(items) ? items : []).forEach(item => {
+      const friendUid = String(item && item.uid || '');
+      if (!friendUid) return;
+      if (isFixedCoupleAccount(item)) {
+        next.set(friendUid, { ...item, uid: friendUid, ...FIXED_COUPLE_AFFINITY });
+        return;
+      }
+      const points = Math.max(0, Math.min(10000, Number(item.points) || 0));
+      next.set(friendUid, { ...item, uid: friendUid, points, level: Math.max(1, Math.min(100, Number(item.level) || 1)) });
+    });
+    state.affinity = next;
+    renderFriends();
+    renderAffinity();
+    renderAffinitySummary();
+    return true;
   }
 
   function renderRequests() {
@@ -267,10 +435,11 @@
   }
 
   function switchTab(name) {
-    const selected = ['friends', 'requests', 'recent', 'blocks'].includes(name) ? name : 'friends';
+    const selected = ['friends', 'affinity', 'requests', 'recent', 'blocks'].includes(name) ? name : 'friends';
     cacheDom();
     const roots = {
       friends: byId('socialFriendsList'),
+      affinity: byId('socialAffinityList'),
       requests: byId('socialRequestsList'),
       recent: byId('socialRecentList'),
       blocks: byId('socialBlocksList')
@@ -381,6 +550,9 @@
 
   function renderAll() {
     renderFriends();
+    renderLobbyRoster();
+    renderAffinity();
+    renderAffinitySummary();
     renderRequests();
     renderRecent();
     renderBlocks();
@@ -824,6 +996,9 @@
       if (input) input.value = '';
       if (result.data) state.messages.push(result.data);
       renderMessages();
+      if (typeof window.scheduleGameAffinityRefresh === 'function') {
+        window.scheduleGameAffinityRefresh();
+      }
     } catch (error) {
       notice(error.message || '消息发送失败', true);
     } finally {
@@ -925,9 +1100,14 @@
     } catch (error) { notice(error.message, true); }
   }
 
-  function socketUrl(origin, ticket) {
-    const url = new URL('/api/social/socket', origin);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  function socketUrl(ticketResponseUrl, ticket) {
+    const routing = window.GomokuBackendRouting;
+    const responseUrl = String(ticketResponseUrl || '');
+    const host = (routing && responseUrl && routing.getHostForUrl(responseUrl))
+      || (routing && routing.getActiveHost())
+      || (typeof activeApiHost !== 'undefined' ? activeApiHost : '');
+    const routedUrl = routing && host ? routing.socketUrl('/api/social/socket', host) : '';
+    const url = new URL(routedUrl || '/api/social/socket', routedUrl ? undefined : (responseUrl || host));
     url.searchParams.set('ticket', ticket);
     return url.href;
   }
@@ -964,14 +1144,18 @@
     if (state.socketConnecting) return;
     if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) return;
     state.socketConnecting = true;
+    let ticketResponseUrl = '';
     try {
       const result = await api('/api/social/socket-ticket', { method: 'POST' });
       if (!state.started || state.stopping) return;
-      const origin = result.response && result.response.url ? new URL(result.response.url).origin : (typeof activeApiHost !== 'undefined' ? activeApiHost : '');
+      ticketResponseUrl = result.response && result.response.url ? result.response.url : '';
+      const routing = window.GomokuBackendRouting;
+      const origin = (routing && ticketResponseUrl && routing.getHostForUrl(ticketResponseUrl))
+        || (typeof activeApiHost !== 'undefined' ? activeApiHost : '');
       const ticket = String(result.data?.ticket || '');
       if (!origin || !/^[A-Fa-f0-9]{48}$/.test(ticket)) throw new Error('好友连接票据无效');
       state.ticketOrigin = origin;
-      const socket = new WebSocket(socketUrl(origin, ticket));
+      const socket = new WebSocket(socketUrl(ticketResponseUrl, ticket));
       state.socket = socket;
       socket.onopen = () => {
         if (state.socket !== socket) return;
@@ -988,6 +1172,7 @@
         if (state.socket === socket) state.socket = null;
         if (state.socketPingTimer) clearInterval(state.socketPingTimer);
         state.socketPingTimer = null;
+        if (!state.stopping && ticketResponseUrl) window.GomokuBackendRouting?.markFailureForUrl(ticketResponseUrl);
         setConnectionStatus('好友实时连接已断开，正在重连…', false);
         scheduleSocketReconnect();
       };
@@ -1019,16 +1204,21 @@
     if (event.kind === 'message' && state.currentChat && String(state.currentChat.uid) === String(event.fromUid)) {
       loadChat({ incremental: true, quiet: true });
     }
-    if (event.kind === 'message') notifyIncomingMessage(event);
+    if (event.kind === 'message') {
+      notifyIncomingMessage(event);
+      if (typeof window.scheduleGameAffinityRefresh === 'function') window.scheduleGameAffinityRefresh();
+    }
     refresh({ quiet: true });
   }
 
   async function open() {
     if (!requireAccount()) return false;
+    state.affinity.clear();
     requestNotificationPermission();
     const modal = byId('friendsModal');
     if (modal) modal.classList.add('show');
     switchTab('friends');
+    await ensureAvatarAssets();
     start();
     await refresh();
     return true;
@@ -1103,7 +1293,8 @@
     const chatInput = state.dom.socialChatInput;
     const presence = state.dom.socialPresenceHidden;
     const metrics = state.dom.socialMetricsEnabled;
-    const listeners = state.domListeners = { friendsModal, chatModal, searchInput, chatInput, presence, metrics };
+    const lobbyRoster = byId('skyFriendRoster');
+    const listeners = state.domListeners = { friendsModal, chatModal, searchInput, chatInput, presence, metrics, lobbyRoster };
     for (const root of [friendsModal, chatModal]) {
       if (root) {
         root.dataset.socialBound = '1';
@@ -1112,6 +1303,7 @@
         root.addEventListener('click', onActionClick, true);
       }
     }
+    if (lobbyRoster) lobbyRoster.addEventListener('click', onLobbyRosterClick, true);
     if (searchInput) {
       searchInput.dataset.socialBound = '1';
       searchInput.maxLength = 32;
@@ -1145,6 +1337,7 @@
         delete root.dataset.socialBound;
       }
     }
+    if (listeners.lobbyRoster) listeners.lobbyRoster.removeEventListener('click', onLobbyRosterClick, true);
     if (listeners.searchInput) {
       listeners.searchInput.removeEventListener('keydown', onSearchKeyDown);
       listeners.searchInput.removeEventListener('input', onSearchInput);
@@ -1221,6 +1414,7 @@
     state.requests = [];
     state.recent = [];
     state.blocks = [];
+    state.affinity.clear();
     state.searchResult = null;
     state.searchUsername = '';
     state.searchAt = 0;
@@ -1253,6 +1447,8 @@
     respondInvite,
     recordOpponent,
     saveSettings,
-    resume
+    setAffinity,
+    resume,
+    renderLobbyRoster
   });
 })();

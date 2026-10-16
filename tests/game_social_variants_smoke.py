@@ -64,7 +64,8 @@ def main():
         assert re.search(r"doubleStarEndgame\s*:\s*false", source) and re.search(r"weatherSeason\s*:\s*false", source), f"{path}: 未启用未来功能钩子"
         assert re.search(r"prefers-reduced-motion\s*:\s*reduce", source), f"{path}: reduced-motion 降级缺失"
         assert "low-spec-mode" in source, f"{path}: low-spec 降级缺失"
-        assert "候选标记" in source and "非引擎判定" in source and "结果标记" in source, f"{path}: 复盘候选文案未声明降级"
+        assert "真实棋谱节点" in source and "点击节点跳到对应棋盘" in source, f"{path}: 复盘节点说明缺失"
+        assert "openCurrentGameReplayAtStep?.(event.step)" in source, f"{path}: 复盘节点没有跳转到棋盘"
         assert 'aria-current' in source and 'gameDockUnreadBadge' in source, f"{path}: 浮岛 aria/红点缺失"
 
         announcement = extract_block(source, "script", "announcementCenterEnhancements")

@@ -70,13 +70,64 @@ class MemoryStatement {
       const user = this.db.users.get(String(a[0]));
       return user && user.token === a[1] ? { ...user } : null;
     }
+    if (q.startsWith('select score, wins, total_games from users where uid = ?')) {
+      const user = this.db.users.get(String(a[0]));
+      return user ? { score: user.score, wins: user.wins, total_games: user.total_games } : null;
+    }
+    if (q.startsWith('select failed_login_count as failure_count, locked_until as locked_until from users where uid = ?')) {
+      const user = this.db.users.get(String(a[0]));
+      return user ? { failure_count: user.failed_login_count, locked_until: user.locked_until } : null;
+    }
+    if (q.startsWith('select failed_reset_count as failure_count, reset_locked_until as locked_until from users where uid = ?')) {
+      const user = this.db.users.get(String(a[0]));
+      return user ? { failure_count: user.failed_reset_count, locked_until: user.reset_locked_until } : null;
+    }
+    if (q.startsWith('select q.uid, q.matched_with, q.room_code')) {
+      const row = this.db.matchQueue.get(String(a[0]));
+      const peer = row && this.db.matchQueue.get(String(row.matched_with));
+      return row && peer && row.status === 'matched' && peer.status === 'matched' &&
+        peer.matched_with === row.uid && peer.room_code === row.room_code &&
+        row.room_code && row.updated_at > Number(a[1]) && peer.updated_at > Number(a[2])
+        ? {
+            uid: row.uid, matched_with: row.matched_with, room_code: row.room_code,
+            reported_outcome: row.reported_outcome, settlement_claim_id: row.settlement_claim_id,
+            opponent_outcome: peer.reported_outcome,
+            opponent_settlement_claim_id: peer.settlement_claim_id,
+          }
+        : null;
+    }
+    if (q.startsWith('select q.reported_outcome, q.settlement_claim_id')) {
+      const row = this.db.matchQueue.get(String(a[0]));
+      const peer = row && this.db.matchQueue.get(String(row.matched_with));
+      return row && peer && row.status === 'matched' && peer.status === 'matched' &&
+        peer.matched_with === row.uid && peer.room_code === row.room_code
+        ? {
+            reported_outcome: row.reported_outcome,
+            settlement_claim_id: row.settlement_claim_id,
+            opponent_outcome: peer.reported_outcome,
+            opponent_settlement_claim_id: peer.settlement_claim_id,
+          }
+        : null;
+    }
     if (q.includes('from users') && q.includes('where username = ?')) {
       const user = [...this.db.users.values()].find(row => row.username === a[0] && row.username);
+      return user ? { ...user } : null;
+    }
+    if (q.startsWith('select * from users where (username = ? or uid = ? or nickname = ?)')) {
+      const user = [...this.db.users.values()].find(row => row.username === a[0] || row.uid === a[1] || row.nickname === a[2]);
+      return user ? { ...user } : null;
+    }
+    if (q.startsWith('select * from users where (username = ? or uid = ?)')) {
+      const user = [...this.db.users.values()].find(row => row.username === a[0] || row.uid === a[1]);
       return user ? { ...user } : null;
     }
     if (q.includes('select uid from users where uid = ?')) {
       const user = this.db.users.get(String(a[0]));
       return user && user.username ? { uid: user.uid } : null;
+    }
+    if (q.startsWith('select uid, username from users where uid = ?')) {
+      const user = this.db.users.get(String(a[0]));
+      return user && user.username ? { uid: user.uid, username: user.username } : null;
     }
     if (q.includes('select 1 as ok from friendships')) {
       return this.db.friendships.has(pairKey(a[0], a[1])) ? { ok: 1 } : null;
@@ -118,6 +169,14 @@ class MemoryStatement {
     }
     if (q.startsWith('select max(id) as max_id from private_messages')) {
       const ids = this.db.messages.filter(row => row.pair_key === a[0]).map(row => row.id);
+      return { max_id: ids.length ? Math.max(...ids) : null };
+    }
+    if (q.startsWith('select max(id) as max_id from world_messages')) {
+      const requestingUid = q.includes('from user_blocks') ? String(a[a.length - 1]) : '';
+      const ids = this.db.worldMessages
+        .filter(row => row.channel === a[0] && row.moderation_state === 'visible' && row.created_at >= Number(a[1]) &&
+          (!requestingUid || !this.db.blocks.has(`${requestingUid}:${row.sender_uid}`)))
+        .map(row => row.id);
       return { max_id: ids.length ? Math.max(...ids) : null };
     }
     if (q.startsWith('select cleared_before_id from message_state')) {
@@ -261,6 +320,81 @@ class MemoryStatement {
       });
       return { meta: { changes: 1 } };
     }
+    if (q.startsWith('insert into world_message_state')) {
+      const uid = String(a[0]);
+      const previous = this.db.worldMessageStates.get(uid) || { last_read_id: 0, cleared_before_id: 0 };
+      this.db.worldMessageStates.set(uid, {
+        last_read_id: Math.max(previous.last_read_id, Number(a[1]) || 0),
+        cleared_before_id: previous.cleared_before_id,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('update users set failed_login_count = coalesce(failed_login_count, 0) + 1')) {
+      const [limit, lockUntil, uid, now] = a;
+      const user = this.db.users.get(String(uid));
+      if (!user || Number(user.locked_until || 0) > Number(now)) return { meta: { changes: 0 } };
+      user.failed_login_count = Number(user.failed_login_count || 0) + 1;
+      if (user.failed_login_count >= Number(limit)) user.locked_until = Number(lockUntil);
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('update users set failed_reset_count = coalesce(failed_reset_count, 0) + 1')) {
+      const [limit, lockUntil, uid, now] = a;
+      const user = this.db.users.get(String(uid));
+      if (!user || Number(user.reset_locked_until || 0) > Number(now)) return { meta: { changes: 0 } };
+      user.failed_reset_count = Number(user.failed_reset_count || 0) + 1;
+      if (user.failed_reset_count >= Number(limit)) user.reset_locked_until = Number(lockUntil);
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('update match_queue set reported_outcome =')) {
+      const [outcome, uid, cutoff, peerCutoff] = a;
+      const row = this.db.matchQueue.get(String(uid));
+      const peer = row && this.db.matchQueue.get(String(row.matched_with));
+      if (!row || row.status !== 'matched' || row.settlement_claim_id || row.reported_outcome ||
+          Number(row.updated_at) <= Number(cutoff) || !peer || peer.status !== 'matched' ||
+          peer.matched_with !== row.uid || peer.room_code !== row.room_code || Number(peer.updated_at) <= Number(peerCutoff)) {
+        return { meta: { changes: 0 } };
+      }
+      row.reported_outcome = String(outcome);
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('update match_queue set settlement_claim_id =')) {
+      const [claimId, firstUid, secondUid, cutoff, aUid, bUid, aCutoff, bCutoff, aOutcome, bOutcome, firstUserUid, secondUserUid] = a;
+      const first = this.db.matchQueue.get(String(firstUid));
+      const second = this.db.matchQueue.get(String(secondUid));
+      const rowA = this.db.matchQueue.get(String(aUid));
+      const rowB = this.db.matchQueue.get(String(bUid));
+      if (!first || !second || first.status !== 'matched' || second.status !== 'matched' ||
+          first.settlement_claim_id || second.settlement_claim_id ||
+          Number(first.updated_at) <= Number(cutoff) || Number(second.updated_at) <= Number(cutoff) ||
+          !rowA || !rowB || rowA.status !== 'matched' || rowB.status !== 'matched' ||
+          rowA.matched_with !== rowB.uid || rowB.matched_with !== rowA.uid || rowA.room_code !== rowB.room_code ||
+          Number(rowA.updated_at) <= Number(aCutoff) || Number(rowB.updated_at) <= Number(bCutoff) ||
+          rowA.reported_outcome !== aOutcome || rowB.reported_outcome !== bOutcome ||
+          !this.db.users.has(String(firstUserUid)) || !this.db.users.has(String(secondUserUid))) {
+        return { meta: { changes: 0 } };
+      }
+      first.settlement_claim_id = String(claimId);
+      second.settlement_claim_id = String(claimId);
+      return { meta: { changes: 2 } };
+    }
+    if (q.startsWith('update users set score =')) {
+      const [settledAt, firstUid, secondUid, bUid, aUid, claimA, claimB, outcomeA, outcomeB] = a;
+      const rowA = this.db.matchQueue.get(String(aUid));
+      const rowB = this.db.matchQueue.get(String(bUid));
+      if (!rowA || !rowB || rowA.settlement_claim_id !== claimA || rowB.settlement_claim_id !== claimB ||
+          rowA.reported_outcome !== outcomeA || rowB.reported_outcome !== outcomeB ||
+          rowA.matched_with !== rowB.uid || rowB.matched_with !== rowA.uid) return { meta: { changes: 0 } };
+      for (const uid of [String(firstUid), String(secondUid)]) {
+        const user = this.db.users.get(uid);
+        const result = this.db.matchQueue.get(uid)?.reported_outcome;
+        const delta = result === 'win' ? 25 : result === 'loss' ? -15 : 0;
+        user.score = Math.max(0, Number(user.score) + delta);
+        user.wins = Number(user.wins || 0) + (result === 'win' ? 1 : 0);
+        user.total_games = Number(user.total_games || 0) + 1;
+        user.last_game_at = Number(settledAt);
+      }
+      return { meta: { changes: 2 } };
+    }
     if (q.startsWith('delete from social_socket_tickets')) {
       for (const [hash, row] of this.db.tickets) {
         if (row.expires_at <= Number(a[0]) || row.used !== 0) this.db.tickets.delete(hash);
@@ -374,12 +508,20 @@ class MemoryStatement {
 
 class MemoryDB {
   constructor(users) {
-    this.users = new Map(users.map(user => [user.uid, { score: 1000, wins: 0, total_games: 0, ...user }]));
+    this.users = new Map(users.map(user => [user.uid, {
+      score: 1000, wins: 0, total_games: 0,
+      failed_login_count: 0, locked_until: 0,
+      failed_reset_count: 0, reset_locked_until: 0,
+      ...user,
+    }]));
     this.friendRequests = new Map();
     this.friendships = new Set();
     this.blocks = new Set();
     this.messages = [];
+    this.worldMessages = [];
     this.messageStates = new Map();
+    this.worldMessageStates = new Map();
+    this.matchQueue = new Map();
     this.tickets = new Map();
     this.gameInvites = new Map();
     this.recentReports = new Map();
@@ -433,11 +575,13 @@ async function main() {
     { uid: '100001', username: 'alice', nickname: 'Alice', avatar: '👧', token: 'token-alice', token_expires_at: Date.now() + 86400000 },
     { uid: '100002', username: 'bob', nickname: 'Bob', avatar: '👦', token: 'token-bob', token_expires_at: Date.now() + 86400000 },
     { uid: '100003', username: 'charlie', nickname: 'Charlie', avatar: '🐼', token: 'token-charlie', token_expires_at: Date.now() + 86400000 },
+    { uid: '100004', username: 'reset-user', nickname: 'Reset User', security_q: 'favorite color?', security_salt: 'reset-salt', security_a_hash: 'no-match' },
   ]);
   const notifications = [];
   const socialFetches = [];
   const env = {
     DB: db,
+    PRIVATE_GAME_MODE: '0',
     GOMOKU_SOCIAL: {
       idFromName(name) { return name; },
       get(id) {
@@ -515,6 +659,13 @@ async function main() {
     const result = await call(env, path, options);
     assert.ok([401, 403].includes(result.response.status), `${path} 必须拒绝未认证请求`);
   }
+
+  const unconfiguredPrivateEnv = { ...env, PRIVATE_GAME_MODE: '1' };
+  result = await call(unconfiguredPrivateEnv, '/api/friends?uid=100001', { token: 'token-alice' });
+  assert.equal(result.response.status, 403, '缺少 PRIVATE_GAME_USERNAMES 时私人模式必须 fail closed');
+  const configuredPrivateEnv = { ...env, PRIVATE_GAME_MODE: '1', PRIVATE_GAME_USERNAMES: 'alice,bob' };
+  result = await call(configuredPrivateEnv, '/api/friends/search?uid=100001&username=bob', { token: 'token-alice' });
+  assert.equal(result.response.status, 200, '私人账号白名单应从运行时环境变量读取');
 
   // CORS headers alone are not a CSRF boundary: a hostile page can still send
   // a simple request even when it cannot read the response. Authenticated API
@@ -671,6 +822,20 @@ async function main() {
   assert.equal(firstMessage.response.status, 200);
   assert.equal(duplicateMessage.payload.data.id, firstMessage.payload.data.id, '相同客户端消息 ID 应返回同一消息');
   assert.equal(db.messages.length, 1, '相同客户端消息 ID 不得重复落库');
+  result = await call(env, '/api/messages/read', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { friendUid: '100002', lastMessageId: 999999 },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.data.lastReadId, firstMessage.payload.data.id, '私聊已读游标不得越过该会话的最新消息');
+  db.worldMessages.push({
+    id: 50, channel: 'world', sender_uid: '100002', moderation_state: 'visible', created_at: Date.now(),
+  });
+  result = await call(env, '/api/world/messages/read', {
+    method: 'POST', uid: '100001', token: 'token-alice', body: { lastMessageId: 999999 },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.data.lastReadId, 50, '世界频道已读游标不得越过当前可见消息');
   const bobIncrementalMessages = await call(env, '/api/messages?uid=100002&friendUid=100001&after=0&limit=50', { token: 'token-bob' });
   assert.deepEqual(bobIncrementalMessages.payload.data.map(row => row.id), [firstMessage.payload.data.id], 'after 游标应只返回游标之后的新私聊');
   const bobNoNewMessages = await call(env, `/api/messages?uid=100002&friendUid=100001&after=${firstMessage.payload.data.id}&limit=50`, { token: 'token-bob' });
@@ -703,6 +868,40 @@ async function main() {
   assert.equal(bobMessages.payload.data.length, 1, '对方聊天历史不得被一并删除');
   assert.equal(db.messages.length, 1, '清空聊天不得删除永久消息记录');
 
+  db.matchQueue.set('100001', {
+    uid: '100001', status: 'matched', matched_with: '100002', room_code: '345678',
+    updated_at: Date.now(), reported_outcome: null, settlement_claim_id: null,
+  });
+  db.matchQueue.set('100002', {
+    uid: '100002', status: 'matched', matched_with: '100001', room_code: '345678',
+    updated_at: Date.now(), reported_outcome: null, settlement_claim_id: null,
+  });
+  result = await call(env, '/api/report_game', {
+    method: 'POST', uid: '100003', token: 'token-charlie', body: { isWin: true, isDraw: false },
+  });
+  assert.equal(result.response.status, 409, '没有服务器匹配凭证的客户端不得伪造胜场');
+  assert.equal(db.users.get('100003').score, 1000);
+  result = await call(env, '/api/report_game', {
+    method: 'POST', uid: '100001', token: 'token-alice', body: { isWin: true, isDraw: false },
+  });
+  assert.equal(result.response.status, 202, '只有一方确认时战绩应暂存且不计分');
+  assert.equal(db.users.get('100001').score, 1000);
+  result = await call(env, '/api/report_game', {
+    method: 'POST', uid: '100002', token: 'token-bob', body: { isWin: false, isDraw: false },
+  });
+  assert.equal(result.response.status, 200, '双方一致确认后结算天梯');
+  assert.equal(db.users.get('100001').score, 1025);
+  assert.equal(db.users.get('100001').wins, 1);
+  assert.equal(db.users.get('100001').total_games, 1);
+  assert.equal(db.users.get('100002').score, 985);
+  assert.equal(db.users.get('100002').wins, 0);
+  assert.equal(db.users.get('100002').total_games, 1);
+  result = await call(env, '/api/report_game', {
+    method: 'POST', uid: '100001', token: 'token-alice', body: { isWin: true, isDraw: false },
+  });
+  assert.equal(result.response.status, 200, '重复结算请求保持幂等');
+  assert.equal(db.users.get('100001').score, 1025, '重放战绩不能重复加分');
+
   result = await call(env, '/api/blocks', {
     method: 'POST', uid: '100001', token: 'token-alice', body: { targetUid: '100002' },
   });
@@ -722,6 +921,15 @@ async function main() {
     body: { receiverUid: '100001', text: 'blocked', clientMessageId: 'bob-blocked-01' },
   });
   assert.equal(result.response.status, 403, '拉黑后旧关系不得继续发送私聊');
+  db.worldMessages.push(
+    { id: 51, channel: 'world', sender_uid: '100003', moderation_state: 'visible', created_at: Date.now() },
+    { id: 75, channel: 'world', sender_uid: '100002', moderation_state: 'visible', created_at: Date.now() },
+  );
+  result = await call(env, '/api/world/messages/read', {
+    method: 'POST', uid: '100001', token: 'token-alice', body: { lastMessageId: 999999 },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.data.lastReadId, 51, '世界频道游标不得越过被屏蔽来源的消息');
 
   const issuedAt = Date.now();
   result = await call(env, '/api/social/socket-ticket', {
@@ -811,6 +1019,22 @@ async function main() {
 
   const duplicateNotifications = notifications.filter(item => item.event.kind === 'message' && item.event.messageId === firstMessage.payload.data.id).length;
   assert.equal(duplicateNotifications, 1, '幂等消息重试不得重复推送实时通知');
+
+  const badLoginAttempts = await Promise.all(Array.from({ length: 7 }, () => call(env, '/api/auth/login', {
+    method: 'POST', body: { username: 'alice', password: 'wrong-password' },
+  })));
+  const aliceAfterBadLogins = db.users.get('100001');
+  assert.ok(aliceAfterBadLogins.failed_login_count <= 5, '并发错误登录不可绕过原子失败次数上限');
+  assert.ok(aliceAfterBadLogins.locked_until > Date.now(), '达到阈值后账号应被锁定');
+  assert.ok(badLoginAttempts.some(item => item.response.status === 429 || item.payload.code === 429), '并发错误登录达到阈值时应反馈锁定');
+  const resetAttempts = await Promise.all(Array.from({ length: 5 }, () => call(env, '/api/auth/reset_password', {
+    method: 'POST', body: { username: 'reset-user', securityAnswer: 'wrong-answer', newPassword: 'new-password' },
+  })));
+  const resetUser = db.users.get('100004');
+  assert.ok(resetUser.failed_reset_count <= 3, '并发错误密保不可绕过原子失败次数上限');
+  assert.ok(resetUser.reset_locked_until > Date.now(), '密保达到阈值后应锁定找回流程');
+  assert.ok(resetAttempts.some(item => item.payload.code === 429), '并发错误密保达到阈值时应反馈锁定');
+
   console.log(JSON.stringify({
     unauthenticatedRoutesRejected: 5,
     exactSearchAndBlockedPrivacy: true,
@@ -829,6 +1053,10 @@ async function main() {
     socialHubMultiDevicePresence: true,
     premiumCatalogAndSandboxNoCredit: true,
     gameLayoutNormalizedAndAuthenticated: true,
+    privateGameAllowlistRuntimeAndFailClosed: true,
+    messageReadCursorsClamped: true,
+    pairedGameSettlementVerifiedAndIdempotent: true,
+    concurrentCredentialFailuresLockedAtomically: true,
   }));
 }
 
