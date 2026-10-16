@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.129';
+    const CURRENT_VERSION_TAG = 'v1.0.130';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -3263,6 +3263,8 @@
       primaryHost: API_PRIMARY_HOST,
       getActiveHost: () => activeApiHost,
       getOrderedHosts: () => getOrderedApiHosts(),
+      // 房间中继状态按后端隔离；两名玩家必须用相同的固定顺序查找短房间码。
+      getAllHosts: () => [API_PRIMARY_HOST, ...CLOUDFLARE_API_HOSTS],
       getHostForUrl: value => {
         try { return getAllowedApiHostForUrl(new URL(value)); }
         catch (_) { return ''; }
@@ -3357,8 +3359,10 @@
         : 7000;
       const requestOptions = { ...options };
       const anonymousRequest = requestOptions.anonymous === true;
+      const primaryOnly = requestOptions.primaryOnly === true;
       delete requestOptions.anonymous;
       delete requestOptions.timeoutMs;
+      delete requestOptions.primaryOnly;
       const endpointText = String(endpoint || '');
       let fixedEndpointUrl = null;
       if (/^https?:/i.test(endpointText)) {
@@ -3378,7 +3382,7 @@
       const canFailover = ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod);
       const explicitEndpointHost = fixedEndpointUrl ? getAllowedApiHostForUrl(fixedEndpointUrl) : '';
       const orderedHosts = canFailover
-        ? getOrderedApiHosts()
+        ? (primaryOnly ? [API_PRIMARY_HOST] : getOrderedApiHosts())
         : [explicitEndpointHost || API_PRIMARY_HOST];
       const isLoginRequest = requestMethod === 'POST' &&
         (fixedEndpointUrl ? getApiPathname(fixedEndpointUrl) : endpointText.split('?')[0]) === API_LOGIN_PATH;
@@ -4509,7 +4513,7 @@
         localStorage.setItem(key, JSON.stringify(list));
         updateHistoryCountUI();
 
-        // ☁️ 实时异步备份到 Cloudflare D1 云端数据库（换机/重装永不丢战绩谱，仅限正式账号）
+        // 实时异步备份到 ECS 主数据库（仅限正式账号）
         if (hasRegisteredAccountSession()) {
           safeApiFetch('/api/history/record', {
             method: 'POST',
@@ -7563,14 +7567,12 @@
     // 🚀 Cloudflare 保留私有仓库更新文件中转；游戏业务 API 以 ECS 为主。
         // 📜 当前版本官方更新内容说明（用于开机公告、弹窗展示与日志回顾）
     const CURRENT_UPDATE_NOTES = [
-      "👥 【完整好友系统】支持精确账号查找、好友申请、在线状态、最近对手、删除与黑名单管理",
-      "💬 【实时私聊】好友间支持文字、Emoji、快捷短语、未读同步、历史分页和个人清空",
-      "🎮 【好友邀战】一键创建 2 分钟有效房间邀请，接受后自动进房，P2P 失败仍可靠中继",
-      "⚡ 【首屏性能升级】核心、联机、社交、排行榜、复盘和设置按需拆包，4× CPU 冷启动中位交互约 2.01 秒",
-      "🎨 【智能画质】新增自动/高清/流畅档，依据设备能力选择 Canvas 清晰度并降低弱机发热",
-      "📡 【联机质量】并行探测官方入口、缓存近期较快线路，断线按 0/1/2/4/8/12 秒自动恢复",
-      "🛡️ 【社交安全】短时一次性 WebSocket 票据、消息幂等、精确搜索、防枚举和全链路拉黑校验",
-      "📊 【匿名质量统计】仅采样上传性能区间、画质、入口、链路类型和重连结果，可随时关闭"
+      "🔔 【更新反馈】点检查更新后立即显示检查中状态、进度和按钮反馈，不必等网络请求结束才知道已开始",
+      "⚡ 【匹配稳定性】等待中的匹配会定时续接，减少并发匹配时漏配；进房时校验房间状态，避免误进过期棋盘",
+      "💬 【好友与私聊】好友邀请、私聊刷新和复制房间号增加即时反馈，社交数据读取统一使用 ECS 主库",
+      "🔌 【联机恢复】应用回到前台时及时恢复实时连接，并清理旧会话残留，降低好友和房间状态错乱",
+      "👤 【头像一致性】固定账号头像映射覆盖好友、邀请、排行、匹配与棋谱；人机头像不再借用情侣头像",
+      "🧭 【复盘体验】修正结束后返回棋盘复盘入口，并清理复盘画面中的终局和技能临时特效"
     ];
     try {
       const verEl = document.getElementById('appVersionDisplay');
@@ -7744,6 +7746,93 @@
     let isCheckingAppUpdate = false;
     let isAppDownloading = false;
     let updateManifestRequest = null;
+    let isManualUpdateCheckInProgress = false;
+    let updateCheckButtonOriginalHtml = null;
+
+    function setManualUpdateCheckBusy(isBusy) {
+      const versionEl = document.getElementById('appVersionDisplay');
+      const updateButton = document.querySelector('[data-sky-action="update"]');
+      if (isBusy) {
+        if (versionEl) {
+          versionEl.textContent = '正在检查…';
+          versionEl.setAttribute('aria-live', 'polite');
+        }
+        if (updateButton) {
+          if (updateCheckButtonOriginalHtml === null) updateCheckButtonOriginalHtml = updateButton.innerHTML;
+          updateButton.disabled = true;
+          updateButton.setAttribute('aria-busy', 'true');
+          updateButton.innerHTML = '<span>⏳ 正在检查…</span>';
+        }
+        return;
+      }
+      if (updateButton) {
+        updateButton.disabled = false;
+        updateButton.removeAttribute('aria-busy');
+        if (updateCheckButtonOriginalHtml !== null) updateButton.innerHTML = updateCheckButtonOriginalHtml;
+      }
+      updateCheckButtonOriginalHtml = null;
+    }
+
+    function showUpdateCheckPendingState() {
+      const modalIcon = document.getElementById('updateModalIcon');
+      const modalTitle = document.getElementById('updateModalTitle');
+      const tagEl = document.getElementById('updateTagText');
+      const notesTitle = document.getElementById('updateNotesTitle');
+      const notesEl = document.getElementById('updateNotesContent');
+      const downloadButton = document.getElementById('btnFastDownload');
+      const cancelButton = document.getElementById('btnUpdateCancel');
+      const progressWrap = document.getElementById('updateProgressBarWrap');
+      const progressInner = document.getElementById('updateProgressBarInner');
+      const progressPercent = document.getElementById('updateProgressPercentText');
+      const progressStatus = document.getElementById('updateProgressStatusText');
+
+      if (modalIcon) {
+        modalIcon.textContent = '🔎';
+        modalIcon.classList.add('update-check-spin');
+      }
+      if (modalTitle) modalTitle.textContent = '正在检查更新…';
+      if (tagEl) {
+        tagEl.textContent = `${DISPLAY_VERSION_TAG} (当前版本)`;
+        tagEl.style.background = '#f1f5f9';
+        tagEl.style.color = '#475569';
+      }
+      if (notesTitle) notesTitle.textContent = '检查状态：';
+      if (notesEl) notesEl.textContent = '正在连接官方更新服务并读取版本清单。\n\n网络响应较慢时请稍候，检查完成后会在这里显示结果。';
+      if (downloadButton) {
+        downloadButton.style.display = 'none';
+        downloadButton.disabled = true;
+      }
+      if (cancelButton) {
+        cancelButton.textContent = '隐藏检查窗口';
+        cancelButton.style.background = '#f1f5f9';
+        cancelButton.style.color = '#64748b';
+      }
+      if (progressWrap) {
+        progressWrap.style.display = 'block';
+        progressWrap.classList.add('update-check-pending');
+      }
+      if (progressInner) progressInner.style.width = '36%';
+      if (progressPercent) progressPercent.textContent = '…';
+      if (progressStatus) progressStatus.textContent = '正在连接更新服务…';
+      openUpdateModal();
+    }
+
+    function finishManualUpdateCheck() {
+      isManualUpdateCheckInProgress = false;
+      setManualUpdateCheckBusy(false);
+      const modalIcon = document.getElementById('updateModalIcon');
+      if (modalIcon) modalIcon.classList.remove('update-check-spin');
+      const downloadButton = document.getElementById('btnFastDownload');
+      if (downloadButton) {
+        downloadButton.disabled = false;
+        downloadButton.style.opacity = '1';
+      }
+      const progressWrap = document.getElementById('updateProgressBarWrap');
+      if (progressWrap) {
+        progressWrap.classList.remove('update-check-pending');
+        progressWrap.style.display = 'none';
+      }
+    }
 
     function getUpdateManifest() {
       if (!updateManifestRequest) {
@@ -7804,9 +7893,16 @@
         if (isManual) showGameNotice('🚀 正在全自动下载最新安装包中，请稍候...');
         return;
       }
+      if (isManual && isManualUpdateCheckInProgress) {
+        showGameNotice('🔍 正在检查更新，请稍候…');
+        return;
+      }
       if (isCheckingAppUpdate && !isManual) return;
 
       if (isManual) {
+        isManualUpdateCheckInProgress = true;
+        setManualUpdateCheckBusy(true);
+        showUpdateCheckPendingState();
         showGameNotice('🔍 正在连接官方云端检查最新更新...');
       }
 
@@ -7823,6 +7919,14 @@
       // 当前加载的 HTML 才是实际运行版本；旧版遗留的本地标记不能把新版本误判为已安装。
       const effectiveVersion = CURRENT_VERSION_TAG;
       const hasNewVersion = versionData ? (compareVersions(versionData.tag, effectiveVersion) > 0) : false;
+      if (isManual) {
+        finishManualUpdateCheck();
+        const versionEl = document.getElementById('appVersionDisplay');
+        if (versionEl) {
+          versionEl.textContent = !versionData ? '检查失败，点此重试' : hasNewVersion ? '发现新版本' : '已是最新';
+          versionEl.title = !versionData ? '无法连接更新服务，点击重试' : hasNewVersion ? `发现 ${formatDisplayVersionTag(versionData.tag)}` : '当前已是最新版本';
+        }
+      }
 
       // 静默后台检查分支：有新版本仅做静默提示
       if (!isManual) {

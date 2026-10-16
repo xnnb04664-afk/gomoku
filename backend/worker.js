@@ -200,7 +200,8 @@ export class GomokuRoom {
 
     if (role === 'host') {
       const sameHost = this.host && this.host.sessionId === requestedSessionId && this.joinTicket === requestedJoinTicket;
-      if (this.host && !sameHost) {
+      const sessionChanged = Boolean(this.roomSessionId && this.roomSessionId !== requestedSessionId);
+      if (sessionChanged || (this.host && !sameHost)) {
         // 同一短房间码重新开局时，旧房间的客方也必须一起失效，防止旧局报文串入。
         this._closeConnection(this.host, false);
         this._closeConnection(this.client, true);
@@ -214,6 +215,10 @@ export class GomokuRoom {
       this.roomSessionId = requestedSessionId;
       this.joinTicket = requestedJoinTicket;
       this.host = connection;
+      if (this.client && !this.client.closed && !this.client.sessionId) {
+        // 客户端可能先于房主连入并把 join_request 放入 bootstrap 队列。
+        this.client.sessionId = this.roomSessionId;
+      }
     } else {
       if (this.client) {
         const sameClientSession = !requestedSessionId || !this.client.sessionId || this.client.sessionId === requestedSessionId;
@@ -342,6 +347,9 @@ export class GomokuRoom {
   }
 
   _onMessage(connection, rawMessage) {
+    if (!connection || connection.closed ||
+        (connection.role === 'host' ? this.host !== connection || connection.sessionId !== this.roomSessionId
+          : this.client !== connection || (this.roomSessionId && connection.sessionId !== this.roomSessionId))) return;
     if (!this._consumeBudget(connection)) return;
     const raw = typeof rawMessage === 'string' ? rawMessage : '';
     if (!raw || roomRelayByteLength(raw) > ROOM_RELAY_MAX_PAYLOAD_BYTES) return;
@@ -1559,6 +1567,16 @@ export default {
     const privateGameMode = () => String(env.PRIVATE_GAME_MODE || '1').trim() !== '0';
     const isPrivateGameUsername = username => privateGameConfigured && PRIVATE_GAME_ALLOWED_USERNAMES.includes(String(username || '').trim());
     const isAllowedPrivateGameUser = user => !privateGameMode() || isPrivateGameUsername(user?.username);
+    // 私人游戏的账号头像按 PRIVATE_GAME_USERNAMES 配置顺序固定：第一个男生，第二个女生。
+    // 头像值以账号名为准，避免旧设备资料或资料编辑把固定情侣头像互相覆盖。
+    const avatarForAccount = (username, avatar) => {
+      const accountName = String(username || '').trim();
+      if (privateGameMode() && isPrivateGameUsername(accountName)) {
+        return accountName === PRIVATE_GAME_ALLOWED_USERNAMES[0] ? 'anime_boy' : 'anime_girl';
+      }
+      return sanitizeAvatar(avatar);
+    };
+    const compactAvatarForAccount = (username, avatar) => compactAvatar(avatarForAccount(username, avatar));
     const isPrivateGameCouple = (leftUsername, rightUsername) => {
       const left = String(leftUsername || '').trim();
       const right = String(rightUsername || '').trim();
@@ -1595,10 +1613,19 @@ export default {
       ]);
     }
 
+    async function usernameForUid(uid) {
+      const row = await env.DB.prepare('SELECT username FROM users WHERE uid = ?').bind(String(uid || '').trim()).first();
+      return String(row?.username || '').trim();
+    }
+
+    async function compactAvatarForUid(uid, avatar) {
+      if (!privateGameMode()) return compactAvatar(avatar);
+      return compactAvatarForAccount(await usernameForUid(uid), avatar);
+    }
+
     async function isAllowedPrivateGameUid(uid) {
       if (!privateGameMode()) return true;
-      const row = await env.DB.prepare('SELECT username FROM users WHERE uid = ?').bind(String(uid || '').trim()).first();
-      return isPrivateGameUsername(row?.username);
+      return isPrivateGameUsername(await usernameForUid(uid));
     }
 
     async function requireUser(uid, token) {
@@ -1953,7 +1980,7 @@ export default {
             uid: String(friend.friend_uid || ''),
             username: String(friend.username || ''),
             nickname: String(friend.nickname || friend.username || '棋友').slice(0, 32),
-            avatar: compactAvatar(friend.avatar),
+            avatar: compactAvatarForAccount(friend.username, friend.avatar),
             points: affinityPoints,
             level: fixedCoupleAffinity
               ? PRIVATE_GAME_COUPLE_AFFINITY_LEVEL
@@ -2217,7 +2244,7 @@ export default {
         uid: target.uid,
         username: target.username,
         nickname: sanitizeText(target.nickname || target.username, 16),
-        avatar: compactAvatar(target.avatar),
+        avatar: compactAvatarForAccount(target.username, target.avatar),
         score: Number(target.score) || 1000,
         relationship: friendship ? 'friend' : (pending ? (pending.sender_uid === uid ? 'outgoing' : 'incoming') : 'none'),
         requestId: pending?.id || '',
@@ -2268,7 +2295,7 @@ export default {
         uid: String(row.uid),
         username: row.username,
         nickname: sanitizeText(row.nickname || row.username, 16),
-        avatar: compactAvatar(row.avatar),
+        avatar: compactAvatarForAccount(row.username, row.avatar),
         score: Number(row.score) || 1000,
         relationshipType: String(row.relationship_type || 'friend'),
         online: Number(row.presence_hidden) === 0 && Number(row.presence_online) !== 0,
@@ -2281,7 +2308,7 @@ export default {
         uid: row.user_uid,
         username: row.username,
         nickname: sanitizeText(row.nickname || row.username, 16),
-        avatar: compactAvatar(row.avatar),
+        avatar: compactAvatarForAccount(row.username, row.avatar),
         createdAt: Number(row.created_at) || 0
       }));
       const settings = await env.DB.prepare('SELECT presence_hidden, metrics_enabled FROM user_social_settings WHERE uid = ?').bind(uid).first();
@@ -2293,7 +2320,7 @@ export default {
           fromUid: row.sender_uid,
           username: row.username,
           nickname: sanitizeText(row.nickname || row.username, 16),
-          avatar: compactAvatar(row.avatar),
+          avatar: compactAvatarForAccount(row.username, row.avatar),
           roomCode: row.room_code,
           expiresAt: Number(row.expires_at) || 0
         })),
@@ -2402,7 +2429,7 @@ export default {
         WHERE b.blocker_uid = ?${privateGameMode() ? ' AND u.username IN (?, ?)' : ''}
         ORDER BY b.created_at DESC LIMIT 200
       `).bind(uid, ...(privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [])).all();
-      return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatar(row.avatar) })) });
+      return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatarForAccount(row.username, row.avatar) })) });
     }
 
     if (url.pathname === '/api/blocks' && request.method === 'POST') {
@@ -2619,7 +2646,7 @@ export default {
         senderUid: String(row.sender_uid || ''),
         username: sanitizeText(row.username || '', 32),
         nickname: sanitizeText(row.nickname || row.username || '棋友', 32),
-        avatar: compactAvatar(row.avatar),
+        avatar: compactAvatarForAccount(row.username, row.avatar),
         body: String(row.body || ''),
         createdAt: Number(row.created_at) || 0
       }));
@@ -2660,7 +2687,7 @@ export default {
           senderUid: String(message.sender_uid || ''),
           username: sanitizeText(message.username || '', 32),
           nickname: sanitizeText(message.nickname || message.username || '棋友', 32),
-          avatar: compactAvatar(message.avatar),
+          avatar: compactAvatarForAccount(message.username, message.avatar),
           body: String(message.body || ''),
           createdAt: Number(message.created_at) || now
         };
@@ -2671,7 +2698,7 @@ export default {
         senderUid: String(message.sender_uid || ''),
         username: sanitizeText(message.username || '', 32),
         nickname: sanitizeText(message.nickname || message.username || '棋友', 32),
-        avatar: compactAvatar(message.avatar),
+        avatar: compactAvatarForAccount(message.username, message.avatar),
         body: String(message.body || ''),
         createdAt: Number(message.created_at) || now
       }});
@@ -2859,7 +2886,7 @@ export default {
           SELECT 1 FROM user_blocks b WHERE (b.blocker_uid = ? AND b.blocked_uid = u.uid) OR (b.blocker_uid = u.uid AND b.blocked_uid = ?)
         ) ORDER BY r.last_played_at DESC LIMIT 30
       `).bind(uid, privateGameMode() ? 1 : 0, ...PRIVATE_GAME_ALLOWED_USERNAMES, uid, uid).all();
-      return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatar(row.avatar) })) });
+      return json({ code: 0, data: (rows.results || []).map(row => ({ ...row, avatar: compactAvatarForAccount(row.username, row.avatar) })) });
     }
 
     if (url.pathname === '/api/recent-opponents' && request.method === 'POST') {
@@ -3239,7 +3266,11 @@ async function allocateNextAvailableUid(env) {
         const user = auth.user;
 
         const safeNick = nickname ? sanitizeText(nickname, 16) : null;
-        const safeAvatar = avatar ? sanitizeAvatar(avatar) : null;
+        const requestedAvatar = avatar ? sanitizeAvatar(avatar) : null;
+        const fixedAccount = privateGameMode() && isPrivateGameUsername(user.username);
+        const safeAvatar = fixedAccount
+          ? avatarForAccount(user.username, requestedAvatar || user.avatar)
+          : requestedAvatar;
 
         if (privateGameMode() && safeNick && safeNick !== String(user.username || '')) {
           return json({ code: 403, msg: '私人游戏账号名固定，不能修改' }, 403);
@@ -3272,7 +3303,7 @@ async function allocateNextAvailableUid(env) {
             uid: String(uid),
             username: finalName,
             nickname: finalName,
-            avatar: safeAvatar || sanitizeAvatar(user.avatar)
+            avatar: safeAvatar || avatarForAccount(user.username, user.avatar)
           }
         });
       } catch (err) {
@@ -3332,7 +3363,7 @@ async function allocateNextAvailableUid(env) {
                   uid: current.uid,
                   username: current.username,
                   nickname: current.nickname,
-                  avatar: sanitizeAvatar(current.avatar),
+                avatar: avatarForAccount(current.username, current.avatar),
                   score: current.score,
                   wins: current.wins,
                   total_games: current.total_games,
@@ -3349,7 +3380,7 @@ async function allocateNextAvailableUid(env) {
                 uid: user.uid,
                 username: user.username,
                 nickname: user.nickname,
-                avatar: sanitizeAvatar(user.avatar),
+                avatar: avatarForAccount(user.username, user.avatar),
                 score: user.score,
                 wins: user.wins,
                 total_games: user.total_games,
@@ -3375,7 +3406,7 @@ async function allocateNextAvailableUid(env) {
               uid: user.uid,
               username: null,
               nickname: user.nickname,
-              avatar: sanitizeAvatar(user.avatar),
+              avatar: avatarForAccount(user.username, user.avatar),
               score: user.score,
               wins: user.wins,
               total_games: user.total_games,
@@ -3442,7 +3473,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
-            avatar: sanitizeAvatar(user.avatar),
+            avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
@@ -3506,7 +3537,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
-            avatar: sanitizeAvatar(user.avatar),
+            avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
@@ -3593,7 +3624,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
-            avatar: sanitizeAvatar(user.avatar),
+            avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
@@ -3693,7 +3724,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
-            avatar: sanitizeAvatar(user.avatar),
+            avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
             total_games: user.total_games,
@@ -3857,7 +3888,7 @@ async function allocateNextAvailableUid(env) {
 
         const now = Date.now();
         const safeNick = sanitizeText(nickname, 12) || '棋士';
-        const safeAvatar = sanitizeAvatar(avatar);
+        const safeAvatar = avatarForAccount(auth.user?.username, avatar);
         const safeScore = auth.user ? Math.max(0, Number(auth.user.score) || 1000) : 1000;
         const matchId = typeof body.matchId === 'string' && /^[A-Za-z0-9_-]{8,80}$/.test(body.matchId.trim())
           ? body.matchId.trim()
@@ -3880,7 +3911,7 @@ async function allocateNextAvailableUid(env) {
           }
         }
 
-        const formatMatched = (record) => ({
+        const formatMatched = async record => ({
           code: 0,
           status: 'matched',
           matchId: String(record.match_id || ''),
@@ -3890,7 +3921,7 @@ async function allocateNextAvailableUid(env) {
           opponent: {
             uid: record.matched_with,
             nickname: sanitizeText(record.matched_nickname, 12) || '好友',
-            avatar: compactAvatar(record.matched_avatar),
+            avatar: await compactAvatarForUid(record.matched_with, record.matched_avatar),
             score: Number.isFinite(Number(record.matched_score)) ? Number(record.matched_score) : 1000
           }
         });
@@ -3900,7 +3931,7 @@ async function allocateNextAvailableUid(env) {
         if (existingBeforeMatch?.status === 'matched') {
           const sameRequest = !matchId || existingBeforeMatch.match_id === matchId;
           const allowedOpponent = !privateGameMode() || await isAllowedPrivateGameUid(existingBeforeMatch.matched_with);
-          if (sameRequest && allowedOpponent) return json(formatMatched(existingBeforeMatch));
+          if (sameRequest && allowedOpponent) return json(await formatMatched(existingBeforeMatch));
           await deleteMatchQueuePair(matchUid, String(existingBeforeMatch.match_id || ''));
         }
 
@@ -3957,7 +3988,7 @@ async function allocateNextAvailableUid(env) {
               WHERE match_queue.status != 'matched'
             `).bind(
               matchUid, safeNick, safeAvatar, safeScore,
-              opponent.uid, opponent.nickname, compactAvatar(opponent.avatar), opponent.score,
+              opponent.uid, opponent.nickname, await compactAvatarForUid(opponent.uid, opponent.avatar), opponent.score,
               roomCode, matchId, claimId, now,
               opponent.uid, matchUid, roomCode, claimId, now, matchUid
             ),
@@ -3977,7 +4008,7 @@ async function allocateNextAvailableUid(env) {
           const current = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
           if (current?.status === 'matched' && (!matchId || current.match_id === matchId)) {
             if (!privateGameMode() || await isAllowedPrivateGameUid(current.matched_with)) {
-              return json(formatMatched(current));
+              return json(await formatMatched(current));
             }
             await deleteMatchQueuePair(matchUid, String(current.match_id || ''));
           }
@@ -3987,7 +4018,7 @@ async function allocateNextAvailableUid(env) {
         const existing = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
         if (existing?.status === 'matched' && (!matchId || existing.match_id === matchId)) {
           if (!privateGameMode() || await isAllowedPrivateGameUid(existing.matched_with)) {
-            return json(formatMatched(existing));
+            return json(await formatMatched(existing));
           }
           await deleteMatchQueuePair(matchUid, String(existing.match_id || ''));
         }
@@ -4008,7 +4039,7 @@ async function allocateNextAvailableUid(env) {
         const finalRecord = await env.DB.prepare('SELECT * FROM match_queue WHERE uid = ?').bind(matchUid).first();
         if (finalRecord?.status === 'matched' && (!matchId || finalRecord.match_id === matchId)) {
           if (!privateGameMode() || await isAllowedPrivateGameUid(finalRecord.matched_with)) {
-            return json(formatMatched(finalRecord));
+            return json(await formatMatched(finalRecord));
           }
           await deleteMatchQueuePair(matchUid, String(finalRecord.match_id || ''));
         }
@@ -4058,7 +4089,7 @@ async function allocateNextAvailableUid(env) {
             opponent: {
               uid: record.matched_with,
               nickname: record.matched_nickname,
-              avatar: compactAvatar(record.matched_avatar),
+              avatar: await compactAvatarForUid(record.matched_with, record.matched_avatar),
               score: record.matched_score
             }
           });
@@ -4126,7 +4157,7 @@ async function allocateNextAvailableUid(env) {
             WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL ${privateRankFilter}
             ORDER BY score DESC, wins DESC, uid ASC
             LIMIT 30
-          `).bind(PRIVATE_GAME_ALLOWED_USERNAMES[1], PRIVATE_GAME_ALLOWED_USERNAMES[0], ...privateRankBindings).all();
+          `).bind(PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1], ...privateRankBindings).all();
           const data = Array.isArray(results) ? results : [];
           cachedLeaderboard = data;
           lastLeaderboardTime = Date.now();

@@ -421,11 +421,11 @@
 
     window.openCurrentGameReplay = openCurrentGameReplay;
 
-    // ☁️ 全自动云端战绩双向对账同步器 (登录即拉取、换手机100%找回，仅限正式账号)
+    // 云端战绩以 ECS 主库为准 (登录即拉取、换手机找回，仅限正式账号)
     async function syncCloudHistory() {
       if (!hasRegisteredAccountSession()) return;
       try {
-        const res = await safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`);
+        const res = await safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`, { primaryOnly: true });
         const json = await res.json();
         if (json.code === 0 && Array.isArray(json.data)) {
           const key = getHistoryStorageKey();
@@ -443,9 +443,9 @@
       modal.classList.add("show");
       renderHistoryUI();
 
-      // ☁️ 每次打开历史弹窗时，从 Cloudflare D1 云端拉取最新全量战报合并（仅限正式账号）
+      // 每次打开历史弹窗时从 ECS 主库拉取最新战报（仅限正式账号）
       if (hasRegisteredAccountSession()) {
-        safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`)
+        safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`, { primaryOnly: true })
           .then(res => res.json())
           .then(json => {
             if (json.code === 0 && Array.isArray(json.data) && json.data.length > 0) {

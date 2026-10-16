@@ -72,8 +72,8 @@ node server.js
 ## ECS 主后端与 Cloudflare 备用
 
 - `js/ecs-config.js` 是 ECS API 地址的唯一前端配置。修改后运行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js` 和 `npm run build:official-site`，不要手改压缩或生成文件。
-- 只读 GET/HEAD/OPTIONS 请求先走 ECS，失败时可回退到 Cloudflare Pages/Worker。写请求固定发往一个后端；ECS 超时或返回 5xx 时不会把同一写操作重放到独立数据库，客户端会提示提交状态未知。好友与世界频道 WebSocket 使用发出票据的同一后端地址；房间中继按主备顺序连接。
-- ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
+- 公共只读 GET/HEAD/OPTIONS 请求先走 ECS，失败时可回退到 Cloudflare Pages/Worker。社交、私聊、世界频道、排行、战绩和金币等账号/数据库状态读取固定走 ECS，避免从未同步的 Cloudflare 数据库读到旧状态；写请求固定发往一个后端，ECS 超时或返回 5xx 时不会把同一写操作重放到独立数据库，客户端会提示提交状态未知。好友与世界频道 WebSocket 使用发出票据的同一后端地址；房间中继两端固定按 ECS 优先、Cloudflare 备用的同一顺序查找房间，但备用端不能接续另一端的内存房间状态。
+- ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。当前 `/healthz` 只检查 SQLite，不能证明公网 WebSocket 升级链路正常；发布验收还需独立连通实际房间中继。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
 - Cloudflare 数据库与 ECS SQLite 相互独立。客户端不会把 ECS 写入请求回放到 Cloudflare；不要据此假定两边数据会自动同步。
 - 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新清单与受保护下载当前仍走 Cloudflare 更新服务；这与 ECS 游戏 API 的读写路由是两条独立路径。
 ## 账号访问边界

@@ -37,7 +37,13 @@
       if (!routing || typeof routing.getOrderedHosts !== 'function' || typeof routing.socketUrl !== 'function') {
         return ONLINE_RELAY_ENDPOINTS.slice();
       }
-      const routed = routing.getOrderedHosts()
+      // 房间状态存在各自的 relay 后端。不能按本机健康缓存重排，否则房主和
+      // 加入者可能分别落到 ECS/Cloudflare；始终先查权威 ECS，再顺序尝试备用。
+      const hosts = typeof routing.getAllHosts === 'function'
+        ? routing.getAllHosts()
+        : [routing.primaryHost, ...routing.getOrderedHosts()];
+      const ordered = [...new Set(hosts.filter(Boolean))];
+      const routed = ordered
         .map(host => routing.socketUrl('/api/room/socket', host))
         .filter(Boolean);
       return [...new Set([...routed, ...ONLINE_RELAY_ENDPOINTS])];
@@ -2818,7 +2824,7 @@
       updateOnlineNetworkUI();
       if (gameMode !== 'online' || isOver) return;
       const now = Date.now();
-      if (!force && now - lastOnlineNetworkResetAt < ONLINE_NETWORK_RESET_COOLDOWN_MS) return;
+      if (now - lastOnlineNetworkResetAt < ONLINE_NETWORK_RESET_COOLDOWN_MS) return;
       lastOnlineNetworkResetAt = now;
 
       // 网络接口切换时，旧 WebSocket/ICE 可能长时间保持“假连接”。先主动销毁旧信令池，
@@ -2872,11 +2878,11 @@
       }
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-          scheduleOnlineNetworkChange('页面恢复前台', getBrowserNetworkSignature(), false);
+          scheduleOnlineNetworkChange('页面恢复前台', getBrowserNetworkSignature(), true);
         }
       });
       window.addEventListener('pageshow', () => {
-        scheduleOnlineNetworkChange('页面恢复', getBrowserNetworkSignature(), false);
+        scheduleOnlineNetworkChange('页面恢复', getBrowserNetworkSignature(), true);
       });
     } catch (_) {}
 
@@ -3799,8 +3805,7 @@
 
       try {
         const client = await getOrCreateOnlineTransport(code, 'client', onlineSessionId);
-        if (transportGeneration !== onlineTransportGeneration ||
-            (currentRoomCode && String(currentRoomCode) !== String(code))) return;
+        if (transportGeneration !== onlineTransportGeneration) return;
         const c2hTopic = `gomoku/v3/${code}/c2h`;
         const h2cTopic = `gomoku/v3/${code}/h2c`;
 
@@ -4335,10 +4340,32 @@
     function startQuickMatchPolling(record, attemptGeneration, retryState = { authRetried: false }) {
       clearInterval(matchPollInterval);
       let pollInFlight = false;
+      let lastJoinAttemptAt = Date.now();
       const isCurrent = () => attemptGeneration === matchAttemptGeneration && isMatchmaking && currentActiveMatchId === record.matchId;
       const handleAuthFailure = () => {
         clearInterval(matchPollInterval);
         finishMatchAuthenticationFailure(record);
+      };
+      const retryJoin = async () => {
+        lastJoinAttemptAt = Date.now();
+        const joined = await requestMatchApi('/api/match/join', quickMatchPayload(record), retryState, 12000);
+        if (!isCurrent()) return true;
+        if (isMatchAuthFailure(joined.response, joined.data)) {
+          handleAuthFailure();
+          return true;
+        }
+        if (Number(joined.data?.code) !== 0) {
+          const error = new Error(joined.data?.msg || '匹配服务暂时不可用');
+          error.response = joined.response;
+          error.data = joined.data;
+          throw error;
+        }
+        if (joined.data.status === 'matched') {
+          clearInterval(matchPollInterval);
+          onMatchFound(joined.data);
+          return true;
+        }
+        return false;
       };
       matchPollInterval = setInterval(async () => {
         if (!isCurrent()) {
@@ -4361,14 +4388,12 @@
           }
           if (result.data.code === 0 && result.data.status === 'cancelled') {
             // 服务端可能已清理长时间离线的等待行；用原 matchId 幂等重入并继续心跳。
-            result = await requestMatchApi('/api/match/join', quickMatchPayload(record), retryState, 12000);
-            if (!isCurrent()) return;
-            if (isMatchAuthFailure(result.response, result.data)) return handleAuthFailure();
-            if (result.data.code === 0 && result.data.status === 'matched') {
-              clearInterval(matchPollInterval);
-              onMatchFound(result.data);
-              return;
-            }
+            if (await retryJoin()) return;
+          } else if (result.data.code === 0 && result.data.status === 'waiting' &&
+                     Date.now() - lastJoinAttemptAt >= 5000) {
+            // /poll 只续心跳，不参与配对；重复同一 matchId 的 join 可补上
+            // 两名玩家同时入队时互相错过候选人的竞态，服务端按幂等请求处理。
+            if (await retryJoin()) return;
           }
           if (Number(result.data?.code) !== 0) {
             const error = new Error(result.data?.msg || '匹配服务暂时不可用');
@@ -4741,14 +4766,41 @@
       }
     }
 
-    function copyRoomCode() {
+    async function copyRoomCode() {
       const codeEl = document.getElementById('myRoomCodeDisplay');
       const code = codeEl ? codeEl.textContent.trim() : '';
       if (!/^\d{6}$/.test(code)) {
         initPeer();
         return;
       }
-      navigator.clipboard ? navigator.clipboard.writeText(code).then(() => showGameNotice(`📋 房间码【${code}】已复制！快发给好友吧~`, false)) : showGameNotice(`📋 房间码: ${code}`, false);
+      let copied = false;
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(code);
+          copied = true;
+        }
+      } catch (_) {}
+      if (!copied) {
+        let input = null;
+        try {
+          input = document.createElement('textarea');
+          input.value = code;
+          input.setAttribute('readonly', '');
+          input.style.position = 'fixed';
+          input.style.opacity = '0';
+          input.style.pointerEvents = 'none';
+          document.body.appendChild(input);
+          input.select();
+          copied = Boolean(document.execCommand && document.execCommand('copy'));
+        } catch (_) {
+          copied = false;
+        } finally {
+          if (input && input.parentNode) input.parentNode.removeChild(input);
+        }
+      }
+      showGameNotice(copied
+        ? `📋 房间号【${code}】已复制，快发给好友吧！`
+        : `房间号：${code}（复制失败，请长按号码手动复制）`, !copied);
     }
 
     function openOnlineModal(tab = 'match') {

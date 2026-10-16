@@ -26,6 +26,8 @@
     chatRefreshTimer: null,
     chatGeneration: 0,
     pendingInvites: new Map(),
+    dismissedInviteIds: new Set(),
+    inviteActionsPending: new Set(),
     socket: null,
     socketConnecting: false,
     socketRetry: 0,
@@ -64,7 +66,7 @@
       'friendsModal', 'socialChatModal', 'socialConnectionStatus', 'socialSearchInput',
       'socialSearchResult', 'socialFriendsList', 'socialAffinityList', 'socialRequestsList', 'socialRecentList',
       'socialBlocksList', 'socialPresenceHidden', 'socialMetricsEnabled',
-      'socialChatInput', 'socialChatMessages', 'socialChatTitle'
+      'socialChatInput', 'socialChatMessages', 'socialChatTitle', 'socialInviteModal', 'socialInviteContent'
     ];
     ids.forEach(byId);
     const modal = state.dom.friendsModal;
@@ -122,6 +124,9 @@
     if (typeof safeApiFetch !== 'function') throw new Error('网络服务尚未加载');
     const request = { ...(options || {}) };
     const method = String(request.method || 'GET').toUpperCase();
+    // 社交账号数据只在 ECS 主库写入；Cloudflare 是独立数据库，不能作为这些
+    // GET 的透明回退，否则刚发出的私聊/好友/邀战会读到另一套库里的旧状态。
+    request.primaryOnly = true;
     let endpoint = path;
     if (method === 'GET') {
       endpoint = makeQuery(path, { uid: uid() });
@@ -385,6 +390,57 @@
       return card(personHeading(person, '向你发起实时对战') + `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${button('invite-accept', '接受', extra, 'primary')}${button('invite-reject', '拒绝', extra, 'danger')}${button('invite-busy', '忙碌', extra)}</div>`);
     }).join('');
     root.innerHTML = inviteMarkup + requestMarkup || emptyMarkup('暂无新的好友申请或邀战');
+    renderIncomingInviteDialog();
+  }
+
+  function getVisibleInvite() {
+    const now = Date.now();
+    for (const [inviteId, invite] of state.pendingInvites.entries()) {
+      if (!invite || (Number(invite.expiresAt) > 0 && Number(invite.expiresAt) <= now)) {
+        state.pendingInvites.delete(inviteId);
+        state.dismissedInviteIds.delete(inviteId);
+        state.inviteActionsPending.delete(inviteId);
+        continue;
+      }
+      if (!state.dismissedInviteIds.has(inviteId)) return { inviteId, invite };
+    }
+    return null;
+  }
+
+  function renderIncomingInviteDialog() {
+    const modal = byId('socialInviteModal');
+    const content = byId('socialInviteContent');
+    if (!modal || !content) return;
+    const entry = getVisibleInvite();
+    if (!entry) {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      content.replaceChildren();
+      return;
+    }
+    const { inviteId, invite } = entry;
+    const person = state.friends.find(item => String(item.uid) === String(invite.fromUid)) || invite;
+    const actionPending = state.inviteActionsPending.has(inviteId);
+    const roomCode = String(invite.roomCode || '');
+    const extra = `data-invite-id="${attr(inviteId)}" data-room-code="${attr(roomCode)}"`;
+    content.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+        <div><div style="color:#54715b;font-size:12px;font-weight:900;letter-spacing:.08em;">晴空棋岛 · 好友邀战</div><h2 id="socialInviteTitle" style="margin:5px 0 0;color:#1d3543;font-size:24px;line-height:1.2;">来下一局吗？</h2></div>
+        <button type="button" data-social-action="invite-dismiss" aria-label="稍后处理" style="width:34px;height:34px;flex:none;border:1px solid #d7e0db;border-radius:50%;background:#fff;color:#405b4c;font-size:19px;font-weight:900;">×</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;padding:12px;border:1px solid #d5e2d9;border-radius:16px;background:linear-gradient(135deg,#f8fbf8,#edf5f0);">
+        ${avatarMarkup(person)}
+        <div style="min-width:0;flex:1;"><strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#1d3543;font-size:16px;">${escapeHtml(displayName(person))}</strong><small style="color:#647b6c;font-weight:800;">邀请你加入好友房间</small></div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:12px;background:#f8f2df;color:#5b472a;"><span style="font-size:12px;font-weight:800;">房间号</span><strong style="font-size:22px;letter-spacing:.16em;">${escapeHtml(roomCode)}</strong></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px;">
+        <button type="button" data-social-action="invite-accept" ${extra} ${actionPending ? 'disabled' : ''} style="grid-column:1/-1;border:0;border-radius:13px;padding:12px 14px;background:linear-gradient(135deg,#6f9275,#496b57);color:white;font-size:15px;font-weight:900;box-shadow:0 4px 0 #34533f;opacity:${actionPending ? '.65' : '1'};">${actionPending ? '正在处理…' : '接受并加入'}</button>
+        <button type="button" data-social-action="invite-reject" ${extra} ${actionPending ? 'disabled' : ''} style="border:1px solid #d4ddd7;border-radius:11px;padding:10px;background:#fff;color:#405b4c;font-weight:900;">拒绝</button>
+        <button type="button" data-social-action="invite-busy" ${extra} ${actionPending ? 'disabled' : ''} style="border:1px solid #d4ddd7;border-radius:11px;padding:10px;background:#fff;color:#64748b;font-weight:900;">稍后再约</button>
+      </div>
+      <small style="display:block;margin-top:12px;text-align:center;color:#829087;font-weight:700;">邀战两分钟内有效，接受后自动进入棋局</small>`;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
   }
 
   function renderRecent() {
@@ -592,6 +648,9 @@
         state.pendingInvites = new Map(syncedInvites
           .filter(invite => invite && invite.inviteId && Number(invite.expiresAt) > now && /^\d{6}$/.test(String(invite.roomCode || '')))
           .map(invite => [String(invite.inviteId), invite]));
+        for (const inviteId of state.dismissedInviteIds) {
+          if (!state.pendingInvites.has(inviteId)) state.dismissedInviteIds.delete(inviteId);
+        }
       }
       syncSettings(social);
       renderAll();
@@ -1051,15 +1110,21 @@
 
   async function respondInvite(inviteId, response, roomCode) {
     if (!['accepted', 'rejected', 'busy'].includes(response)) return;
+    const normalizedInviteId = String(inviteId || '');
+    if (!normalizedInviteId || state.inviteActionsPending.has(normalizedInviteId)) return;
     if (response === 'accepted' && isBusyInGame()) {
       notice('你正在联机对局中，已向好友回复忙碌', true);
       response = 'busy';
     }
+    state.inviteActionsPending.add(normalizedInviteId);
+    renderIncomingInviteDialog();
     try {
-      const result = await api(`/api/game-invites/${encodeURIComponent(inviteId)}/respond`, {
+      const result = await api(`/api/game-invites/${encodeURIComponent(normalizedInviteId)}/respond`, {
         method: 'POST', body: JSON.stringify({ response })
       });
-      state.pendingInvites.delete(String(inviteId));
+      state.pendingInvites.delete(normalizedInviteId);
+      state.dismissedInviteIds.add(normalizedInviteId);
+      state.inviteActionsPending.delete(normalizedInviteId);
       renderRequests();
       updateUnreadBadge();
       if (response === 'accepted') {
@@ -1074,8 +1139,17 @@
         notice(response === 'busy' ? '已回复：正在忙碌' : '已拒绝邀战', false);
       }
     } catch (error) {
+      state.inviteActionsPending.delete(normalizedInviteId);
+      renderIncomingInviteDialog();
       notice(error.message || '邀战处理失败', true);
     }
+  }
+
+  function dismissInvite() {
+    const entry = getVisibleInvite();
+    if (!entry) return;
+    state.dismissedInviteIds.add(entry.inviteId);
+    renderIncomingInviteDialog();
   }
 
   async function recordOpponent(opponentUid) {
@@ -1168,11 +1242,13 @@
       };
       socket.onmessage = event => handleSocketMessage(event.data);
       socket.onerror = () => {};
-      socket.onclose = () => {
+      socket.onclose = event => {
         if (state.socket === socket) state.socket = null;
         if (state.socketPingTimer) clearInterval(state.socketPingTimer);
         state.socketPingTimer = null;
-        if (!state.stopping && ticketResponseUrl) window.GomokuBackendRouting?.markFailureForUrl(ticketResponseUrl);
+        const intentionalClose = state.stopping || Number(event?.code) === 1000 || Number(event?.code) === 1001;
+        if (!intentionalClose && ticketResponseUrl) window.GomokuBackendRouting?.markFailureForUrl(ticketResponseUrl);
+        if (state.stopping) return;
         setConnectionStatus('好友实时连接已断开，正在重连…', false);
         scheduleSocketReconnect();
       };
@@ -1190,10 +1266,15 @@
     if (!message || message.type !== 'social_event' || !message.event) return;
     const event = message.event;
     if (event.kind === 'game_invite' && event.inviteId && /^\d{6}$/.test(String(event.roomCode || ''))) {
-      state.pendingInvites.set(String(event.inviteId), event);
+      const inviteId = String(event.inviteId);
+      if (Number(event.expiresAt) > 0 && Number(event.expiresAt) <= Date.now()) return;
+      const isNewInvite = !state.pendingInvites.has(inviteId);
+      if (isNewInvite) {
+        state.pendingInvites.set(inviteId, { ...event, __receivedAt: Date.now() });
+      }
       renderRequests();
       updateUnreadBadge();
-      notice('⚔️ 收到好友邀战，请在好友申请页处理', false);
+      if (document.hidden && isNewInvite) notifyIncomingInvite(event);
       return;
     }
     if (event.kind === 'game_invite_response') {
@@ -1209,6 +1290,28 @@
       if (typeof window.scheduleGameAffinityRefresh === 'function') window.scheduleGameAffinityRefresh();
     }
     refresh({ quiet: true });
+  }
+
+  function notifyIncomingInvite(invite) {
+    const inviteId = String(invite?.inviteId || '');
+    const friend = state.friends.find(item => String(item.uid) === String(invite?.fromUid)) || invite;
+    const title = '五子棋 · 收到好友邀战';
+    const body = `${displayName(friend)} 邀请你加入房间 ${String(invite?.roomCode || '')}`;
+    try {
+      if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.showSocialNotification === 'function') {
+        AndroidNativeApp.showSocialNotification();
+      }
+    } catch (_) {}
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const notification = new Notification(title, { body, tag: `gomoku-social-invite-${inviteId || 'new'}` });
+        notification.onclick = () => {
+          try { window.focus(); } catch (_) {}
+          renderIncomingInviteDialog();
+          notification.close();
+        };
+      }
+    } catch (_) {}
   }
 
   async function open() {
@@ -1257,6 +1360,7 @@
     else if (action === 'invite-accept') respondInvite(inviteId, 'accepted', roomCode);
     else if (action === 'invite-reject') respondInvite(inviteId, 'rejected', roomCode);
     else if (action === 'invite-busy') respondInvite(inviteId, 'busy', roomCode);
+    else if (action === 'invite-dismiss') dismissInvite();
   }
 
   function onSearchKeyDown(event) {
@@ -1289,18 +1393,19 @@
     }
     const friendsModal = state.dom.friendsModal;
     const chatModal = state.dom.socialChatModal;
+    const inviteModal = state.dom.socialInviteModal;
     const searchInput = state.dom.socialSearchInput;
     const chatInput = state.dom.socialChatInput;
     const presence = state.dom.socialPresenceHidden;
     const metrics = state.dom.socialMetricsEnabled;
     const lobbyRoster = byId('skyFriendRoster');
-    const listeners = state.domListeners = { friendsModal, chatModal, searchInput, chatInput, presence, metrics, lobbyRoster };
-    for (const root of [friendsModal, chatModal]) {
+    const listeners = state.domListeners = { friendsModal, chatModal, inviteModal, searchInput, chatInput, presence, metrics, lobbyRoster };
+    for (const root of [friendsModal, chatModal, inviteModal]) {
       if (root) {
         root.dataset.socialBound = '1';
         // 弹窗卡片自身会 stopPropagation，动态列表按钮必须在捕获阶段委托，
         // 否则申请、私聊、邀战、删除和拉黑按钮都会看得到但点不动。
-        root.addEventListener('click', onActionClick, true);
+        root.addEventListener('click', root === inviteModal ? onInviteModalClick : onActionClick, true);
       }
     }
     if (lobbyRoster) lobbyRoster.addEventListener('click', onLobbyRosterClick, true);
@@ -1331,9 +1436,9 @@
   function unbindDom() {
     const listeners = state.domListeners;
     if (!listeners) return;
-    for (const root of [listeners.friendsModal, listeners.chatModal]) {
+    for (const root of [listeners.friendsModal, listeners.chatModal, listeners.inviteModal]) {
       if (root) {
-        root.removeEventListener('click', onActionClick, true);
+        root.removeEventListener('click', root === listeners.inviteModal ? onInviteModalClick : onActionClick, true);
         delete root.dataset.socialBound;
       }
     }
@@ -1354,6 +1459,14 @@
       }
     }
     state.domListeners = null;
+  }
+
+  function onInviteModalClick(event) {
+    if (event.target === state.dom.socialInviteModal) {
+      dismissInvite();
+      return;
+    }
+    onActionClick(event);
   }
 
   function onVisibilityChange() {
@@ -1420,6 +1533,8 @@
     state.searchAt = 0;
     state.pendingRequests.clear();
     state.pendingInvites.clear();
+    state.dismissedInviteIds.clear();
+    state.inviteActionsPending.clear();
     state.lastUnreadTotal = 0;
     state.lastNotifiedMessageId = '';
     state.hasUnreadSnapshot = false;
@@ -1427,6 +1542,7 @@
     unbindDom();
     closeChat();
     close();
+    renderIncomingInviteDialog();
     renderAll();
   }
 
@@ -1445,6 +1561,7 @@
     sendFriendRequest,
     inviteFriend,
     respondInvite,
+    dismissInvite,
     recordOpponent,
     saveSettings,
     setAffinity,

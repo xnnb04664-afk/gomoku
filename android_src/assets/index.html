@@ -389,7 +389,7 @@
         loadGameEconomyPreview();
         if (!gameEconomyRegistered() || typeof safeApiFetch !== 'function' || typeof currentUserUid === 'undefined' || !currentUserUid) return gameEconomyState;
         try {
-          const response = await safeApiFetch(`/api/economy/summary?uid=${encodeURIComponent(String(currentUserUid))}`, { timeoutMs: 5500 });
+          const response = await safeApiFetch(`/api/economy/summary?uid=${encodeURIComponent(String(currentUserUid))}`, { timeoutMs: 5500, primaryOnly: true });
           const payload = await response.json();
           if (!response.ok || !payload || payload.code !== 0 || !payload.data) throw new Error(payload?.msg || '经济数据暂不可用');
           gameEconomyState = normalizeGameEconomyState(payload.data);
@@ -2624,7 +2624,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      z-index: 99999;
+      z-index: 100100;
       pointer-events: auto;
       cursor: pointer;
       opacity: 0;
@@ -3807,7 +3807,7 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.129" data-collapsed="false" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.130" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
       <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
@@ -4207,6 +4207,13 @@
       </div>
     </div>
   </div>
+
+  <div class="online-modal-backdrop" id="socialInviteModal" aria-hidden="true" style="z-index:100120;">
+    <div class="online-modal-card" role="dialog" aria-modal="true" aria-labelledby="socialInviteTitle" style="max-width:390px;width:min(92vw,390px);text-align:left;padding:20px;border:1px solid rgba(255,255,255,.85);background:linear-gradient(145deg,#fffef9,#edf4ef);box-shadow:0 22px 70px rgba(15,37,33,.28);" onclick="event.stopPropagation()">
+      <div id="socialInviteContent"></div>
+    </div>
+  </div>
+
     <!-- 🔑 高颜值游戏账号通行证弹窗 (登录 / 注册 / 自定义密保找回) -->
   <div class="online-modal-backdrop" id="authModal" onclick="closeAuthModal()">
     <div class="auth-modal-card" onclick="event.stopPropagation()">
@@ -4558,7 +4565,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.2.9</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.3.0</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
@@ -5007,6 +5014,7 @@
   async function api(path, options = {}) {
     if (typeof safeApiFetch !== 'function') throw new Error('云端世界频道暂不可用，单文件仍可离线对局');
     const request = { ...options };
+    request.primaryOnly = true;
     const method = String(request.method || 'GET').toUpperCase();
     let endpoint = String(path);
     if (method === 'GET') {

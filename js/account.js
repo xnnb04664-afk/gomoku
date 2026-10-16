@@ -196,7 +196,8 @@
         try {
           const res = await safeApiFetch('/api/rank', {
             ...(isManualRefresh ? { cache: 'no-store' } : {}),
-            timeoutMs: 5500
+            timeoutMs: 5500,
+            primaryOnly: true
           });
           const json = await res.json();
 
