@@ -239,3 +239,10 @@ adb install .\五子棋.apk
 - 本次只改客户端登录恢复与版本信息；不包含 `auth_sessions` 多设备会话服务端实验，也未部署 ECS 或 Cloudflare。该服务端候选仍需修复旧令牌重复迁移、并发验证轮换与单设备注销，再通过隔离 SQLite/D1 验证后才可部署。
 - APK 构建版本为 `1.0.135` / `versionCode=136`；正式签名验证通过 v1、v2、v3，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5`，与 v1.0.134 安装包一致。签名构建本身不代表真机或 MuMu 安装验收。
 - **发布核验：**GitHub Release `v1.0.135` 已发布，源提交为 `ad878921b9cab28191a21622c206cb8299439067`。APK SHA-256 为 `7da8716a87743a04b2d766c20fe4c9c9f0d4bbb170c1908b9fde28375ed93289`，单文件 HTML SHA-256 为 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`，增量包 328,511 bytes。ECS `/api/version` 已返回 v1.0.135 且哈希与 Release 一致，`/healthz` 为 HTTP 200；这是现有 ECS API 动态读取最新 GitHub Release，本轮未部署 Worker 或改数据库。MuMu/真机未安装本版，Cloudflare 未部署。
+
+## v1.0.136 启动画面
+
+- Android 12+ 系统启动图标使用动画矢量棋盘：第一帧是空的 15×15 棋盘，黑白棋子逐步落成爱心；Activity 初始化期间循环播放，避免动画结束后停在静态爱心图上。
+- 原生 `GomokuSplashView` 随 Activity 首帧接管，继续从空棋盘逐步显现网格和爱心棋子，再进入首页。动画资源位于 `android_src/res/animator/` 与 `android_src/res/drawable/`；系统主题配置在 `android_src/res/values/styles.xml`。
+- **构建与验证：**`python tests/android_splash_smoke.py` 通过，全部 Android 资源 XML 可解析，`node --check js/app.js` 通过。APK 为 `1.0.136` / `versionCode=137`，正式签名 v1/v2/v3 验证通过；证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，与 v1.0.135 相同。APK SHA-256 为 `1eedae202e5934122a459f46d684a8c9689ce95fe9ed691c8c76c0645b3171ae`，单文件 HTML SHA-256 为 `78df73cf65f446c0f51b3e3763d7db15b2e8ea571bd8925ee1dec6540019305e`。从 v1.0.135（基础 HTML SHA-256 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`）生成的 HTML 增量包为 84,406 bytes。MuMu Android 15 覆盖安装成功且 `firstInstallTime` 保持不变；冷启动录屏确认先出现空棋盘、棋子再组成爱心并进入首页。此项是 MuMu 模拟器验收，不代表额外真机验收。
+- 本版只更新客户端启动画面和版本资源；未改 ECS 后端、数据库或 Cloudflare 备用配置。

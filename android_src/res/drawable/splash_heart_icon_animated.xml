@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/splash_heart_icon">
+    <target
+        android:name="heart_outline"
+        android:animation="@animator/splash_heart_outline" />
+    <target
+        android:name="stones_inner"
+        android:animation="@animator/splash_stones_inner" />
+    <target
+        android:name="stones_middle"
+        android:animation="@animator/splash_stones_middle" />
+    <target
+        android:name="stones_outer"
+        android:animation="@animator/splash_stones_outer" />
+</animated-vector>

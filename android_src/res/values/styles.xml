@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="@android:style/Theme.NoTitleBar.Fullscreen">
-        <!-- Match Android 12+ system splash to the game's own sky and heart-stone mark. -->
+        <!-- Keep Android 12+ showing a moving Gomoku board until the native opening is ready. -->
         <item name="android:windowSplashScreenBackground">@color/splash_bg</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_heart_icon</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">@color/splash_board</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_heart_icon_animated</item>
+        <item name="android:windowSplashScreenAnimationDuration">900</item>
         <item name="android:windowBackground">@color/splash_bg</item>
     </style>
 </resources>

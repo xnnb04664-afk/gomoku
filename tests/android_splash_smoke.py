@@ -17,6 +17,17 @@ def main():
     colors = (ROOT / "android_src/res/values/colors.xml").read_text(encoding="utf-8")
     night_colors = (ROOT / "android_src/res/values-night/colors.xml").read_text(encoding="utf-8")
     strings = (ROOT / "android_src/res/values/strings.xml").read_text(encoding="utf-8")
+    theme = (ROOT / "android_src/res/values/styles.xml").read_text(encoding="utf-8")
+    launch_icon = (ROOT / "android_src/res/drawable/splash_heart_icon.xml").read_text(encoding="utf-8")
+    launch_animators = [
+        (ROOT / "android_src/res/animator" / name).read_text(encoding="utf-8")
+        for name in (
+            "splash_heart_outline.xml",
+            "splash_stones_inner.xml",
+            "splash_stones_middle.xml",
+            "splash_stones_outer.xml",
+        )
+    ]
 
     assert "class GomokuSplashView" in splash
     assert "ValueAnimator" in splash
@@ -29,8 +40,16 @@ def main():
     assert "splash_ink" in colors and "splash_stone_dark" in colors
     assert "splash_bg" in night_colors and "splash_stone_dark" in night_colors
     assert "splash_content_description" in strings
+    assert "windowSplashScreenAnimatedIcon" in theme
+    assert "splash_heart_icon_animated" in theme
+    assert 'android:name="gomoku_grid"' in launch_icon
+    assert 'android:trimPathEnd="0"' in launch_icon
+    assert launch_icon.count('android:alpha="0"') == 3
+    assert all('android:repeatCount="infinite"' in animator for animator in launch_animators)
+    assert all('android:repeatMode="reverse"' in animator for animator in launch_animators)
 
     assert "showNativeSplash();" in activity
+    assert activity.index("showNativeSplash();") < activity.index("mMainHandler.postDelayed(mInitializeWebViewTask")
     assert "onPageCommitVisible" in activity
     assert "onWebContentVisible();" in activity
     assert "getMinimumDisplayDurationMs()" in activity
