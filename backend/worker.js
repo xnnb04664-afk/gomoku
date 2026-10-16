@@ -1428,7 +1428,7 @@ export default {
       headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       headers.set('Content-Type', assetType === 'apk' ? 'application/vnd.android.package-archive' : 'text/html; charset=utf-8');
       headers.set('Content-Disposition', `attachment; filename="${assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html'}"`);
-      headers.set('X-Gomoku-Update-Source', selected.sourceLabel);
+      headers.set('X-Gomoku-Update-Source', selected.sourceLabel === 'GitHub 代理' ? 'github-proxy' : 'github-official');
       const contentLength = assetResponse.headers.get('content-length');
       if (contentLength) headers.set('Content-Length', contentLength);
       return new Response(assetResponse.body, { status: 200, headers });
