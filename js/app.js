@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.136';
+    const CURRENT_VERSION_TAG = 'v1.0.137';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -1799,6 +1799,7 @@
               }
               turn = WHITE;
               updateUI();
+              persistGameState();
               setTimeout(smartAiMove, 650);
             }
           }, 850);
@@ -1806,6 +1807,7 @@
           opponentFreeMove = true;
           turn = enemyColor;
           updateUI();
+          persistGameState();
           showGameNotice(`💀 空过生效！轮到对手【${getPlayerNameByColor(turn)}】免费补子并接管回合！`, true);
         } else if (gameMode === 'online') {
           turn = enemyColor;
@@ -1813,6 +1815,7 @@
           if (conn && conn.open) {
             conn.send({ type: 'destiny_point_1' });
           }
+          persistGameState();
         }
       } else if (point === 2) {
         // 🙈 掷出 2（偷梁换柱）：闭上眼，让对手替你盲选棋盘上你的 1 颗子，移到最近的空格里
@@ -1824,6 +1827,7 @@
         }
         if (myStones.length === 0) {
           showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, '棋盘尚无己方棋子，偷梁换柱落空~');
+          persistGameState();
           return;
         }
         const pick = myStones[Math.floor(Math.random() * myStones.length)];
@@ -1875,6 +1879,7 @@
         for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
         if (enemyCount === 0) {
           showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '对方场上暂无棋子，精准爆破落空~');
+          persistGameState();
           return;
         }
         showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '请在棋盘上点击对方任意 1 颗棋子将其抹除！');
@@ -1891,6 +1896,7 @@
         for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
         if (enemyCount === 0) {
           showSkillBanner('🎭', `🎲 投出点数 4：【绝地倒戈】！`, '对方场上暂无棋子，绝地倒戈落空~');
+          persistGameState();
           return;
         }
         showSkillBanner('🎭', `🎲 投出点数 4：【绝地倒戈】！`, '请在棋盘上点击对方任意 1 颗棋子翻为己用！');
@@ -1945,6 +1951,9 @@
           }
         }
       }
+      // Targeted dice results are saved after their target is chosen. Persist
+      // immediate outcomes now so consumed cards and turn flags stay in sync.
+      if (!activeSkill) persistGameState();
     }
 
     function handleCardClick(idx) {
@@ -2438,6 +2447,9 @@
           triggerGameDraw('天命降临后棋盘已无空位，双方本局和棋！');
         }
       }
+      // Save completed card effects, including non-board state such as
+      // prophecy and extra-move flags, before the app can be killed.
+      persistGameState();
     }
 
 
@@ -7701,6 +7713,14 @@
         && (snapshot.gameMode === 'ai' || snapshot.gameMode === 'pvp')
         && snapshot.isOver !== true
         && (snapshot.hasExtraMove === undefined || typeof snapshot.hasExtraMove === 'boolean')
+        && (snapshot.consecutiveMovesLeft === undefined || (Number.isInteger(snapshot.consecutiveMovesLeft)
+          && snapshot.consecutiveMovesLeft >= 0 && snapshot.consecutiveMovesLeft <= 8))
+        && (snapshot.opponentFreeMove === undefined || typeof snapshot.opponentFreeMove === 'boolean')
+        && (snapshot.prophecyPoint === undefined || snapshot.prophecyPoint === null || (
+          Number.isInteger(snapshot.prophecyPoint?.r) && snapshot.prophecyPoint.r >= 0 && snapshot.prophecyPoint.r < BOARD_SIZE
+          && Number.isInteger(snapshot.prophecyPoint?.c) && snapshot.prophecyPoint.c >= 0 && snapshot.prophecyPoint.c < BOARD_SIZE
+          && (snapshot.prophecyPoint?.by === undefined || snapshot.prophecyPoint.by === BLACK || snapshot.prophecyPoint.by === WHITE)
+        ))
         && Array.isArray(snapshot.history) && snapshot.history.length > 0 && snapshot.history.length <= 512
         && Array.isArray(snapshot.board) && snapshot.board.length === BOARD_SIZE
         && snapshot.board.every(row => Array.isArray(row) && row.length === BOARD_SIZE
@@ -7718,6 +7738,19 @@
       } catch (_) {
         return null;
       }
+    }
+
+    function restoreGameSkillState(snapshot) {
+      hasExtraMove = snapshot?.hasExtraMove === true;
+      consecutiveMovesLeft = Number.isInteger(snapshot?.consecutiveMovesLeft)
+        ? Math.max(0, Math.min(8, snapshot.consecutiveMovesLeft)) : 0;
+      opponentFreeMove = snapshot?.opponentFreeMove === true;
+      const point = snapshot?.prophecyPoint;
+      prophecyPoint = point && Number.isInteger(point.r) && point.r >= 0 && point.r < BOARD_SIZE
+        && Number.isInteger(point.c) && point.c >= 0 && point.c < BOARD_SIZE
+        && (point.by === undefined || point.by === BLACK || point.by === WHITE)
+        ? { r: point.r, c: point.c, ...(point.by === undefined ? {} : { by: point.by }) }
+        : null;
     }
 
     function clearCurrentGameCheckpoint(ownerUid) {
@@ -7789,7 +7822,7 @@
       board = session.board.map(row => [...row]);
       history = session.history.map(move => move && typeof move === 'object' ? { ...move } : move);
       turn = session.turn;
-      if (typeof session.hasExtraMove === 'boolean') hasExtraMove = session.hasExtraMove;
+      restoreGameSkillState(session);
       if (Array.isArray(session.currentDrawnCards)) {
         const restoredCards = session.currentDrawnCards
           .map(saved => SKILL_CARD_POOL.find(card => card.id === saved?.id))
@@ -7808,7 +7841,6 @@
       undoStack = Array.isArray(session.undoStack) ? session.undoStack.slice(-30) : [];
       gameMode = 'online';
       activeSkill = null;
-      prophecyPoint = null;
       activeVFX = [];
       winningLine = null;
       updatePlayerHeaderUI();
@@ -7839,6 +7871,7 @@
         aiOpponentProfile: gameMode === 'ai' ? { ...aiOpponentProfile } : null,
         currentDrawnCards, cardUsedStatus,
         opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
+        consecutiveMovesLeft, opponentFreeMove, prophecyPoint: prophecyPoint ? { ...prophecyPoint } : null,
         undoStack: undoStack.slice(-30)
       };
 
@@ -7866,6 +7899,7 @@
             isDraw: gameResultIsDraw,
             currentDrawnCards, cardUsedStatus,
             opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
+            consecutiveMovesLeft, opponentFreeMove, prophecyPoint: prophecyPoint ? { ...prophecyPoint } : null,
             undoStack: undoStack.slice(-30),
             timestamp: Date.now()
           };
@@ -7928,7 +7962,7 @@
       board = snapshot.board.map(row => [...row]);
       history = snapshot.history.map(move => move && typeof move === 'object' ? { ...move } : move);
       turn = snapshot.turn;
-      hasExtraMove = snapshot.hasExtraMove === true;
+      restoreGameSkillState(snapshot);
       isOver = false;
       gameWinnerColor = 0;
       gameResultIsDraw = false;
@@ -7957,10 +7991,6 @@
       opponentReforgeUsed = snapshot.opponentReforgeUsed === true;
       undoStack = Array.isArray(snapshot.undoStack) ? snapshot.undoStack.slice(-30) : [];
       activeSkill = null;
-      prophecyPoint = null;
-      hasExtraMove = false;
-      consecutiveMovesLeft = 0;
-      opponentFreeMove = false;
       activeVFX = [];
       aiTurnSeq++;
       aiThinking = false;
@@ -8017,7 +8047,7 @@
             board = s.board.map(row => [...row]);
             history = s.history.map(move => move && typeof move === 'object' ? { ...move } : move);
             turn = s.turn;
-            hasExtraMove = s.hasExtraMove === true;
+            restoreGameSkillState(s);
             isOver = false;
             gameWinnerColor = 0;
             gameResultIsDraw = false;
@@ -8523,14 +8553,21 @@
       }
     }
 
-    async function fetchUpdateJson(url, timeoutMs) {
+    async function fetchUpdateJson(url, timeoutMs, externalSignal = null) {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       let timeoutId = null;
+      const abortFromExternal = () => controller?.abort();
       const requestOptions = {
         method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store',
         headers: { Accept: 'application/vnd.github+json' }
       };
-      if (controller) requestOptions.signal = controller.signal;
+      if (controller) {
+        requestOptions.signal = controller.signal;
+        if (externalSignal?.aborted) controller.abort();
+        else externalSignal?.addEventListener?.('abort', abortFromExternal, { once: true });
+      } else if (externalSignal) {
+        requestOptions.signal = externalSignal;
+      }
       const timeoutPromise = new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
           controller?.abort();
@@ -8548,6 +8585,7 @@
         })(), timeoutPromise]);
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
+        externalSignal?.removeEventListener?.('abort', abortFromExternal);
       }
     }
 
@@ -8580,15 +8618,37 @@
     async function fetchUpdateManifest(options = {}) {
       const failures = [];
       if (options.includeGithub !== false) {
-        for (const [index, url] of GITHUB_RELEASE_API_MIRRORS.entries()) {
-          const label = index === 0 ? 'GitHub 代理节点 A' : index === 1 ? 'GitHub 代理节点 B' : 'GitHub 官方接口';
-          try {
-            const release = await fetchUpdateJson(url, UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(index, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)]);
-            return normalizeGithubReleaseManifest(release, label);
-          } catch (error) {
-            const detail = String(error?.message || '连接失败').slice(0, 90);
-            failures.push(`${label}：${detail}`);
-          }
+        const controllers = GITHUB_RELEASE_API_MIRRORS.map(() =>
+          typeof AbortController === 'function' ? new AbortController() : null
+        );
+        let remaining = GITHUB_RELEASE_API_MIRRORS.length;
+        let resolved = false;
+        const githubRace = new Promise((resolve, reject) => {
+          const mirrorErrors = [];
+          GITHUB_RELEASE_API_MIRRORS.forEach((url, index) => {
+            const label = index === 0 ? 'GitHub 代理节点 A' : index === 1 ? 'GitHub 代理节点 B' : 'GitHub 官方接口';
+            const timeout = UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(index, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)];
+            fetchUpdateJson(url, timeout, controllers[index]?.signal)
+              .then(release => normalizeGithubReleaseManifest(release, label))
+              .then(manifest => {
+                if (resolved) return;
+                resolved = true;
+                resolve(manifest);
+              })
+              .catch(error => {
+                mirrorErrors[index] = `${label}：${String(error?.message || '连接失败').slice(0, 90)}`;
+                remaining -= 1;
+                if (remaining === 0 && !resolved) reject(mirrorErrors);
+              });
+          });
+        });
+        try {
+          const manifest = await githubRace;
+          controllers.forEach(controller => controller?.abort());
+          return manifest;
+        } catch (mirrorErrors) {
+          controllers.forEach(controller => controller?.abort());
+          failures.push(...(Array.isArray(mirrorErrors) ? mirrorErrors.filter(Boolean) : ['GitHub 更新入口全部失败']));
         }
       }
       for (const [index, sourceOrigin] of UPDATE_SERVICE_ORIGINS.entries()) {

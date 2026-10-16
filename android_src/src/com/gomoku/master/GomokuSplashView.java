@@ -14,6 +14,7 @@ import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.provider.Settings;
 import android.view.MotionEvent;
@@ -34,6 +35,12 @@ public final class GomokuSplashView extends View {
     private static final long ANIMATION_DURATION_MS = 3600L;
     private static final String SKY_ASSET = "img/startup/sky-cloudsea-v2.webp";
     private static final String BOARD_ASSET = "img/game/sky-board-cloudstone.webp";
+    private static final int[] STAR_POINTS = {3, 7, 11};
+    private static final float[] STONE_GRADIENT_STOPS = {0f, 0.42f, 1f};
+    private static final int[] ATMOSPHERE_COLORS = {0x240b3b63, 0x020b3b63, 0x06154962, 0x37154962};
+    private static final float[] ATMOSPHERE_STOPS = {0f, 0.28f, 0.63f, 1f};
+    private static final Typeface TYPEFACE_MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    private static final Typeface TYPEFACE_BOLD = Typeface.create("sans-serif", Typeface.BOLD);
     private static final int[][] STONES = {
             {2, 4, 0}, {2, 10, 0}, {2, 5, 1}, {2, 9, 1},
             {3, 3, 1}, {3, 11, 1}, {3, 6, 0}, {3, 8, 0},
@@ -46,15 +53,25 @@ public final class GomokuSplashView extends View {
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stoneBitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final RectF boardRect = new RectF();
     private final RectF footerRect = new RectF();
+    private final RectF skyRect = new RectF();
+    private final RectF stoneRect = new RectF();
     private final boolean reducedMotion;
     private final int backgroundColor;
     private final int inkColor;
     private final int stoneLightColor;
     private final int stoneDarkColor;
+    private final String splashTitle;
+    private final String splashSubtitle;
+    private final String splashSkipLabel;
     private Bitmap skyBitmap;
     private Bitmap boardBitmap;
+    private Bitmap blackStoneBitmap;
+    private Bitmap whiteStoneBitmap;
+    private Shader atmosphereShader;
+    private int atmosphereShaderHeight = -1;
     private ValueAnimator animator;
     private float progress;
     private boolean showLoadingHint;
@@ -66,9 +83,15 @@ public final class GomokuSplashView extends View {
         inkColor = context.getResources().getColor(R.color.splash_ink);
         stoneLightColor = context.getResources().getColor(R.color.splash_stone_light);
         stoneDarkColor = context.getResources().getColor(R.color.splash_stone_dark);
+        splashTitle = context.getString(R.string.splash_title);
+        splashSubtitle = context.getString(R.string.splash_subtitle);
+        splashSkipLabel = context.getString(R.string.splash_skip);
         reducedMotion = isReducedMotion(context);
         skyBitmap = loadBitmap(context, SKY_ASSET, Bitmap.Config.RGB_565);
         boardBitmap = loadBitmap(context, BOARD_ASSET, Bitmap.Config.ARGB_8888);
+        int spriteSize = Math.max(96, Math.round(64f * getResources().getDisplayMetrics().density));
+        blackStoneBitmap = createStoneBitmap(spriteSize, true, stoneLightColor, stoneDarkColor);
+        whiteStoneBitmap = createStoneBitmap(spriteSize, false, stoneLightColor, stoneDarkColor);
 
         setClickable(true);
         setFocusable(true);
@@ -76,7 +99,7 @@ public final class GomokuSplashView extends View {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             setElevation(2f * getResources().getDisplayMetrics().density);
         }
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+        textPaint.setTypeface(TYPEFACE_BOLD);
     }
 
     public void setDismissListener(DismissListener listener) {
@@ -108,13 +131,13 @@ public final class GomokuSplashView extends View {
         animator.setInterpolator(new LinearInterpolator());
         animator.addUpdateListener(valueAnimator -> {
             progress = (Float) valueAnimator.getAnimatedValue();
-            invalidate();
+            postInvalidateOnAnimation();
         });
         animator.addListener(new AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(Animator animation) {
                 progress = 1f;
-                invalidate();
+                postInvalidateOnAnimation();
             }
         });
         animator.start();
@@ -162,7 +185,7 @@ public final class GomokuSplashView extends View {
         float drawHeight = skyBitmap.getHeight() * cover * breathingZoom;
         float driftX = (float) Math.sin(progress * Math.PI) * width * 0.004f;
         float driftY = (0.5f - progress) * height * 0.006f;
-        RectF skyRect = new RectF(
+        skyRect.set(
                 (width - drawWidth) * 0.5f + driftX,
                 (height - drawHeight) * 0.5f + driftY,
                 (width + drawWidth) * 0.5f + driftX,
@@ -176,13 +199,18 @@ public final class GomokuSplashView extends View {
     }
 
     private void drawAtmosphere(Canvas canvas, float width, float height) {
+        int shaderHeight = Math.max(1, Math.round(height));
+        if (atmosphereShader == null || atmosphereShaderHeight != shaderHeight) {
+            atmosphereShader = new LinearGradient(
+                    0f, 0f, 0f, shaderHeight,
+                    ATMOSPHERE_COLORS,
+                    ATMOSPHERE_STOPS,
+                    Shader.TileMode.CLAMP
+            );
+            atmosphereShaderHeight = shaderHeight;
+        }
         paint.setStyle(Paint.Style.FILL);
-        paint.setShader(new LinearGradient(
-                0f, 0f, 0f, height,
-                new int[]{0x240b3b63, 0x020b3b63, 0x06154962, 0x37154962},
-                new float[]{0f, 0.28f, 0.63f, 1f},
-                Shader.TileMode.CLAMP
-        ));
+        paint.setShader(atmosphereShader);
         canvas.drawRect(0f, 0f, width, height, paint);
         paint.setShader(null);
     }
@@ -193,30 +221,30 @@ public final class GomokuSplashView extends View {
         final float titleReveal = easeOut((progress - 0.06f) / 0.24f);
         final float subtitleReveal = easeOut((progress - 0.15f) / 0.24f);
         textPaint.setTextAlign(Paint.Align.CENTER);
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        textPaint.setTypeface(TYPEFACE_MEDIUM);
         textPaint.setColor(Color.WHITE);
         textPaint.setAlpha((int) (238f * kickerReveal));
         textPaint.setTextSize(9.5f * density);
         textPaint.setShadowLayer(5f * density, 0f, 1f * density, 0x66345570);
         canvas.drawText("SKY ISLAND  ·  GOMOKU", centerX, height * 0.078f, textPaint);
 
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+        textPaint.setTypeface(TYPEFACE_BOLD);
         textPaint.setColor(0xfffffdf3);
         textPaint.setAlpha((int) (255f * titleReveal));
         textPaint.setTextSize(Math.max(30f * density, Math.min(39f * density, width * 0.105f)));
         textPaint.setShadowLayer(2f * density, 0f, 2f * density, 0x33244f62);
-        canvas.drawText(getResources().getString(R.string.splash_title), centerX,
+        canvas.drawText(splashTitle, centerX,
                 height * 0.145f + (1f - titleReveal) * 14f * density, textPaint);
 
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        textPaint.setTypeface(TYPEFACE_MEDIUM);
         textPaint.setColor(0xfff6fbf2);
         textPaint.setAlpha((int) (242f * subtitleReveal));
         textPaint.setTextSize(12.5f * density);
         textPaint.setShadowLayer(4f * density, 0f, 1f * density, 0x66345570);
-        canvas.drawText(getResources().getString(R.string.splash_subtitle), centerX, height * 0.192f, textPaint);
+        canvas.drawText(splashSubtitle, centerX, height * 0.192f, textPaint);
         textPaint.clearShadowLayer();
         textPaint.setAlpha(255);
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+        textPaint.setTypeface(TYPEFACE_BOLD);
     }
 
     private void drawBoard(Canvas canvas, float width, float height, float density) {
@@ -288,8 +316,8 @@ public final class GomokuSplashView extends View {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(0xff344b2e);
             paint.setAlpha((int) (170f * easeOut((animationProgress - 0.38f) / 0.16f)));
-            for (int row : new int[]{3, 7, 11}) {
-                for (int col : new int[]{3, 7, 11}) {
+            for (int row : STAR_POINTS) {
+                for (int col : STAR_POINTS) {
                     canvas.drawCircle(firstX + col * step, firstY + row * step,
                             Math.max(1.5f * density, step * 0.055f), paint);
                 }
@@ -324,32 +352,15 @@ public final class GomokuSplashView extends View {
 
         paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
+        paint.setAlpha(255);
         paint.setColor(0x55344843);
         canvas.drawOval(x - stoneRadius, y + radius * 0.16f, x + stoneRadius, y + radius * 0.88f, paint);
-        int[] colors = black
-                ? new int[]{0xff7f8c96, stoneDarkColor, 0xff07121c}
-                : new int[]{0xffffffff, stoneLightColor, 0xffa6b5bc};
-        RadialGradient stoneGradient = new RadialGradient(
-                x - stoneRadius * 0.32f, centerY - stoneRadius * 0.38f,
-                stoneRadius * 1.48f, colors, new float[]{0f, 0.42f, 1f}, Shader.TileMode.CLAMP
-        );
-        paint.setStyle(Paint.Style.FILL);
-        paint.setShader(stoneGradient);
-        paint.setAlpha((int) (255f * Math.min(1f, stoneProgress * 1.4f)));
-        canvas.drawCircle(x, centerY, stoneRadius, paint);
-        paint.setShader(null);
-        if (!black) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setColor(0x7788989f);
-            paint.setStrokeWidth(Math.max(0.7f, stoneRadius * 0.07f));
-            canvas.drawCircle(x, centerY, stoneRadius * 0.96f, paint);
-        }
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(black ? 0x66ffffff : 0xddffffff);
-        canvas.drawOval(x - stoneRadius * 0.56f, centerY - stoneRadius * 0.70f,
-                x - stoneRadius * 0.06f, centerY - stoneRadius * 0.37f, paint);
-        paint.setAlpha(255);
-        paint.setShader(null);
+        Bitmap stoneBitmap = black ? blackStoneBitmap : whiteStoneBitmap;
+        if (stoneBitmap == null || stoneBitmap.isRecycled()) return;
+        stoneRect.set(x - stoneRadius, centerY - stoneRadius, x + stoneRadius, centerY + stoneRadius);
+        stoneBitmapPaint.setAlpha((int) (255f * Math.min(1f, stoneProgress * 1.4f)));
+        canvas.drawBitmap(stoneBitmap, null, stoneRect, stoneBitmapPaint);
+        stoneBitmapPaint.setAlpha(255);
     }
 
     private void drawFooter(Canvas canvas, float width, float height, float density) {
@@ -361,7 +372,7 @@ public final class GomokuSplashView extends View {
         canvas.drawCircle(centerX - 78f * density, statusY - 4f * density, 3.3f * density, paint);
 
         textPaint.setTextAlign(Paint.Align.CENTER);
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        textPaint.setTypeface(TYPEFACE_MEDIUM);
         textPaint.setColor(Color.WHITE);
         textPaint.setAlpha(235);
         textPaint.setTextSize(11f * density);
@@ -384,9 +395,9 @@ public final class GomokuSplashView extends View {
         textPaint.setColor(Color.WHITE);
         textPaint.setAlpha(245);
         textPaint.setTextSize(10.5f * density);
-        textPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+        textPaint.setTypeface(TYPEFACE_BOLD);
         textPaint.setShadowLayer(3f * density, 0f, 1f * density, 0x55345570);
-        canvas.drawText(getResources().getString(R.string.splash_skip), centerX, height - 27f * density, textPaint);
+        canvas.drawText(splashSkipLabel, centerX, height - 27f * density, textPaint);
         textPaint.clearShadowLayer();
         textPaint.setAlpha(255);
         paint.setAlpha(255);
@@ -423,8 +434,40 @@ public final class GomokuSplashView extends View {
     private void releaseBitmaps() {
         if (skyBitmap != null && !skyBitmap.isRecycled()) skyBitmap.recycle();
         if (boardBitmap != null && !boardBitmap.isRecycled()) boardBitmap.recycle();
+        if (blackStoneBitmap != null && !blackStoneBitmap.isRecycled()) blackStoneBitmap.recycle();
+        if (whiteStoneBitmap != null && !whiteStoneBitmap.isRecycled()) whiteStoneBitmap.recycle();
         skyBitmap = null;
         boardBitmap = null;
+        blackStoneBitmap = null;
+        whiteStoneBitmap = null;
+    }
+
+    private static Bitmap createStoneBitmap(int size, boolean black, int lightColor, int darkColor) {
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        Paint stonePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+        float center = size * 0.5f;
+        float radius = center * 0.94f;
+        int[] colors = black
+                ? new int[]{0xff7f8c96, darkColor, 0xff07121c}
+                : new int[]{0xffffffff, lightColor, 0xffa6b5bc};
+        stonePaint.setShader(new RadialGradient(
+                center - radius * 0.32f, center - radius * 0.38f,
+                radius * 1.48f, colors, STONE_GRADIENT_STOPS, Shader.TileMode.CLAMP
+        ));
+        canvas.drawCircle(center, center, radius, stonePaint);
+        stonePaint.setShader(null);
+        if (!black) {
+            stonePaint.setStyle(Paint.Style.STROKE);
+            stonePaint.setColor(0x7788989f);
+            stonePaint.setStrokeWidth(Math.max(1f, radius * 0.07f));
+            canvas.drawCircle(center, center, radius * 0.96f, stonePaint);
+        }
+        stonePaint.setStyle(Paint.Style.FILL);
+        stonePaint.setColor(black ? 0x66ffffff : 0xddffffff);
+        canvas.drawOval(center - radius * 0.56f, center - radius * 0.70f,
+                center - radius * 0.06f, center - radius * 0.37f, stonePaint);
+        return bitmap;
     }
 
     private static boolean isReducedMotion(Context context) {
@@ -446,7 +489,8 @@ public final class GomokuSplashView extends View {
 
     private static float easeOut(float value) {
         float t = clamp(value);
-        return 1f - (float) Math.pow(1f - t, 3f);
+        float inverse = 1f - t;
+        return 1f - inverse * inverse * inverse;
     }
 
 }

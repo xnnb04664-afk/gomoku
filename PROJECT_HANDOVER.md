@@ -1,6 +1,6 @@
 # 五子棋项目交接手册：从零启动
 
-更新日期：2026-10-16
+更新日期：2026-10-17
 项目目录：D:\小游戏\五子棋
 本手册替代旧版按日期堆叠的长交接日志。历史记录与当前代码不一致时，以当前代码、测试和重新核验的线上状态为准。
 
@@ -198,7 +198,7 @@ adb install .\五子棋.apk
 线上服务状态会随部署和配置变化。每次更新都要从服务器读取当前服务与反向代理配置、先完成受限备份，再用健康检查和 SQLite 完整性检查验收。数据库内容、账号统计、主机地址、备份路径和密钥不应复制到公开文档或 GitHub。源码或构建成功不等于 ECS 已更新，也不等于真实客户端验收通过。
 ## Git 与提交边界
 
-当前已发布业务基线是 master 上的 `2d91794`（v1.0.134 / Android Build 135）。本次交接文档和 ECS 服务模板的发布后更正应单独提交，不要混入其他工作区文件。
+当前已发布业务基线是 master 上的 `4d813238`（v1.0.136 / Android Build 137）。本次交接文档和 ECS 服务模板的发布后更正应单独提交，不要混入其他工作区文件。
 
 提交前运行 git diff --check、git status --short、git diff -- PROJECT_HANDOVER.md。只按文件名暂存，例如 git add -- PROJECT_HANDOVER.md。需要推送或部署时先核实目标分支和项目；正式发版、Cloudflare Worker/Pages 或生产 D1 的改动应处于用户明确授权范围内。
 
@@ -247,3 +247,10 @@ adb install .\五子棋.apk
 - **构建与验证：**`python tests/android_splash_smoke.py` 通过，全部 Android 资源 XML 可解析，`node --check js/app.js` 通过。APK 为 `1.0.136` / `versionCode=137`，正式签名 v1/v2/v3 验证通过；证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，与 v1.0.135 相同。APK SHA-256 为 `46f0b28551ad241a3356bdee2c64bcf135765b1d57382ae61a83e5753a0846a0`，单文件 HTML SHA-256 为 `78df73cf65f446c0f51b3e3763d7db15b2e8ea571bd8925ee1dec6540019305e`。从 v1.0.135（基础 HTML SHA-256 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`）生成的 HTML 增量包为 84,406 bytes。MuMu Android 15 覆盖安装成功，`firstInstallTime=2026-09-16 13:22:58` 未变；从模拟器拉取已安装 APK 后 SHA-256 与本次候选包完全一致。冷启动画面从无棋子的棋盘开始，随后逐步落子成爱心，再衔接游戏首页。此项是 MuMu 模拟器验收，不代表额外真机验收。
 - 本版只更新客户端启动画面和版本资源；未改 ECS 后端、数据库或 Cloudflare 备用配置。
 - **发布记录：**启动动画合并于 [PR #2](https://github.com/xnnb04664-afk/gomoku/pull/2)，验收信息修订于 [PR #3](https://github.com/xnnb04664-afk/gomoku/pull/3)。GitHub [Release v1.0.136](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.136) 指向提交 `4d8132387322eaabde649333b6bf33b359e05ad6`；ECS `/healthz` 返回 HTTP 200，`/api/version` 已读到 v1.0.136，APK 与 HTML 哈希匹配 Release。ECS 动态读取 GitHub 最新 Release，本次没有部署后端或改数据库。
+
+## 2026-10-17 v1.0.137 应用图标候选（未发布）
+
+- 使用内置 ImageGen 按原晴空棋岛图标重新绘制；主图为 `design_assets/gomoku-app-icon-master.png`。`MOBILE_ICON_PROMPT.md` 记录设计方向和资源映射。
+- 已从主图生成 Android 各密度启动图标、通知图标与根目录 `favicon.png`；`npm run build:official-site` 已同步官网及官网游戏页图标。单文件 HTML 已重新生成。
+- Android APK 为 `1.0.137` / `versionCode=138`，构建成功，正式签名 v1/v2/v3 验证通过，签名证书与 v1.0.136 相同。APK SHA-256：`9c79bfe8a4bf83cb51812a096305744532fdd8ea618ef75f0aa5a84dcaad2c70`。
+- 这是本地候选包；本轮没有安装到 MuMu/真机，没有推送 GitHub、发布 Release 或更新 ECS。不要将候选版记录为线上版本。

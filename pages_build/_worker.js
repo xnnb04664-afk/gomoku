@@ -157,6 +157,7 @@ export class GomokuRoom {
     this.roomCode = '';
     this.roomSessionId = '';
     this.joinTicket = '';
+    this.hostUid = '';
     this.host = null;
     this.client = null;
     this.pendingBootstrap = [];
@@ -168,14 +169,19 @@ export class GomokuRoom {
     const role = String(url.searchParams.get('role') || '');
     const requestedSessionId = String(url.searchParams.get('session') || '');
     const requestedJoinTicket = String(url.searchParams.get('ticket') || '');
+    const authenticatedUid = roomRelaySafeId(request.headers.get('X-Gomoku-Room-Uid'), 128);
     if (!/^\d{6}$/.test(roomCode) || !['host', 'client'].includes(role)) {
       return new Response('Invalid room relay parameters', { status: 400 });
     }
+    if (!authenticatedUid) return new Response('Authenticated room identity required', { status: 401 });
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('WebSocket upgrade required', { status: 426 });
     }
     if (role === 'host' && (!roomRelaySafeId(requestedSessionId) || !roomRelaySafeId(requestedJoinTicket))) {
       return new Response('Host session credentials required', { status: 401 });
+    }
+    if (role === 'host' && this.hostUid && this.hostUid !== authenticatedUid) {
+      return new Response('Room host identity mismatch', { status: 403 });
     }
     if (requestedSessionId && !roomRelaySafeId(requestedSessionId)) {
       return new Response('Invalid room session', { status: 400 });
@@ -192,6 +198,7 @@ export class GomokuRoom {
     const connection = {
       socket: serverSocket,
       role,
+      uid: authenticatedUid,
       sessionId: requestedSessionId,
       joinTicket: requestedJoinTicket,
       messageCount: 0,
@@ -215,6 +222,7 @@ export class GomokuRoom {
       }
       this.roomSessionId = requestedSessionId;
       this.joinTicket = requestedJoinTicket;
+      this.hostUid = authenticatedUid;
       this.host = connection;
       if (this.client && !this.client.closed && !this.client.sessionId) {
         // 客户端可能先于房主连入并把 join_request 放入 bootstrap 队列。
@@ -546,7 +554,7 @@ export default {
 
       const corsHeaders = {
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket, Range, If-Range',
       'Access-Control-Max-Age': '600',
       'Vary': 'Origin',
       'X-Content-Type-Options': 'nosniff',
@@ -1396,10 +1404,52 @@ export default {
     const fetchReleaseAsset = async (assetUrl, sourceLabel, init, timeoutMs) => {
       try {
         const response = await fetchWithTimeout(assetUrl, init, timeoutMs);
-        if (response.ok && response.body) return { response, sourceLabel, error: '' };
         const status = Number(response.status) || 0;
+        const rangeHeader = String(init?.headers?.Range || '').trim();
+        let invalidReason = '';
+        if (!response.body) invalidReason = '响应缺少文件内容';
+        else if (status === 200) {
+          if (response.headers.has('content-range')) invalidReason = '完整文件响应包含无效 Content-Range';
+        } else if (status === 206) {
+          if (!rangeHeader) invalidReason = '未请求分段下载却收到局部文件';
+          else {
+            const requested = rangeHeader.match(/^bytes=(\d+)-(\d*)$/i) || rangeHeader.match(/^bytes=-(\d+)$/i);
+            const actual = String(response.headers.get('content-range') || '').match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i);
+            if (!requested || !actual) invalidReason = '分段下载范围格式无效';
+            else {
+              const actualStart = Number(actual[1]);
+              const actualEnd = Number(actual[2]);
+              const total = actual[3] === '*' ? null : Number(actual[3]);
+              const actualLength = actualEnd - actualStart + 1;
+              const declaredLengthHeader = response.headers.get('content-length');
+              const declaredLength = declaredLengthHeader === null ? null : Number(declaredLengthHeader);
+              const isSuffix = requested[0].match(/^bytes=-(\d+)$/i);
+              if (!Number.isSafeInteger(actualStart) || !Number.isSafeInteger(actualEnd) ||
+                  actualStart < 0 || actualEnd < actualStart ||
+                  (total !== null && (!Number.isSafeInteger(total) || total <= actualEnd)) ||
+                  (declaredLength !== null && (!Number.isSafeInteger(declaredLength) || declaredLength !== actualLength))) {
+                invalidReason = '分段下载的 Content-Range 与文件长度不匹配';
+              } else if (isSuffix) {
+                const suffixLength = Number(isSuffix[1]);
+                if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0 ||
+                    (total !== null && (actualEnd !== total - 1 || actualStart !== Math.max(0, total - suffixLength)))) {
+                  invalidReason = '分段下载未匹配请求的后缀范围';
+                }
+              } else {
+                const requestedStart = Number(requested[1]);
+                const requestedEnd = requested[2] ? Number(requested[2]) : null;
+                if (!Number.isSafeInteger(requestedStart) || actualStart !== requestedStart ||
+                    (requestedEnd !== null && actualEnd > requestedEnd) ||
+                    (requestedEnd === null && total !== null && actualEnd !== total - 1)) {
+                  invalidReason = '分段下载未匹配请求范围';
+                }
+              }
+            }
+          }
+        } else invalidReason = `HTTP ${status || '无响应'}`;
+        if (!invalidReason) return { response, sourceLabel, error: '' };
         try { await response.body?.cancel(); } catch (_) {}
-        return { response: null, sourceLabel, error: `HTTP ${status || '无响应'}` };
+        return { response: null, sourceLabel, error: invalidReason };
       } catch (error) {
         const isTimeout = error?.name === 'AbortError' || error?.name === 'TimeoutError';
         return { response: null, sourceLabel, error: isTimeout ? '请求超时' : '网络连接失败' };
@@ -1418,14 +1468,21 @@ export default {
       }
 
       const assetName = assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html';
+      const rangeHeader = String(request.headers.get('Range') || '').trim();
+      const ifRangeHeader = String(request.headers.get('If-Range') || '').trim();
+      const assetHeaders = {
+        'User-Agent': 'gomoku-update-proxy',
+        ...(rangeHeader ? { Range: rangeHeader } : {}),
+        ...(rangeHeader && ifRangeHeader ? { 'If-Range': ifRangeHeader } : {})
+      };
       const mirrorUrl = `https://gh-proxy.com/https://github.com/${UPDATE_REPOSITORY}/releases/download/${releaseTag}/${assetName}`;
       const mirror = await fetchReleaseAsset(mirrorUrl, 'GitHub 代理', {
-        headers: { 'User-Agent': 'gomoku-update-proxy' }
+        headers: assetHeaders
       }, 12000);
       let selected = mirror;
       if (!selected.response) {
         const official = await fetchReleaseAsset(result.asset.url, 'GitHub 官方源', {
-          headers: githubHeaders(result.token, 'application/octet-stream')
+          headers: { ...githubHeaders(result.token, 'application/octet-stream'), ...assetHeaders }
         }, 20000);
         selected = official.response ? official : {
           response: null,
@@ -1441,6 +1498,13 @@ export default {
       const declaredAssetSize = Number(assetResponse.headers.get('content-length') || 0);
       const maxAssetBytes = assetType === 'apk' ? MAX_UPDATE_APK_BYTES : MAX_UPDATE_HTML_BYTES;
       if (Number.isFinite(declaredAssetSize) && declaredAssetSize > maxAssetBytes) {
+        try { await assetResponse.body?.cancel(); } catch (_) {}
+        return json({ code: 413, msg: '更新文件超过允许大小' }, 413);
+      }
+      const contentRange = String(assetResponse.headers.get('content-range') || '');
+      const rangeTotal = contentRange.match(/^bytes\s+\d+-\d+\/(\d+)$/i);
+      if (rangeTotal && Number(rangeTotal[1]) > maxAssetBytes) {
+        try { await assetResponse.body?.cancel(); } catch (_) {}
         return json({ code: 413, msg: '更新文件超过允许大小' }, 413);
       }
 
@@ -1449,9 +1513,18 @@ export default {
       headers.set('Content-Type', assetType === 'apk' ? 'application/vnd.android.package-archive' : 'text/html; charset=utf-8');
       headers.set('Content-Disposition', `attachment; filename="${assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html'}"`);
       headers.set('X-Gomoku-Update-Source', selected.sourceLabel === 'GitHub 代理' ? 'github-proxy' : 'github-official');
+      headers.set('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Range, ETag, Last-Modified, X-Gomoku-Update-Source');
       const contentLength = assetResponse.headers.get('content-length');
       if (contentLength) headers.set('Content-Length', contentLength);
-      return new Response(assetResponse.body, { status: 200, headers });
+      for (const name of ['Accept-Ranges', 'Content-Range', 'ETag', 'Last-Modified']) {
+        const value = assetResponse.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      return new Response(assetResponse.body, {
+        status: assetResponse.status,
+        statusText: assetResponse.statusText,
+        headers
+      });
     };
 
     // 版本检测与文件下载统一从 Worker 出口完成，客户端不再直连私有仓库。
@@ -1462,6 +1535,10 @@ export default {
       return json({ code: 405, msg: '仅支持 GET 请求' }, 405);
     }
     if (url.pathname === "/api/version") {
+      const ticketProtectionEnabled = String(env.UPDATE_TICKET_ENFORCED || '1').trim() !== '0';
+      if (ticketProtectionEnabled && !getUpdateTicketSecret()) {
+        return json({ code: 503, msg: '更新服务未配置票据签名密钥，请联系管理员' }, 503);
+      }
       const latest = await getLatestPrivateRelease();
       if (latest.error) return json({ code: 503, msg: latest.error }, 503);
       const releaseTag = String(latest.release.tag_name || '').trim();
@@ -1824,7 +1901,12 @@ export default {
         `).bind(ticketHash, now).run();
         if (!Number(claimed?.meta?.changes)) return json({ code: 401, msg: '房间连接票据已使用' }, 401);
         const roomId = env.GOMOKU_ROOMS.idFromName(`gomoku-room:${roomCode}`);
-        return env.GOMOKU_ROOMS.get(roomId).fetch(request);
+        const relayHeaders = new Headers(request.headers);
+        // Never trust a client-supplied identity header; only the consumed ticket
+        // may choose the UID that the room Durable Object uses for host ownership.
+        relayHeaders.set('X-Gomoku-Room-Uid', String(record.uid));
+        const relayRequest = new Request(request, { headers: relayHeaders });
+        return env.GOMOKU_ROOMS.get(roomId).fetch(relayRequest);
       } catch (error) {
         return publicServerError('房间连接校验异常', error);
       }
@@ -2415,7 +2497,10 @@ export default {
       if (auth.response) return auth.response;
       const uid = String(auth.user.uid);
       if (!consumeSocialRequestRate(uid, 'friend-request', 20, 86400000, 100)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
-      const targetUsername = String(body.targetUsername || '').trim().slice(0, 32);
+      const targetUsername = String(body.targetUsername || '').trim();
+      if (!targetUsername || targetUsername.length > 32) {
+        return json({ code: 400, msg: '账号名长度无效' }, 400);
+      }
       const aliasTarget = privateUsernameForPublicUid(targetUsername);
       const target = aliasTarget
         ? await env.DB.prepare(`SELECT uid, username FROM users WHERE LOWER(username) = ? AND username IS NOT NULL AND username != ''`).bind(aliasTarget).first()

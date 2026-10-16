@@ -3630,6 +3630,7 @@
           } else if (data.type === 'skill_prophecy') {
           prophecyPoint = { r: data.r, c: data.c, by: data.by };
           draw();
+          persistGameState();
           showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
         } else if (data.type === 'skill_remove_stone') {
           const removedP = board[data.r][data.c];
@@ -3754,6 +3755,7 @@
           opponentFreeMove = true;
           turn = myOnlineColor;
           updateUI();
+          persistGameState();
           showSkillBanner('💀', '对方掷出【大凶·空军】！', '对方本回合直接空过！您获得免费补下 1 子！');
         } else if (data.type === 'destiny_point_2') {
           const shiftColor = (myOnlineColor === BLACK ? WHITE : BLACK);

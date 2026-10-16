@@ -260,6 +260,13 @@ def main():
             }, ensure_ascii=False))
         page.wait_for_selector("#socialFriendsList >> text=云端棋友")
 
+        # A pending incoming invitation opens a blocking modal. Dismiss only
+        # its prompt before testing search; the invite remains available in
+        # the requests tab for the later accept-flow assertion.
+        page.wait_for_selector("#socialInviteModal.show", timeout=5000)
+        page.locator('#socialInviteModal [data-social-action="invite-dismiss"]').click()
+        page.wait_for_function("!document.querySelector('#socialInviteModal')?.classList.contains('show')")
+
         # 未读总数要同时出现在弹窗入口、底部好友按钮和收起后的悬浮入口。
         # 这里的 2 条私聊 + 2 条好友申请 + 1 条邀战来自同一份 /api/friends 快照。
         for badge_id in ("socialUnreadBadge", "gameFriendsUnreadBadge", "gameDockUnreadBadge"):
@@ -287,6 +294,7 @@ def main():
 
         # 输入变化只允许最后一次精确账号查找发出请求，避免移动端键入时刷接口。
         search_calls_before_debounce = len([call for call in calls if call["path"] == "/api/friends/search"])
+        assert not page.locator("#socialInviteModal").evaluate("element => element.classList.contains('show')"), "好友搜索开始前应先关闭邀战提示弹窗"
         page.locator("#socialSearchInput").fill("Auto.Partial")
         page.locator("#socialSearchInput").fill("Auto.Final")
         page.wait_for_timeout(650)

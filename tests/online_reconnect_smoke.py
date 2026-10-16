@@ -88,17 +88,27 @@ def main():
             initial_persisted = guest.evaluate(
                 """
                 () => {
-                  const saved = JSON.parse(localStorage.getItem('gomoku_active_online_room') || '{}');
+                  const ownerUid = getCurrentGameOwnerUid();
+                  const storageKey = getOnlineRoomStorageKey(ownerUid);
+                  const expectedStorageKey = `gomoku_active_online_room_v1_${encodeURIComponent(ownerUid || 'guest')}`;
+                  const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
                   return {
+                    ownerUid,
+                    storageKey,
+                    expectedStorageKey,
                     liveSessionId: onlineSessionId,
                     savedSessionId: saved.sessionId,
                     savedRoundId: saved.roundId,
+                    savedOwnerUid: saved.ownerUid,
                     savedHistoryLength: Array.isArray(saved.history) ? saved.history.length : -1
                   };
                 }
                 """
             )
-            if (not initial_persisted["liveSessionId"] or
+            if (initial_persisted["storageKey"] != initial_persisted["expectedStorageKey"] or
+                    not initial_persisted["ownerUid"] or
+                    initial_persisted["savedOwnerUid"] != initial_persisted["ownerUid"] or
+                    not initial_persisted["liveSessionId"] or
                     initial_persisted["savedSessionId"] != initial_persisted["liveSessionId"] or
                     initial_persisted["savedRoundId"] != initial["guest"]["round"] or
                     initial_persisted["savedHistoryLength"] != 0):
@@ -157,17 +167,28 @@ def main():
                 """
                 () => {
                   persistGameState();
-                  const saved = JSON.parse(localStorage.getItem('gomoku_active_online_room') || '{}');
+                  const ownerUid = getCurrentGameOwnerUid();
+                  const storageKey = getOnlineRoomStorageKey(ownerUid);
+                  const expectedStorageKey = `gomoku_active_online_room_v1_${encodeURIComponent(ownerUid || 'guest')}`;
+                  const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
                   return {
+                    ownerUid,
+                    storageKey,
+                    expectedStorageKey,
                     liveSessionId: onlineSessionId,
                     savedSessionId: saved.sessionId,
                     savedRoundId: saved.roundId,
+                    savedOwnerUid: saved.ownerUid,
                     savedJoinTicket: saved.joinTicket
                   };
                 }
                 """
             )
-            if not persisted["liveSessionId"] or persisted["savedSessionId"] != persisted["liveSessionId"]:
+            if (persisted["storageKey"] != persisted["expectedStorageKey"] or
+                    not persisted["ownerUid"] or
+                    persisted["savedOwnerUid"] != persisted["ownerUid"] or
+                    not persisted["liveSessionId"] or
+                    persisted["savedSessionId"] != persisted["liveSessionId"]):
                 raise AssertionError(json.dumps({"phase": "persist_room_identity", **persisted}, ensure_ascii=False))
 
             guest.reload(wait_until="domcontentloaded", timeout=30_000)

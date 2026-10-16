@@ -365,7 +365,7 @@ public class MainActivity extends Activity {
                 ? new Notification.Builder(this, SOCIAL_NOTIFICATION_CHANNEL_ID)
                 : new Notification.Builder(this);
         Notification notification = builder
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_gomoku)
                 .setContentTitle("五子棋 · 好友消息")
                 .setContentText("你有新的好友动态，打开游戏查看")
                 .setCategory(Notification.CATEGORY_MESSAGE)
