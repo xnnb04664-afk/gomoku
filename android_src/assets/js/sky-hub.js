@@ -77,15 +77,24 @@
     let nickname = '';
     let avatar = '';
     let uid = '';
+    let token = '';
     try {
       username = localStorage.getItem('gomoku_user_username') || '';
       nickname = localStorage.getItem('gomoku_p1Name') || '';
       avatar = localStorage.getItem('gomoku_p1Avatar') || '';
       uid = localStorage.getItem('gomoku_user_uid') || '';
+      token = localStorage.getItem('gomoku_user_token') || '';
     } catch (_) {}
+    const loggedIn = Boolean(username.trim() && uid.trim() && token.trim());
     const name = nickname.trim() || username.trim() || '游客棋手';
     nameNode.textContent = name;
-    detailNode.textContent = uid ? '账号已连接 · 棋局与棋友同步中' : '游客棋手 · 对局记录保存在本机';
+    detailNode.textContent = loggedIn ? '账号已连接 · 棋局与棋友同步中' : '游客棋手 · 对局记录保存在本机';
+    const profileAction = lobby?.querySelector('.sky-profile-card [data-sky-action]');
+    if (profileAction) {
+      profileAction.dataset.skyAction = loggedIn ? 'profile' : 'login';
+      profileAction.innerHTML = loggedIn ? '资料 <span>→</span>' : '登录账号 <span>→</span>';
+      profileAction.setAttribute('aria-label', loggedIn ? '打开个人资料' : '打开账号登录');
+    }
     const imageKey = avatar === 'anime_boy' || avatar === 'img/avatar_boy.png' || avatar === 'img/anime_avatar_boy.jpg'
       ? 'boy'
       : avatar === 'anime_girl' || avatar === 'img/avatar_girl.png' || avatar === 'img/anime_avatar_girl.jpg'
@@ -107,6 +116,7 @@
       window.ensureGomokuResource('avatars').then(paintAvatar).catch(() => {});
     }
   }
+  window.refreshSkyProfileCard = refreshProfileCard;
 
   function lobbyMarkup() {
     return `
@@ -191,7 +201,7 @@
           <article class="sky-profile-card">
             <div class="sky-profile-avatar" id="skyProfileAvatar" aria-hidden="true">棋</div>
             <div class="sky-profile-copy"><small>当前棋手</small><strong id="skyProfileName">游客棋手</strong><span id="skyProfileDetail">对局记录保存在本机</span></div>
-            <button type="button" data-sky-action="profile">资料 <span>→</span></button>
+            <button type="button" data-sky-action="login">登录账号 <span>→</span></button>
           </article>
           <article class="sky-me-update">
             <div class="sky-update-mark" aria-hidden="true">↻</div>
@@ -199,7 +209,7 @@
             <button type="button" data-sky-action="update" aria-label="检查更新">检查更新 <b>→</b></button>
           </article>
           <div class="sky-page-grid sky-me-actions">
-            <button class="sky-entry-card" type="button" data-sky-action="profile"><span class="sky-entry-icon">○</span><span><b>个人资料与账号</b><small>昵称、头像、登录与战绩绑定</small></span><i>↗</i></button>
+            <button class="sky-entry-card" type="button" data-sky-action="account"><span class="sky-entry-icon">○</span><span><b>个人资料与账号</b><small>昵称、头像、登录与战绩绑定</small></span><i>↗</i></button>
             <button class="sky-entry-card" type="button" data-sky-action="settings"><span class="sky-entry-icon">⚙</span><span><b>设置</b><small>背景音乐、对局音效与棋盘画质</small></span><i>↗</i></button>
             <button class="sky-entry-card" type="button" data-sky-action="activity"><span class="sky-entry-icon">✳</span><span><b>活动与签到</b><small>查看已有活动和签到记录</small></span><i>↗</i></button>
             <button class="sky-entry-card" type="button" data-sky-action="feedback"><span class="sky-entry-icon">↗</span><span><b>意见反馈</b><small>提交问题或改进建议</small></span><i>↗</i></button>
@@ -392,6 +402,18 @@
     }
     else if (action === 'history') safeCall('openHistoryModal');
     else if (action === 'leaderboard') safeCall('openLeaderboardModal');
+    else if (action === 'login') {
+      closeSheet();
+      safeCall('openAuthModal', 'login');
+    }
+    else if (action === 'account') {
+      const loggedIn = Boolean(localStorage.getItem('gomoku_user_username') && localStorage.getItem('gomoku_user_uid') && localStorage.getItem('gomoku_user_token'));
+      if (loggedIn) runSheetAction('profile');
+      else {
+        closeSheet();
+        safeCall('openAuthModal', 'login');
+      }
+    }
     else if (action === 'profile') runSheetAction('profile');
     else if (action === 'activity') runSheetAction('activity');
     else if (action === 'settings') runSheetAction('settings');

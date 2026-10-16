@@ -51,10 +51,18 @@ public class MainActivity extends Activity {
 
     // 🛡️ 原厂官方数字签名 SHA-256 指纹（严密防止第三方重打包）
     private static final String OFFICIAL_SIGNATURE_SHA256 = "9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e";
-    // 客户端只保留 Cloudflare 中转出口；仓库地址和 GitHub 直链不进入 APK。
-    private static final String UPDATE_PROXY_HOST = "gomoku-api.pages.dev";
-    private static final String UPDATE_PROXY_VERSION_URL = "https://gomoku-api.pages.dev/api/version";
-    private static final String UPDATE_PROXY_APK_URL = "https://gomoku-api.pages.dev/api/update/apk";
+    // 更新顺序：多个 GitHub 反向代理节点 -> ECS -> Cloudflare 应急出口。
+    // GitHub 文件始终校验 Release SHA-256 与原始 APK 签名；服务票据只发往其签发源。
+    private static final String ECS_UPDATE_BASE = "https://101.201.76.166/gomoku-api";
+    private static final String CLOUDFLARE_PAGES_UPDATE_BASE = "https://gomoku-api.pages.dev";
+    private static final String CLOUDFLARE_WORKER_UPDATE_BASE = "https://gomoku-backend.xnnb04664.workers.dev";
+    private static final String[] TRUSTED_UPDATE_BASES = {
+            ECS_UPDATE_BASE, CLOUDFLARE_PAGES_UPDATE_BASE, CLOUDFLARE_WORKER_UPDATE_BASE
+    };
+    private static final String[] GITHUB_RELEASE_PROXY_HOSTS = {
+            "gh-proxy.com", "gh-proxy.org", "githubproxy.cc", "ghfast.top"
+    };
+    private static final String DEFAULT_UPDATE_BASE = CLOUDFLARE_PAGES_UPDATE_BASE;
     private static final String UPDATE_PROXY_VERSION_PATH = "/api/version";
     private static final String UPDATE_PROXY_APK_PATH = "/api/update/apk";
     private static final String UPDATE_CLIENT_HEADER = "X-Gomoku-Client";
@@ -666,10 +674,10 @@ public class MainActivity extends Activity {
     private static boolean isTrustedApkUrl(Uri uri) {
         return uri != null
                 && "https".equalsIgnoreCase(uri.getScheme())
-                && UPDATE_PROXY_HOST.equalsIgnoreCase(uri.getHost())
                 && uri.getUserInfo() == null
                 && (uri.getPort() == -1 || uri.getPort() == 443)
-                && UPDATE_PROXY_APK_PATH.equals(uri.getPath());
+                && UPDATE_PROXY_APK_PATH.equals(uri.getPath())
+                && isTrustedUpdateBase(uri.getScheme() + "://" + uri.getHost());
     }
 
     private boolean handleWebViewNavigation(WebView view, Uri uri) {
@@ -701,27 +709,48 @@ public class MainActivity extends Activity {
                 || responseCode == 307 || responseCode == 308;
     }
 
-    private static boolean isTrustedUpdateUrl(URL url, String expectedPath) {
-        return url != null
-                && "https".equalsIgnoreCase(url.getProtocol())
-                && UPDATE_PROXY_HOST.equalsIgnoreCase(url.getHost())
-                && (url.getPort() == -1 || url.getPort() == 443)
-                && url.getUserInfo() == null
-                && expectedPath.equals(url.getPath());
+    private static boolean isTrustedUpdateBase(String sourceBase) {
+        if (sourceBase == null) return false;
+        String normalized = sourceBase.replaceAll("/+$", "");
+        for (String trustedBase : TRUSTED_UPDATE_BASES) {
+            if (trustedBase.equalsIgnoreCase(normalized)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isTrustedUpdateUrl(URL url, String expectedPath, String sourceBase) {
+        if (url == null || !isTrustedUpdateBase(sourceBase)
+                || !"https".equalsIgnoreCase(url.getProtocol())
+                || (url.getPort() != -1 && url.getPort() != 443)
+                || url.getUserInfo() != null) return false;
+        try {
+            URL base = new URL(sourceBase);
+            String basePath = base.getPath().replaceAll("/+$", "");
+            return base.getHost().equalsIgnoreCase(url.getHost())
+                    && (base.getPort() == url.getPort() || (base.getPort() == -1 && url.getPort() == -1))
+                    && (basePath + expectedPath).equals(url.getPath());
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private HttpURLConnection openTrustedConnection(String rawUrl, String expectedPath) throws Exception {
-        return openTrustedConnection(rawUrl, expectedPath, "");
+        return openTrustedConnection(rawUrl, expectedPath, DEFAULT_UPDATE_BASE, "");
     }
 
     private HttpURLConnection openTrustedConnection(String rawUrl, String expectedPath, String updateTicket) throws Exception {
+        return openTrustedConnection(rawUrl, expectedPath, DEFAULT_UPDATE_BASE, updateTicket);
+    }
+
+    private HttpURLConnection openTrustedConnection(String rawUrl, String expectedPath, String sourceBase, String updateTicket) throws Exception {
         String cleanTicket = updateTicket == null ? "" : updateTicket.trim();
+        if (!isTrustedUpdateBase(sourceBase)) throw new SecurityException("更新来源不在可信 ECS/Cloudflare 清单中");
         if (UPDATE_PROXY_APK_PATH.equals(expectedPath) && cleanTicket.isEmpty()) {
             throw new SecurityException("缺少更新下载授权");
         }
         URL current = new URL(rawUrl);
         for (int redirectCount = 0; redirectCount <= 3; redirectCount++) {
-            if (!isTrustedUpdateUrl(current, expectedPath)) {
+            if (!isTrustedUpdateUrl(current, expectedPath, sourceBase)) {
                 throw new SecurityException("拒绝连接非官方更新地址");
             }
             HttpURLConnection connection = (HttpURLConnection) current.openConnection();
@@ -762,10 +791,10 @@ public class MainActivity extends Activity {
         return output.toString("UTF-8");
     }
 
-    private String fetchExpectedApkSha256() throws Exception {
+    private String fetchExpectedApkSha256(String sourceBase) throws Exception {
         HttpURLConnection connection = null;
         try {
-            connection = openTrustedConnection(UPDATE_PROXY_VERSION_URL, UPDATE_PROXY_VERSION_PATH);
+            connection = openTrustedConnection(sourceBase + UPDATE_PROXY_VERSION_PATH, UPDATE_PROXY_VERSION_PATH, sourceBase, "");
             int responseCode = connection.getResponseCode();
             if (responseCode < 200 || responseCode >= 300) throw new SecurityException("版本接口不可用");
             try (InputStream input = connection.getInputStream()) {
@@ -798,13 +827,36 @@ public class MainActivity extends Activity {
         return result.toString();
     }
 
-    private static boolean isVerifiedApk(File apkFile, String expectedSha256) {
+    private boolean verifyDownloadedApkSignature(File apkFile) {
+        if (apkFile == null || !apkFile.exists() || !apkFile.isFile()) return false;
+        try {
+            android.content.pm.PackageInfo packageInfo;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                packageInfo = getPackageManager().getPackageArchiveInfo(apkFile.getAbsolutePath(),
+                        android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
+                if (packageInfo != null && packageInfo.signingInfo != null) {
+                    android.content.pm.Signature[] signers = packageInfo.signingInfo.getApkContentsSigners();
+                    return signers != null && signers.length > 0 && checkSignatureHash(signers[0]);
+                }
+            } else {
+                packageInfo = getPackageManager().getPackageArchiveInfo(apkFile.getAbsolutePath(),
+                        android.content.pm.PackageManager.GET_SIGNATURES);
+                return packageInfo != null && packageInfo.signatures != null && packageInfo.signatures.length > 0
+                        && checkSignatureHash(packageInfo.signatures[0]);
+            }
+        } catch (Exception error) {
+            android.util.Log.w("SignatureCheck", "Downloaded APK certificate check failed: " + error.getMessage());
+        }
+        return false;
+    }
+
+    private boolean isVerifiedApk(File apkFile, String expectedSha256) {
         if (apkFile == null || expectedSha256 == null || !expectedSha256.matches("(?i)[0-9a-f]{64}")
                 || !apkFile.exists() || !apkFile.isFile()) return false;
         long size = apkFile.length();
         if (size < 500000L || size > MAX_APK_BYTES) return false;
         try {
-            return expectedSha256.equalsIgnoreCase(sha256File(apkFile));
+            return expectedSha256.equalsIgnoreCase(sha256File(apkFile)) && verifyDownloadedApkSignature(apkFile);
         } catch (Exception ignored) {
             return false;
         }
@@ -869,7 +921,7 @@ public class MainActivity extends Activity {
                 }
                 try {
                     byte[] contentBytes = content.getBytes("UTF-8");
-                    if (contentBytes.length < 50000 || contentBytes.length > 4 * 1024 * 1024) return false;
+                    if (contentBytes.length < 50000 || contentBytes.length > 20 * 1024 * 1024) return false;
                     File dir = new File(getFilesDir(), "hot_update");
                     if (!dir.exists()) dir.mkdirs();
                     File target = new File(dir, "index.html");
@@ -907,6 +959,21 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void downloadAndInstallApkWithTicket(String updateTicket) {
                 startApkDownload(updateTicket);
+            }
+
+            @android.webkit.JavascriptInterface
+            public void downloadAndInstallApkWithTicketAndHash(String updateTicket, String apkSha256) {
+                startApkDownload(updateTicket, apkSha256);
+            }
+
+            @android.webkit.JavascriptInterface
+            public void downloadAndInstallApkFromEndpoint(String sourceBase, String updateTicket, String apkSha256) {
+                startApkDownload(updateTicket, apkSha256, sourceBase);
+            }
+
+            @android.webkit.JavascriptInterface
+            public void downloadAndInstallGithubReleaseApk(String releaseTag, String apkSha256) {
+                startGithubProxyApkDownload(releaseTag, apkSha256);
             }
 
             @android.webkit.JavascriptInterface
@@ -1260,6 +1327,18 @@ public class MainActivity extends Activity {
         });
     }
 
+    private static String formatDownloadProgressStatus(long downloadedBytes, long totalBytes, long bytesPerSecond) {
+        String speed = bytesPerSecond >= 1024L * 1024L
+                ? String.format(java.util.Locale.US, "%.1f MB/s", bytesPerSecond / (1024.0 * 1024.0))
+                : String.format(java.util.Locale.US, "%.0f KB/s", bytesPerSecond / 1024.0);
+        if (totalBytes > 0) {
+            return String.format(java.util.Locale.US, "已下载 %.1f / %.1f MB · %s",
+                    downloadedBytes / (1024.0 * 1024.0), totalBytes / (1024.0 * 1024.0), speed);
+        }
+        return String.format(java.util.Locale.US, "已下载 %.1f MB · %s · 总大小未知",
+                downloadedBytes / (1024.0 * 1024.0), speed);
+    }
+
     private void notifyWebDownloadFailure(final String status) {
         runOnUiThread(() -> {
             if (mWebView != null) {
@@ -1274,11 +1353,22 @@ public class MainActivity extends Activity {
     }
 
     public void startApkDownload(String updateTicket) {
+        startApkDownload(updateTicket, "", DEFAULT_UPDATE_BASE);
+    }
+
+    public void startApkDownload(String updateTicket, String manifestApkSha256) {
+        startApkDownload(updateTicket, manifestApkSha256, DEFAULT_UPDATE_BASE);
+    }
+
+    public void startApkDownload(String updateTicket, String manifestApkSha256, String sourceBase) {
         final String cleanUpdateTicket = updateTicket == null ? "" : updateTicket.trim();
-        if (cleanUpdateTicket.isEmpty()) {
+        final String cleanSourceBase = sourceBase == null ? "" : sourceBase.trim().replaceAll("/+$", "");
+        final String suppliedHash = manifestApkSha256 == null ? "" : manifestApkSha256.trim().toLowerCase(java.util.Locale.ROOT);
+        final boolean hasSuppliedHash = suppliedHash.matches("[0-9a-f]{64}");
+        if (cleanUpdateTicket.isEmpty() || !isTrustedUpdateBase(cleanSourceBase)) {
             runOnUiThread(() -> {
-                Toast.makeText(MainActivity.this, "更新授权已失效，请重新检查更新", Toast.LENGTH_LONG).show();
-                notifyWebDownloadFailure("更新授权已失效，请重新点击更新");
+                Toast.makeText(MainActivity.this, "更新授权或服务来源无效，请重新检查更新", Toast.LENGTH_LONG).show();
+                notifyWebDownloadFailure("更新授权或服务来源无效，请重新检查更新");
             });
             return;
         }
@@ -1324,13 +1414,13 @@ public class MainActivity extends Activity {
             try {
                 if (destFile.exists()) destFile.delete();
 
-                // 先读取 Worker 发布清单中的摘要，再下载；摘要接口与下载接口均严格限制为官方 HTTPS 出口。
-                expectedHash = fetchExpectedApkSha256();
+                // 优先使用网页刚校验过的发布清单摘要，省掉一次串行版本请求；旧网页仍安全回源取摘要。
+                expectedHash = hasSuppliedHash ? suppliedHash : fetchExpectedApkSha256(cleanSourceBase);
                 sExpectedApkSha256 = expectedHash;
 
                 HttpURLConnection connection = null;
                 try {
-                    connection = openTrustedConnection(UPDATE_PROXY_APK_URL, UPDATE_PROXY_APK_PATH, cleanUpdateTicket);
+                    connection = openTrustedConnection(cleanSourceBase + UPDATE_PROXY_APK_PATH, UPDATE_PROXY_APK_PATH, cleanSourceBase, cleanUpdateTicket);
                     int responseCode = connection.getResponseCode();
                     if (responseCode < 200 || responseCode >= 300) throw new SecurityException("更新文件接口不可用");
                     int declaredSize = connection.getContentLength();
@@ -1341,16 +1431,25 @@ public class MainActivity extends Activity {
                         int len;
                         long downloaded = 0;
                         int lastPercent = 5;
+                        long progressWindowStartedAt = android.os.SystemClock.elapsedRealtime();
+                        long progressWindowStartBytes = 0;
                         while ((len = input.read(buffer)) != -1) {
                             downloaded += len;
                             if (downloaded > MAX_APK_BYTES) throw new SecurityException("更新文件超过大小限制");
                             output.write(buffer, 0, len);
-                            if (declaredSize > 0) {
-                                int percent = Math.min(99, (int) ((downloaded * 100L) / declaredSize));
-                                if (percent - lastPercent >= 5) {
-                                    lastPercent = percent;
-                                    notifyWebProgress(percent, "downloading");
-                                }
+                            long progressNow = android.os.SystemClock.elapsedRealtime();
+                            int percent = declaredSize > 0
+                                    ? Math.min(99, (int) ((downloaded * 100L) / declaredSize))
+                                    : -1;
+                            if ((declaredSize > 0 && percent - lastPercent >= 5)
+                                    || progressNow - progressWindowStartedAt >= 1000) {
+                                long elapsed = Math.max(1, progressNow - progressWindowStartedAt);
+                                long bytesPerSecond = (downloaded - progressWindowStartBytes) * 1000L / elapsed;
+                                notifyWebProgress(percent < 0 ? -1 : Math.max(5, percent),
+                                        formatDownloadProgressStatus(downloaded, declaredSize, bytesPerSecond));
+                                if (percent >= 0) lastPercent = percent;
+                                progressWindowStartedAt = progressNow;
+                                progressWindowStartBytes = downloaded;
                             }
                         }
                         output.flush();
@@ -1370,7 +1469,7 @@ public class MainActivity extends Activity {
                 if (destFile.exists()) destFile.delete();
                 android.util.Log.e("MainActivity", "Direct download or integrity check failed: " + e.getMessage());
                 if (expectedHash != null && !expectedHash.isEmpty()) {
-                    handedOffToDownloadManager = fallbackDownloadManager(expectedHash, cleanUpdateTicket);
+                    handedOffToDownloadManager = fallbackDownloadManager(expectedHash, cleanUpdateTicket, cleanSourceBase);
                     if (!handedOffToDownloadManager) {
                         notifyWebDownloadFailure("备用下载启动失败，请重试更新");
                     }
@@ -1382,6 +1481,160 @@ public class MainActivity extends Activity {
                 }
             } finally {
                 if (!handedOffToDownloadManager) sIsDownloading = false;
+            }
+        }).start();
+    }
+
+    private static String githubProxyApkUrl(String host, String releaseTag) {
+        return "https://" + host + "/https://github.com/xnnb04664-afk/gomoku/releases/download/"
+                + releaseTag + "/gomoku.apk";
+    }
+
+    private static boolean isTrustedGithubProxyUrl(URL url, String releaseTag) {
+        if (url == null || !"https".equalsIgnoreCase(url.getProtocol())
+                || (url.getPort() != -1 && url.getPort() != 443)
+                || url.getUserInfo() != null || url.getQuery() != null || url.getRef() != null) return false;
+        String expectedPath = "/https://github.com/xnnb04664-afk/gomoku/releases/download/"
+                + releaseTag + "/gomoku.apk";
+        if (!expectedPath.equals(url.getPath())) return false;
+        for (String host : GITHUB_RELEASE_PROXY_HOSTS) {
+            if (host.equalsIgnoreCase(url.getHost())) return true;
+        }
+        return false;
+    }
+
+    private static boolean isTrustedGithubRedirectUrl(URL url, String releaseTag) {
+        if (url == null || !"https".equalsIgnoreCase(url.getProtocol())
+                || (url.getPort() != -1 && url.getPort() != 443) || url.getUserInfo() != null) return false;
+        if ("github.com".equalsIgnoreCase(url.getHost())) {
+            return ("/xnnb04664-afk/gomoku/releases/download/" + releaseTag + "/gomoku.apk").equals(url.getPath())
+                    && (url.getQuery() == null || url.getQuery().isEmpty());
+        }
+        return "release-assets.githubusercontent.com".equalsIgnoreCase(url.getHost())
+                || "objects.githubusercontent.com".equalsIgnoreCase(url.getHost());
+    }
+
+    private HttpURLConnection openTrustedGithubProxyConnection(String rawUrl, String releaseTag) throws Exception {
+        URL current = new URL(rawUrl);
+        for (int redirectCount = 0; redirectCount <= 3; redirectCount++) {
+            if (redirectCount == 0 ? !isTrustedGithubProxyUrl(current, releaseTag)
+                    : !isTrustedGithubRedirectUrl(current, releaseTag)) {
+                throw new SecurityException("GitHub 代理重定向到了未授权地址");
+            }
+            HttpURLConnection connection = (HttpURLConnection) current.openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(12000);
+            connection.setReadTimeout(40000);
+            connection.setRequestProperty("User-Agent", "GomokuMasterApp/1");
+            int responseCode = connection.getResponseCode();
+            if (!isRedirectResponse(responseCode)) return connection;
+            if (redirectCount == 3) {
+                connection.disconnect();
+                throw new SecurityException("GitHub 代理重定向次数过多");
+            }
+            String location = connection.getHeaderField("Location");
+            connection.disconnect();
+            if (location == null || location.trim().isEmpty()) throw new SecurityException("GitHub 代理返回了空重定向地址");
+            current = new URL(current, location.trim());
+        }
+        throw new SecurityException("GitHub 代理地址解析失败");
+    }
+
+    private void startGithubProxyApkDownload(String releaseTag, String manifestApkSha256) {
+        final String cleanReleaseTag = releaseTag == null ? "" : releaseTag.trim();
+        final String expectedHash = manifestApkSha256 == null ? "" : manifestApkSha256.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!cleanReleaseTag.matches("v\\d+\\.\\d+\\.\\d+") || !expectedHash.matches("[0-9a-f]{64}")) {
+            runOnUiThread(() -> notifyWebDownloadFailure("GitHub Release 版本号或 SHA-256 摘要无效，已停止下载"));
+            return;
+        }
+        synchronized (sDownloadLock) {
+            if (sIsDownloading) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "正在下载更新，请稍候…", Toast.LENGTH_SHORT).show());
+                return;
+            }
+            sIsDownloading = true;
+        }
+        File destDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (destDir == null) destDir = getFilesDir();
+        if (!destDir.exists() && !destDir.mkdirs()) {
+            sIsDownloading = false;
+            runOnUiThread(() -> notifyWebDownloadFailure("更新下载目录不可用，请检查存储空间后重试"));
+            return;
+        }
+        final File destFile = new File(destDir, "gomoku_latest.apk");
+        if (destFile.exists() && !destFile.delete()) {
+            sIsDownloading = false;
+            runOnUiThread(() -> notifyWebDownloadFailure("旧更新文件无法清理，请稍后重试"));
+            return;
+        }
+        sExpectedApkSha256 = expectedHash;
+        runOnUiThread(() -> {
+            Toast.makeText(MainActivity.this, "正在尝试多个 GitHub 加速节点…", Toast.LENGTH_LONG).show();
+            notifyWebProgress(-1, "正在连接 GitHub 反向代理节点…");
+        });
+        new Thread(() -> {
+            StringBuilder failures = new StringBuilder();
+            boolean downloaded = false;
+            try {
+                for (int index = 0; index < GITHUB_RELEASE_PROXY_HOSTS.length; index++) {
+                    String host = GITHUB_RELEASE_PROXY_HOSTS[index];
+                    HttpURLConnection connection = null;
+                    try {
+                        if (destFile.exists() && !destFile.delete()) throw new java.io.IOException("无法清理上次下载片段");
+                        notifyWebProgress(-1, "GitHub 代理节点 " + (index + 1) + "/" + GITHUB_RELEASE_PROXY_HOSTS.length + "：" + host);
+                        connection = openTrustedGithubProxyConnection(githubProxyApkUrl(host, cleanReleaseTag), cleanReleaseTag);
+                        int responseCode = connection.getResponseCode();
+                        if (responseCode < 200 || responseCode >= 300) throw new java.io.IOException("HTTP " + responseCode);
+                        int declaredSize = connection.getContentLength();
+                        if (declaredSize > MAX_APK_BYTES) throw new SecurityException("文件超过 50 MB 限制");
+                        try (InputStream input = connection.getInputStream(); FileOutputStream output = new FileOutputStream(destFile)) {
+                            byte[] buffer = new byte[8192];
+                            int len;
+                            long bytes = 0;
+                            int lastPercent = 0;
+                            long windowStart = android.os.SystemClock.elapsedRealtime();
+                            long windowBytes = 0;
+                            while ((len = input.read(buffer)) != -1) {
+                                bytes += len;
+                                if (bytes > MAX_APK_BYTES) throw new SecurityException("文件超过 50 MB 限制");
+                                output.write(buffer, 0, len);
+                                long now = android.os.SystemClock.elapsedRealtime();
+                                int percent = declaredSize > 0 ? Math.min(99, (int) (bytes * 100L / declaredSize)) : -1;
+                                if ((percent >= 0 && percent - lastPercent >= 5) || now - windowStart >= 1000) {
+                                    long elapsed = Math.max(1, now - windowStart);
+                                    long speed = (bytes - windowBytes) * 1000L / elapsed;
+                                    notifyWebProgress(percent < 0 ? -1 : Math.max(1, percent),
+                                            formatDownloadProgressStatus(bytes, declaredSize, speed));
+                                    if (percent >= 0) lastPercent = percent;
+                                    windowStart = now;
+                                    windowBytes = bytes;
+                                }
+                            }
+                            output.flush();
+                        }
+                        if (!isVerifiedApk(destFile, expectedHash)) throw new SecurityException("APK 摘要或官方签名校验失败");
+                        downloaded = true;
+                        break;
+                    } catch (Exception error) {
+                        if (destFile.exists()) destFile.delete();
+                        if (failures.length() > 0) failures.append("；");
+                        String failureText = String.valueOf(error.getMessage() == null ? "连接失败" : error.getMessage()).replaceAll("[\\r\\n]", " ");
+                        if (failureText.length() > 90) failureText = failureText.substring(0, 90);
+                        failures.append(host).append("：").append(failureText);
+                    } finally {
+                        if (connection != null) connection.disconnect();
+                    }
+                }
+                if (!downloaded) throw new java.io.IOException("所有 GitHub 代理节点都失败");
+                notifyWebProgress(100, "done");
+                runOnUiThread(() -> installDownloadedApk(destFile));
+            } catch (Exception error) {
+                if (destFile.exists()) destFile.delete();
+                android.util.Log.w("MainActivity", "GitHub proxy update failed: " + error.getMessage());
+                String detail = failures.length() == 0 ? "代理节点均不可用" : failures.toString();
+                notifyWebDownloadFailure("GitHub 加速节点下载失败：" + detail + "。正在切换到 ECS 更新服务。");
+            } finally {
+                sIsDownloading = false;
             }
         }).start();
     }
@@ -1418,14 +1671,15 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean fallbackDownloadManager(final String expectedHash, final String updateTicket) {
+    private boolean fallbackDownloadManager(final String expectedHash, final String updateTicket, final String sourceBase) {
         if (expectedHash == null || !expectedHash.matches("(?i)[0-9a-f]{64}")
-                || updateTicket == null || updateTicket.trim().isEmpty()) return false;
+                || updateTicket == null || updateTicket.trim().isEmpty()
+                || !isTrustedUpdateBase(sourceBase)) return false;
         runOnUiThread(() -> {
             try {
                 final DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
                 if (dm == null) throw new IllegalStateException("系统下载服务不可用");
-                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(UPDATE_PROXY_APK_URL));
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(sourceBase + UPDATE_PROXY_APK_PATH));
                 req.addRequestHeader(UPDATE_CLIENT_HEADER, UPDATE_CLIENT_HEADER_VALUE);
                 req.addRequestHeader(UPDATE_TICKET_HEADER, updateTicket.trim());
                 req.setMimeType("application/vnd.android.package-archive");

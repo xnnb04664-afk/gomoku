@@ -113,8 +113,8 @@ class MemoryStatement {
       const user = [...this.db.users.values()].find(row => row.username === a[0] && row.username);
       return user ? { ...user } : null;
     }
-    if (q.startsWith('select * from users where (username = ? or uid = ? or nickname = ?)')) {
-      const user = [...this.db.users.values()].find(row => row.username === a[0] || row.uid === a[1] || row.nickname === a[2]);
+    if (q.startsWith('select * from users where (lower(username) = ? or uid = ? or nickname = ?)')) {
+      const user = [...this.db.users.values()].find(row => String(row.username || '').toLowerCase() === a[0] || row.uid === a[1] || row.nickname === a[2]);
       return user ? { ...user } : null;
     }
     if (q.startsWith('select * from users where (username = ? or uid = ?)')) {

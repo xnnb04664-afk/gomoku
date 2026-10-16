@@ -44,6 +44,15 @@ def main():
             page.wait_for_function("() => window.__GOMOKU_ONLINE_READY__ === true", timeout=30_000)
             output[role] = {"pageErrors": page_errors, "consoleErrors": console_errors, "consoleLogs": console_logs}
 
+        # 开房与加入都从大厅首页开始；握手完成后双方必须真正切到棋盘。
+        pages["guest"].evaluate("() => openOnlineModal('join')")
+        pages["guest"].locator("#inputJoinCode").fill("123456")
+        pages["guest"].locator("#btnJoinRoomCancel").click()
+        if pages["guest"].locator("#inputJoinCode").input_value() != "":
+            raise AssertionError("the clear-room-code button did not clear an incorrect room number")
+        pages["guest"].evaluate("() => closeOnlineModal()")
+        for page in pages.values():
+            page.evaluate("() => window.SkyIslandUI?.showLobby()")
         pages["host"].evaluate("code => { void window.initHostPeer(code, true).catch(error => console.error(error)); }", room)
         pages["guest"].evaluate("code => { void window.joinOnlineRoom(code).catch(error => console.error(error)); }", room)
         pages["host"].wait_for_timeout(250)
@@ -67,6 +76,8 @@ def main():
                   mode: gameMode,
                   room: currentRoomCode,
                   conn: conn ? { open: conn.open, ready: conn.ready, broker: conn.client?.url || '' } : null,
+                  lobbyHidden: document.getElementById('skyLobby')?.hidden === true,
+                  gameOpen: document.body.classList.contains('sky-game-open'),
                   notice: document.querySelector('#gameNoticeToast')?.textContent?.trim() || '',
                   badge: document.querySelector('#roomStatusBadge')?.textContent?.trim() || '',
                   acceptedTimes: window.__gomokuMockAcceptedTimes || []
@@ -78,6 +89,8 @@ def main():
         if not all(state["mode"] == "online" and state["conn"] and state["conn"]["open"] and state["conn"]["ready"]
                    for state in (host_state, guest_state)):
             raise AssertionError(json.dumps(output, ensure_ascii=False))
+        if not all(state["lobbyHidden"] and state["gameOpen"] for state in (host_state, guest_state)):
+            raise AssertionError(f"room join did not transition both players from the lobby to the board: {output}")
         color_state = {
             "host": pages["host"].evaluate(
                 "({ myColor: myOnlineColor, p1: document.querySelector('#p1NameLabel')?.textContent || '', p2: document.querySelector('#p2NameLabel')?.textContent || '' })"

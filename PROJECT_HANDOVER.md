@@ -75,7 +75,7 @@ node server.js
 - 公共只读 GET/HEAD/OPTIONS 请求先走 ECS，失败时可回退到 Cloudflare Pages/Worker。社交、私聊、世界频道、排行、战绩和金币等账号/数据库状态读取固定走 ECS，避免从未同步的 Cloudflare 数据库读到旧状态；写请求固定发往一个后端，ECS 超时或返回 5xx 时不会把同一写操作重放到独立数据库，客户端会提示提交状态未知。好友与世界频道 WebSocket 使用发出票据的同一后端地址；房间中继两端固定按 ECS 优先、Cloudflare 备用的同一顺序查找房间，但备用端不能接续另一端的内存房间状态。
 - ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。当前 `/healthz` 只检查 SQLite，不能证明公网 WebSocket 升级链路正常；发布验收还需独立连通实际房间中继。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
 - Cloudflare 数据库与 ECS SQLite 相互独立。客户端不会把 ECS 写入请求回放到 Cloudflare；不要据此假定两边数据会自动同步。
-- 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新清单与受保护下载当前仍走 Cloudflare 更新服务；这与 ECS 游戏 API 的读写路由是两条独立路径。
+- 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新检查优先读取多个 GitHub 反向代理节点的公开 Release，下载失败后再走 ECS 短时票据更新服务，Cloudflare Pages/Worker 只作为最后应急出口。APK/HTML 下载按 Release SHA-256 校验；Android 还核对原签名证书。
 ## 账号访问边界
 
 - 生产环境启用 `PRIVATE_GAME_MODE=1`，允许名单只从 ECS 运行时环境变量 `PRIVATE_GAME_USERNAMES` 读取；缺失时 fail closed。账号名不得写入源码、文档、测试样例或 GitHub。
@@ -180,7 +180,7 @@ adb install .\五子棋.apk
 - Cloudflare 部署脚本不会更新 ECS。本次 ECS 发布不要运行 Wrangler，也不要迁移、重置或写入 Cloudflare 数据库。
 - Cloudflare 账号配置、令牌和更新服务密钥只存放在运维者管理的本机或云端 Secret 中。不要把凭据写入前端、Git、日志或交接文档。
 - `backup_d1.js` 只用于 Cloudflare D1 备用环境。ECS 发布前要单独备份 ECS SQLite 和运行配置；任何生产数据库备份均留在受限服务器目录。
-- 当前客户端的更新清单与受保护下载仍由 Cloudflare 更新接口提供；游戏 API 的 ECS 主站/只读备用策略不会自动切换更新文件托管。
+- 当前客户端的更新顺序固定为 GitHub 反向代理节点 → ECS 更新服务 → Cloudflare Pages/Worker 应急备用。ECS 的 `UPDATE_TICKET_SECRET` 由受限运行配置提供；公开 GitHub Release 不需要仓库读取令牌。更新来源必须与签发短时票据的来源一致，不能把一处服务的票据发给另一处服务。
 
 ## 线上状态核验
 

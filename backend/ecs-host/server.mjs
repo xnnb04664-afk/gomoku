@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { STATUS_CODES } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { D1Database } from './d1.mjs';
 import { makeRuntimeEnv } from './runtime-env.mjs';
@@ -230,8 +231,11 @@ function bridgePairToNetwork(workerSocket, networkSocket) {
   return workerFacing;
 }
 
-function sendPlainError(response, status, message) {
-  const body = Buffer.from(JSON.stringify({ code: status, msg: message }));
+function sendPlainError(response, status, message, errorId = '') {
+  const payload = { code: status };
+  if (errorId) payload.errorId = errorId;
+  payload.msg = errorId ? `${message}（错误码 ${errorId}，请提供给维护者）` : message;
+  const body = Buffer.from(JSON.stringify(payload));
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -296,8 +300,9 @@ const server = createServer(async (request, response) => {
     sendNodeResponse(response, workerResponse, context);
   } catch (error) {
     const status = Number(error?.statusCode) || 500;
-    if (status >= 500) console.error(`[gomoku-ecs] ${request.method} ${pathname} failed (${safeErrorName(error)})`);
-    if (!response.headersSent) sendPlainError(response, status, status === 413 ? '请求数据过大' : status === 400 ? '请求无效' : '服务器暂不可用');
+    const errorId = status >= 500 ? randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase() : '';
+    if (errorId) console.error(`[gomoku-ecs][${errorId}] ${request.method} ${pathname} failed (${safeErrorName(error)})`, error?.stack || error?.message || error);
+    if (!response.headersSent) sendPlainError(response, status, status === 413 ? '请求数据过大' : status === 400 ? '请求无效' : '服务器暂不可用', errorId);
     else response.destroy();
   }
 });

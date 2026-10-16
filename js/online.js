@@ -24,29 +24,20 @@
     // 兼容适配器沿用 MQTT 的 publish/subscribe 形状：业务报文按 QoS 1 语义，
     // ICE 信令按 QoS 0 语义；项目自有 WebSocket 中继会忽略 QoS 参数。
     const MQTT_ROOM_DATA_QOS = 1;
-    // ECS Durable Object 兼容层承担生产房间信令；Cloudflare Durable Object
-    // 保留故障回退，公共 MQTT 只保留给旧版迁移和自动化兼容。
-    const ONLINE_RELAY_ENDPOINTS = [
-      'wss://gomoku-backend.xnnb04664.workers.dev/api/room/socket',
-      'wss://gomoku-api.pages.dev/api/room/socket'
-    ];
     const ONLINE_RELAY_CONNECT_TIMEOUT_MS = 2800;
 
     function getOnlineRelayEndpoints() {
       const routing = window.GomokuBackendRouting;
-      if (!routing || typeof routing.getOrderedHosts !== 'function' || typeof routing.socketUrl !== 'function') {
-        return ONLINE_RELAY_ENDPOINTS.slice();
-      }
+      if (!routing || !routing.primaryHost || typeof routing.socketUrl !== 'function') return [];
       // 房间状态存在各自的 relay 后端。不能按本机健康缓存重排，否则房主和
       // 加入者可能分别落到 ECS/Cloudflare；始终先查权威 ECS，再顺序尝试备用。
       const hosts = typeof routing.getAllHosts === 'function'
         ? routing.getAllHosts()
-        : [routing.primaryHost, ...routing.getOrderedHosts()];
+        : [routing.primaryHost, ...(typeof routing.getOrderedHosts === 'function' ? routing.getOrderedHosts() : [])];
       const ordered = [...new Set(hosts.filter(Boolean))];
-      const routed = ordered
+      return ordered
         .map(host => routing.socketUrl('/api/room/socket', host))
         .filter(Boolean);
-      return [...new Set([...routed, ...ONLINE_RELAY_ENDPOINTS])];
     }
 
     function roomSocketTicketApiUrl(endpoint) {
@@ -851,7 +842,7 @@
     async function connectRoomRelay(roomKey, role, sessionId = '') {
       // 同一房间的同一角色不能并行连接两个 DO 入口：后建立的连接会让
       // 前一个连接被判定为重复会话，表现为“一边进房、另一边断开”。
-      // 因此这里按 ECS 主入口 -> Cloudflare 备用入口串行切换。
+      // 因此这里按 ECS 主入口 -> Cloudflare 故障备用入口串行切换。
       let lastError = null;
       const orderedRelayEndpoints = getOnlineRelayEndpoints();
       for (const endpoint of orderedRelayEndpoints) {
@@ -867,13 +858,29 @@
           // API host routing only accepts HTTPS URLs. The relay endpoint is WSS,
           // so marking it directly silently leaves a failed ECS host at the front
           // of every subsequent connection attempt.
-          if (!Number.isFinite(status) || status === 429 || status >= 500) {
+          const canUseBackup = !Number.isFinite(status) || (status >= 500 && status <= 599);
+          if (canUseBackup) {
             try { window.GomokuBackendRouting?.markFailureForUrl(roomSocketTicketApiUrl(endpoint)); } catch (_) {}
           }
           try { relay?.end(true); } catch (_) {}
+          // 房间票据接口明确返回的 4xx/429 是鉴权或业务拒绝，不转发到备用端。
+          // WebSocket 握手错误通常不暴露 HTTP 状态，只能按网络失败尝试下一备用节点。
+          if (!canUseBackup) throw error;
         }
       }
       throw lastError || new Error('自有房间中继不可用');
+    }
+
+    function describeRoomRelayFailure(error) {
+      const status = Number(error?.status);
+      const detail = String(error?.message || '网络连接失败').replace(/[\r\n]+/g, ' ').slice(0, 100);
+      if (status === 401) return `房间授权失效（HTTP 401）：${detail}。请重新登录后再加入。`;
+      if (status === 403) return `当前账号无权加入此房间（HTTP 403）：${detail}。请确认账号和房间邀请有效。`;
+      if (status === 404) return `房间不存在或邀请已过期（HTTP 404）：${detail}。请核对房间号并让好友重新开房。`;
+      if (status === 429) return `加入请求过于频繁（HTTP 429）：${detail}。请稍等片刻再试。`;
+      if (status >= 400 && status < 500) return `ECS 拒绝了房间请求（HTTP ${status}）：${detail}。请核对账号、房间号后重试。`;
+      if (status >= 500) return `ECS 房间服务异常（HTTP ${status}），备用节点也未能建立连接：${detail}。请稍后重试。`;
+      return `ECS 主节点和 Cloudflare 备用节点均未连通：${detail}。请检查网络，确认好友在线且房间未过期后重试。`;
     }
 
     function isLegacyMqttFallbackEnabled() {
@@ -915,7 +922,9 @@
       const promise = relayAttempt.catch((relayError) => {
         if (!isLegacyMqttFallbackEnabled()) {
           console.error('[Room relay] 项目自有 WebSocket 中继不可用:', relayError?.message || relayError);
-          throw new Error('项目联机中继不可用，请检查网络后重试');
+          const failure = new Error(describeRoomRelayFailure(relayError));
+          failure.status = relayError?.status;
+          throw failure;
         }
         console.warn('[Legacy MQTT] 仅测试/迁移开关已启用，使用公共 MQTT 兼容通道:', relayError?.message || relayError);
         return getOrCreateMqttClient(normalizedRoomKey);
@@ -2257,6 +2266,7 @@
               activeOnlineOpponentUid = reqUid;
               if (window.GomokuSocial?.recordOpponent) void window.GomokuSocial.recordOpponent(reqUid);
               closeOnlineModal();
+              window.SkyIslandUI?.showGame();
               try {
                 conn.send({ type: 'profile_sync', uid: currentUserUid || '', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) });
               } catch (_) {}
@@ -3767,9 +3777,113 @@
     // ==========================================
     // 🎴 干扰技能卡执行与棋盘交互核心逻辑
     // ==========================================
+    let activeRoomJoinAttempt = null;
+
+    function setRoomJoinPendingUI(pending, button = null) {
+      const connectButton = button || document.getElementById('btnConnectRoom');
+      const cancelButton = document.getElementById('btnJoinRoomCancel');
+      if (connectButton) {
+        connectButton.disabled = Boolean(pending);
+        connectButton.innerHTML = pending ? '⏳ 正在连接…' : '加入好友房间 <span>→</span>';
+      }
+      if (cancelButton) {
+        cancelButton.textContent = pending ? '取消连接' : '清空号码';
+        cancelButton.setAttribute('aria-label', pending ? '取消加入房间' : '清空输入的房间号');
+      }
+      const hint = document.getElementById('joinRoomHint');
+      if (hint && pending) hint.textContent = '正在尝试连接；可以随时取消，然后修改房间号再试。';
+      else if (hint && !pending && activeRoomJoinAttempt === null) {
+        hint.textContent = '输错可清空重输；连接中可以取消，或返回联机大厅。';
+      }
+    }
+
+    function handleJoinRoomCancel() {
+      const cancelledPendingJoin = Boolean(activeRoomJoinAttempt);
+      if (cancelledPendingJoin) cancelRoomJoin({ silent: true });
+      const input = document.getElementById('inputJoinCode');
+      if (input) {
+        input.value = '';
+        input.focus({ preventScroll: true });
+      }
+      const hint = document.getElementById('joinRoomHint');
+      if (hint) hint.textContent = cancelledPendingJoin
+        ? '已取消连接并清空房间号；可以输入新号码重新加入。'
+        : '房间号已清空；可以重新输入号码，或返回联机大厅。';
+      if (cancelledPendingJoin) showGameNotice('已取消加入并清空房间号，可以修改后重试。', false);
+    }
+
+    function cancelRoomJoin(options = {}) {
+      const attempt = activeRoomJoinAttempt;
+      if (!attempt) return false;
+      const silent = options === true || Boolean(options && options.silent);
+      attempt.cancelled = true;
+      if (attempt.generation === onlineTransportGeneration) onlineTransportGeneration++;
+      if (onlineTransportPromise && onlineTransportPromiseKey === attempt.transportKey) {
+        // 让进行中的 Promise 在完成时关闭新建的 socket，避免取消后连接仍留在后台。
+        onlineTransportRequestSeq++;
+        onlineTransportPromise = null;
+        onlineTransportPromiseKey = '';
+      }
+      for (const timer of [attempt.joinInterval, attempt.joinTimeout, attempt.joinConfirmTimeout, attempt.joinReadyInterval]) {
+        if (timer) {
+          clearTimeout(timer);
+          clearInterval(timer);
+        }
+      }
+      if (attempt.client && attempt.listener) {
+        try { attempt.client.removeListener('message', attempt.listener); } catch (_) {}
+      }
+      if (attempt.client && typeof attempt.client.unsubscribe === 'function' && attempt.h2cTopic) {
+        try { attempt.client.unsubscribe(attempt.h2cTopic); } catch (_) {}
+      }
+      if (!attempt.preserveRoomState && String(currentRoomCode || '') === attempt.code) {
+        currentRoomCode = '';
+        lastActiveRoomCode = '';
+        onlineSessionId = '';
+        onlineJoinTicket = '';
+        onlineRoundId = '';
+      }
+      if (attempt.connection) {
+        try { attempt.connection.close(true); } catch (_) {}
+        if (conn === attempt.connection) conn = null;
+      }
+      attempt.restoreBtn?.();
+      setRoomJoinPendingUI(false);
+      if (!silent) showGameNotice('已取消加入房间，可以修改房间号后重试。', false);
+      return true;
+    }
+
     async function joinMqttRoom(code, btn) {
-      if (!(await ensurePrivateGameAccountSession())) return false;
       if (!/^\d{6}$/.test(String(code))) return showGameNotice("请输入 6 位数字房间码！", true);
+      if (activeRoomJoinAttempt) cancelRoomJoin({ silent: true });
+
+      // 账号续期/校验期间也要保持可取消状态，避免按钮看起来可取消，
+      // 但认证完成后仍然拿旧房间号悄悄继续加入。
+      const authAttempt = {
+        code: String(code),
+        generation: onlineTransportGeneration,
+        transportKey: '',
+        cancelled: false,
+        preserveRoomState: true,
+        restoreBtn: null
+      };
+      activeRoomJoinAttempt = authAttempt;
+      setRoomJoinPendingUI(true, btn);
+      let authorized = false;
+      try {
+        authorized = await ensurePrivateGameAccountSession();
+      } catch (error) {
+        if (activeRoomJoinAttempt === authAttempt && !authAttempt.cancelled) {
+          activeRoomJoinAttempt = null;
+          setRoomJoinPendingUI(false, btn);
+          showGameNotice(`账号验证失败，暂未加入房间：${String(error?.message || '请重新登录后重试').slice(0, 100)}`, true);
+        }
+        return false;
+      }
+      if (authAttempt.cancelled || activeRoomJoinAttempt !== authAttempt) return false;
+      activeRoomJoinAttempt = null;
+      setRoomJoinPendingUI(false, btn);
+      if (!authorized) return false;
 
       // 手动加入是一个全新的传输世代；先作废旧连接的异步回调。
       // 房客不在这里伪造会话 ID，真正的 ID 只接受自房主的 join_accepted。
@@ -3780,6 +3894,40 @@
         clearOnlineReliableOutbox();
       }
       const transportGeneration = onlineTransportGeneration;
+      const attempt = {
+        code: String(code),
+        transportKey: `${String(code)}|client|${String(onlineSessionId || '')}`,
+        generation: transportGeneration,
+        cancelled: false,
+        completed: false,
+        originalOnlineColor: myOnlineColor,
+        aiWasThinking: aiThinking,
+        preserveRoomState: isReconnecting && String(currentRoomCode || '') === String(code),
+        client: null,
+        listener: null,
+        connection: null,
+        h2cTopic: `gomoku/v3/${code}/h2c`,
+        joinInterval: null,
+        joinTimeout: null,
+        joinConfirmTimeout: null,
+        joinReadyInterval: null,
+        restoreBtn: null
+      };
+      activeRoomJoinAttempt = attempt;
+      const restoreBtn = () => {
+        if (activeRoomJoinAttempt && activeRoomJoinAttempt !== attempt) return;
+        if (activeRoomJoinAttempt === attempt) activeRoomJoinAttempt = null;
+        if (!attempt.completed) {
+          myOnlineColor = attempt.originalOnlineColor;
+          if (attempt.aiWasThinking && gameMode === 'ai' && !isOver && turn === WHITE) {
+            setTimeout(() => {
+              if (gameMode === 'ai' && !isOver && turn === WHITE && !aiThinking) void smartAiMove();
+            }, 0);
+          }
+        }
+        setRoomJoinPendingUI(false, btn);
+      };
+      attempt.restoreBtn = restoreBtn;
 
       // 加入房间的一方固定执白。先在建连阶段写入颜色，避免 accepted 报文延迟时
       // 客户端仍沿用默认 BLACK，出现“双方都是黑子”并在首步互相拦截的假联机状态。
@@ -3792,10 +3940,7 @@
         clearOnlineReliableOutbox();
       }
 
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = '⏳ 正在连接好友房间...';
-      }
+      setRoomJoinPendingUI(true, btn);
 
       if (conn) {
         try { conn.close(true); } catch(e) {}
@@ -3805,7 +3950,12 @@
 
       try {
         const client = await getOrCreateOnlineTransport(code, 'client', onlineSessionId);
-        if (transportGeneration !== onlineTransportGeneration) return;
+        if (transportGeneration !== onlineTransportGeneration || attempt.cancelled) {
+          if (mqttClient === client) closeMqttClientPool();
+          else { try { client?.end(true); } catch (_) {} }
+          return false;
+        }
+        attempt.client = client;
         const c2hTopic = `gomoku/v3/${code}/c2h`;
         const h2cTopic = `gomoku/v3/${code}/h2c`;
 
@@ -3817,21 +3967,26 @@
         let joinConfirmTimeout = null;
         let joinReadyInterval = null;
 
-        const restoreBtn = () => {
-          if (btn) {
-            btn.disabled = false;
-            btn.textContent = '🚀 立即连接开局';
-          }
-        };
-
         const clearJoinConfirmTimeout = () => {
           if (joinConfirmTimeout) clearTimeout(joinConfirmTimeout);
           joinConfirmTimeout = null;
+          attempt.joinConfirmTimeout = null;
         };
 
         const clearJoinReadyRetry = () => {
           if (joinReadyInterval) clearInterval(joinReadyInterval);
           joinReadyInterval = null;
+          attempt.joinReadyInterval = null;
+        };
+
+        const detachJoinSignals = () => {
+          if (attempt.listener) {
+            try { client.removeListener('message', attempt.listener); } catch (_) {}
+            attempt.listener = null;
+          }
+          if (typeof client.unsubscribe === 'function') {
+            try { client.unsubscribe(h2cTopic); } catch (_) {}
+          }
         };
 
         const myJoinUid = getOrCreateMatchUid();
@@ -3855,6 +4010,7 @@
           setTimeout(sendReady, 150);
           setTimeout(sendReady, 350);
           joinReadyInterval = setInterval(sendReady, ONLINE_JOIN_READY_RETRY_MS);
+          attempt.joinReadyInterval = joinReadyInterval;
         };
 
         const onClientInvite = (topic, payload) => {
@@ -3873,7 +4029,7 @@
                 clearTimeout(joinTimeout);
                 clearJoinReadyRetry();
                 clearJoinConfirmTimeout();
-                client.removeListener('message', onClientInvite);
+                detachJoinSignals();
                 restoreBtn();
                 showGameNotice('🚫 该房间已有 2 位棋友正在对弈，人数已满！请让好友新建房间或更换房间码。', true);
                 return;
@@ -3897,12 +4053,14 @@
               clearJoinReadyRetry();
               clearInterval(joinInterval);
               clearTimeout(joinTimeout);
-              client.removeListener('message', onClientInvite);
+              detachJoinSignals();
+              attempt.completed = true;
               restoreBtn();
-              closeOnlineModal();
               if (gameMode !== 'online') setMode('online');
               else updateOnlineNetworkUI();
               persistGameState();
+              closeOnlineModal();
+              window.SkyIslandUI?.showGame();
               const guestBadgeEl = document.getElementById('roomStatusBadge');
               if (guestBadgeEl) {
                 guestBadgeEl.innerHTML = '🟢 已与好友连接，可以开始对弈';
@@ -3937,6 +4095,7 @@
               onlineJoinTicket = typeof data.joinTicket === 'string' ? data.joinTicket : onlineJoinTicket;
               const nextConn = new MqttRoomConnection(client, code, 'client', onlineSessionId);
               joiningConnection = nextConn;
+              attempt.connection = nextConn;
               conn = nextConn;
               lastActiveRoomCode = code;
               currentRoomCode = code;
@@ -3971,9 +4130,12 @@
                     try { nextConn.close(true); } catch (_) {}
                     if (conn === nextConn) conn = null;
                     joiningConnection = null;
+                    attempt.connection = null;
+                    detachJoinSignals();
                     restoreBtn();
-                    showGameNotice('❌ 对局确认超时，请重新匹配；P2P 不可用时仍会自动使用 WebSocket 中继', true);
+                    showGameNotice('❌ 已连入房间信道，但房主未在时限内确认开局。请确认好友仍在房间；可取消后重新输入房间号再试。', true);
                   }, ONLINE_JOIN_CONFIRM_TIMEOUT_MS);
+                  attempt.joinConfirmTimeout = joinConfirmTimeout;
                   try { nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) }); } catch (_) {}
                 } catch (err) {
                   console.warn('[guest room connection]', err);
@@ -3982,6 +4144,13 @@
                   if (conn === nextConn) {
                     try { nextConn.close(true); } catch (_) {}
                     conn = null;
+                    attempt.connection = null;
+                  }
+                  if (transportGeneration === onlineTransportGeneration && !attempt.cancelled) {
+                    joinCancelled = true;
+                    detachJoinSignals();
+                    restoreBtn();
+                    showGameNotice(`❌ 房间信道已接通，但对局连接未就绪：${err?.message || '连接中断'}。请确认网络后重试。`, true);
                   }
                 } finally {
                   // 等待 join_confirmed 时必须保留引用；否则确认报文会被当成旧连接直接丢弃。
@@ -3994,12 +4163,14 @@
           }
         };
 
+        attempt.listener = onClientInvite;
         client.on('message', onClientInvite);
         client.subscribe(h2cTopic, { qos: MQTT_ROOM_DATA_QOS }, (err) => {
+          if (transportGeneration !== onlineTransportGeneration || attempt.cancelled) return;
           if (err) {
             joinCancelled = true;
             restoreBtn();
-            client.removeListener('message', onClientInvite);
+            detachJoinSignals();
             return showGameNotice('❌ 订阅房间信道失败，请检查网络！', true);
           }
 
@@ -4015,28 +4186,29 @@
 
           sendReq();
           joinInterval = setInterval(sendReq, 450);
+          attempt.joinInterval = joinInterval;
           joinTimeout = setTimeout(() => {
             if (!hasJoined) {
               joinCancelled = true;
               clearInterval(joinInterval);
               clearJoinReadyRetry();
               clearJoinConfirmTimeout();
-              client.removeListener('message', onClientInvite);
+              detachJoinSignals();
               if (joiningConnection) {
                 try { joiningConnection.close(true); } catch (_) {}
                 if (conn === joiningConnection) conn = null;
                 joiningConnection = null;
+                attempt.connection = null;
               }
               restoreBtn();
               showGameNotice('❌ 未找到该房间，请确认房间码正确，并让好友先开启房间！', true);
             }
           }, 15000);
+          attempt.joinTimeout = joinTimeout;
         });
       } catch(err) {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = '🚀 立即连接开局';
-        }
+        if (transportGeneration !== onlineTransportGeneration || attempt.cancelled) return false;
+        restoreBtn();
         showGameNotice('❌ 连接服务器失败：' + (err.message || '网络异常'), true);
       }
     }
@@ -4618,8 +4790,9 @@
             return;
           }
           closeOnlineModal();
+          window.SkyIslandUI?.showGame();
         }).catch(() => {
-          showGameNotice('❌ 房间信道连接失败，请点击重试或更换网络后再匹配', true);
+          showGameNotice('❌ 房间信道连接失败：ECS 与备用节点均未接通。请检查网络后取消本次匹配，再重新匹配。', true);
         });
       } else {
         // 我作为客户端（执白后行）：匹配结果一到就开始订阅，不再人为等待 1 秒。
@@ -4744,6 +4917,7 @@
       const hallTitle = document.getElementById('onlineHallTitle');
 
       if (!['match', 'create', 'join'].includes(tab)) tab = 'match';
+      if (activeRoomJoinAttempt && tab !== 'join') cancelRoomJoin({ silent: true });
       if (onlineModal) onlineModal.dataset.onlineView = tab;
       if (hallEyebrow) hallEyebrow.textContent = tab === 'create' || tab === 'join' ? '晴空棋岛 · 棋友专房' : '晴空棋岛 · 在线对局';
       if (hallTitle) hallTitle.textContent = tab === 'create' ? '创建好友房间' : tab === 'join' ? '加入好友房间' : '🌐 联机对战 · 房间大厅';
@@ -4814,6 +4988,7 @@
       if (tab === 'match') void resumePendingQuickMatch();
     }
     function closeOnlineModal() {
+      if (activeRoomJoinAttempt) cancelRoomJoin({ silent: true });
       const modal = document.getElementById('onlineModal');
       modal?.classList.remove('show');
       modal?.removeAttribute('data-online-view');

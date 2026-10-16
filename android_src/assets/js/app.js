@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.130';
+    const CURRENT_VERSION_TAG = 'v1.0.131';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -108,6 +108,8 @@
     // 自定义玩家昵称与头像
     let p1Name = localStorage.getItem('gomoku_p1Name') || '棋手';
     let p1Avatar = localStorage.getItem('gomoku_p1Avatar') || 'anime_boy';
+    // Async auth responses must not restore a session after logout or account switching.
+    let authSessionGeneration = 0;
     let p2Name = localStorage.getItem('gomoku_p2Name') || '零碎小土豆';
     let p2Avatar = localStorage.getItem('gomoku_p2Avatar') || 'anime_girl';
 
@@ -753,7 +755,7 @@
       const syncTip = document.getElementById('profileSyncTip');
       if (syncTip) {
         if (hasRegisteredAccountSession()) {
-          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · 修改后登录账号与全服天梯将同步变更`;
+          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · 登录账号固定，昵称与头像可单独设置`;
         } else {
           syncTip.innerHTML = `🔒 <span style="color:#d97706;">当前未登录</span> · 本地修改保存在设备，联网功能需指定账号登录`;
         }
@@ -886,6 +888,8 @@
 
         // 🌟 同步到云端数据库：修改 username 和 nickname
         if (hasRegisteredAccount) {
+          const requestGeneration = authSessionGeneration;
+          const requestUid = String(currentUserUid);
           try {
             const res = await safeApiFetch('/api/user/update_profile', {
               method: 'POST',
@@ -898,17 +902,18 @@
               })
             });
             const data = await res.json();
+            if (requestGeneration !== authSessionGeneration || String(currentUserUid) !== requestUid) return;
             if (data && data.code === 0) {
               console.log('[saveProfile] 账号名与天梯榜已同步:', p1Name);
               localStorage.setItem('gomoku_p1Name', p1Name);
               localStorage.setItem('gomoku_p1Avatar', p1Avatar);
-              currentUsername = p1Name;
+              currentUsername = String(data.data?.username || prevUsername || '');
               localStorage.setItem('gomoku_user_username', currentUsername);
               if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
                 try { AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar); } catch(e) {}
               }
               if (data.data) {
-                applyUserData(data.data);
+                applyUserData(data.data, requestGeneration);
               }
               if (Array.isArray(cachedLeaderboard)) {
                 cachedLeaderboard.forEach(item => {
@@ -939,6 +944,7 @@
               return;
             }
           } catch(e) {
+            if (requestGeneration !== authSessionGeneration || String(currentUserUid) !== requestUid) return;
             console.warn('[saveProfile sync error]', e);
             // 离线/网络故障兜底：先保留在本地，提醒用户稍后联网同步
             localStorage.setItem('gomoku_p1Name', p1Name);
@@ -3124,15 +3130,47 @@
     ];
     const ECS_API_HOST = String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '').replace(/\/+$/, '');
     const API_HOSTS = [...new Set([ECS_API_HOST, ...CLOUDFLARE_API_HOSTS].filter(Boolean))];
-    const API_PRIMARY_HOST = API_HOSTS[0] || CLOUDFLARE_API_HOSTS[0];
-    const API_HOST_STORAGE_KEY = 'gomoku_api_host_v1';
-    const API_HOST_HINT_AT_STORAGE_KEY = 'gomoku_api_host_hint_at_v1';
-    const API_HOST_HINT_MAX_AGE_MS = 30 * 60 * 1000;
+    const API_PRIMARY_HOST = ECS_API_HOST;
     const API_HOST_FAILURES_STORAGE_KEY = 'gomoku_api_host_failures_v1';
     const API_HOST_FAILURE_COOLDOWN_MS = 60 * 1000;
     const API_HOST_PROBE_TIMEOUT_MS = 2500;
     const API_LOGIN_PATH = '/api/auth/login';
     const API_PROBE_PATH = '/api/network/probe';
+    const API_OPERATION_LABELS = Object.freeze({
+      '/api/auth/login': '账号登录',
+      '/api/auth/register': '注册账号',
+      '/api/auth/refresh_session': '登录状态续期',
+      '/api/user/update_profile': '保存昵称与头像',
+      '/api/auth/change_password': '修改密码',
+      '/api/auth/get_security_q': '读取密保问题',
+      '/api/auth/reset_password': '重置密码',
+      '/api/friends/list': '读取好友列表',
+      '/api/friends/requests': '好友申请',
+      '/api/friends/search': '查找好友',
+      '/api/friends/accept': '处理好友申请',
+      '/api/messages': '私聊消息',
+      '/api/world/messages': '世界聊天',
+      '/api/game-invites': '好友对局邀请',
+      '/api/match/join': '加入快速匹配',
+      '/api/match/poll': '匹配状态同步',
+      '/api/match/cancel': '取消匹配',
+      '/api/room/create': '创建好友房间',
+      '/api/report_game': '提交对局结果',
+      '/api/history/record': '保存棋谱',
+      '/api/history/list': '读取棋谱',
+      '/api/leaderboard': '读取天梯榜',
+      '/api/economy/checkin': '每日签到',
+      '/api/room/socket-ticket': '加入好友房间'
+    });
+
+    function apiOperationLabel(pathname) {
+      if (API_OPERATION_LABELS[pathname]) return API_OPERATION_LABELS[pathname];
+      if (pathname.startsWith('/api/friends/')) return '好友功能';
+      if (pathname.startsWith('/api/messages')) return '私聊功能';
+      if (pathname.startsWith('/api/room/')) return '好友房间';
+      if (pathname.startsWith('/api/history/')) return '棋谱功能';
+      return '游戏服务请求';
+    }
 
     function isAllowedApiHost(host) {
       return API_HOSTS.includes(host);
@@ -3172,25 +3210,6 @@
       return url;
     }
 
-    function readStoredApiHost() {
-      try {
-        const saved = localStorage.getItem(API_HOST_STORAGE_KEY) || '';
-        const savedAt = Number(localStorage.getItem(API_HOST_HINT_AT_STORAGE_KEY) || 0);
-        const isFresh = Number.isFinite(savedAt) && savedAt > 0 && Date.now() - savedAt < API_HOST_HINT_MAX_AGE_MS;
-        return isFresh && isAllowedApiHost(saved) ? saved : '';
-      } catch (_) {
-        return '';
-      }
-    }
-
-    function storeApiHost(host) {
-      if (!isAllowedApiHost(host)) return;
-      try {
-        localStorage.setItem(API_HOST_STORAGE_KEY, host);
-        localStorage.setItem(API_HOST_HINT_AT_STORAGE_KEY, String(Date.now()));
-      } catch (_) {}
-    }
-
     function readApiHostFailures() {
       const result = {};
       try {
@@ -3206,10 +3225,9 @@
       return result;
     }
 
-    const storedApiHost = readStoredApiHost();
     let apiHostFailures = readApiHostFailures();
-    let activeApiHost = storedApiHost || CLOUDFLARE_API_HOSTS[0];
-    let hasApiHostHint = Boolean(storedApiHost);
+    let activeApiHost = API_PRIMARY_HOST;
+    let hasApiHostHint = false;
     let apiHostWarmPromise = null;
     let apiHostWarmAt = 0;
 
@@ -3237,8 +3255,7 @@
       if (!isAllowedApiHost(host)) return;
       delete apiHostFailures[host];
       activeApiHost = host;
-      hasApiHostHint = true;
-      storeApiHost(host);
+      hasApiHostHint = host === API_PRIMARY_HOST;
       persistApiHostFailures();
     }
 
@@ -3248,15 +3265,11 @@
     }
 
     function getOrderedApiHosts() {
-      // ECS 是主服务，Cloudflare Pages/Worker 仅在 ECS 失败时接管。
-      const primaryHost = API_PRIMARY_HOST;
-      const preferredHost = !isApiHostCoolingDown(primaryHost)
-        ? primaryHost
-        : (isAllowedApiHost(activeApiHost) && !isApiHostCoolingDown(activeApiHost) ? activeApiHost : '');
-      const preferred = preferredHost ? [preferredHost] : [];
-      const healthy = CLOUDFLARE_API_HOSTS.filter(host => !preferred.includes(host) && !isApiHostCoolingDown(host));
-      const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host) && !preferred.includes(host));
-      return [...preferred, ...healthy, ...cooling];
+      // 每次请求都先验证 ECS；上次故障记录不能跳过已经恢复的主服务。
+      if (!API_PRIMARY_HOST) return [];
+      const healthy = CLOUDFLARE_API_HOSTS.filter(host => !isApiHostCoolingDown(host));
+      const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host));
+      return [API_PRIMARY_HOST, ...healthy, ...cooling];
     }
 
     window.GomokuBackendRouting = Object.freeze({
@@ -3264,7 +3277,7 @@
       getActiveHost: () => activeApiHost,
       getOrderedHosts: () => getOrderedApiHosts(),
       // 房间中继状态按后端隔离；两名玩家必须用相同的固定顺序查找短房间码。
-      getAllHosts: () => [API_PRIMARY_HOST, ...CLOUDFLARE_API_HOSTS],
+      getAllHosts: () => API_PRIMARY_HOST ? [API_PRIMARY_HOST, ...CLOUDFLARE_API_HOSTS] : [],
       getHostForUrl: value => {
         try { return getAllowedApiHostForUrl(new URL(value)); }
         catch (_) { return ''; }
@@ -3295,7 +3308,7 @@
     }
 
     function getApiNetworkErrorMessage(error) {
-      if (error && (error.code === 'API_TIMEOUT' || error.code === 'API_UNAVAILABLE')) {
+      if (error && (error.code === 'API_TIMEOUT' || error.code === 'API_UNAVAILABLE' || error.code === 'API_ECS_CONFIG_MISSING')) {
         return error.message;
       }
       if (isApiAbortError(error)) return '官方服务响应超时，请检查手机网络后重试';
@@ -3377,6 +3390,18 @@
           throw new Error('拒绝访问非官方 API 地址');
         }
       }
+      let endpointPath = '';
+      try {
+        endpointPath = fixedEndpointUrl
+          ? getApiPathname(fixedEndpointUrl)
+          : new URL(endpointText, 'https://gomoku.invalid').pathname;
+      } catch (_) {}
+      const operationLabel = apiOperationLabel(endpointPath);
+      if (!API_PRIMARY_HOST) {
+        const configError = new Error('ECS 主服务地址未配置，已停止请求；Cloudflare 仅作为故障备用。');
+        configError.code = 'API_ECS_CONFIG_MISSING';
+        throw configError;
+      }
       const requestMethod = String(requestOptions.method || 'GET').toUpperCase();
       // ECS 与 Cloudflare 使用彼此独立的数据库。只有不会改变服务端状态的请求可以跨主备回退。
       const canFailover = ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod);
@@ -3428,7 +3453,14 @@
             markApiHostFailure(host);
             try {
               if (!anonymousRequest && typeof showGameNotice === 'function') {
-                showGameNotice(`⚠️ 服务端返回 HTTP ${res.status}。请求可能已被处理，提交状态无法确认；请刷新核对后再决定是否重试。`, true);
+                const serviceLabel = host === API_PRIMARY_HOST ? 'ECS 主服务器' : 'Cloudflare 备用服务器';
+                let detail = '';
+                try {
+                  const payload = await res.clone().json();
+                  const message = String(payload?.msg || '').replace(/[\r\n]+/g, ' ').slice(0, 120);
+                  if (message) detail = `服务端说明：${message}。`;
+                } catch (_) {}
+                showGameNotice(`⚠️ ${operationLabel}遇到 HTTP ${res.status}（${serviceLabel}返回异常）。${detail}本次操作是否完成无法确认，请先刷新对应页面核对状态，再决定是否重试。`, true);
               }
             } catch (_) {}
             return res;
@@ -3461,7 +3493,7 @@
       }
       if (lastServerResponse) return lastServerResponse;
       if (!canFailover && attemptErrors.some(item => item.dispatchAttempted)) {
-        const unknownError = new Error('与主服务连接中断；服务端是否已处理无法确认。请刷新核对状态后再决定是否重试。');
+        const unknownError = new Error(`${operationLabel}请求已发出，但与 ECS 主服务连接中断，服务端是否已处理无法确认。请刷新对应页面核对状态后再决定是否重试。`);
         unknownError.code = 'API_COMMIT_UNKNOWN';
         unknownError.cause = lastErr;
         try {
@@ -3470,12 +3502,12 @@
         throw unknownError;
       }
       if (attemptErrors.length && attemptErrors.every(item => item.timedOut)) {
-        const timeoutError = new Error('官方服务响应超时，请检查手机网络后重试');
+        const timeoutError = new Error(`${operationLabel}响应超时，请检查手机网络后重试。`);
         timeoutError.code = 'API_TIMEOUT';
         timeoutError.cause = lastErr;
         throw timeoutError;
       }
-      const networkError = new Error('无法连接官方服务，请检查手机网络后重试');
+      const networkError = new Error(`${operationLabel}无法连接 ECS 主服务或 Cloudflare 备用服务，请检查网络后重试。`);
       networkError.code = 'API_UNAVAILABLE';
       networkError.cause = lastErr;
       throw networkError;
@@ -3576,6 +3608,10 @@
     }
     let currentUsername = localStorage.getItem('gomoku_user_username') || '';
 
+    function authSessionStillCurrent(generation, uid = currentUserUid) {
+      return generation === authSessionGeneration && String(currentUserUid || '') === String(uid || '');
+    }
+
     function hasRegisteredAccountSession() {
       return Boolean(
         currentUsername && currentUserUid && currentUserToken
@@ -3622,9 +3658,9 @@
       return '';
     }
 
-    async function refreshUserSession() {
-      if (!currentUserUid || !currentUserRefreshToken || String(currentUserUid).startsWith('guest_')) return false;
-      const sessionUid = String(currentUserUid);
+    async function refreshUserSession(expectedGeneration = authSessionGeneration, expectedUid = currentUserUid) {
+      if (!authSessionStillCurrent(expectedGeneration, expectedUid) || !currentUserUid || !currentUserRefreshToken || String(currentUserUid).startsWith('guest_')) return false;
+      const sessionUid = String(expectedUid);
       let refreshToken = String(currentUserRefreshToken);
       let retriedAfterConcurrentRotation = false;
       try {
@@ -3636,8 +3672,9 @@
             timeoutMs: 7000
           });
           const json = await res.json();
+          if (!authSessionStillCurrent(expectedGeneration, sessionUid)) return false;
           if (json && json.code === 0 && json.data) {
-            applyUserData(json.data);
+            applyUserData(json.data, expectedGeneration);
             return true;
           }
           if (json && json.retryable === true && !retriedAfterConcurrentRotation) {
@@ -3645,7 +3682,7 @@
             // for its successful response to publish the replacement locally;
             // never retry with or recover a token from the server.
             const latestToken = await waitForRotatedRefreshToken(sessionUid, refreshToken);
-            if (latestToken && String(currentUserUid) === sessionUid) {
+            if (latestToken && authSessionStillCurrent(expectedGeneration, sessionUid)) {
               refreshToken = latestToken;
               currentUserRefreshToken = latestToken;
               retriedAfterConcurrentRotation = true;
@@ -3666,6 +3703,8 @@
     }
 
     async function initUserSession() {
+      const sessionGeneration = authSessionGeneration;
+      const sessionUid = String(currentUserUid || '');
       // 1. 若本地已保存正式账号或凭证：发起无感静默验证与 1 年超长自动续期
       if (currentUserUid && currentUserToken) {
         try {
@@ -3678,22 +3717,16 @@
             })
           });
           const json = await res.json();
+          if (!authSessionStillCurrent(sessionGeneration, sessionUid)) return;
           if (json && json.code === 0 && json.data) {
             // 云端验证成功，静默校准天梯积分与头像
-            applyUserData(json.data);
+            applyUserData(json.data, sessionGeneration);
             return;
           } else if (res.status === 401 || res.status === 403 || (json && (json.code === 2 || json.code === 403))) {
-            if (await refreshUserSession()) return;
+            if (await refreshUserSession(sessionGeneration, sessionUid)) return;
+            if (!authSessionStillCurrent(sessionGeneration, sessionUid)) return;
             if (PRIVATE_GAME_LOGIN_ONLY && (res.status === 403 || Number(json?.code) === 403)) {
-              currentUsername = '';
-              currentUserUid = '';
-              currentUserToken = '';
-              currentUserRefreshToken = '';
-              ['gomoku_user_username', 'gomoku_user_uid', 'gomoku_user_token', 'gomoku_user_refresh_token'].forEach(key => localStorage.removeItem(key));
-              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.clearUserLogin) {
-                try { AndroidNativeApp.clearUserLogin(); } catch (_) {}
-              }
-              updateAccountUI();
+              clearLocalAccountSession();
               openAuthModal('login');
             } else {
               showGameNotice('⚠️ 登录状态已失效，请重新登录账号', true);
@@ -3712,13 +3745,18 @@
 
       // 旧网页缓存或原生备份可能只有 Refresh Token，直接走无感换发。
       if (currentUserUid && currentUserRefreshToken && !currentUserToken) {
-        if (await refreshUserSession()) return;
+        if (await refreshUserSession(sessionGeneration, sessionUid)) return;
+        if (!authSessionStillCurrent(sessionGeneration, sessionUid)) return;
       }
 
       if (!currentUserUid && !currentUsername) {
         if (PRIVATE_GAME_LOGIN_ONLY) {
           updateAccountUI();
-          setTimeout(() => openAuthModal('login'), 120);
+          setTimeout(() => {
+            if (authSessionStillCurrent(sessionGeneration, sessionUid) && !hasRegisteredAccountSession()) {
+              openAuthModal('login');
+            }
+          }, 120);
           return;
         }
         // 非私人开发构建保留原来的纯本地访客昵称。
@@ -3741,8 +3779,8 @@
       }
     }
 
-    function applyUserData(data) {
-      if (!data) return;
+    function applyUserData(data, expectedGeneration = null) {
+      if (!data || (expectedGeneration !== null && expectedGeneration !== authSessionGeneration)) return false;
       if (typeof data.score === 'number') {
         const badge = document.getElementById('myLadderBadge');
         if (badge) badge.textContent = `${data.score} 分`;
@@ -3818,6 +3856,7 @@
       if (hasRegisteredAccountSession() && typeof window.ensureGomokuFeature === 'function') {
         window.ensureGomokuFeature('social').then(() => window.GomokuSocial.start()).catch(() => {});
       }
+      return true;
     }
 
     function updateAccountUI() {
@@ -3830,7 +3869,7 @@
 
       if (uidBadge && currentUserUid) {
         uidBadge.textContent = `UID: ${currentUserUid} 📋`;
-      }
+      } else if (uidBadge) uidBadge.textContent = 'UID: ------ 📋';
 
       const btnLogout = document.getElementById("btnLogoutAction");
       if (hasRegisteredAccountSession()) {
@@ -3875,6 +3914,7 @@
         }
       }
       updateHistoryCountUI();
+      window.refreshSkyProfileCard?.();
     }
 
     function copyMyUid() {
@@ -3930,6 +3970,7 @@
         modal.classList.add('show');
         ensurePrivateGameAuthUI();
         switchAuthTab(tab);
+        if (tab === 'login') setTimeout(() => document.getElementById('loginUsername')?.focus(), 80);
         // 提前探测官方出口，让用户填写账号密码的时间与网络探测并行。
         void warmApiHost();
       }
@@ -4039,6 +4080,8 @@
         btnSubmit.innerHTML = '<span>⏳ 正在安全修改...</span>';
       }
 
+      const requestGeneration = authSessionGeneration;
+      const requestUid = String(currentUserUid);
       try {
         const res = await safeApiFetch('/api/auth/change_password', {
           method: 'POST',
@@ -4051,14 +4094,16 @@
           })
         });
         const json = await res.json();
+        if (requestGeneration !== authSessionGeneration || String(currentUserUid) !== requestUid) return;
         if (json.code === 0 && json.data) {
-          applyUserData(json.data);
+          applyUserData(json.data, requestGeneration);
           closeChangePasswordModal();
           showGameNotice('🔒 密码修改成功！当前登录凭证已刷新', true);
         } else {
           showError(json.msg || '密码修改失败，请稍后重试');
         }
       } catch (err) {
+        if (requestGeneration !== authSessionGeneration || String(currentUserUid) !== requestUid) return;
         showError(getApiNetworkErrorMessage(err));
       } finally {
         if (btnSubmit) {
@@ -4113,6 +4158,7 @@
       }
 
       errEl.style.display = "none";
+      const loginGeneration = ++authSessionGeneration;
       if (btnSubmit) {
         btnSubmit.disabled = true;
         btnSubmit.style.opacity = "0.75";
@@ -4130,13 +4176,16 @@
           timeoutMs: 6000
         });
         const json = await res.json();
+        if (loginGeneration !== authSessionGeneration) return;
         if (json.code === 0 && json.data) {
-          applyUserData(json.data);
+          if (!applyUserData(json.data, loginGeneration)) return;
           p1Name = json.data.nickname || u;
           localStorage.setItem("gomoku_p1Name", p1Name);
           updatePlayerHeaderUI();
           updateAccountUI();
           updateHistoryCountUI();
+          const passwordInput = document.getElementById('loginPassword');
+          if (passwordInput) passwordInput.value = '';
           closeAuthModal();
           showGameNotice(`🎉 欢迎回来，棋士【${p1Name}】！已成功登录`, true);
         } else {
@@ -4144,6 +4193,7 @@
           errEl.style.display = "block";
         }
       } catch (err) {
+        if (loginGeneration !== authSessionGeneration) return;
         errEl.textContent = getApiNetworkErrorMessage(err);
         errEl.style.display = "block";
       } finally {
@@ -4256,6 +4306,7 @@
       }
 
       errEl.style.display = 'none';
+      const requestGeneration = authSessionGeneration;
       try {
         const res = await safeApiFetch(`/api/auth/get_security_q`, {
           method: 'POST',
@@ -4263,6 +4314,7 @@
           body: JSON.stringify({ username: u })
         });
         const json = await res.json();
+        if (requestGeneration !== authSessionGeneration) return;
         if (json.code === 0 && json.data) {
           document.getElementById('displaySecurityQ').textContent = json.data.question;
           document.getElementById('resetStep1').style.display = 'none';
@@ -4272,6 +4324,7 @@
           errEl.style.display = 'block';
         }
       } catch(e) {
+        if (requestGeneration !== authSessionGeneration) return;
         errEl.textContent = getApiNetworkErrorMessage(e);
         errEl.style.display = 'block';
       }
@@ -4295,6 +4348,7 @@
       }
 
       errEl.style.display = 'none';
+      const requestGeneration = authSessionGeneration;
       try {
         const res = await safeApiFetch(`/api/auth/reset_password`, {
           method: 'POST',
@@ -4302,8 +4356,9 @@
           body: JSON.stringify({ username: u, securityAnswer: a, newPassword: np })
         });
         const json = await res.json();
+        if (requestGeneration !== authSessionGeneration) return;
         if (json.code === 0 && json.data) {
-          applyUserData(json.data);
+          if (!applyUserData(json.data, requestGeneration)) return;
           closeAuthModal();
           showGameNotice(`🎉 密码已成功重置！已自动安全登录`, true);
         } else {
@@ -4311,6 +4366,7 @@
           errEl.style.display = 'block';
         }
       } catch(e) {
+        if (requestGeneration !== authSessionGeneration) return;
         errEl.textContent = getApiNetworkErrorMessage(e);
         errEl.style.display = 'block';
       }
@@ -6839,19 +6895,37 @@
       }, null, { title: '退出当前账号', icon: '👤', okText: '确认退出', cancelText: '取消' });
     }
 
-    async function logoutAccount() {
-      const oldName = currentUsername;
+    function clearLocalAccountSession() {
+      authSessionGeneration++;
       if (window.GomokuSocial?.stop) window.GomokuSocial.stop();
       currentUsername = "";
       currentUserUid = "";
       currentUserToken = "";
       currentUserRefreshToken = "";
       currentUserScore = 1000;
+      p1Name = '游客棋手';
+      p1Avatar = 'anime_boy';
+      selectedAvatarData = 'anime_boy';
       localStorage.removeItem("gomoku_user_username");
       localStorage.removeItem("gomoku_user_token");
       localStorage.removeItem("gomoku_user_refresh_token");
       localStorage.removeItem("gomoku_user_uid");
+      localStorage.removeItem("gomoku_p1Name");
+      localStorage.removeItem("gomoku_p1Avatar");
       localStorage.setItem("gomoku_user_score", "1000");
+
+      ['loginUsername', 'loginPassword', 'resetUsername', 'resetAnswer', 'resetNewPwd'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.value = '';
+      });
+      ['loginErrorMsg', 'resetErrorMsg'].forEach(id => {
+        const error = document.getElementById(id);
+        if (error) { error.textContent = ''; error.style.display = 'none'; }
+      });
+      const securityQuestion = document.getElementById('displaySecurityQ');
+      if (securityQuestion) securityQuestion.textContent = '';
+      const profileModal = document.getElementById('profileModal');
+      if (profileModal) profileModal.classList.remove('show');
 
       // 重置本地临时分数和战绩徽标，杜绝跨账号复制数据漏洞
       const badge = document.getElementById("myLadderBadge");
@@ -6866,7 +6940,11 @@
       updatePlayerHeaderUI();
       updateAccountUI();
       updateHistoryCountUI();
-      showGameNotice(`🚪 已退出账号【${oldName}】，请使用指定账号重新登录`, true);
+    }
+
+    async function logoutAccount() {
+      clearLocalAccountSession();
+      showGameNotice('🚪 已退出账号，请登录后继续', true);
       openAuthModal('login');
     }
 
@@ -7578,12 +7656,25 @@
       const verEl = document.getElementById('appVersionDisplay');
       if (verEl) verEl.textContent = DISPLAY_VERSION_TAG;
     } catch(e) {}
-    const UPDATE_PROXY_ORIGIN = 'https://gomoku-api.pages.dev';
-    const UPDATE_API_URL = `${UPDATE_PROXY_ORIGIN}/api/version`;
+    const UPDATE_CLOUDFLARE_PAGES_ORIGIN = 'https://gomoku-api.pages.dev';
+    const UPDATE_CLOUDFLARE_WORKER_ORIGIN = 'https://gomoku-backend.xnnb04664.workers.dev';
+    const UPDATE_SERVICE_ORIGINS = [...new Set([ECS_API_HOST, UPDATE_CLOUDFLARE_PAGES_ORIGIN, UPDATE_CLOUDFLARE_WORKER_ORIGIN].filter(Boolean))];
     const UPDATE_PROXY_APK_PATH = '/api/update/apk';
     const UPDATE_PROXY_HTML_PATH = '/api/update/html';
-    const UPDATE_PROXY_APK_URL = `${UPDATE_PROXY_ORIGIN}${UPDATE_PROXY_APK_PATH}`;
-    const UPDATE_PROXY_HTML_URL = `${UPDATE_PROXY_ORIGIN}${UPDATE_PROXY_HTML_PATH}`;
+    const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest';
+    const GITHUB_RELEASE_API_MIRRORS = [
+      'https://gh-proxy.com/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest',
+      'https://gh-proxy.org/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest',
+      GITHUB_LATEST_RELEASE_API
+    ];
+    // APK/HTML release files are public; every downloaded file is SHA-256 checked,
+    // and Android also checks the original signing certificate before install.
+    const GITHUB_RELEASE_PROXY_ORIGINS = [
+      'https://gh-proxy.com',
+      'https://gh-proxy.org',
+      'https://githubproxy.cc',
+      'https://ghfast.top'
+    ];
     const UPDATE_CLIENT_HEADER = 'X-Gomoku-Client';
     const UPDATE_CLIENT_VALUE = 'gomoku-app-client-v2';
     const UPDATE_TICKET_HEADER = 'X-Gomoku-Update-Ticket';
@@ -7601,39 +7692,102 @@
       return headers;
     }
 
-    async function downloadProtectedApk(url, ticket) {
-      if (url !== UPDATE_PROXY_APK_URL || !ticket) throw new Error('更新下载授权无效');
-      const response = await fetch(url, {
-        cache: 'no-store',
-        headers: getUpdateHeaders(ticket)
-      });
-      if (!response.ok) throw new Error('更新文件接口不可用');
-      const declaredLength = Number(response.headers.get('content-length') || 0);
-      if (declaredLength > 50 * 1024 * 1024) throw new Error('更新文件超过大小限制');
-      const blob = await response.blob();
-      if (blob.size < 500000 || blob.size > 50 * 1024 * 1024) throw new Error('更新文件大小异常');
-      const objectUrl = URL.createObjectURL(blob);
-      try {
-        const anchor = document.createElement('a');
-        anchor.href = objectUrl;
-        anchor.download = 'gomoku_latest.apk';
-        anchor.rel = 'noopener';
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      } finally {
-        setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
-      }
+    function buildGithubProxyUrls(assetUrl) {
+      const rawUrl = String(assetUrl || '').trim();
+      if (!/^https:\/\/github\.com\/xnnb04664-afk\/gomoku\/releases\/download\/v\d+\.\d+\.\d+\/gomoku\.(?:apk|html)$/.test(rawUrl)) return [];
+      return GITHUB_RELEASE_PROXY_ORIGINS.map(origin => `${origin}/${rawUrl}`);
     }
 
-    function invokeProtectedNativeApkUpdate(ticket) {
+    async function sha256HexBytes(value) {
+      if (!window.crypto || !window.crypto.subtle) throw new Error('当前环境不支持更新完整性校验');
+      const digest = await window.crypto.subtle.digest('SHA-256', value);
+      return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function downloadProtectedApk(updateData, options = {}) {
+      const data = updateData || {};
+      const githubSource = data.sourceType === 'github';
+      const candidates = githubSource ? (data.apkUrls || []) : [data.fastUrl].filter(Boolean);
+      const failures = [];
+      for (const url of candidates) {
+        try {
+          if (githubSource && !buildGithubProxyUrls(data.apkAssetUrl).includes(url)) throw new Error('拒绝非官方 GitHub 代理地址');
+          if (!githubSource && (!UPDATE_SERVICE_ORIGINS.includes(data.sourceOrigin) || url !== `${data.sourceOrigin}${UPDATE_PROXY_APK_PATH}` || !data.apkTicket)) {
+            throw new Error('更新下载授权或来源无效');
+          }
+          const response = await fetch(url, {
+            cache: 'no-store',
+            ...(githubSource ? {} : { headers: getUpdateHeaders(data.apkTicket) })
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const declaredLength = Number(response.headers.get('content-length') || 0);
+          if (declaredLength > 50 * 1024 * 1024) throw new Error('更新文件超过 50 MB');
+          const blob = await response.blob();
+          if (blob.size < 500000 || blob.size > 50 * 1024 * 1024) throw new Error(`文件大小异常（${blob.size} 字节）`);
+          if (!data.apkSha256) throw new Error('版本清单缺少 APK 摘要');
+          const actualHash = await sha256HexBytes(await blob.arrayBuffer());
+          if (actualHash !== data.apkSha256) throw new Error('APK SHA-256 校验失败');
+          const objectUrl = URL.createObjectURL(blob);
+          try {
+            const anchor = document.createElement('a');
+            anchor.href = objectUrl;
+            anchor.download = 'gomoku_latest.apk';
+            anchor.rel = 'noopener';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          } finally {
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+          }
+          return;
+        } catch (error) {
+          failures.push(`${new URL(url).host}: ${String(error?.message || '下载失败').slice(0, 70)}`);
+        }
+      }
+
+      if (githubSource && !options.skipServiceFallback) {
+        const serviceManifests = await fetchTicketedUpdateManifests(data.tag, data.apkSha256);
+        for (const serviceData of serviceManifests) {
+          try { return await downloadProtectedApk(serviceData, { skipServiceFallback: true }); }
+          catch (error) { failures.push(`${serviceData.sourceLabel}: ${String(error?.message || '下载失败').slice(0, 70)}`); }
+        }
+      }
+      throw new Error(`安装包下载失败（已尝试 ${failures.length || candidates.length} 个可用入口）：${failures.slice(0, 4).join('；') || '没有可用下载地址'}`);
+    }
+
+    function invokeProtectedNativeApkUpdate(ticket, apkSha256 = '', sourceOrigin = UPDATE_CLOUDFLARE_PAGES_ORIGIN) {
       if (typeof AndroidNativeApp === 'undefined' || !ticket) return false;
-      if (typeof AndroidNativeApp.downloadAndInstallApkWithTicket !== 'function') return false;
       try {
-        AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
+        const safeHash = /^[0-9a-f]{64}$/i.test(String(apkSha256 || '')) ? String(apkSha256).toLowerCase() : '';
+        if (safeHash && UPDATE_SERVICE_ORIGINS.includes(sourceOrigin) && typeof AndroidNativeApp.downloadAndInstallApkFromEndpoint === 'function') {
+          AndroidNativeApp.downloadAndInstallApkFromEndpoint(sourceOrigin, ticket, safeHash);
+          return true;
+        }
+        if (sourceOrigin !== UPDATE_CLOUDFLARE_PAGES_ORIGIN) return false;
+        if (safeHash && typeof AndroidNativeApp.downloadAndInstallApkWithTicketAndHash === 'function') {
+          AndroidNativeApp.downloadAndInstallApkWithTicketAndHash(ticket, safeHash);
+        } else if (typeof AndroidNativeApp.downloadAndInstallApkWithTicket === 'function') {
+          AndroidNativeApp.downloadAndInstallApkWithTicket(ticket);
+        } else {
+          return false;
+        }
         return true;
       } catch (error) {
         console.warn('[UpdateCheck] 原生安装通道未能启动:', error?.message || error);
+        return false;
+      }
+    }
+
+    function invokeGithubProxyNativeApkUpdate(updateData) {
+      if (typeof AndroidNativeApp === 'undefined' || typeof AndroidNativeApp.downloadAndInstallGithubReleaseApk !== 'function') return false;
+      const tag = String(updateData?.tag || '');
+      const hash = String(updateData?.apkSha256 || '').toLowerCase();
+      if (!/^v\d+\.\d+\.\d+$/.test(tag) || !/^[0-9a-f]{64}$/.test(hash) || !updateData?.apkAssetUrl || !buildGithubProxyUrls(updateData.apkAssetUrl).length) return false;
+      try {
+        AndroidNativeApp.downloadAndInstallGithubReleaseApk(tag, hash);
+        return true;
+      } catch (error) {
+        console.warn('[UpdateCheck] GitHub 反向代理下载通道未能启动:', error?.message || error);
         return false;
       }
     }
@@ -7686,61 +7840,152 @@
       return 0;
     }
 
-    function normalizeUpdateManifest(data) {
+    function normalizeUpdateManifest(data, sourceOrigin, sourceLabel) {
       const releaseTag = String(data && data.tag || '').trim();
       if (!data || Number(data.code) !== 0 || !/^v\d+\.\d+\.\d+$/.test(releaseTag)) {
-        throw new Error('更新清单响应无效');
+        throw new Error(String(data?.msg || '更新清单响应格式无效'));
       }
+      if (!UPDATE_SERVICE_ORIGINS.includes(sourceOrigin)) throw new Error('更新清单来源不在可信服务列表中');
+      const apkSha256 = /^[0-9a-f]{64}$/i.test(String(data.apkSha256 || '')) ? String(data.apkSha256).toLowerCase() : '';
+      const htmlSha256 = /^[0-9a-f]{64}$/i.test(String(data.htmlSha256 || '')) ? String(data.htmlSha256).toLowerCase() : '';
+      if (!apkSha256 || !data.apkTicket) throw new Error('服务端未返回 APK 摘要或短时下载授权');
       return {
         tag: releaseTag,
         notes: data.updateLog || "修复已知问题，优化联机体验与显示",
-        fastUrl: isTrustedUpdatePath(data.apkPath, UPDATE_PROXY_APK_PATH) ? UPDATE_PROXY_APK_URL : '',
-        htmlUrl: isTrustedUpdatePath(data.htmlPath, UPDATE_PROXY_HTML_PATH) ? UPDATE_PROXY_HTML_URL : '',
+        sourceType: 'ticketed',
+        sourceOrigin,
+        sourceLabel,
+        fastUrl: isTrustedUpdatePath(data.apkPath, UPDATE_PROXY_APK_PATH) ? `${sourceOrigin}${UPDATE_PROXY_APK_PATH}` : '',
+        htmlUrl: isTrustedUpdatePath(data.htmlPath, UPDATE_PROXY_HTML_PATH) ? `${sourceOrigin}${UPDATE_PROXY_HTML_PATH}` : '',
+        apkUrls: [],
+        htmlUrls: [],
         apkTicket: String(data.apkTicket || '').trim(),
         htmlTicket: String(data.htmlTicket || '').trim(),
-        htmlSha256: /^[0-9a-f]{64}$/i.test(String(data.htmlSha256 || '')) ? String(data.htmlSha256).toLowerCase() : ''
+        apkSha256,
+        htmlSha256
       };
     }
 
-    async function fetchUpdateManifest() {
-      let lastError = null;
-      for (let attempt = 0; attempt < UPDATE_MANIFEST_TIMEOUTS_MS.length; attempt++) {
-        let controller = null;
-        let timeoutId = null;
+    function normalizeGithubReleaseManifest(release, sourceLabel) {
+      const releaseTag = String(release?.tag_name || '').trim();
+      if (!/^v\d+\.\d+\.\d+$/.test(releaseTag)) throw new Error('GitHub Release 版本号无效');
+      const assets = Array.isArray(release.assets) ? release.assets : [];
+      const getAsset = (name) => assets.find(asset => asset?.name === name);
+      const normalizeAsset = (name) => {
+        const asset = getAsset(name);
+        const digestMatch = String(asset?.digest || '').match(/^sha256:([0-9a-f]{64})$/i);
+        const expectedPath = `/xnnb04664-afk/gomoku/releases/download/${releaseTag}/${name}`;
+        let assetUrl = '';
         try {
-          // 时间戳避免手机 WebView/中间缓存返回旧清单；GET 不附带 X-Gomoku-Client，因此不会触发预检。
-          const separator = UPDATE_API_URL.includes('?') ? '&' : '?';
-          const manifestUrl = `${UPDATE_API_URL}${separator}_t=${Date.now()}&attempt=${attempt}`;
-          const requestOptions = {
-            method: 'GET',
-            mode: 'cors',
-            credentials: 'omit',
-            cache: 'no-store'
-          };
-          if (typeof AbortController === 'function') {
-            controller = new AbortController();
-            requestOptions.signal = controller.signal;
-          }
-          const timeoutPromise = new Promise((_, reject) => {
-            timeoutId = setTimeout(() => {
-              if (controller) controller.abort();
-              reject(new Error('更新服务响应超时'));
-            }, UPDATE_MANIFEST_TIMEOUTS_MS[attempt]);
-          });
-          const requestPromise = (async () => {
-            const response = await fetch(manifestUrl, requestOptions);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return normalizeUpdateManifest(await response.json());
-          })();
-          return await Promise.race([requestPromise, timeoutPromise]);
+          const parsed = new URL(String(asset?.browser_download_url || ''));
+          if (parsed.origin === 'https://github.com' && parsed.pathname === expectedPath && !parsed.search && !parsed.hash) assetUrl = parsed.href;
+        } catch (_) {}
+        if (!assetUrl || !digestMatch) throw new Error(`GitHub Release 缺少 ${name} 或 SHA-256 摘要`);
+        return { assetUrl, sha256: digestMatch[1].toLowerCase() };
+      };
+      const apk = normalizeAsset('gomoku.apk');
+      let html = null;
+      try { html = normalizeAsset('gomoku.html'); } catch (_) {}
+      const apkUrls = buildGithubProxyUrls(apk.assetUrl);
+      const htmlUrls = html ? buildGithubProxyUrls(html.assetUrl) : [];
+      if (!apkUrls.length) throw new Error('没有配置可用的 GitHub APK 代理节点');
+      return {
+        tag: releaseTag,
+        notes: String(release.body || '修复已知问题，优化联机体验与显示'),
+        sourceType: 'github',
+        sourceLabel,
+        sourceOrigin: '',
+        apkAssetUrl: apk.assetUrl,
+        htmlAssetUrl: html?.assetUrl || '',
+        fastUrl: apkUrls[0],
+        htmlUrl: htmlUrls[0] || '',
+        apkUrls,
+        htmlUrls,
+        apkTicket: '',
+        htmlTicket: '',
+        apkSha256: apk.sha256,
+        htmlSha256: html?.sha256 || ''
+      };
+    }
+
+    async function fetchUpdateJson(url, timeoutMs) {
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      let timeoutId = null;
+      const requestOptions = {
+        method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store',
+        headers: { Accept: 'application/vnd.github+json' }
+      };
+      if (controller) requestOptions.signal = controller.signal;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          controller?.abort();
+          reject(new Error(`响应超时（${Math.ceil(timeoutMs / 1000)} 秒）`));
+        }, timeoutMs);
+      });
+      try {
+        return await Promise.race([(async () => {
+          const separator = url.includes('?') ? '&' : '?';
+          const response = await fetch(`${url}${separator}_t=${Date.now()}`, requestOptions);
+          let data = null;
+          try { data = await response.json(); } catch (_) {}
+          if (!response.ok) throw new Error(String(data?.msg || data?.message || `HTTP ${response.status}`));
+          return data;
+        })(), timeoutPromise]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    }
+
+    async function fetchTicketedUpdateManifest(sourceOrigin, sourceIndex = 0) {
+      const sourceLabel = sourceOrigin === ECS_API_HOST
+        ? 'ECS 更新服务'
+        : sourceOrigin === UPDATE_CLOUDFLARE_PAGES_ORIGIN
+          ? 'Cloudflare Pages 应急服务'
+          : 'Cloudflare Worker 应急服务';
+      const url = `${sourceOrigin}/api/version`;
+      const data = await fetchUpdateJson(url, UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(sourceIndex, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)]);
+      return normalizeUpdateManifest(data, sourceOrigin, sourceLabel);
+    }
+
+    async function fetchTicketedUpdateManifests(expectedTag = '', expectedHash = '') {
+      const manifests = [];
+      for (const [index, sourceOrigin] of UPDATE_SERVICE_ORIGINS.entries()) {
+        try {
+          const manifest = await fetchTicketedUpdateManifest(sourceOrigin, index);
+          if (expectedTag && manifest.tag !== expectedTag) continue;
+          if (expectedHash && manifest.apkSha256 !== expectedHash) continue;
+          manifests.push(manifest);
         } catch (error) {
-          lastError = error;
-          if (attempt + 1 < UPDATE_MANIFEST_TIMEOUTS_MS.length) continue;
-        } finally {
-          if (timeoutId) clearTimeout(timeoutId);
+          console.warn(`[UpdateCheck] ${sourceOrigin} 更新服务不可用:`, error?.message || error);
         }
       }
-      throw lastError || new Error('更新清单不可用');
+      return manifests;
+    }
+
+    async function fetchUpdateManifest(options = {}) {
+      const failures = [];
+      if (options.includeGithub !== false) {
+        for (const [index, url] of GITHUB_RELEASE_API_MIRRORS.entries()) {
+          const label = index === 0 ? 'GitHub 代理节点 A' : index === 1 ? 'GitHub 代理节点 B' : 'GitHub 官方接口';
+          try {
+            const release = await fetchUpdateJson(url, UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(index, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)]);
+            return normalizeGithubReleaseManifest(release, label);
+          } catch (error) {
+            const detail = String(error?.message || '连接失败').slice(0, 90);
+            failures.push(`${label}：${detail}`);
+          }
+        }
+      }
+      for (const [index, sourceOrigin] of UPDATE_SERVICE_ORIGINS.entries()) {
+        try {
+          const manifest = await fetchTicketedUpdateManifest(sourceOrigin, index);
+          return manifest;
+        } catch (error) {
+          const label = sourceOrigin === ECS_API_HOST ? 'ECS 更新服务' : 'Cloudflare 应急服务';
+          failures.push(`${label}：${String(error?.message || '连接失败').slice(0, 90)}`);
+        }
+      }
+      throw new Error(`更新检查失败：${failures.slice(0, 5).join('；') || '所有更新入口都无响应'}`);
     }
 
     let isCheckingAppUpdate = false;
@@ -7748,6 +7993,70 @@
     let updateManifestRequest = null;
     let isManualUpdateCheckInProgress = false;
     let updateCheckButtonOriginalHtml = null;
+    let activeNativeUpdateFallback = null;
+
+    function startNativeApkUpdate(updateData) {
+      if (typeof AndroidNativeApp === 'undefined') return false;
+      const tag = String(updateData?.tag || '');
+      const hash = String(updateData?.apkSha256 || '').toLowerCase();
+      if (!/^v\d+\.\d+\.\d+$/.test(tag) || !/^[0-9a-f]{64}$/.test(hash)) return false;
+      activeNativeUpdateFallback = {
+        tag,
+        hash,
+        currentOrigin: updateData.sourceOrigin || 'github',
+        manifests: null,
+        index: 0,
+        isHandlingFailure: false
+      };
+      const started = updateData.sourceType === 'github'
+        ? invokeGithubProxyNativeApkUpdate(updateData)
+        : invokeProtectedNativeApkUpdate(updateData.apkTicket, hash, updateData.sourceOrigin);
+      if (!started) activeNativeUpdateFallback = null;
+      return started;
+    }
+
+    async function startNativeApkUpdateWithFallback(updateData) {
+      if (startNativeApkUpdate(updateData)) return true;
+      if (updateData?.sourceType !== 'github') return false;
+      const manifests = await fetchTicketedUpdateManifests(updateData.tag, updateData.apkSha256);
+      for (const [index, candidate] of manifests.entries()) {
+        if (!startNativeApkUpdate(candidate)) continue;
+        if (activeNativeUpdateFallback) {
+          activeNativeUpdateFallback.manifests = manifests;
+          activeNativeUpdateFallback.index = index + 1;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    async function continueNativeUpdateFallback(message) {
+      const state = activeNativeUpdateFallback;
+      if (!state || state.isHandlingFailure) {
+        resetUpdateDownloadUI(String(message || '安装包下载失败，请重试更新').slice(0, 160));
+        return;
+      }
+      state.isHandlingFailure = true;
+      try {
+        if (!state.manifests) state.manifests = await fetchTicketedUpdateManifests(state.tag, state.hash);
+        while (state.index < state.manifests.length) {
+          const candidate = state.manifests[state.index++];
+          if (candidate.sourceOrigin === state.currentOrigin) continue;
+          if (!invokeProtectedNativeApkUpdate(candidate.apkTicket, candidate.apkSha256, candidate.sourceOrigin)) continue;
+          state.currentOrigin = candidate.sourceOrigin;
+          isAppDownloading = true;
+          const progressStatus = document.getElementById('updateProgressStatusText');
+          if (progressStatus) progressStatus.textContent = `GitHub 代理下载失败，正在切换 ${candidate.sourceLabel}…`;
+          return;
+        }
+      } catch (error) {
+        message = `${message || '下载入口不可用'}；ECS/应急更新入口检查失败：${error?.message || '未知错误'}`;
+      } finally {
+        state.isHandlingFailure = false;
+      }
+      activeNativeUpdateFallback = null;
+      resetUpdateDownloadUI(`已尝试 GitHub 多个反向代理、ECS 与 Cloudflare 应急入口，仍无法下载。${String(message || '').slice(0, 120)}`);
+    }
 
     function setManualUpdateCheckBusy(isBusy) {
       const versionEl = document.getElementById('appVersionDisplay');
@@ -7797,7 +8106,7 @@
         tagEl.style.color = '#475569';
       }
       if (notesTitle) notesTitle.textContent = '检查状态：';
-      if (notesEl) notesEl.textContent = '正在连接官方更新服务并读取版本清单。\n\n网络响应较慢时请稍候，检查完成后会在这里显示结果。';
+      if (notesEl) notesEl.textContent = '正在按顺序连接 GitHub 加速节点、ECS 更新服务和 Cloudflare 应急入口。\n\n检查完成后会显示使用的来源；入口失败会自动切换到下一节点。';
       if (downloadButton) {
         downloadButton.style.display = 'none';
         downloadButton.disabled = true;
@@ -7849,6 +8158,8 @@
       isAppDownloading = false;
       const btn = document.getElementById('btnFastDownload');
       const progressStatus = document.getElementById('updateProgressStatusText');
+      const progressWrap = document.getElementById('updateProgressBarWrap');
+      if (progressWrap) progressWrap.classList.remove('update-download-indeterminate');
       if (btn) {
         btn.disabled = false;
         btn.style.opacity = '1';
@@ -7870,22 +8181,34 @@
 
       if (status === 'done' || percent >= 100) {
         isAppDownloading = false;
+        activeNativeUpdateFallback = null;
+        if (progressWrap) progressWrap.classList.remove('update-download-indeterminate');
         if (progressInner) progressInner.style.width = '100%';
         if (progressPercent) progressPercent.textContent = '100%';
         if (progressStatus) progressStatus.textContent = '✅ 下载完成，正在调起安装...';
         if (btn) btn.innerHTML = '<span>✅ 下载完成，请在手机上确认安装</span>';
         setTimeout(() => closeUpdateModal(), 2500);
+      } else if (Number(percent) < 0) {
+        isAppDownloading = true;
+        if (progressWrap) progressWrap.classList.add('update-download-indeterminate');
+        if (progressInner) progressInner.style.width = '36%';
+        if (progressPercent) progressPercent.textContent = '…';
+        if (progressStatus) progressStatus.textContent = `📥 ${String(status || '正在下载，正在统计速度…')}`;
+        if (btn) btn.innerHTML = '<span>⏳ 正在下载安装包…</span>';
       } else if (percent > 0) {
         isAppDownloading = true;
+        if (progressWrap) progressWrap.classList.remove('update-download-indeterminate');
         if (progressInner) progressInner.style.width = percent + '%';
         if (progressPercent) progressPercent.textContent = percent + '%';
-        if (progressStatus) progressStatus.textContent = `🚀 正在下载安装包... ${percent}%`;
+        if (progressStatus) progressStatus.textContent = status && status !== 'downloading'
+          ? `🚀 ${String(status)} · ${percent}%`
+          : `🚀 正在下载安装包... ${percent}%`;
         if (btn) btn.innerHTML = `<span>⏳ 正在全自动极速下载 (${percent}%)...</span>`;
       }
     };
 
     window.onApkDownloadFailure = function(message) {
-      resetUpdateDownloadUI(String(message || '安装包下载失败，请重试更新').slice(0, 120));
+      void continueNativeUpdateFallback(String(message || '安装包下载失败，请重试更新').slice(0, 160));
     };
 
     async function checkAppUpdate(isManual = false) {
@@ -7903,7 +8226,7 @@
         isManualUpdateCheckInProgress = true;
         setManualUpdateCheckBusy(true);
         showUpdateCheckPendingState();
-        showGameNotice('🔍 正在连接官方云端检查最新更新...');
+        showGameNotice('🔍 正在检查更新：GitHub 加速节点 → ECS → Cloudflare 应急入口');
       }
 
       let versionData = null;
@@ -7978,7 +8301,7 @@
           tagEl.style.color = "#475569";
         }
         if (notesTitle) notesTitle.textContent = "运行状态：";
-        if (notesEl) notesEl.textContent = `暂时无法连接官方更新服务，无法确认是否有新版本。\n\n请检查网络后点击下方按钮重试；这不会影响当前版本 (${effectiveVersion}) 的正常对弈。`;
+        if (notesEl) notesEl.textContent = `GitHub 反向代理、ECS 更新服务和 Cloudflare 应急入口都未能提供有效版本清单，无法确认是否有新版本。\n\n请检查网络后点击下方按钮重试；这不会影响当前版本 (${effectiveVersion}) 的正常对弈。`;
         if (btnFast) {
           btnFast.style.display = "flex";
           btnFast.innerHTML = "<span>🔄 重新尝试获取更新</span>";
@@ -8038,11 +8361,12 @@
                   checkAppUpdate(true);
                   return;
                 }
-                if (!clickVersionData.apkTicket) throw new Error('更新服务未签发有效下载授权');
+                if (!clickVersionData.apkTicket && clickVersionData.sourceType !== 'github') throw new Error('更新服务未签发有效下载授权');
 
-                const hotUrls = clickVersionData.htmlUrl
-                  ? [clickVersionData.htmlUrl + (clickVersionData.htmlUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()]
-                  : [];
+                const rawHotUrls = clickVersionData.sourceType === 'github'
+                  ? clickVersionData.htmlUrls
+                  : (clickVersionData.htmlUrl ? [clickVersionData.htmlUrl] : []);
+                const hotUrls = rawHotUrls.map(url => url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now());
 
                 const fetchCandidate = (url, timeoutMs = 20000) => {
                   const controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -8056,12 +8380,12 @@
                   const downloadPromise = (async () => {
                     const requestOptions = {
                       cache: 'no-store',
-                      headers: getUpdateHeaders(clickVersionData.htmlTicket)
+                      ...(clickVersionData.htmlTicket ? { headers: getUpdateHeaders(clickVersionData.htmlTicket) } : {})
                     };
                     if (controller) requestOptions.signal = controller.signal;
                     const res = await fetch(url, requestOptions);
                     if (!res.ok) throw new Error("HTTP " + res.status);
-                    const txt = await readLimitedResponseText(res, 4 * 1024 * 1024);
+                    const txt = await readLimitedResponseText(res, 20 * 1024 * 1024);
                     if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
                       throw new Error("更新文件内容无效");
                     }
@@ -8078,7 +8402,10 @@
                 };
 
                 setVisualProgress(30, "📥 正在接收并校验最新版游戏...");
-                if (hotUrls.length === 0 || !clickVersionData.htmlTicket) throw new Error("更新服务未提供完整热更新授权");
+                if (hotUrls.length === 0 || !clickVersionData.htmlSha256 ||
+                    (clickVersionData.sourceType !== 'github' && !clickVersionData.htmlTicket)) {
+                  throw new Error('更新清单未提供完整热更新文件、摘要或下载授权');
+                }
                 const newHtml = await Promise.any(hotUrls.map(u => fetchCandidate(u)));
 
                 const startupScriptBlocks = newHtml.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
@@ -8105,7 +8432,7 @@
                 throw new Error("沙盒写入失败");
               } catch(err) {
                 console.warn('[HotUpdate Fallback]', err?.message || err);
-                if (!incompatibleHotUpdate && clickVersionData?.apkTicket && invokeProtectedNativeApkUpdate(clickVersionData.apkTicket)) {
+                if (!incompatibleHotUpdate && clickVersionData && await startNativeApkUpdateWithFallback(clickVersionData)) {
                   setVisualProgress(50, "🔄 热更新暂不可用，正在通过安全安装包通道继续...");
                   return;
                 }
@@ -8126,14 +8453,14 @@
                   showGameNotice('当前已是最新版本', false);
                   return;
                 }
-                if (!freshData.apkTicket) throw new Error('更新服务未签发有效下载授权');
-                if (typeof AndroidNativeApp !== "undefined" && invokeProtectedNativeApkUpdate(freshData.apkTicket)) {
+                if (!freshData.apkTicket && freshData.sourceType !== 'github') throw new Error('更新服务未签发有效下载授权');
+                if (typeof AndroidNativeApp !== "undefined" && await startNativeApkUpdateWithFallback(freshData)) {
                   handedOffToNative = true;
                   showGameNotice(`🚀 正在全自动下载最新版 (${freshData.tag})，下载完成后将弹出安装确认`, true);
                   return;
                 }
-                if (!freshData.fastUrl) throw new Error('更新服务未提供安装包地址');
-                await downloadProtectedApk(freshData.fastUrl, freshData.apkTicket);
+                if (!freshData.fastUrl && !freshData.apkUrls?.length) throw new Error('更新服务未提供安装包地址');
+                await downloadProtectedApk(freshData);
                 showGameNotice('✅ 安装包已下载，请从浏览器下载列表中安装', false);
               } catch (error) {
                 resetUpdateDownloadUI(error?.message ? `更新失败：${error.message}` : '更新失败，请重试');

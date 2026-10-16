@@ -76,7 +76,7 @@ const PRIVATE_GAME_UNCONFIGURED_USERNAMES = Object.freeze([
   '__private_game_unconfigured_b__'
 ]);
 function configuredPrivateGameUsernames(value) {
-  const names = String(value || '').split(',').map(name => name.trim());
+  const names = String(value || '').split(',').map(name => name.trim().toLowerCase());
   if (names.length !== 2 || names.some(name => !name || name.length > 32) || names[0] === names[1]) return [];
   return names;
 }
@@ -586,8 +586,13 @@ export default {
       if (error && error.code === 'PAYLOAD_TOO_LARGE') {
         return json({ code: 413, msg: '请求数据过大' }, 413);
       }
-      console.error(`[${label}]`, error?.stack || error?.message || error);
-      return json({ code: 1, msg: `${label}，请稍后重试` }, 500);
+      const errorId = generateSecureHex(4).toUpperCase();
+      console.error(`[${label}][${errorId}]`, error?.stack || error?.message || error);
+      return json({
+        code: 1,
+        errorId,
+        msg: `${label}（错误码 ${errorId}）。服务器已记录，请稍后重试；若再次出现，请提供此错误码。`
+      }, 500);
     };
 
     // 同时限制 Content-Length 与分块请求的实际大小，避免大包绕过请求头限制。
@@ -1222,16 +1227,18 @@ export default {
       await dbInitializationPromise;
     }
 
-    const githubHeaders = (token, accept = 'application/vnd.github+json') => ({
-      Accept: accept,
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      'User-Agent': 'gomoku-update-proxy'
-    });
+    const githubHeaders = (token, accept = 'application/vnd.github+json') => {
+      const headers = {
+        Accept: accept,
+        'X-GitHub-Api-Version': GITHUB_API_VERSION,
+        'User-Agent': 'gomoku-update-proxy'
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      return headers;
+    };
 
     const getLatestPrivateRelease = async () => {
       const token = String(env.GITHUB_READ_TOKEN || '').trim();
-      if (!token) return { error: '更新服务尚未配置私有仓库凭据' };
 
       const now = Date.now();
       if (privateReleaseCache && now - privateReleaseCache.fetchedAt < PRIVATE_RELEASE_CACHE_TTL_MS) {
@@ -1247,18 +1254,18 @@ export default {
             });
             if (!response.ok) {
               console.warn(`[update proxy] GitHub latest release returned HTTP ${response.status}`);
-              return { error: `私有仓库版本读取失败 (${response.status})` };
+              return { error: `GitHub Release 读取失败（HTTP ${response.status}）` };
             }
             const release = await response.json();
             if (!release || typeof release !== 'object') {
-              return { error: '私有仓库版本响应无效' };
+              return { error: 'GitHub Release 响应格式无效' };
             }
             privateReleaseCache = { release, fetchedAt: Date.now() };
             return { release };
           } catch (error) {
             const message = error?.name === 'AbortError'
-              ? '私有仓库版本读取超时，请稍后重试'
-              : '私有仓库版本读取失败，请稍后重试';
+              ? 'GitHub Release 读取超时，请稍后重试'
+              : 'GitHub Release 读取失败，请稍后重试';
             console.error('[update proxy] GitHub latest release request failed:', error?.message || error);
             return { error: message };
           } finally {
@@ -1277,7 +1284,7 @@ export default {
       const assets = Array.isArray(latest.release.assets) ? latest.release.assets : [];
       const expectedName = assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html';
       const asset = assets.find(item => item.name === expectedName);
-      if (!asset || !asset.url) return { error: `最新 Release 中没有可用的 ${assetType.toUpperCase()} 文件` };
+      if (!asset || !asset.url) return { error: `最新 GitHub Release 中没有可用的 ${assetType.toUpperCase()} 文件` };
       try {
         const assetUrl = new URL(asset.url);
         const expectedPathPrefix = `/repos/${UPDATE_REPOSITORY}/releases/assets/`;
@@ -1406,7 +1413,7 @@ export default {
       const latest = await getLatestPrivateRelease();
       if (latest.error) return json({ code: 503, msg: latest.error }, 503);
       const releaseTag = String(latest.release.tag_name || '').trim();
-      if (!releaseTag) return json({ code: 502, msg: '私有仓库最新 Release 缺少版本号' }, 502);
+      if (!releaseTag) return json({ code: 502, msg: 'GitHub 最新 Release 缺少版本号' }, 502);
       const releaseAssets = Array.isArray(latest.release.assets) ? latest.release.assets : [];
       const assetDigest = (name) => {
         const digest = String(releaseAssets.find(item => item.name === name)?.digest || '').trim();
@@ -1565,12 +1572,12 @@ export default {
 
     // 私人游戏默认开启；仅显式 PRIVATE_GAME_MODE=0 的本地调试环境可关闭。
     const privateGameMode = () => String(env.PRIVATE_GAME_MODE || '1').trim() !== '0';
-    const isPrivateGameUsername = username => privateGameConfigured && PRIVATE_GAME_ALLOWED_USERNAMES.includes(String(username || '').trim());
+    const isPrivateGameUsername = username => privateGameConfigured && PRIVATE_GAME_ALLOWED_USERNAMES.includes(String(username || '').trim().toLowerCase());
     const isAllowedPrivateGameUser = user => !privateGameMode() || isPrivateGameUsername(user?.username);
     // 私人游戏的账号头像按 PRIVATE_GAME_USERNAMES 配置顺序固定：第一个男生，第二个女生。
     // 头像值以账号名为准，避免旧设备资料或资料编辑把固定情侣头像互相覆盖。
     const avatarForAccount = (username, avatar) => {
-      const accountName = String(username || '').trim();
+      const accountName = String(username || '').trim().toLowerCase();
       if (privateGameMode() && isPrivateGameUsername(accountName)) {
         return accountName === PRIVATE_GAME_ALLOWED_USERNAMES[0] ? 'anime_boy' : 'anime_girl';
       }
@@ -1578,8 +1585,8 @@ export default {
     };
     const compactAvatarForAccount = (username, avatar) => compactAvatar(avatarForAccount(username, avatar));
     const isPrivateGameCouple = (leftUsername, rightUsername) => {
-      const left = String(leftUsername || '').trim();
-      const right = String(rightUsername || '').trim();
+      const left = String(leftUsername || '').trim().toLowerCase();
+      const right = String(rightUsername || '').trim().toLowerCase();
       return left !== right && isPrivateGameUsername(left) && isPrivateGameUsername(right);
     };
     const privateGameDenied = () => json({ code: 403, msg: '本游戏为私人游戏，仅限指定账号使用' }, 403);
@@ -3253,7 +3260,7 @@ async function allocateNextAvailableUid(env) {
       }
     }
 
-    // ── 3.5 用户资料更新（昵称即账号名，改昵称即改账号名） ───────
+    // ── 3.5 用户资料更新（私人游戏保留固定登录名，昵称单独保存） ───────
     if (url.pathname === '/api/user/update_profile' && request.method === 'POST') {
       if (!env.DB) return json({ code: 1, msg: '数据库未连接' }, 500);
       try {
@@ -3272,22 +3279,28 @@ async function allocateNextAvailableUid(env) {
           ? avatarForAccount(user.username, requestedAvatar || user.avatar)
           : requestedAvatar;
 
-        if (privateGameMode() && safeNick && safeNick !== String(user.username || '')) {
-          return json({ code: 403, msg: '私人游戏账号名固定，不能修改' }, 403);
-        }
-
         if (safeNick) {
-          // 检查该账号名/昵称是否已被其他注册用户占用
-          const exist = await env.DB.prepare('SELECT uid FROM users WHERE (username = ? OR nickname = ?) AND uid != ?').bind(safeNick, safeNick, String(uid)).first();
+          // 私人游戏的登录名固定，昵称只需与其他显示昵称区分。
+          const duplicateSql = fixedAccount
+            ? 'SELECT uid FROM users WHERE nickname = ? AND uid != ?'
+            : 'SELECT uid FROM users WHERE (username = ? OR nickname = ?) AND uid != ?';
+          const duplicateBindings = fixedAccount
+            ? [safeNick, String(uid)]
+            : [safeNick, safeNick, String(uid)];
+          const exist = await env.DB.prepare(duplicateSql).bind(...duplicateBindings).first();
           if (exist) {
-            return json({ code: 1, msg: '该账号名称已被其他玩家占用，请换一个' });
+            return json({ code: 1, msg: '该昵称已被其他玩家使用，请换一个' });
           }
         }
 
-        // 🌟 核心：昵称即账号名，改昵称就是改账号名！同时更新 username 与 nickname
-        if (safeNick && safeAvatar) {
+        // 私人游戏必须保留固定登录名，昵称和头像仍可单独更新。
+        if (fixedAccount && safeNick && safeAvatar) {
+          await env.DB.prepare('UPDATE users SET nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeAvatar, String(uid)).run();
+        } else if (fixedAccount && safeNick) {
+          await env.DB.prepare('UPDATE users SET nickname = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, String(uid)).run();
+        } else if (safeNick && safeAvatar) {
           await env.DB.prepare('UPDATE users SET username = ?, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeNick, safeAvatar, String(uid)).run();
-        } else if (safeNick) {
+        } else if (safeNick && !fixedAccount) {
           await env.DB.prepare('UPDATE users SET username = ?, nickname = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeNick, safeNick, String(uid)).run();
         } else if (safeAvatar) {
           await env.DB.prepare('UPDATE users SET avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE uid = ?').bind(safeAvatar, String(uid)).run();
@@ -3295,14 +3308,15 @@ async function allocateNextAvailableUid(env) {
 
         cachedLeaderboard = null;
         lastLeaderboardTime = 0;
-        const finalName = safeNick || user.username || user.nickname;
+        const finalUsername = String(user.username || '');
+        const finalNickname = safeNick || user.nickname || finalUsername;
         return json({
           code: 0,
-          msg: '账号与昵称已成功同步更新！',
+          msg: fixedAccount ? '昵称与头像已成功更新！' : '账号与昵称已成功同步更新！',
           data: {
             uid: String(uid),
-            username: finalName,
-            nickname: finalName,
+            username: fixedAccount ? finalUsername : finalNickname,
+            nickname: finalNickname,
             avatar: safeAvatar || avatarForAccount(user.username, user.avatar)
           }
         });
@@ -3499,7 +3513,8 @@ async function allocateNextAvailableUid(env) {
 
         const now = Date.now();
         const loginName = username.trim();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ? OR nickname = ?)').bind(loginName, loginName, loginName).first();
+        const normalizedLoginName = loginName.toLowerCase();
+        const user = await env.DB.prepare('SELECT * FROM users WHERE (LOWER(username) = ? OR uid = ? OR nickname = ?)').bind(normalizedLoginName, loginName, loginName).first();
         if (!user) {
           return json({ code: 1, msg: '账号或密码不正确' });
         }
@@ -3902,8 +3917,8 @@ async function allocateNextAvailableUid(env) {
           try {
             await env.DB.prepare(`
               DELETE FROM match_queue
-              WHERE (status = "waiting" AND updated_at < ?)
-                 OR (status = "matched" AND updated_at < ?)
+              WHERE (status = 'waiting' AND updated_at < ?)
+                 OR (status = 'matched' AND updated_at < ?)
             `).bind(now - 25000, now - MATCH_RESULT_TTL_MS).run();
           } catch (cleanupError) {
             lastMatchQueueCleanupAt = 0;
@@ -3939,7 +3954,7 @@ async function allocateNextAvailableUid(env) {
         const privateMatchFilter = privateGameMode() ? ' AND uid IN (SELECT uid FROM users WHERE username IN (?, ?))' : '';
         const privateMatchBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
         const opponent = await env.DB.prepare(
-          `SELECT * FROM match_queue WHERE status = "waiting" AND uid != ? AND updated_at > ?${privateMatchFilter} ORDER BY updated_at ASC LIMIT 1`
+          `SELECT * FROM match_queue WHERE status = 'waiting' AND uid != ? AND updated_at > ?${privateMatchFilter} ORDER BY updated_at ASC LIMIT 1`
         ).bind(matchUid, now - 20000, ...privateMatchBindings).first();
 
         if (opponent) {
@@ -4096,7 +4111,7 @@ async function allocateNextAvailableUid(env) {
         }
 
         // 保持心跳活跃
-        await env.DB.prepare('UPDATE match_queue SET updated_at = ? WHERE uid = ? AND status = "waiting"').bind(now, matchUid).run();
+        await env.DB.prepare(`UPDATE match_queue SET updated_at = ? WHERE uid = ? AND status = 'waiting'`).bind(now, matchUid).run();
         return json({ code: 0, status: 'waiting' });
       } catch (err) {
         return publicServerError('轮询异常', err);
