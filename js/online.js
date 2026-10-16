@@ -230,6 +230,7 @@
         this.transportType = 'relay';
         this.connected = false;
         this.closed = false;
+        this.intentionalPeerLeaveDelivered = false;
         this.listeners = new Map();
         this.subscriptions = new Map();
         this.ws = null;
@@ -313,6 +314,7 @@
           for (const topic of this.subscriptions.keys()) this._send({ type: 'subscribe', topic });
         };
         socket.onmessage = event => {
+          if (this.closed) return;
           const raw = typeof event.data === 'string' ? event.data : '';
           if (!raw || raw.length > 96 * 1024) return;
           let message;
@@ -326,6 +328,19 @@
             return;
           }
           if (message.type === 'relay_peer_left') {
+            const expectedPeerRole = this.role === 'host' ? 'client' : 'host';
+            if (message.intentional === true) {
+              if (this.intentionalPeerLeaveDelivered || message.role !== expectedPeerRole ||
+                  typeof message.sessionId !== 'string' || !message.sessionId ||
+                  message.sessionId !== this.relaySessionId) return;
+              // Deliver this control event straight to the active room client.
+              // Do not route it through a temporary v3 join subscription: the
+              // live game may already be listening only on a session-bound v4 topic.
+              this.intentionalPeerLeaveDelivered = true;
+              this._emit('peer_leave', message);
+              this.end(true);
+              return;
+            }
             this._emit('offline');
             this._emit('close');
             // 对端离开时主动释放本地 WebSocket；否则旧 relay 仍可能保持
@@ -955,9 +970,20 @@
     const P2P_DISCONNECTED_GRACE_MS = 2500;
     const P2P_ICE_RESTART_WAIT_MS = 1800;
     const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
+    const ECS_ICE_HOST = (() => {
+      try {
+        const apiBase = String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '');
+        const host = new URL(apiBase).hostname;
+        return host || '101.201.76.166';
+      } catch (_) {
+        return '101.201.76.166';
+      }
+    })();
+    const ECS_STUN_URL = `stun:${ECS_ICE_HOST}:3478`;
     const DEFAULT_WEBRTC_ICE_SERVERS = [
-      { urls: 'stun:stun.cloudflare.com:3478' }
+      { urls: ECS_STUN_URL }
     ];
+    window.__GOMOKU_ECS_STUN_URL = ECS_STUN_URL;
     const RTC_ICE_CACHE_MAX_AGE_MS = 45 * 60 * 1000;
     let cachedRtcIceServers = null;
     let cachedRtcIceServersExpiresAt = 0;
@@ -1138,6 +1164,16 @@
           if (topic !== this.subTopic) return;
           this._handleIncomingPayload(rawPayload, false, 'mqtt');
         };
+        this.relayPeerLeaveHandler = message => {
+          const expectedPeerRole = this.role === 'host' ? 'client' : 'host';
+          if (!message || message.role !== expectedPeerRole || typeof message.sessionId !== 'string' ||
+              message.sessionId !== this.sessionId) return;
+          this._handleIncomingPayload(JSON.stringify({
+            type: 'leave_room',
+            senderRole: message.role,
+            sessionId: message.sessionId
+          }), false, 'relay');
+        };
         this.mqttCloseHandler = () => this._markTransportClosed(new Error('信令连接已断开'));
         this.mqttOfflineHandler = () => this._markTransportClosed(new Error('信令连接已离线'));
         this.mqttErrorHandler = (err) => {
@@ -1145,6 +1181,7 @@
         };
 
         this.client.on('message', this.messageHandler);
+        if (typeof this.client.on === 'function') this.client.on('peer_leave', this.relayPeerLeaveHandler);
         this.client.on('close', this.mqttCloseHandler);
         this.client.on('offline', this.mqttOfflineHandler);
         this.client.on('error', this.mqttErrorHandler);
@@ -1857,6 +1894,7 @@
       _detachMqttListeners() {
         if (!this.client) return;
         try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
+        try { this.client.removeListener('peer_leave', this.relayPeerLeaveHandler); } catch(_) {}
         try { this.client.removeListener('close', this.mqttCloseHandler); } catch(_) {}
         try { this.client.removeListener('offline', this.mqttOfflineHandler); } catch(_) {}
         try { this.client.removeListener('error', this.mqttErrorHandler); } catch(_) {}

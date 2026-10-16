@@ -503,6 +503,56 @@ body.sky-lobby-open #socialInviteModal.show { z-index:100120 !important; }
   gap: 12px;
 }
 
+.sky-current-game {
+  display:grid;
+  grid-column:1 / -1;
+  grid-template-columns:42px minmax(0,1fr) auto;
+  align-items:center;
+  gap:12px;
+  width:min(100%,760px);
+  margin:0 auto;
+  padding:10px 13px;
+  border:1px solid rgba(70,109,75,.22);
+  border-radius:17px;
+  color:var(--sky-deep);
+  background:linear-gradient(110deg,rgba(248,252,239,.96),rgba(255,255,255,.86));
+  box-shadow:0 8px 22px rgba(29,53,67,.09),inset 0 1px 0 rgba(255,255,255,.9);
+}
+.sky-current-game-mark {
+  display:grid;
+  place-items:center;
+  width:40px;
+  height:40px;
+  border-radius:13px;
+  color:#fff;
+  background:linear-gradient(145deg,#769a71,#456b55);
+  box-shadow:0 3px 0 #355541;
+  font-size:24px;
+  font-weight:800;
+}
+.sky-current-game-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.sky-current-game-copy small { color:#63816a; font-size:9px; font-weight:900; letter-spacing:.08em; }
+.sky-current-game-copy strong { overflow:hidden; color:#193c4d; font-size:13px; font-weight:950; text-overflow:ellipsis; white-space:nowrap; }
+.sky-current-game-copy span { overflow:hidden; color:rgba(23,56,76,.62); font-size:9px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.sky-current-game > button {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  min-height:38px;
+  padding:8px 13px;
+  border:0;
+  border-radius:12px;
+  color:#fff;
+  background:linear-gradient(135deg,#60866a,#41634e);
+  box-shadow:0 3px 0 #34503d;
+  font-family:inherit;
+  font-size:10px;
+  font-weight:900;
+  cursor:pointer;
+}
+.sky-current-game > button b { color:#f6d787; font-size:16px; }
+.sky-current-game > button:focus-visible { outline:3px solid var(--sky-sun); outline-offset:3px; }
+
 .sky-route-button {
   position: relative;
   overflow: hidden;
@@ -1962,7 +2012,13 @@ body.sky-game-open {
   .sky-board-bay { order:1; width:100%; min-height:0; height:min(38vh,330px); flex:none; }
   .sky-preview-board { width:min(82vw,37vh,340px); }
   .sky-board-halo { width:min(88vw,340px); }
-  .sky-route-list { order:2; width:100%; margin-top:0; gap:8px; }
+  .sky-route-list { order:3; width:100%; margin-top:0; gap:8px; }
+  .sky-current-game { order:2; width:100%; grid-template-columns:36px minmax(0,1fr) auto; gap:9px; padding:9px; border-radius:15px; }
+  .sky-current-game-mark { width:34px; height:34px; border-radius:11px; font-size:20px; }
+  .sky-current-game-copy small { font-size:8px; }
+  .sky-current-game-copy strong { font-size:11px; }
+  .sky-current-game-copy span { font-size:8px; }
+  .sky-current-game > button { min-height:34px; gap:5px; padding:7px 9px; border-radius:10px; font-size:9px; }
   .sky-route-button { display:flex; align-items:center; flex-direction:column; justify-content:center; gap:6px; min-height:89px; padding:8px 4px; border-radius:16px; text-align:center; }
   .sky-route-button::before { inset:0 13px auto; width:auto; height:2px; border-radius:0 0 3px 3px; }
   .sky-route-icon { width:35px; height:35px; border-radius:12px; }

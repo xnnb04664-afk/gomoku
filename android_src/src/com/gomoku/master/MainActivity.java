@@ -206,10 +206,15 @@ public class MainActivity extends Activity {
     private FrameLayout   mRootLayout;
     private GomokuSplashView mSplashView;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
-    private final Runnable mSplashFailSafe = this::dismissNativeSplash;
+    private final Runnable mInitializeWebViewTask = this::initializeWebView;
+    private final Runnable mSplashLoadWarning = () -> {
+        if (mSplashView == null) return;
+        android.util.Log.w("MainActivity", "Startup is still waiting for the first visible WebView frame; keeping the splash visible.");
+        mSplashView.showLoadingHint();
+    };
     private final Runnable mSplashContentDismiss = this::dismissNativeSplash;
-    private static final long NATIVE_SPLASH_MIN_DURATION_MS = 1200L;
     private long mNativeSplashStartedAt = 0L;
+    private boolean mHasVisibleWebContent;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
     private ValueCallback<Uri[]> mFilePathCallback;
@@ -244,8 +249,8 @@ public class MainActivity extends Activity {
     /**
      * Installs the native splash over the WebView without putting WebView
      * startup behind an animation.  The user can dismiss it at any time;
-     * otherwise first committed content removes it and the timeout is only a
-     * last-resort guard for a broken/offline page.
+     * otherwise first committed content removes it and a slow-start timer only
+     * adds a visible waiting hint without exposing the empty WebView surface.
      */
     private void showNativeSplash() {
         if (mRootLayout == null || mSplashView != null) return;
@@ -256,12 +261,17 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         mRootLayout.addView(mSplashView, params);
         mSplashView.startAnimation();
-        mMainHandler.postDelayed(mSplashFailSafe, 1400L);
+        // A slow cold start must keep showing the artwork. Removing it on a
+        // fixed timer exposed the splash background color as a blank gray page
+        // whenever WebView had not committed its first frame yet.
+        mMainHandler.postDelayed(mSplashLoadWarning, 1400L);
     }
 
     private void dismissNativeSplash() {
         if (mSplashView == null) return;
-        mMainHandler.removeCallbacks(mSplashFailSafe);
+        // Never let an early tap uncover the empty WebView surface.
+        if (!mHasVisibleWebContent) return;
+        mMainHandler.removeCallbacks(mSplashLoadWarning);
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         GomokuSplashView splash = mSplashView;
         mSplashView = null;
@@ -277,12 +287,14 @@ public class MainActivity extends Activity {
         if (mSplashView == null) return;
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         long elapsed = SystemClock.uptimeMillis() - mNativeSplashStartedAt;
-        long remaining = Math.max(0L, NATIVE_SPLASH_MIN_DURATION_MS - elapsed);
+        long minimumDuration = mSplashView.getMinimumDisplayDurationMs();
+        long remaining = Math.max(0L, minimumDuration - elapsed);
         mMainHandler.postDelayed(mSplashContentDismiss, remaining);
     }
 
     private void onWebContentVisible() {
-        // Keep the four-frame sequence visible through the first WebView draw.
+        // Keep the native island-opening sequence visible through the first WebView draw.
+        mHasVisibleWebContent = true;
         if (mSplashView != null) {
             requestNativeSplashDismiss();
         }
@@ -542,35 +554,53 @@ public class MainActivity extends Activity {
             sp.edit().putInt("last_version_code", currentCode).apply();
         }
         if (!updateDir.exists()) updateDir.mkdirs();
+        recoverInterruptedHotUpdate(updateDir);
         mLocalServer = new LocalWebServer(getAssets(), updateDir);
 
-        // 先在后台绑定本地端口，再创建 WebView；两段初始化并行，避免冷启动白屏时额外等待 500ms。
+        // 先在后台绑定本地端口。WebView 创建放到启动画首帧之后，避免其冷启动阻塞期间只露出主题底色。
         mLocalServer.startAsync();
-
-        mWebView = new WebView(this);
-        // 使用与启动窗口一致的底色，避免 WebView 冷启动期间出现突兀空白。
-        mWebView.setBackgroundColor(getResources().getColor(R.color.splash_bg));
         mRootLayout = new FrameLayout(this);
         mRootLayout.setBackgroundColor(getResources().getColor(R.color.splash_bg));
-        mRootLayout.addView(mWebView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(mRootLayout);
-        // 原生动画与 WebView 并行启动；动画不作为页面可操作性的门槛。
         showNativeSplash();
+        mMainHandler.postDelayed(mInitializeWebViewTask, 80L);
+    }
 
-        setupWebView();
-        registerNetworkMonitor();
+    private void initializeWebView() {
+        if (mDestroyed || isFinishing() || mRootLayout == null || mWebView != null) return;
+        try {
+            mWebView = new WebView(this);
+            mWebView.setBackgroundColor(getResources().getColor(R.color.splash_bg));
+            // 插入在启动画下面，首帧提交前保持原生画面可见。
+            mRootLayout.addView(mWebView, 0, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            setupWebView();
+            registerNetworkMonitor();
 
-        // WebView 初始化期间通常已经完成端口绑定；仅保留 120ms 极端兜底等待。
-        boolean serverReady = mLocalServer.awaitReady(120);
+            // WebView 初始化期间通常已经完成端口绑定；仅保留 120ms 极端兜底等待。
+            boolean serverReady = mLocalServer.awaitReady(120);
 
-        if (serverReady) {
-            mWebView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
-        } else {
-            // 极罕见情况：服务器未能及时就绪，回退到 file:// 并提示
-            android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
-            mWebView.loadUrl("file:///android_asset/index.html");
+            if (serverReady) {
+                mWebView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
+            } else {
+                android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
+                mWebView.loadUrl("file:///android_asset/index.html");
+            }
+        } catch (RuntimeException error) {
+            android.util.Log.e("MainActivity", "WebView startup failed", error);
+            if (mSplashView != null) mSplashView.showLoadingHint();
         }
+    }
+
+    private static void recoverInterruptedHotUpdate(File updateDir) {
+        File target = new File(updateDir, "index.html");
+        File backup = new File(updateDir, "index.html.bak");
+        File temp = new File(updateDir, "index.html.tmp");
+        if (!target.isFile() && backup.isFile() && backup.length() >= 50000L) {
+            backup.renameTo(target);
+        }
+        if (target.isFile() && backup.exists()) backup.delete();
+        if (temp.exists()) temp.delete();
     }
 
     @Override
@@ -926,18 +956,27 @@ public class MainActivity extends Activity {
                     if (!dir.exists()) dir.mkdirs();
                     File target = new File(dir, "index.html");
                     File temp = new File(dir, "index.html.tmp");
+                    File backup = new File(dir, "index.html.bak");
                     try (FileOutputStream fos = new FileOutputStream(temp)) {
                         fos.write(contentBytes);
                         fos.flush();
+                        fos.getFD().sync();
                     }
-                    if (target.exists() && !target.delete()) {
+                    if (backup.exists() && !backup.delete()) {
+                        temp.delete();
+                        return false;
+                    }
+                    boolean hadTarget = target.isFile();
+                    if (hadTarget && !target.renameTo(backup)) {
                         temp.delete();
                         return false;
                     }
                     if (!temp.renameTo(target)) {
+                        if (hadTarget) backup.renameTo(target);
                         temp.delete();
                         return false;
                     }
+                    if (backup.exists()) backup.delete();
                     return true;
                 } catch (Exception e) {
                     android.util.Log.e("MainActivity", "Hot update save failed: " + e.getMessage());
@@ -1729,7 +1768,8 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         mDestroyed = true;
         mActivityResumed = false;
-        mMainHandler.removeCallbacks(mSplashFailSafe);
+        mMainHandler.removeCallbacks(mInitializeWebViewTask);
+        mMainHandler.removeCallbacks(mSplashLoadWarning);
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);

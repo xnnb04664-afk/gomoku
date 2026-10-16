@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const { execSync, execFileSync } = require('child_process');
 const { loadSecretIntoEnv } = require('./local_secret_store');
 
@@ -304,6 +306,7 @@ if (fs.existsSync(appSourcePath)) {
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
+  `🎬 【主题启动】Android 启动过渡匹配晴空棋岛；云海棋台渐显，黑白棋子逐颗落位组成爱心`,
   `🔗 【联机主备】游戏数据和房间连接优先使用 ECS；Cloudflare 只在 ECS 故障时作为备用`,
   `🛠️ 【匹配修复】修正 ECS SQLite 快速匹配状态查询，避免将 waiting 误读为列名引发 HTTP 500`,
   `📦 【更新通道】依次尝试多个 GitHub 反向代理节点、ECS 更新服务，Cloudflare 仅作应急备用；下载仍校验 SHA-256 与 APK 签名`,
@@ -388,6 +391,11 @@ try {
   const explicitFiles = [
     'PROJECT_HANDOVER.md',
     'android_src/AndroidManifest.xml',
+    'android_src/assets/img/startup/sky-cloudsea-v2.webp',
+    'android_src/res/drawable/splash_heart_icon.xml',
+    'android_src/res/values/strings.xml',
+    'android_src/res/values/styles.xml',
+    'android_src/src/com/gomoku/master/GomokuSplashView.java',
     'android_src/src/com/gomoku/master/MainActivity.java',
     'backend/worker.js',
     'backend/ecs-host/README.md',
@@ -395,20 +403,31 @@ try {
     'build_official_site.js',
     'bundle_single_file.js',
     'build_apk.js',
+    'create_html_delta.js',
     'deploy_worker.js',
     'index.html',
+    'img/startup/sky-cloudsea-v2.webp',
+    'img/startup/startup-01.webp',
+    'img/startup/startup-02.webp',
+    'img/startup/startup-03.webp',
+    'img/startup/startup-04.webp',
     'js/account.js',
     'js/account.min.js',
     'js/app.js',
     'js/app.min.js',
+    'js/ecs-config.js',
     'js/online.js',
     'js/online.min.js',
+    'js/p2p-network.js',
     'js/replay.js',
     'js/replay.min.js',
     'js/sky-hub.js',
     'js/sky-island.css',
     'js/social.js',
     'js/social.min.js',
+    'js/startup-splash.css',
+    'js/startup-splash.js',
+    'js/voice.js',
     'official-site/index.html',
     'official-site/privacy/index.html',
     'official-site/site.js',
@@ -417,6 +436,9 @@ try {
     'official-site/version.json',
     'pages_build/_worker.js',
     'publish.js',
+    'tests/android_splash_smoke.py',
+    'tests/api_failover_policy_regression.js',
+    'tests/apk_asset_manifest_smoke.py',
     'tests/game_feature_panel_inspect.py',
     'tests/game_social_variants_smoke.py',
     'tests/github_update_proxy_browser_smoke.py',
@@ -427,12 +449,14 @@ try {
     'tests/online_match_race_smoke.py',
     'tests/match_queue_sqlite_regression.mjs',
     'tests/social_worker_unit.js',
+    'tests/worker_unit.js',
     'version.json',
     '五子棋.apk',
     '五子棋大师_单文件版.html'
   ];
-  const existingExplicitFiles = explicitFiles.filter(file => fs.existsSync(path.join(ROOT_DIR, file)));
-  execFileSync('git', ['add', '--', ...existingExplicitFiles], { cwd: ROOT_DIR, stdio: 'inherit' });
+  const trackedFiles = new Set(execFileSync('git', ['ls-files'], { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/));
+  const selectedExplicitFiles = explicitFiles.filter(file => fs.existsSync(path.join(ROOT_DIR, file)) || trackedFiles.has(file));
+  execFileSync('git', ['add', '--all', '--', ...selectedExplicitFiles], { cwd: ROOT_DIR, stdio: 'inherit' });
   // Generated trees are scoped to tracked files only; untracked screenshots/diagnostics stay out.
   for (const generatedPath of ['android_src/assets', 'official-site/play']) {
     const trackedGeneratedFiles = execFileSync('git', ['ls-files', '--', generatedPath], {
@@ -449,7 +473,7 @@ try {
   })
     .split(/\r?\n/).map(file => file.trim()).filter(Boolean);
   const allowedGenerated = file => file.startsWith('android_src/assets/') || file.startsWith('official-site/play/');
-  const unexpectedFiles = stagedFiles.filter(file => !existingExplicitFiles.includes(file) && !allowedGenerated(file));
+  const unexpectedFiles = stagedFiles.filter(file => !selectedExplicitFiles.includes(file) && !allowedGenerated(file));
   if (unexpectedFiles.length > 0) {
     throw new Error(`发布安全门禁拦截：发现未授权暂存文件：${unexpectedFiles.join(', ')}`);
   }
@@ -480,26 +504,69 @@ const releaseHtml = path.join(ROOT_DIR, 'gomoku.html');
 fs.copyFileSync(apkPath, releaseApk);
 fs.copyFileSync(singleHtmlPath, releaseHtml);
 
+let deltaTempDir = '';
+let deltaAssetPath = '';
+try {
+  const previousTag = execFileSync('gh', ['release', 'view', '--json', 'tagName', '--jq', '.tagName'], {
+    cwd: ROOT_DIR,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  }).trim();
+  if (previousTag && previousTag !== releaseTag) {
+    deltaTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gomoku-html-delta-'));
+    execFileSync('gh', ['release', 'download', previousTag, '--pattern', 'gomoku.html', '--dir', deltaTempDir], {
+      cwd: ROOT_DIR,
+      stdio: 'pipe'
+    });
+    const previousHtml = path.join(deltaTempDir, 'gomoku.html');
+    if (fs.existsSync(previousHtml)) {
+      const baseSha256 = crypto.createHash('sha256').update(fs.readFileSync(previousHtml)).digest('hex');
+      const candidatePath = path.join(deltaTempDir, `gomoku-html-${baseSha256}.gmd`);
+      try {
+        const summary = execFileSync(process.execPath, [path.join(ROOT_DIR, 'create_html_delta.js'), previousHtml, releaseHtml, candidatePath], {
+          cwd: ROOT_DIR,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']
+        }).trim();
+        deltaAssetPath = candidatePath;
+        console.log(`🧩 已生成按上一版精确摘要匹配的 HTML 增量包：${summary}`);
+      } catch (error) {
+        if (error.status === 2) {
+          console.log('ℹ️ 本次 HTML 变动较大，保留完整热更新，不附加增量包。');
+        } else {
+          console.warn(`⚠️ 增量包生成失败，完整 HTML 更新仍可用：${error.stderr ? error.stderr.toString().trim() : error.message}`);
+        }
+      }
+    }
+  }
+} catch (error) {
+  console.warn(`⚠️ 未能读取上一版 HTML，当前发行仍使用完整热更新：${error.stderr ? error.stderr.toString().trim() : error.message}`);
+}
+
 try {
   const releaseTitle = `五子棋 ${releaseTag} 官方正式版 (APK + 单文件HTML双发布)`;
-  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 安装包：\`gomoku.apk\` (${apkSize} MB)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (${htmlSize} KB)`;
+  const deltaNote = deltaAssetPath ? `\n- 🧩 Android 热更新增量包：\`${path.basename(deltaAssetPath)}\` (${(fs.statSync(deltaAssetPath).size / 1024).toFixed(1)} KB；仅匹配上一版 HTML 摘要的设备使用)` : '';
+  const releaseNotes = `### 🚀 五子棋 ${releaseTag} 官方全平台正式发布！\n\n${vJson.updateLog}\n\n- 📱 原生 Android 安装包：\`gomoku.apk\` (${apkSize} MB)\n- 💻 全平台浏览器单文件版：\`gomoku.html\` (${htmlSize} KB)${deltaNote}`;
   const releaseNotesPath = path.join(ROOT_DIR, `.release-notes-${releaseTag}.md`);
   fs.writeFileSync(releaseNotesPath, releaseNotes, 'utf8');
 
    const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
-   execFileSync('gh', ['release', 'create', releaseTag, 'gomoku.apk', 'gomoku.html', '--target', releaseCommit, '--title', releaseTitle, '--notes-file', releaseNotesPath], { cwd: ROOT_DIR, stdio: 'inherit' });
+   const releaseAssets = ['gomoku.apk', 'gomoku.html', ...(deltaAssetPath ? [deltaAssetPath] : [])];
+   execFileSync('gh', ['release', 'create', releaseTag, ...releaseAssets, '--target', releaseCommit, '--title', releaseTitle, '--notes-file', releaseNotesPath], { cwd: ROOT_DIR, stdio: 'inherit' });
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {
   if (!ALLOW_RELEASE_OVERWRITE) {
     throw new Error(`GitHub Release 创建失败，已禁止自动覆盖既有 Release：${err.message}。如确认需要补传，请显式追加 --allow-release-overwrite。`);
   }
   console.log('⚠️ 已显式允许覆盖，尝试补传当前 Release 资产。');
-  execFileSync('gh', ['release', 'upload', releaseTag, 'gomoku.apk', 'gomoku.html', '--clobber'], { cwd: ROOT_DIR, stdio: 'inherit' });
+  const releaseAssets = ['gomoku.apk', 'gomoku.html', ...(deltaAssetPath ? [deltaAssetPath] : [])];
+  execFileSync('gh', ['release', 'upload', releaseTag, ...releaseAssets, '--clobber'], { cwd: ROOT_DIR, stdio: 'inherit' });
 } finally {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
   const releaseNotesPath = path.join(ROOT_DIR, `.release-notes-${releaseTag}.md`);
   if (fs.existsSync(releaseNotesPath)) fs.unlinkSync(releaseNotesPath);
+  if (deltaTempDir && fs.existsSync(deltaTempDir)) fs.rmSync(deltaTempDir, { recursive: true, force: true });
 }
 
 // Cloudflare 生产部署必须显式开启，避免每次普通发版都触碰线上环境。

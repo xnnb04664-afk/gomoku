@@ -23,17 +23,20 @@ def main():
     assert "isReducedMotion" in splash
     assert "setDismissListener" in splash
     assert "onTouchEvent" in splash and "performClick" in splash
-    assert "STARTUP_FRAME_ASSETS" in splash and "loadStartupFrames" in splash
-    assert "splash_board" in colors and "splash_accent" in colors
+    assert 'img/startup/sky-cloudsea-v2.webp' in splash
+    assert 'img/game/sky-board-cloudstone.webp' in splash
+    assert "drawGridAndStones" in splash and "RadialGradient" in splash
+    assert "splash_ink" in colors and "splash_stone_dark" in colors
     assert "splash_bg" in night_colors and "splash_stone_dark" in night_colors
     assert "splash_content_description" in strings
 
     assert "showNativeSplash();" in activity
     assert "onPageCommitVisible" in activity
     assert "onWebContentVisible();" in activity
-    assert "NATIVE_SPLASH_MIN_DURATION_MS = 1200L" in activity
+    assert "getMinimumDisplayDurationMs()" in activity
+    assert "mHasVisibleWebContent" in activity
     assert "requestNativeSplashDismiss();" in activity
-    assert "postDelayed(mSplashFailSafe, 1400L)" in activity
+    assert "postDelayed(mSplashLoadWarning, 1400L)" in activity
     assert "setContentView(mRootLayout)" in activity
     # The splash must not introduce the prohibited memory/cache-clearing path.
     assert "System.gc()" not in activity

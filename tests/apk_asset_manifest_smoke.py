@@ -42,10 +42,8 @@ REQUIRED = {
     "js/sky-island.css",
     "js/startup-splash.css",
     "js/startup-splash.js",
-    "img/startup/startup-01.webp",
-    "img/startup/startup-02.webp",
-    "img/startup/startup-03.webp",
-    "img/startup/startup-04.webp",
+    "img/startup/sky-cloudsea-v2.webp",
+    "img/game/sky-board-cloudstone.webp",
 }
 
 REMOVED_THEME_ASSETS = {

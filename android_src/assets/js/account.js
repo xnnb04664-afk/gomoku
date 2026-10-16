@@ -27,9 +27,26 @@
       if (modal) modal.classList.remove('show');
     }
 
+    function getCanonicalAccountAvatar(accountIdentity, fallbackAvatar) {
+      const normalizedIdentity = String(accountIdentity || '').trim().toLowerCase();
+      if (normalizedIdentity === 'lza') return 'anime_boy';
+      if (normalizedIdentity === 'qsq') return 'anime_girl';
+      return fallbackAvatar || 'anime_boy';
+    }
+
+    function getLeaderboardAccountIdentity(item) {
+      const publicIdentity = item && (item.publicUid || item.loginAlias || item.accountAlias || item.username);
+      if (publicIdentity) return publicIdentity;
+      // UID 只用于确认当前行属于已登录本人，再读取认证态 username；不按 UID 赋性别。
+      if (item && hasRegisteredAccountSession() && currentUserUid && String(item.uid) === String(currentUserUid)) {
+        return currentUsername;
+      }
+      return '';
+    }
+
     function leaderboardNeedsBundledAvatars(list) {
       return Array.isArray(list) && list.some(item => {
-        const avatar = item && item.avatar;
+        const avatar = item && getCanonicalAccountAvatar(getLeaderboardAccountIdentity(item), item.avatar);
         return avatar === 'anime_boy' || avatar === 'anime_girl'
           || avatar === 'img/avatar_boy.png' || avatar === 'img/avatar_girl.png'
           || avatar === 'img/anime_avatar_boy.jpg' || avatar === 'img/anime_avatar_girl.jpg';
@@ -260,8 +277,8 @@
         else if (item.score >= 1200) { tierName = '妙手大师'; tierClass = 'expert'; }
         else if (item.score >= 1100) { tierName = '棋坛新秀'; tierClass = 'rising'; }
 
-        // 头像以服务端返回的账号资料为准；不要在前端按昵称识别私人账号。
-        const avatar = item.avatar || 'anime_boy';
+        // 固定头像来自服务器返回的账号身份，不看可编辑昵称，也不推断内部 UID 的性别。
+        const avatar = getCanonicalAccountAvatar(getLeaderboardAccountIdentity(item), item.avatar);
         const avatarEl = renderAvatarElement(avatar, 42);
         const wins = Math.max(0, Number(item.wins) || 0);
         const totalGames = Math.max(0, Number(item.total_games) || 0);

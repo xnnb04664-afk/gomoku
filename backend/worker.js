@@ -23,7 +23,8 @@ const MAX_LEADERBOARD_AVATAR_CHARS = 300;
 const PRIVATE_RELEASE_CACHE_TTL_MS = 30000;
 const GITHUB_REQUEST_TIMEOUT_MS = 8000;
 const MAX_JSON_BODY_BYTES = 512 * 1024;
-const MAX_UPDATE_ASSET_BYTES = 8 * 1024 * 1024;
+const MAX_UPDATE_HTML_BYTES = 20 * 1024 * 1024;
+const MAX_UPDATE_APK_BYTES = 50 * 1024 * 1024;
 const AUTH_SESSION_TTL_MS = 365 * 24 * 3600 * 1000;
 const REFRESH_TOKEN_BYTES = 32;
 
@@ -218,6 +219,14 @@ export class GomokuRoom {
       if (this.client && !this.client.closed && !this.client.sessionId) {
         // 客户端可能先于房主连入并把 join_request 放入 bootstrap 队列。
         this.client.sessionId = this.roomSessionId;
+        // Refresh the relay session cached by that already-open client before
+        // the host flushes the queued join bootstrap and starts the game.
+        this._send(this.client, {
+          type: 'relay_ready',
+          role: 'client',
+          room: this.roomCode,
+          sessionId: this.roomSessionId
+        });
       }
     } else {
       if (this.client) {
@@ -281,7 +290,12 @@ export class GomokuRoom {
     if (this.host === connection) this.host = null;
     if (this.client === connection) this.client = null;
     const peer = connection.role === 'host' ? this.client : this.host;
-    this._send(peer, { type: 'relay_peer_left', role: connection.role });
+    this._send(peer, {
+      type: 'relay_peer_left',
+      role: connection.role,
+      intentional: Boolean(connection.intentionalLeave),
+      sessionId: connection.sessionId || this.roomSessionId
+    });
   }
 
   _consumeBudget(connection) {
@@ -367,6 +381,11 @@ export class GomokuRoom {
     if (!this._topicDirectionAllowed(connection, topic, payloadObject)) return;
 
     const forwarded = this._forward(connection, topic, payload);
+    if (forwarded && payloadObject.type === 'leave_room') {
+      // Forward the normal room message first. If the sender closes immediately,
+      // _onClose emits a single session-bound intentional marker as a fallback.
+      connection.intentionalLeave = true;
+    }
     if (!forwarded && connection.role === 'client' && topic === `gomoku/v3/${this.roomCode}/c2h` &&
         payloadObject.type === 'join_request') {
       this.pendingBootstrap.push({ topic, payload });
@@ -1420,7 +1439,8 @@ export default {
         return json({ code: 502, msg: `更新文件读取失败：${selected.error}` }, 502);
       }
       const declaredAssetSize = Number(assetResponse.headers.get('content-length') || 0);
-      if (Number.isFinite(declaredAssetSize) && declaredAssetSize > MAX_UPDATE_ASSET_BYTES) {
+      const maxAssetBytes = assetType === 'apk' ? MAX_UPDATE_APK_BYTES : MAX_UPDATE_HTML_BYTES;
+      if (Number.isFinite(declaredAssetSize) && declaredAssetSize > maxAssetBytes) {
         return json({ code: 413, msg: '更新文件超过允许大小' }, 413);
       }
 
@@ -1606,6 +1626,18 @@ export default {
     const privateGameMode = () => String(env.PRIVATE_GAME_MODE || '1').trim() !== '0';
     const isPrivateGameUsername = username => privateGameConfigured && PRIVATE_GAME_ALLOWED_USERNAMES.includes(String(username || '').trim().toLowerCase());
     const isAllowedPrivateGameUser = user => !privateGameMode() || isPrivateGameUsername(user?.username);
+    const publicUidForAccount = username => {
+      if (!privateGameMode() || !isPrivateGameUsername(username)) return '';
+      const index = PRIVATE_GAME_ALLOWED_USERNAMES.indexOf(String(username || '').trim().toLowerCase());
+      return index === 0 ? 'lza' : (index === 1 ? 'qsq' : '');
+    };
+    const privateUsernameForPublicUid = value => {
+      if (!privateGameMode() || !privateGameConfigured) return '';
+      const publicUid = String(value || '').normalize('NFKC').trim().toLowerCase();
+      if (publicUid === 'lza') return PRIVATE_GAME_ALLOWED_USERNAMES[0];
+      if (publicUid === 'qsq') return PRIVATE_GAME_ALLOWED_USERNAMES[1];
+      return '';
+    };
     // 私人游戏的账号头像按 PRIVATE_GAME_USERNAMES 配置顺序固定：第一个男生，第二个女生。
     // 头像值以账号名为准，避免旧设备资料或资料编辑把固定情侣头像互相覆盖。
     const avatarForAccount = (username, avatar) => {
@@ -2261,14 +2293,19 @@ export default {
       if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(uid, 'search', 30, 3600000, 120)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
       const username = String(url.searchParams.get('username') || '').trim();
-      // 不静默截断搜索词：否则超长输入可能被截断成另一个真实账号，
-      // 也会让客户端误以为支持模糊/前缀搜索。注册账号上限为 32 字符，
-      // 搜索必须使用完整、大小写敏感的账号名。
+      // 不静默截断搜索词：否则超长输入可能被截断成另一个真实账号。
+      // 原账号名仍按完整名称匹配；公开短 ID 由服务端做 NFKC 与大小写归一化。
       if (!username || username.length > 32) return json({ code: 400, msg: '请输入完整账号名（最多 32 个字符）' }, 400);
-      const target = await env.DB.prepare(`
-        SELECT uid, username, nickname, avatar, score FROM users
-        WHERE username = ? AND username IS NOT NULL AND username != ''
-      `).bind(username).first();
+      const aliasTarget = privateUsernameForPublicUid(username);
+      const target = aliasTarget
+        ? await env.DB.prepare(`
+          SELECT uid, username, nickname, avatar, score FROM users
+          WHERE LOWER(username) = ? AND username IS NOT NULL AND username != ''
+        `).bind(aliasTarget).first()
+        : await env.DB.prepare(`
+          SELECT uid, username, nickname, avatar, score FROM users
+          WHERE username = ? AND username IS NOT NULL AND username != ''
+        `).bind(username).first();
       if (!target || (privateGameMode() && !isPrivateGameUsername(target.username)) || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) {
         return json({ code: 404, msg: '未找到可添加的账号' }, 404);
       }
@@ -2282,6 +2319,7 @@ export default {
       return json({ code: 0, data: {
         uid: target.uid,
         username: target.username,
+        publicUid: publicUidForAccount(target.username),
         nickname: sanitizeText(target.nickname || target.username, 16),
         avatar: compactAvatarForAccount(target.username, target.avatar),
         score: Number(target.score) || 1000,
@@ -2378,7 +2416,10 @@ export default {
       const uid = String(auth.user.uid);
       if (!consumeSocialRequestRate(uid, 'friend-request', 20, 86400000, 100)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
       const targetUsername = String(body.targetUsername || '').trim().slice(0, 32);
-      const target = await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
+      const aliasTarget = privateUsernameForPublicUid(targetUsername);
+      const target = aliasTarget
+        ? await env.DB.prepare(`SELECT uid, username FROM users WHERE LOWER(username) = ? AND username IS NOT NULL AND username != ''`).bind(aliasTarget).first()
+        : await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
       if (!target || (privateGameMode() && !isPrivateGameUsername(target.username)) || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) return json({ code: 404, msg: '未找到可添加的账号' }, 404);
       if (await areFriends(uid, target.uid)) return json({ code: 409, msg: '你们已经是好友' }, 409);
       if (await friendCount(uid) >= SOCIAL_MAX_FRIENDS || await friendCount(target.uid) >= SOCIAL_MAX_FRIENDS) return json({ code: 409, msg: '好友数量已达上限' }, 409);
@@ -3409,7 +3450,8 @@ async function allocateNextAvailableUid(env) {
                   uid: current.uid,
                   username: current.username,
                   nickname: current.nickname,
-                avatar: avatarForAccount(current.username, current.avatar),
+                  publicUid: publicUidForAccount(current.username),
+                  avatar: avatarForAccount(current.username, current.avatar),
                   score: current.score,
                   wins: current.wins,
                   total_games: current.total_games,
@@ -3426,6 +3468,7 @@ async function allocateNextAvailableUid(env) {
                 uid: user.uid,
                 username: user.username,
                 nickname: user.nickname,
+                publicUid: publicUidForAccount(user.username),
                 avatar: avatarForAccount(user.username, user.avatar),
                 score: user.score,
                 wins: user.wins,
@@ -3452,6 +3495,7 @@ async function allocateNextAvailableUid(env) {
               uid: user.uid,
               username: null,
               nickname: user.nickname,
+              publicUid: '',
               avatar: avatarForAccount(user.username, user.avatar),
               score: user.score,
               wins: user.wins,
@@ -3519,6 +3563,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -3546,7 +3591,10 @@ async function allocateNextAvailableUid(env) {
         const now = Date.now();
         const loginName = username.trim();
         const normalizedLoginName = loginName.toLowerCase();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE (LOWER(username) = ? OR uid = ? OR nickname = ?)').bind(normalizedLoginName, loginName, loginName).first();
+        const aliasTarget = privateUsernameForPublicUid(loginName);
+        const user = aliasTarget
+          ? await env.DB.prepare('SELECT * FROM users WHERE LOWER(username) = ?').bind(aliasTarget).first()
+          : await env.DB.prepare('SELECT * FROM users WHERE (LOWER(username) = ? OR uid = ? OR nickname = ?)').bind(normalizedLoginName, loginName, loginName).first();
         if (!user) {
           return json({ code: 1, msg: '账号或密码不正确' });
         }
@@ -3584,6 +3632,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -3671,6 +3720,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -3692,7 +3742,11 @@ async function allocateNextAvailableUid(env) {
         const { username } = await readJsonBody(request);
         if (!username) return json({ code: 1, msg: '请输入要找回的账号' });
 
-        const user = await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
+        const resetLookup = String(username).trim();
+        const resetAliasTarget = privateUsernameForPublicUid(resetLookup);
+        const user = resetAliasTarget
+          ? await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE LOWER(username) = ?').bind(resetAliasTarget).first()
+          : await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE (username = ? OR uid = ?)').bind(resetLookup, resetLookup).first();
         if (!user) {
           return json({ code: 1, msg: '该账号不存在' });
         }
@@ -3727,7 +3781,11 @@ async function allocateNextAvailableUid(env) {
         }
 
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
+        const resetLookup = String(username).trim();
+        const resetAliasTarget = privateUsernameForPublicUid(resetLookup);
+        const user = resetAliasTarget
+          ? await env.DB.prepare('SELECT * FROM users WHERE LOWER(username) = ?').bind(resetAliasTarget).first()
+          : await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(resetLookup, resetLookup).first();
         if (!user) return json({ code: 1, msg: '账号不存在' });
         if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
@@ -3771,6 +3829,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -4191,7 +4250,9 @@ async function allocateNextAvailableUid(env) {
       if (!leaderboardQueryPromise) {
         leaderboardQueryPromise = (async () => {
           const { results } = await env.DB.prepare(`
-            SELECT uid, nickname AS name,
+            SELECT uid,
+                   CASE WHEN username = ? THEN 'lza' WHEN username = ? THEN 'qsq' ELSE '' END AS publicUid,
+                   nickname AS name,
                    CASE
                      WHEN username = ? THEN 'anime_boy'
                      WHEN username = ? THEN 'anime_girl'
@@ -4204,7 +4265,11 @@ async function allocateNextAvailableUid(env) {
             WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL ${privateRankFilter}
             ORDER BY score DESC, wins DESC, uid ASC
             LIMIT 30
-          `).bind(PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1], ...privateRankBindings).all();
+          `).bind(
+            PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1],
+            PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1],
+            ...privateRankBindings
+          ).all();
           const data = Array.isArray(results) ? results : [];
           cachedLeaderboard = data;
           lastLeaderboardTime = Date.now();

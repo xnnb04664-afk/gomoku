@@ -22,8 +22,7 @@ if (fs.existsSync(backendConfigPath)) {
 }
 // 单文件版会把 app.min.js 内联，不能留下指向不存在外部资源的 preload。
 html = html.replace(/\s*<link rel="preload" href="js\/app\.min\.js" as="script">/i, '');
-// 单文件版内联启动页样式、脚本和四张帧图，保持离线开屏完整。
-html = html.replace(/\s*<link rel="preload" href="img\/startup\/startup-01\.webp"[^>]*>/i, '');
+// 单文件版内联启动页样式、脚本和开场背景/棋台，保持离线开屏完整。
 const startupCssPath = path.join(ROOT_DIR, 'js', 'startup-splash.css');
 const startupJsPath = path.join(ROOT_DIR, 'js', 'startup-splash.js');
 if (fs.existsSync(startupCssPath)) {
@@ -51,16 +50,12 @@ if (fs.existsSync(startupJsPath)) {
   );
 }
 [
-  'startup-01.webp',
-  'startup-02.webp',
-  'startup-03.webp',
-  'startup-04.webp'
-].forEach(fileName => {
-  const source = 'img/startup/' + fileName;
-  const filePath = path.join(ROOT_DIR, 'img', 'startup', fileName);
-  if (!fs.existsSync(filePath)) throw new Error('缺少启动动画资源：' + filePath);
-  const dataUrl = 'data:image/webp;base64,' + fs.readFileSync(filePath).toString('base64');
-  html = html.split(source).join(dataUrl);
+  { source: 'img/startup/sky-cloudsea-v2.webp', filePath: path.join(ROOT_DIR, 'img', 'startup', 'sky-cloudsea-v2.webp') },
+  { source: 'img/game/sky-board-cloudstone.webp', filePath: path.join(ROOT_DIR, 'img', 'game', 'sky-board-cloudstone.webp') }
+].forEach(asset => {
+  if (!fs.existsSync(asset.filePath)) throw new Error('缺少启动动画资源：' + asset.filePath);
+  const dataUrl = 'data:image/webp;base64,' + fs.readFileSync(asset.filePath).toString('base64');
+  html = html.split(asset.source).join(dataUrl);
 });
 
 console.log('>>> [2/3] 准备可按需载入的联机、音频与头像资源...');

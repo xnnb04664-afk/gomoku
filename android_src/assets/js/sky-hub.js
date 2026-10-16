@@ -45,6 +45,7 @@
       else button.removeAttribute('aria-current');
     });
     if (lobby) lobby.dataset.activePage = next;
+    refreshCurrentGameEntry();
     const pages = document.getElementById('skyLobbyPages');
     if (pages) pages.scrollTop = 0;
     if (next === 'records') {
@@ -118,6 +119,33 @@
   }
   window.refreshSkyProfileCard = refreshProfileCard;
 
+  function refreshCurrentGameEntry() {
+    const card = document.getElementById('skyCurrentGame');
+    if (!card) return false;
+    let summary = null;
+    try { summary = window.getCurrentGameSummary?.() || null; } catch (_) {}
+    if (!summary || !['ai', 'pvp', 'online'].includes(summary.gameMode)) {
+      card.hidden = true;
+      return false;
+    }
+    const mode = summary.gameMode === 'online' ? '联机对局'
+      : summary.gameMode === 'pvp' ? '双人同屏' : 'AI 对战';
+    const title = document.getElementById('skyCurrentGameTitle');
+    const detail = document.getElementById('skyCurrentGameDetail');
+    if (title) title.textContent = Number(summary.moveCount) > 0
+      ? `${mode} · 已走 ${Number(summary.moveCount)} 手` : `${mode} · 等待恢复`;
+    if (detail) detail.textContent = summary.gameMode === 'online'
+      ? '棋盘进度已保存在本设备，继续时尝试重新连接房间'
+      : '本账号的对局进度已保存在此设备';
+    const resume = card.querySelector('[data-sky-action="resume-game"]');
+    if (resume) resume.innerHTML = summary.gameMode === 'online'
+      ? '恢复联机 <b aria-hidden="true">→</b>'
+      : '继续对局 <b aria-hidden="true">→</b>';
+    card.hidden = false;
+    return true;
+  }
+  window.refreshSkyCurrentGameEntry = refreshCurrentGameEntry;
+
   function lobbyMarkup() {
     return `
       <header class="sky-lobby-top">
@@ -136,6 +164,11 @@
             <div class="sky-board-halo" aria-hidden="true"></div>
             <canvas class="sky-preview-board" id="skyHomeBoardPreview" width="380" height="380" role="img" aria-label="天空棋台预览，使用与实际对局相同的草坪棋盘和黑白棋石">标准五子棋棋盘预览</canvas>
           </div>
+          <article class="sky-current-game" id="skyCurrentGame" aria-label="继续进行中的对局" hidden>
+            <span class="sky-current-game-mark" aria-hidden="true">↻</span>
+            <span class="sky-current-game-copy"><small>进行中的对局</small><strong id="skyCurrentGameTitle">AI 对战</strong><span id="skyCurrentGameDetail">本账号的对局进度已保存在此设备</span></span>
+            <button type="button" data-sky-action="resume-game">继续对局 <b aria-hidden="true">→</b></button>
+          </article>
           <aside class="sky-route-list" aria-label="对局入口">
             <button class="sky-route-button" type="button" data-sky-action="ai">
               <span class="sky-route-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><path d="M12 1.5v3M22.5 12h-3M12 22.5v-3M1.5 12h3"/></svg></span><span><strong>AI 对战</strong><small>离线也能随时开局</small></span><span class="sky-route-arrow">↗</span>
@@ -361,6 +394,7 @@
     document.body.classList.remove('sky-game-open');
     document.body.classList.add('sky-lobby-open');
     if (lobby) lobby.hidden = false;
+    refreshCurrentGameEntry();
   }
 
   function enterStandardMode(mode) {
@@ -391,6 +425,10 @@
     else if (action === 'create-room') runSheetAction('online');
     else if (action === 'join-room') runSheetAction('join');
     else if (action === 'match') runSheetAction('match');
+    else if (action === 'resume-game') {
+      closeSheet();
+      if (!safeCall('resumeSavedGame')) refreshCurrentGameEntry();
+    }
     else if (action === 'world-chat') {
       closeSheet();
       const openWorldChat = window.GomokuWorldChat?.open;

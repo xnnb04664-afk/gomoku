@@ -42,7 +42,7 @@ node server.js
 
 | 路径 | 用途 |
 | --- | --- |
-| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供四帧启动画面，img/game/sky-island-match-background.png 提供对局云海背景 |
+| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供“棋岛苏醒”启动底图，网页与 Android 在实际棋台上绘制网格和落子，img/game/sky-island-match-background.png 提供对局云海背景 |
 | backend/worker.js | Cloudflare API、账号/社交/聊天、房间路由及 Durable Object 实现 |
 | backend/ecs-host/ | 在 Node ECS 上运行同一 Worker 的 SQLite、WebSocket 与内存 Durable Object 适配层 |
 | js/ecs-config.js | ECS 公共 API 地址；需随网页、单文件和 Android 构建同步 |
@@ -76,6 +76,17 @@ node server.js
 - ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。当前 `/healthz` 只检查 SQLite，不能证明公网 WebSocket 升级链路正常；发布验收还需独立连通实际房间中继。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
 - Cloudflare D1 与 ECS SQLite 相互独立。当前客户端不会把游戏 API 请求自动切到 Cloudflare；不要据此假定两边数据会自动同步。
 - 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新检查优先读取多个 GitHub 反向代理节点的公开 Release，下载失败后再走 ECS 短时票据更新服务，Cloudflare Pages/Worker 只作为最后应急出口。APK/HTML 下载按 Release SHA-256 校验；Android 还核对原签名证书。
+- Android 网页热更新先尝试按本机当前生效 HTML 的 SHA-256 精确匹配 GitHub HTML 增量包；网页端校验补丁 SHA、基线 SHA、生成文件 SHA 和启动引导，原生桥只负责写入已验证的完整 HTML。设备不支持 `DecompressionStream`、基线不匹配或补丁失败时回退完整 HTML，最后再走完整 APK 安装。增量包只覆盖单文件 HTML 热更新，APK 本身仍为完整包。旧客户端首次升级到带增量能力的网页时仍需完整 HTML 一次；之后无需先装新 APK，发布脚本会按上一版 GitHub HTML 自动生成补丁，补丁过大或基线不可取时跳过。
+- ECS/Cloudflare 的票据式完整 HTML 回退上限为 20 MiB，APK 上限为 50 MiB。生产单文件 HTML 约 12 MiB，不能再用 8 MiB 限额，否则 GitHub 多代理全部不可用时 ECS 完整热更新会返回 413。
+
+### ECS WebRTC STUN/TURN
+
+- 在线对局的 ICE 配置由 `js/online.js` 从 ECS `/api/rtc/ice-servers` 获取；公网路径为 `/gomoku-api/api/rtc/ice-servers`。服务端签发短时 TURN 凭据，客户端只在内存中缓存，不写入房间消息、URL、源码或日志。ICE 获取失败时只回退到 ECS 自有 STUN；不使用 Cloudflare、QQ 或 Syncthing 的 STUN/TURN 服务。`js/voice.js` 与保留兼容的 `js/p2p-network.js` 也使用 ECS ICE 地址。
+- WebRTC 会尝试建立客户端直连；网络不允许直连时可通过 ECS TURN 中继。ECS WebSocket 房间中继仍负责信令和可靠兜底，因此 ICE/TURN 不可用时不应被描述为“房间服务整体不可用”。
+- Coturn、TURN 凭据签发服务及端口范围、配置文件和受限备份记录见本机私有运维文档 `D:\服务器\游戏ECS-TURN说明.md`。密钥、真实运行配置和生产备份不得复制到仓库或公开文档。
+- 2026-10-16 已验证 ECS ICE 接口返回 ECS STUN 和 UDP/TCP TURN 配置、预检响应及 ECS 本机 STUN 映射；当前电脑到 ECS 的 TCP STUN Binding 成功。当前电脑的公网 UDP 探测未到达 ECS 网卡，尚未完成两台外部设备的 TURN 数据中继验收，因此不能据此确认所有网络下 P2P/TURN 已通。
+- 客户端源文件和 Android 资源副本已改为 ECS ICE；本次未构建、发布或安装客户端。已安装旧版本可能仍使用旧 ICE 配置，需升级后才会应用此次客户端改动。
+
 ## 账号访问边界
 
 - 生产环境启用 `PRIVATE_GAME_MODE=1`，允许名单只从 ECS 运行时环境变量 `PRIVATE_GAME_USERNAMES` 读取；缺失时 fail closed。账号名不得写入源码、文档、测试样例或 GitHub。
@@ -135,7 +146,7 @@ npm run build:official-site
 
 - build:app 使用 Terser 生成压缩 JS；build_apk.js 自身也会执行 build:app 并同步 android_src/assets。
 - node build_apk.js --sync-only 只同步资源，不会生成 APK。
-- 单文件版和 Android 入口共用 img/startup/ 四帧开屏；网页可跳过动画，Android 原生开屏最短展示 1.2 秒后随页面首绘关闭。
+- 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格和黑白棋子逐步摆成爱心。网页尊重减少动态效果设置并可轻触继续；Android 12+ 系统启动主题使用匹配的云海浅色与爱心棋子图标，原生 Canvas 动画约 3.6 秒后才允许随网页首绘关闭。慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
 - APK 构建机需要 JDK（当前已验证 JDK 17）、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。
 - 更新游戏版号时同步 version.json、AndroidManifest.xml 和 JS 当前版本。node publish.js --help 会显示说明；该脚本会构建、改版本、提交并推送，还会创建或上传 GitHub Release。只有用户明确要求正式发版时才运行。
 - official-site/play/ 是忽略的构建产物，不要手改或强行纳入 Git。构建后再部署。
@@ -205,3 +216,14 @@ adb install .\五子棋.apk
 - AI 对手使用 `img/game/ai-opponent-avatars.webp` 的原创灵兽头像；对局与棋谱共用映射，旧 AI 棋谱若保存了玩家头像路径则换用 AI 头像。单文件版内嵌图集，APK 清单显式包含图集。
 - 2026-10-16 复盘修复：从结算页进入逐手回放，退出时恢复终局状态；复盘不绘制终局五连光效、技能提示标记和临时 VFX。星轨按真实落子与技能记录生成可点击节点；不伪造“转折手/失误手”。切换人机的提示使用当前 AI 灵兽头像。
 - APK 正式签名、版本和 MuMu 安装状态需每次现场复核；上次构建/安装记录不能代替本轮设备验收。
+
+## 2026-10-16 资料、离房与棋局恢复修复候选
+
+当前本地源码和构建产物为 `v1.0.133`（Android `versionCode=134`）。此版本已构建并完成 APK 签名验证；尚未推送 GitHub、发布 Release、部署 ECS，也未安装到 MuMu/真机。不要据此宣称线上或设备验收已完成。
+
+- **公开登录 ID 与固定头像：**后端按运行时 `PRIVATE_GAME_USERNAMES` 顺序映射公开 ID：第一个允许账号对应 `lza` 和男头像，第二个对应 `qsq` 和女头像。别名登录不区分大小写，也可用于好友查找/申请与密码找回；认证资料返回公开 ID 后，客户端锁定对应头像。数据库数字 UID 仍作为好友、房间、棋谱及统计关系键，不迁移主键。部署前需核对 ECS 私密运行配置顺序与预期账号对应关系；不要把真实账号名写入源码、文档、测试样例或 GitHub。
+- **资料离线保存：**服务器请求失败时昵称/头像只保存在本机；提示要求联网后重新打开资料页并再次保存，不承诺自动同步。云端资料是否成功以接口响应为准。
+- **主动离房通知：**`backend/worker.js` 是 ECS 使用的 Worker 源码，`pages_build/_worker.js` 是 Cloudflare 备用副本。离房消息由当前房间会话转发，WebSocket 关闭时发送带会话 ID 的主动离房标记；客户端校验角色与会话后直接通知对局层，避免投递到旧版 v3 临时订阅。客户端先于房主连接时，服务端会在会话号就绪后补发 `relay_ready`。这些更改只有部署 Worker 并升级客户端后才会影响线上房间。
+- **进行中棋局：**AI/双人同屏棋局按账号 UID 写入本地 `localStorage` 检查点；首页有“进行中的对局”卡片，可恢复棋盘、落子历史、回合及已用卡牌。联机对局快照按账号保存在本机，杀后台后保留到主动离房或棋局结束，不因保存时间过长自动清除；恢复时还原本地棋盘并尝试重连 ECS 房间。ECS 房间状态当前由单个 Node 进程内存承载，进程重启后本机棋盘仍可查看/恢复，但不能保证重连到原对手或继续同步。
+- **本地构建证据：**本轮执行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js`、`npm run build:official-site`；APK 使用仓库外既有正式签名密钥构建，`apksigner verify` 通过。执行了相关 JS 语法检查和 `git diff --check`，未运行测试套件；未做 MuMu/ADB、生产真账号、ECS 健康检查或 WebSocket 端到端验收。
+- **发布前工作：**先确认 ECS 的 `PRIVATE_GAME_USERNAMES` 顺序，再备份 ECS SQLite、运行配置与当前 Worker；发布 Worker 和新客户端后核对 `/healthz`、真实房间 WebSocket/双方离房、`lza/qsq` 登录及头像、资料更新和本地棋局恢复。不要用 APK 构建成功替代服务器或真机验收；Cloudflare 继续仅作为应急备用，不迁移或写入其数据库。
