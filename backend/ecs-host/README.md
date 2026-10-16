@@ -39,9 +39,10 @@ When enabled, `PRIVATE_GAME_USERNAMES` must contain the permitted usernames as a
 comma-separated runtime value. If it is missing or empty, account-backed game
 access fails closed. Keep this private value in the ECS environment/drop-in;
 never commit it to this repository.
-Secret values must not be
-placed in this directory or printed in deployment logs. Update downloads need
-the private-release credential; TURN credentials are optional; payment mode
+Secret values must not be placed in this directory or printed in deployment
+logs. GitHub Release metadata and assets are public and can be read without a
+repository token; ECS must have a persistent `UPDATE_TICKET_SECRET` to issue
+short-lived download tickets. TURN credentials are optional; payment mode
 defaults to disabled.
 
 The Worker has a fixed browser-origin allowlist. To serve the game from another

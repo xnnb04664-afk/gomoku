@@ -300,10 +300,13 @@ if (fs.existsSync(appSourcePath)) {
   fs.writeFileSync(appSourcePath, appSource, 'utf8');
 }
 
-// 同步更新 version.json（兼容旧客户端；新客户端统一走 Cloudflare Worker 中转）
+// 同步更新 version.json（兼容旧客户端；新客户端依次尝试 GitHub 代理、ECS 与 Cloudflare 应急备用）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
+  `🔗 【联机主备】游戏数据和房间连接优先使用 ECS；Cloudflare 只在 ECS 故障时作为备用`,
+  `🛠️ 【匹配修复】修正 ECS SQLite 快速匹配状态查询，避免将 waiting 误读为列名引发 HTTP 500`,
+  `📦 【更新通道】依次尝试多个 GitHub 反向代理节点、ECS 更新服务，Cloudflare 仅作应急备用；下载仍校验 SHA-256 与 APK 签名`,
   `🔔 【更新反馈】点击检查更新后立即显示检查中状态、进度与按钮反馈`,
   `⚡ 【匹配稳定性】等待中的匹配定时续接，降低并发匹配漏配；进房时校验房间状态，避免误进过期棋盘`,
   `💬 【好友与私聊】邀请、私聊刷新和复制房间号增加即时反馈，社交数据读取统一使用 ECS 主库`,
@@ -322,10 +325,10 @@ const vJson = {
   publishTime: todayStr,
   updateLog: releaseUpdateLog,
   notes: releaseUpdateLog,
-  updateTransport: 'cloudflare-ticket-protected'
+  updateTransport: 'github-proxies-then-ecs-then-cloudflare-emergency'
 };
 fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
-console.log('📌 已同步更新 version.json (短时票据保护更新通道)');
+console.log('📌 已同步更新 version.json (GitHub 多节点优先，ECS 与 Cloudflare 票据备用)');
 
 // 官网游戏页与版本回退文本必须和本次客户端发布保持一致；这里只生成仓库产物，
 // 是否部署 Cloudflare 仍由显式 --deploy-cloudflare 选项控制。
@@ -385,7 +388,10 @@ try {
   const explicitFiles = [
     'PROJECT_HANDOVER.md',
     'android_src/AndroidManifest.xml',
+    'android_src/src/com/gomoku/master/MainActivity.java',
     'backend/worker.js',
+    'backend/ecs-host/README.md',
+    'backend/ecs-host/server.mjs',
     'build_official_site.js',
     'bundle_single_file.js',
     'build_apk.js',
@@ -413,10 +419,14 @@ try {
     'publish.js',
     'tests/game_feature_panel_inspect.py',
     'tests/game_social_variants_smoke.py',
+    'tests/github_update_proxy_browser_smoke.py',
     'tests/official_site_live_audit.py',
     'tests/official_site_smoke.py',
     'tests/official_site_worker_smoke.py',
     'tests/online_reconnect_smoke.py',
+    'tests/online_match_race_smoke.py',
+    'tests/match_queue_sqlite_regression.mjs',
+    'tests/social_worker_unit.js',
     'version.json',
     '五子棋.apk',
     '五子棋大师_单文件版.html'
@@ -513,5 +523,5 @@ if (SHOULD_DEPLOY_CLOUDFLARE) {
 
 console.log('======================================================');
 console.log(`✨ 全部发布流程圆满成功！版本: v${newName}`);
-console.log('🔒 更新产物仅通过 Cloudflare 短时票据通道提供，不输出可复用下载地址');
+console.log('🔒 更新顺序：GitHub 多反向代理节点 → ECS 短时票据 → Cloudflare 应急备用；APK 下载校验哈希与签名');
 console.log('======================================================');
