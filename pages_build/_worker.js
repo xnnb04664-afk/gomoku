@@ -1374,19 +1374,50 @@ export default {
       }
     };
 
+    const fetchReleaseAsset = async (assetUrl, sourceLabel, init, timeoutMs) => {
+      try {
+        const response = await fetchWithTimeout(assetUrl, init, timeoutMs);
+        if (response.ok && response.body) return { response, sourceLabel, error: '' };
+        const status = Number(response.status) || 0;
+        try { await response.body?.cancel(); } catch (_) {}
+        return { response: null, sourceLabel, error: `HTTP ${status || '无响应'}` };
+      } catch (error) {
+        const isTimeout = error?.name === 'AbortError' || error?.name === 'TimeoutError';
+        return { response: null, sourceLabel, error: isTimeout ? '请求超时' : '网络连接失败' };
+      }
+    };
+
     const streamPrivateReleaseAsset = async (assetType, ticketPayload = null) => {
       const result = await getPrivateReleaseAsset(assetType);
       if (result.error) return json({ code: 503, msg: result.error }, 503);
       const releaseTag = String(result.release?.tag_name || '').trim();
+      if (!/^v\d+\.\d+\.\d+$/.test(releaseTag)) {
+        return json({ code: 502, msg: 'GitHub Release 版本号无效，暂不能下载更新' }, 502);
+      }
       if (ticketPayload && ticketPayload.release !== releaseTag) {
         return json({ code: 401, msg: '更新票据已过期，请重新检查更新' }, 401);
       }
 
-      const assetResponse = await fetchWithTimeout(result.asset.url, {
-        headers: githubHeaders(result.token, 'application/octet-stream')
-      }, 20000);
-      if (!assetResponse.ok || !assetResponse.body) {
-        return json({ code: 502, msg: `更新文件读取失败 (${assetResponse.status})` }, 502);
+      const assetName = assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html';
+      const mirrorUrl = `https://gh-proxy.com/https://github.com/${UPDATE_REPOSITORY}/releases/download/${releaseTag}/${assetName}`;
+      const mirror = await fetchReleaseAsset(mirrorUrl, 'GitHub 代理', {
+        headers: { 'User-Agent': 'gomoku-update-proxy' }
+      }, 12000);
+      let selected = mirror;
+      if (!selected.response) {
+        const official = await fetchReleaseAsset(result.asset.url, 'GitHub 官方源', {
+          headers: githubHeaders(result.token, 'application/octet-stream')
+        }, 20000);
+        selected = official.response ? official : {
+          response: null,
+          sourceLabel: '',
+          error: `GitHub 代理 ${mirror.error}；GitHub 官方源 ${official.error}`
+        };
+      }
+      const assetResponse = selected.response;
+      if (!assetResponse) {
+        console.warn(`[update proxy] ${assetType} download sources failed: ${selected.error}`);
+        return json({ code: 502, msg: `更新文件读取失败：${selected.error}` }, 502);
       }
       const declaredAssetSize = Number(assetResponse.headers.get('content-length') || 0);
       if (Number.isFinite(declaredAssetSize) && declaredAssetSize > MAX_UPDATE_ASSET_BYTES) {
@@ -1397,6 +1428,7 @@ export default {
       headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       headers.set('Content-Type', assetType === 'apk' ? 'application/vnd.android.package-archive' : 'text/html; charset=utf-8');
       headers.set('Content-Disposition', `attachment; filename="${assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html'}"`);
+      headers.set('X-Gomoku-Update-Source', selected.sourceLabel);
       const contentLength = assetResponse.headers.get('content-length');
       if (contentLength) headers.set('Content-Length', contentLength);
       return new Response(assetResponse.body, { status: 200, headers });
