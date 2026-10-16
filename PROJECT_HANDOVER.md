@@ -198,7 +198,7 @@ adb install .\五子棋.apk
 线上服务状态会随部署和配置变化。每次更新都要从服务器读取当前服务与反向代理配置、先完成受限备份，再用健康检查和 SQLite 完整性检查验收。数据库内容、账号统计、主机地址、备份路径和密钥不应复制到公开文档或 GitHub。源码或构建成功不等于 ECS 已更新，也不等于真实客户端验收通过。
 ## Git 与提交边界
 
-当前已发布业务基线是 master 上的 `4d813238`（v1.0.136 / Android Build 137）。本次交接文档和 ECS 服务模板的发布后更正应单独提交，不要混入其他工作区文件。
+当前已发布业务基线是 master 上的 `89323163`（v1.0.137 / Android Build 138）。交接文档修订应单独提交；生产私有配置和账号数据不得进入仓库。
 
 提交前运行 git diff --check、git status --short、git diff -- PROJECT_HANDOVER.md。只按文件名暂存，例如 git add -- PROJECT_HANDOVER.md。需要推送或部署时先核实目标分支和项目；正式发版、Cloudflare Worker/Pages 或生产 D1 的改动应处于用户明确授权范围内。
 
@@ -237,7 +237,7 @@ adb install .\五子棋.apk
 
 - Android WebView 的账号凭证保存在应用本机 `localStorage`，并由原生 `SharedPreferences` 保存一份恢复副本；登录不依赖 Cookie。`gomoku_user_auth_updated_at` 与原生 `authUpdatedAt` 记录凭证更新时间。启动时若 WebView 来源变化（例如本地服务端口切换）留下了完整但较旧的凭证，会恢复更新时间较新的原生会话；主动退出同步清除该时间戳。
 - 本次只改客户端登录恢复与版本信息；不包含 `auth_sessions` 多设备会话服务端实验，也未部署 ECS 或 Cloudflare。该服务端候选仍需修复旧令牌重复迁移、并发验证轮换与单设备注销，再通过隔离 SQLite/D1 验证后才可部署。
-- APK 构建版本为 `1.0.135` / `versionCode=136`；正式签名验证通过 v1、v2、v3，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5`，与 v1.0.134 安装包一致。签名构建本身不代表真机或 MuMu 安装验收。
+- APK 构建版本为 `1.0.135` / `versionCode=136`；正式签名验证通过 v1、v2、v3，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，与 v1.0.134 安装包一致。签名构建本身不代表真机或 MuMu 安装验收。
 - **发布核验：**GitHub Release `v1.0.135` 已发布，源提交为 `ad878921b9cab28191a21622c206cb8299439067`。APK SHA-256 为 `7da8716a87743a04b2d766c20fe4c9c9f0d4bbb170c1908b9fde28375ed93289`，单文件 HTML SHA-256 为 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`，增量包 328,511 bytes。ECS `/api/version` 已返回 v1.0.135 且哈希与 Release 一致，`/healthz` 为 HTTP 200；这是现有 ECS API 动态读取最新 GitHub Release，本轮未部署 Worker 或改数据库。MuMu/真机未安装本版，Cloudflare 未部署。
 
 ## v1.0.136 启动画面
@@ -248,9 +248,11 @@ adb install .\五子棋.apk
 - 本版只更新客户端启动画面和版本资源；未改 ECS 后端、数据库或 Cloudflare 备用配置。
 - **发布记录：**启动动画合并于 [PR #2](https://github.com/xnnb04664-afk/gomoku/pull/2)，验收信息修订于 [PR #3](https://github.com/xnnb04664-afk/gomoku/pull/3)。GitHub [Release v1.0.136](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.136) 指向提交 `4d8132387322eaabde649333b6bf33b359e05ad6`；ECS `/healthz` 返回 HTTP 200，`/api/version` 已读到 v1.0.136，APK 与 HTML 哈希匹配 Release。ECS 动态读取 GitHub 最新 Release，本次没有部署后端或改数据库。
 
-## 2026-10-17 v1.0.137 应用图标候选（未发布）
+## 2026-10-17 v1.0.137 全面审查与发布
 
-- 使用内置 ImageGen 按原晴空棋岛图标重新绘制；主图为 `design_assets/gomoku-app-icon-master.png`。`MOBILE_ICON_PROMPT.md` 记录设计方向和资源映射。
-- 已从主图生成 Android 各密度启动图标、通知图标与根目录 `favicon.png`；`npm run build:official-site` 已同步官网及官网游戏页图标。单文件 HTML 已重新生成。
-- Android APK 为 `1.0.137` / `versionCode=138`，构建成功，正式签名 v1/v2/v3 验证通过，签名证书与 v1.0.136 相同。APK SHA-256：`9c79bfe8a4bf83cb51812a096305744532fdd8ea618ef75f0aa5a84dcaad2c70`。
-- 这是本地候选包；本轮没有安装到 MuMu/真机，没有推送 GitHub、发布 Release 或更新 ECS。不要将候选版记录为线上版本。
+- 使用 ImageGen 按晴空棋岛主题重新绘制应用图标，源图为 `design_assets/gomoku-app-icon-master.png`；发布脚本会一并提交官网 favicon，Android 各密度图标和状态栏通知图标已更新。
+- 修复棋局检查点恢复时技能状态丢失、房间票据允许错误账号接管房主、长好友账号名被截断、更新下载 Range 响应以及 GitHub 更新节点串行等待等问题；Wrangler 开发依赖升级后，`npm audit` 和 `npm audit --omit=dev` 均为 0 vulnerabilities。
+- 相关验证通过：后端 Worker/社交单元测试、更新清单竞速回归、棋局技能检查点浏览器冒烟、在线匹配/重连/传输及回放测试、AI 强度与性能测试、Android 启动画面/通知图标/生命周期/资源清单测试、完整 APK 与单文件构建。测试模拟没有替代真实双账号联网验收。
+- GitHub Release `v1.0.137` 指向 master 提交 `89323163fc2dedd19566a70362d5d258d87b63dc`，提供 APK、完整 HTML 与 307,262-byte HTML 增量包。APK `versionName=1.0.137` / `versionCode=138`；v1/v2/v3 签名验证通过，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。APK SHA-256：`b773b1907f14c0e940d27a4e74a0438b152186075679f54e03e6c15ae478e0c6`；单文件 HTML SHA-256：`69ef98d41ff546ea230fb0eda039dd2969bfd2e69bd679c9d8411586d5e63910`。
+- ECS 已切换到版本化 v1.0.137 Worker；部署前 SQLite 与服务配置已在服务器受限目录备份，部署后 SQLite `integrity_check=ok`，本机与公网 `/healthz` 均 HTTP 200，公网 `/api/version` 返回 v1.0.137。旧版本目录保留用于回滚。Cloudflare 未部署、未读写数据。
+- ADB 模拟器 `emulator-5554` 使用保留数据的 `adb install -r` 更新到 Build 138；`MainActivity` 已启动。未执行清除数据或卸载。真实两账号匹配、聊天、离房与重连流程未在本轮生产环境执行。

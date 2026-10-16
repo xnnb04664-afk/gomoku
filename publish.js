@@ -447,6 +447,7 @@ try {
     'js/startup-splash.js',
     'js/voice.js',
     'official-site/index.html',
+    'official-site/favicon.png',
     'official-site/privacy/index.html',
     'official-site/site.js',
     'official-site/styles.css',
