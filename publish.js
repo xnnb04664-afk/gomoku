@@ -82,12 +82,19 @@ function runPreflightChecks() {
     }
 
     // B. 核心关键 DOM 元素与核心函数存在性检查
-    const criticalElements = ['cvs', 'gameResultModal', 'p1NameLabel', 'myLadderBadge'];
+    // These three elements are static in index.html. The leaderboard badge is
+    // rendered by the lazy-loaded Sky Hub module, so validate it at its source.
+    const criticalElements = ['cvs', 'gameResultModal', 'p1NameLabel'];
     for (const elemId of criticalElements) {
       if (!html.includes(`id="${elemId}"`)) {
         console.error(`\n❌ [发布致命拦截] index.html 缺失关键核心 DOM 元素: id="${elemId}"`);
         hasError = true;
       }
+    }
+    const skyHubPath = path.join(ROOT_DIR, 'js', 'sky-hub.js');
+    if (!fs.existsSync(skyHubPath) || !fs.readFileSync(skyHubPath, 'utf8').includes('id="myLadderBadge"')) {
+      console.error('\n❌ [发布致命拦截] js/sky-hub.js 缺失天梯分数元素: id="myLadderBadge"');
+      hasError = true;
     }
 
     const criticalFuncs = ['draw', 'makeMove', 'checkWin', 'triggerGameEnd', 'reportMatchResult', 'showGameResultModal', 'resetBoardOnly'];
