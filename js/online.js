@@ -29,8 +29,8 @@
     function getOnlineRelayEndpoints() {
       const routing = window.GomokuBackendRouting;
       if (!routing || !routing.primaryHost || typeof routing.socketUrl !== 'function') return [];
-      // 房间状态存在各自的 relay 后端。不能按本机健康缓存重排，否则房主和
-      // 加入者可能分别落到 ECS/Cloudflare；始终先查权威 ECS，再顺序尝试备用。
+      // 房间码、票据和中继状态由 ECS 单点承载。默认不连 Cloudflare，避免
+      // ECS 房间在独立备用数据库/内存中继上被误判为不存在。
       const hosts = typeof routing.getAllHosts === 'function'
         ? routing.getAllHosts()
         : [routing.primaryHost, ...(typeof routing.getOrderedHosts === 'function' ? routing.getOrderedHosts() : [])];
@@ -217,7 +217,7 @@
 
     // 项目自有的 WebSocket 房间中继适配器。它故意实现和旧 MQTT 客户端相同的
     // 最小接口，这样既能复用已有的 ACK、去重、P2P 探测和重连状态机，
-    // 以便复用旧业务层，同时把生产信令固定在项目自己的 Cloudflare 入口。
+    // 以便复用旧业务层，同时把生产信令固定在项目自己的 ECS 入口。
     class RoomRelayClient {
       constructor(endpoint, roomCode, role, sessionId = '', joinTicket = '', socketTicket = '') {
         this.url = endpoint;
@@ -842,7 +842,7 @@
     async function connectRoomRelay(roomKey, role, sessionId = '') {
       // 同一房间的同一角色不能并行连接两个 DO 入口：后建立的连接会让
       // 前一个连接被判定为重复会话，表现为“一边进房、另一边断开”。
-      // 因此这里按 ECS 主入口 -> Cloudflare 故障备用入口串行切换。
+      // 因此这里按当前显式启用的主备顺序串行连接；默认仅包含 ECS。
       let lastError = null;
       const orderedRelayEndpoints = getOnlineRelayEndpoints();
       for (const endpoint of orderedRelayEndpoints) {
@@ -879,12 +879,12 @@
       if (status === 404) return `房间不存在或邀请已过期（HTTP 404）：${detail}。请核对房间号并让好友重新开房。`;
       if (status === 429) return `加入请求过于频繁（HTTP 429）：${detail}。请稍等片刻再试。`;
       if (status >= 400 && status < 500) return `ECS 拒绝了房间请求（HTTP ${status}）：${detail}。请核对账号、房间号后重试。`;
-      if (status >= 500) return `ECS 房间服务异常（HTTP ${status}），备用节点也未能建立连接：${detail}。请稍后重试。`;
-      return `ECS 主节点和 Cloudflare 备用节点均未连通：${detail}。请检查网络，确认好友在线且房间未过期后重试。`;
+      if (status >= 500) return `ECS 房间服务异常（HTTP ${status}）：${detail}。请稍后重试。`;
+      return `ECS 房间服务暂时无法连接：${detail}。请检查网络，确认好友在线且房间未过期后重试。`;
     }
 
     function isLegacyMqttFallbackEnabled() {
-      // 私人游戏只使用带账号票据的 ECS/Cloudflare 房间中继。
+      // 私人游戏只使用带账号票据的项目自有房间中继；默认部署在 ECS。
       return false;
     }
 

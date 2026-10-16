@@ -1,6 +1,6 @@
 # 五子棋项目交接手册：从零启动
 
-更新日期：2026-10-15
+更新日期：2026-10-16
 项目目录：D:\小游戏\五子棋
 本手册替代旧版按日期堆叠的长交接日志。历史记录与当前代码不一致时，以当前代码、测试和重新核验的线上状态为准。
 
@@ -14,7 +14,7 @@
 
 ## 项目概况
 
-中文优先的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 现在优先连接 ECS；Cloudflare Worker、Pages 和 D1 保留为客户端故障回退。仓库里的本地 Node 服务仍只托管静态文件。
+中文优先的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 和房间中继默认只连接 ECS；Cloudflare 游戏 API/中继应急开关默认关闭，更新下载仍保留 Cloudflare 最后应急出口。仓库里的本地 Node 服务仍只托管静态文件。
 
 - 源码仓库：https://github.com/xnnb04664-afk/gomoku
 - 官网：https://gomoku-home.pages.dev/
@@ -71,10 +71,10 @@ node server.js
 
 ## ECS 主后端与 Cloudflare 备用
 
-- `js/ecs-config.js` 是 ECS API 地址的唯一前端配置。修改后运行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js` 和 `npm run build:official-site`，不要手改压缩或生成文件。
-- 公共只读 GET/HEAD/OPTIONS 请求先走 ECS，失败时可回退到 Cloudflare Pages/Worker。社交、私聊、世界频道、排行、战绩和金币等账号/数据库状态读取固定走 ECS，避免从未同步的 Cloudflare 数据库读到旧状态；写请求固定发往一个后端，ECS 超时或返回 5xx 时不会把同一写操作重放到独立数据库，客户端会提示提交状态未知。好友与世界频道 WebSocket 使用发出票据的同一后端地址；房间中继两端固定按 ECS 优先、Cloudflare 备用的同一顺序查找房间，但备用端不能接续另一端的内存房间状态。
+- `js/ecs-config.js` 是 ECS API 地址与应急开关的唯一前端配置。当前 `enableCloudflareEmergencyApi` 为 `false`，游戏数据与房间中继只连 ECS；修改后运行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js` 和 `npm run build:official-site`，不要手改压缩或生成文件。
+- ECS 是游戏业务数据的唯一日常来源。只有运维明确把 `enableCloudflareEmergencyApi` 改成 `true` 并重新发布客户端后，游戏 API/房间中继才会尝试 Cloudflare。ECS 与 Cloudflare 使用独立数据库，房间中继也各自保存在进程内存；应急切换前必须确认数据和房间迁移策略，不能假定两边状态自动同步。写请求不会跨库重放。
 - ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。当前 `/healthz` 只检查 SQLite，不能证明公网 WebSocket 升级链路正常；发布验收还需独立连通实际房间中继。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
-- Cloudflare 数据库与 ECS SQLite 相互独立。客户端不会把 ECS 写入请求回放到 Cloudflare；不要据此假定两边数据会自动同步。
+- Cloudflare D1 与 ECS SQLite 相互独立。当前客户端不会把游戏 API 请求自动切到 Cloudflare；不要据此假定两边数据会自动同步。
 - 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新检查优先读取多个 GitHub 反向代理节点的公开 Release，下载失败后再走 ECS 短时票据更新服务，Cloudflare Pages/Worker 只作为最后应急出口。APK/HTML 下载按 Release SHA-256 校验；Android 还核对原签名证书。
 ## 账号访问边界
 
@@ -180,7 +180,7 @@ adb install .\五子棋.apk
 - Cloudflare 部署脚本不会更新 ECS。本次 ECS 发布不要运行 Wrangler，也不要迁移、重置或写入 Cloudflare 数据库。
 - Cloudflare 账号配置、令牌和更新服务密钥只存放在运维者管理的本机或云端 Secret 中。不要把凭据写入前端、Git、日志或交接文档。
 - `backup_d1.js` 只用于 Cloudflare D1 备用环境。ECS 发布前要单独备份 ECS SQLite 和运行配置；任何生产数据库备份均留在受限服务器目录。
-- 当前客户端的更新顺序固定为 GitHub 反向代理节点 → ECS 更新服务 → Cloudflare Pages/Worker 应急备用。ECS 的 `UPDATE_TICKET_SECRET` 由受限运行配置提供；公开 GitHub Release 不需要仓库读取令牌。更新来源必须与签发短时票据的来源一致，不能把一处服务的票据发给另一处服务。
+- 当前客户端的更新顺序固定为 GitHub 反向代理节点 → ECS 更新服务 → Cloudflare Pages/Worker 最后应急备用。Android 原生桥默认更新来源也是 ECS。ECS 的 `UPDATE_TICKET_SECRET` 由受限运行配置提供；公开 GitHub Release 不需要仓库读取令牌。更新来源必须与签发短时票据的来源一致，不能把一处服务的票据发给另一处服务。
 
 ## 线上状态核验
 

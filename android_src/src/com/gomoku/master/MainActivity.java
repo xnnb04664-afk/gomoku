@@ -62,7 +62,7 @@ public class MainActivity extends Activity {
     private static final String[] GITHUB_RELEASE_PROXY_HOSTS = {
             "gh-proxy.com", "gh-proxy.org", "githubproxy.cc", "ghfast.top"
     };
-    private static final String DEFAULT_UPDATE_BASE = CLOUDFLARE_PAGES_UPDATE_BASE;
+    private static final String DEFAULT_UPDATE_BASE = ECS_UPDATE_BASE;
     private static final String UPDATE_PROXY_VERSION_PATH = "/api/version";
     private static final String UPDATE_PROXY_APK_PATH = "/api/update/apk";
     private static final String UPDATE_CLIENT_HEADER = "X-Gomoku-Client";

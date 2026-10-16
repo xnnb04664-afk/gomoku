@@ -38,6 +38,7 @@ const sandbox = {
 };
 
 let githubCalls = 0;
+let mirrorUnavailable = false;
 const digest = 'sha256:' + 'a'.repeat(64);
 const release = {
   tag_name: 'v9.9.9',
@@ -62,6 +63,13 @@ sandbox.fetch = async (url) => {
     return new Response(JSON.stringify(release), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  if (String(url).includes('gh-proxy.com/https://github.com/')) {
+    if (mirrorUnavailable) throw new Error('unit-test mirror unavailable');
+    return new Response('apk-test-payload', {
+      status: 200,
+      headers: { 'Content-Type': 'application/octet-stream' },
     });
   }
   if (String(url).endsWith('/releases/assets/1')) {
@@ -122,12 +130,26 @@ async function main() {
   }), env);
   assert.equal(assetResponse.status, 200);
   assert.equal(await assetResponse.text(), 'apk-test-payload');
-  assert.equal(githubCalls, 2, '下载应只额外读取 Release 文件，不重复读取 latest 元数据');
+  assert.equal(assetResponse.headers.get('X-Gomoku-Update-Source'), 'github-proxy', '代理下载来源标记必须是合法 ASCII 响应头');
+  assert.equal(githubCalls, 2, '成功的代理下载不再访问 GitHub 官方资产');
+
+  mirrorUnavailable = true;
+  const fallbackResponse = await worker.fetch(new Request('https://gomoku-api.pages.dev/api/update/apk', {
+    headers: {
+      Origin: 'null',
+      'X-Gomoku-Client': 'gomoku-app-client-v2',
+      'X-Gomoku-Update-Ticket': versionA.apkTicket,
+    },
+  }), env);
+  assert.equal(fallbackResponse.status, 200, '代理失败后应回退到 GitHub 官方 Release 资产');
+  assert.equal(await fallbackResponse.text(), 'apk-test-payload');
+  assert.equal(fallbackResponse.headers.get('X-Gomoku-Update-Source'), 'github-official', '官方源也应使用合法 ASCII 来源标记');
+  assert.equal(githubCalls, 4, '代理失败后才额外读取官方资产');
 
   console.log(JSON.stringify({
     versionStatus: responseA.status,
     releaseRequests: 1,
-    assetRequests: 1,
+    assetRequests: 2,
     ticketIssued: true,
     tokenLeaked: false,
   }));

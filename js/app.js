@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.131';
+    const CURRENT_VERSION_TAG = 'v1.0.132';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -3122,14 +3122,16 @@
       } catch(e) {}
     }
     // ══════════════════════════════════════════════════════════════════
-    // 🌐 游戏 API 使用 ECS 主入口，Cloudflare Pages/Worker 保留故障回退
+    // 🌐 游戏账号、社交、棋谱、匹配与房间数据只读写 ECS。
+    // Cloudflare API 仅保留为显式开启的应急主机；默认关闭，避免独立数据库造成数据分叉。
     // ══════════════════════════════════════════════════════════════════
     const CLOUDFLARE_API_HOSTS = [
       "https://gomoku-api.pages.dev",
       "https://gomoku-backend.xnnb04664.workers.dev"
     ];
     const ECS_API_HOST = String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '').replace(/\/+$/, '');
-    const API_HOSTS = [...new Set([ECS_API_HOST, ...CLOUDFLARE_API_HOSTS].filter(Boolean))];
+    const enableCloudflareEmergencyApi = window.GOMOKU_BACKEND_CONFIG?.enableCloudflareEmergencyApi === true;
+    const API_HOSTS = [...new Set([ECS_API_HOST, ...(enableCloudflareEmergencyApi ? CLOUDFLARE_API_HOSTS : [])].filter(Boolean))];
     const API_PRIMARY_HOST = ECS_API_HOST;
     const API_HOST_FAILURES_STORAGE_KEY = 'gomoku_api_host_failures_v1';
     const API_HOST_FAILURE_COOLDOWN_MS = 60 * 1000;
@@ -3265,10 +3267,11 @@
     }
 
     function getOrderedApiHosts() {
-      // 每次请求都先验证 ECS；上次故障记录不能跳过已经恢复的主服务。
+      // 默认只使用 ECS；只有运维显式开启应急开关时，才把 Cloudflare 加入候选。
       if (!API_PRIMARY_HOST) return [];
-      const healthy = CLOUDFLARE_API_HOSTS.filter(host => !isApiHostCoolingDown(host));
-      const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host));
+      const fallbacks = API_HOSTS.filter(host => host !== API_PRIMARY_HOST);
+      const healthy = fallbacks.filter(host => !isApiHostCoolingDown(host));
+      const cooling = fallbacks.filter(host => isApiHostCoolingDown(host));
       return [API_PRIMARY_HOST, ...healthy, ...cooling];
     }
 
@@ -3276,8 +3279,8 @@
       primaryHost: API_PRIMARY_HOST,
       getActiveHost: () => activeApiHost,
       getOrderedHosts: () => getOrderedApiHosts(),
-      // 房间中继状态按后端隔离；两名玩家必须用相同的固定顺序查找短房间码。
-      getAllHosts: () => API_PRIMARY_HOST ? [API_PRIMARY_HOST, ...CLOUDFLARE_API_HOSTS] : [],
+      // 房间中继和短房间码默认固定使用 ECS；应急备用只有在配置开关显式开启后才可用。
+      getAllHosts: () => getOrderedApiHosts(),
       getHostForUrl: value => {
         try { return getAllowedApiHostForUrl(new URL(value)); }
         catch (_) { return ''; }
@@ -3335,7 +3338,7 @@
       return { host, elapsed: samples[Math.floor(samples.length / 2)] };
     }
 
-    // 登录弹窗打开时优先探测 ECS，再按 Cloudflare Pages/Worker 顺序回退；登录请求不会并发发送。
+    // 登录弹窗只探测当前启用的后端；默认只有 ECS，登录请求不会并发发送。
     function warmApiHost(force = false) {
       const now = Date.now();
       if (!force && hasApiHostHint && activeApiHost === API_PRIMARY_HOST && !isApiHostCoolingDown(API_PRIMARY_HOST)) {
@@ -3398,12 +3401,12 @@
       } catch (_) {}
       const operationLabel = apiOperationLabel(endpointPath);
       if (!API_PRIMARY_HOST) {
-        const configError = new Error('ECS 主服务地址未配置，已停止请求；Cloudflare 仅作为故障备用。');
+        const configError = new Error('ECS 主服务地址未配置，已停止请求；游戏数据不会自动切换到 Cloudflare。');
         configError.code = 'API_ECS_CONFIG_MISSING';
         throw configError;
       }
       const requestMethod = String(requestOptions.method || 'GET').toUpperCase();
-      // ECS 与 Cloudflare 使用彼此独立的数据库。只有不会改变服务端状态的请求可以跨主备回退。
+      // ECS 与 Cloudflare 使用彼此独立的数据库。默认不跨库读取或重放；应急切换必须由运维显式开启。
       const canFailover = ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod);
       const explicitEndpointHost = fixedEndpointUrl ? getAllowedApiHostForUrl(fixedEndpointUrl) : '';
       const orderedHosts = canFailover
@@ -3453,7 +3456,7 @@
             markApiHostFailure(host);
             try {
               if (!anonymousRequest && typeof showGameNotice === 'function') {
-                const serviceLabel = host === API_PRIMARY_HOST ? 'ECS 主服务器' : 'Cloudflare 备用服务器';
+                const serviceLabel = host === API_PRIMARY_HOST ? 'ECS 主服务器' : '应急备用服务器';
                 let detail = '';
                 try {
                   const payload = await res.clone().json();
@@ -3485,7 +3488,7 @@
           attemptErrors.push({ error: err, timedOut: isApiAbortError(err), dispatchAttempted });
           markApiHostFailure(host);
           console.warn('Host ' + host + ' failed: ' + (err && err.message || err) +
-            (canFailover ? ', trying fallback...' : '; mutation will not be replayed'));
+            (hostIndex < orderedHosts.length - 1 ? ', trying emergency fallback...' : '; no automatic backend fallback is enabled'));
           if (!canFailover) break;
         } finally {
           if (timer) clearTimeout(timer);
@@ -3507,7 +3510,8 @@
         timeoutError.cause = lastErr;
         throw timeoutError;
       }
-      const networkError = new Error(`${operationLabel}无法连接 ECS 主服务或 Cloudflare 备用服务，请检查网络后重试。`);
+      const targets = orderedHosts.length > 1 ? 'ECS 主服务或已启用的应急备用服务' : 'ECS 主服务';
+      const networkError = new Error(`${operationLabel}无法连接${targets}，请检查网络或稍后重试。`);
       networkError.code = 'API_UNAVAILABLE';
       networkError.cause = lastErr;
       throw networkError;
@@ -7755,7 +7759,7 @@
       throw new Error(`安装包下载失败（已尝试 ${failures.length || candidates.length} 个可用入口）：${failures.slice(0, 4).join('；') || '没有可用下载地址'}`);
     }
 
-    function invokeProtectedNativeApkUpdate(ticket, apkSha256 = '', sourceOrigin = UPDATE_CLOUDFLARE_PAGES_ORIGIN) {
+    function invokeProtectedNativeApkUpdate(ticket, apkSha256 = '', sourceOrigin = ECS_API_HOST) {
       if (typeof AndroidNativeApp === 'undefined' || !ticket) return false;
       try {
         const safeHash = /^[0-9a-f]{64}$/i.test(String(apkSha256 || '')) ? String(apkSha256).toLowerCase() : '';
