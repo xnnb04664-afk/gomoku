@@ -399,6 +399,7 @@ try {
     'android_src/src/com/gomoku/master/MainActivity.java',
     'backend/worker.js',
     'backend/ecs-host/README.md',
+    'backend/ecs-host/deploy/gomoku-ecs.service',
     'backend/ecs-host/server.mjs',
     'build_official_site.js',
     'bundle_single_file.js',

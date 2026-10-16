@@ -5,17 +5,15 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=gomoku
-Group=gomoku
-WorkingDirectory=/srv/gomoku/current
+User=gomoku-ecs
+Group=gomoku-ecs
+WorkingDirectory=/opt/gomoku/current
 Environment=NODE_ENV=production
-Environment=GOMOKU_ECS_HOST=127.0.0.1
 Environment=GOMOKU_ECS_PORT=3088
 Environment=GOMOKU_DB_PATH=/var/lib/gomoku/gomoku.sqlite
 Environment=PRIVATE_GAME_MODE=1
-Environment=UPDATE_TICKET_ENFORCED=1
 EnvironmentFile=/etc/gomoku/gomoku.env
-ExecStart=/usr/bin/node /srv/gomoku/current/backend/ecs-host/server.mjs
+ExecStart=/opt/gomoku/runtime/node-v22.23.3/bin/node /opt/gomoku/current/backend/ecs-host/server.mjs
 Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=20s
