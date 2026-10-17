@@ -579,19 +579,31 @@ public class MainActivity extends Activity {
             setupWebView();
             registerNetworkMonitor();
 
-            // WebView 初始化期间通常已经完成端口绑定；仅保留 120ms 极端兜底等待。
-            boolean serverReady = mLocalServer.awaitReady(120);
-
-            if (serverReady) {
-                mWebView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
-            } else {
-                android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
-                mWebView.loadUrl("file:///android_asset/index.html");
-            }
+            // Do not block the UI thread while waiting for the local asset server.
+            awaitLocalServerAndLoadPage();
         } catch (RuntimeException error) {
             android.util.Log.e("MainActivity", "WebView startup failed", error);
             if (mSplashView != null) mSplashView.showLoadingHint();
         }
+    }
+
+    private void awaitLocalServerAndLoadPage() {
+        final WebView webView = mWebView;
+        final LocalWebServer localServer = mLocalServer;
+        Thread readinessThread = new Thread(() -> {
+            boolean serverReady = localServer != null && localServer.awaitReady(120);
+            mMainHandler.post(() -> {
+                if (mDestroyed || isFinishing() || mWebView != webView || webView == null) return;
+                if (serverReady) {
+                    webView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
+                } else {
+                    android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
+                    webView.loadUrl("file:///android_asset/index.html");
+                }
+            });
+        }, "gomoku-server-ready");
+        readinessThread.setDaemon(true);
+        readinessThread.start();
     }
 
     private static void recoverInterruptedHotUpdate(File updateDir) {

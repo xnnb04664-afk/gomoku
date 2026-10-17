@@ -51,6 +51,7 @@
     lastNotifiedUnreadTotal: 0,
     dom: Object.create(null),
     domListeners: null,
+    profileReturnFocus: null,
     lifecycle: 0
   };
 
@@ -217,14 +218,16 @@
     return '';
   }
 
-  function avatarMarkup(person) {
+  function avatarMarkup(person, size) {
+    const avatarSize = Math.max(24, Math.min(120, Number(size) || 30));
     const key = avatarImageKey(person);
     const source = key === 'boy' ? window.ANIME_AVATAR_BOY : key === 'girl' ? window.ANIME_AVATAR_GIRL : '';
     if (typeof source === 'string' && source) {
       const border = key === 'boy' ? '#93c5fd' : '#f9a8d4';
-      return `<img src="${attr(source)}" alt="${key === 'boy' ? '男生头像' : '女生头像'}" style="width:30px;height:30px;flex:none;border-radius:50%;object-fit:cover;border:2px solid ${border};background:#fff;" />`;
+      return `<img src="${attr(source)}" alt="${key === 'boy' ? '男生头像' : '女生头像'}" style="width:${avatarSize}px;height:${avatarSize}px;flex:none;border-radius:50%;object-fit:cover;border:2px solid ${border};background:#fff;" />`;
     }
-    return '<span role="img" aria-label="默认头像" style="display:grid;place-items:center;width:30px;height:30px;flex:none;border-radius:50%;color:#668174;background:#edf3ed;"><svg viewBox="0 0 24 24" aria-hidden="true" style="display:block;width:20px;height:20px;"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 21c.5-4.4 3.4-7 8-7s7.5 2.6 8 7" fill="currentColor"/></svg></span>';
+    const iconSize = Math.round(avatarSize * 0.68);
+    return `<span role="img" aria-label="默认头像" style="display:grid;place-items:center;width:${avatarSize}px;height:${avatarSize}px;flex:none;border-radius:50%;color:#668174;background:#edf3ed;"><svg viewBox="0 0 24 24" aria-hidden="true" style="display:block;width:${iconSize}px;height:${iconSize}px;"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 21c.5-4.4 3.4-7 8-7s7.5 2.6 8 7" fill="currentColor"/></svg></span>`;
   }
 
   async function ensureAvatarAssets() {
@@ -260,9 +263,131 @@
     return `<div style="padding:18px 8px;text-align:center;color:#64748b;font-size:13px">${escapeHtml(text)}</div>`;
   }
 
-  function personHeading(person, suffix) {
+  function personHeading(person, suffix, options) {
     const username = person && person.username ? ` @${person.username}` : '';
-    return `<div class="sky-social-person-heading" style="min-width:0;flex:1"><div style="display:flex;align-items:center;gap:7px;min-width:0;font-weight:900;color:#1e293b">${avatarMarkup(person)}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(displayName(person))}</span>${coupleBadge(person)}</div><div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(username)}${suffix ? ` · ${escapeHtml(suffix)}` : ''}</div></div>`;
+    const personUid = String(person && person.uid || '');
+    const avatar = options && options.profile && personUid
+      ? `<button type="button" class="sky-social-avatar-trigger" data-social-action="profile" data-uid="${attr(personUid)}" aria-label="查看 ${attr(displayName(person))} 的资料" title="查看个人资料">${avatarMarkup(person)}</button>`
+      : avatarMarkup(person);
+    return `<div class="sky-social-person-heading" style="min-width:0;flex:1"><div style="display:flex;align-items:center;gap:7px;min-width:0;font-weight:900;color:#1e293b">${avatar}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(displayName(person))}</span>${coupleBadge(person)}</div><div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(username)}${suffix ? ` · ${escapeHtml(suffix)}` : ''}</div></div>`;
+  }
+
+  function ensureProfileModal() {
+    let modal = byId('socialProfileModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'socialProfileModal';
+    modal.className = 'sky-social-profile-backdrop';
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(modal);
+    modal.addEventListener('click', onProfileModalClick);
+    state.dom.socialProfileModal = modal;
+    return modal;
+  }
+
+  function openProfile(friendUid, opener) {
+    const targetUid = String(friendUid || '');
+    const person = state.friends.find(friend => String(friend && friend.uid || '') === targetUid);
+    if (!person) {
+      notice('好友资料暂不可用，请刷新好友列表后重试', true);
+      return false;
+    }
+    const modal = ensureProfileModal();
+    if (!modal.classList.contains('show')) {
+      state.profileReturnFocus = opener && typeof opener.focus === 'function'
+        ? opener
+        : (document.activeElement && typeof document.activeElement.focus === 'function' ? document.activeElement : null);
+    }
+    const bond = affinityFor(person, state.affinity.get(targetUid));
+    const hasBond = Boolean(bond);
+    const level = hasBond ? Number(bond.level) || 1 : 0;
+    const points = hasBond ? Number(bond.points) || 0 : 0;
+    const presence = person.presenceHidden ? '在线状态已隐藏' : (person.online ? '当前在线' : '当前离线');
+    const relationship = isCoupleFriend(person) ? '情侣棋友' : '好友';
+    const accountName = person.username ? `@${person.username}` : '已添加的棋友';
+    const score = Math.max(0, Number(person.score) || 1000);
+    const bondLevel = hasBond ? `Lv.${level}` : '未开始';
+    const bondPoints = hasBond ? points.toLocaleString() : '—';
+    modal.innerHTML = `
+      <section class="sky-social-profile-card" role="dialog" aria-modal="true" aria-labelledby="socialProfileName">
+        <button type="button" class="sky-social-profile-close" data-profile-close aria-label="关闭个人资料">×</button>
+        <div class="sky-social-profile-identity">
+          <div class="sky-social-profile-avatar">${avatarMarkup(person, 82)}</div>
+          <div class="sky-social-profile-names">
+            <span class="sky-social-profile-kicker">晴空棋岛 · 棋友资料</span>
+            <h2 id="socialProfileName">${escapeHtml(displayName(person))}</h2>
+            <p>${escapeHtml(accountName)}</p>
+            <span class="sky-social-profile-relation">${escapeHtml(relationship)} · ${escapeHtml(presence)}</span>
+          </div>
+        </div>
+        <div class="sky-social-profile-stats" aria-label="棋友信息">
+          <div><small>棋力积分</small><strong>${score.toLocaleString()}</strong></div>
+          <div><small>亲密等级</small><strong>${escapeHtml(bondLevel)}</strong></div>
+          <div><small>亲密度</small><strong>${escapeHtml(bondPoints)}</strong></div>
+        </div>
+        ${bond && bond.fixed ? '<p class="sky-social-profile-note">情侣亲密信息固定为 Lv.521 · 1314</p>' : ''}
+        <div class="sky-social-profile-actions">
+          <button type="button" data-social-action="chat" data-uid="${attr(targetUid)}">私聊</button>
+          <button type="button" data-social-action="invite" data-uid="${attr(targetUid)}">邀请对战</button>
+        </div>
+      </section>`;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    const closeButton = modal.querySelector('[data-profile-close]');
+    if (closeButton) closeButton.focus();
+    return true;
+  }
+
+  function closeProfile(restoreFocus) {
+    const modal = byId('socialProfileModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    const opener = state.profileReturnFocus;
+    state.profileReturnFocus = null;
+    if (restoreFocus !== false && opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+  }
+
+  function onProfileModalClick(event) {
+    const modal = state.dom.socialProfileModal;
+    if (!modal) return;
+    if (event.target === modal || event.target.closest('[data-profile-close]')) {
+      closeProfile();
+      return;
+    }
+    if (event.target.closest('[data-social-action]')) {
+      closeProfile();
+      onActionClick(event);
+    }
+  }
+
+  function onProfileModalKeyDown(event) {
+    const modal = state.dom.socialProfileModal;
+    if (!modal || !modal.classList.contains('show')) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeProfile();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(modal.querySelectorAll(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(element => element.getClientRects().length > 0);
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !modal.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || !modal.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   function card(content) {
@@ -325,7 +450,7 @@
       const bondBadge = bond
         ? `<span class="sky-social-friend-bond" title="打开亲密度详情">💞 Lv.${bond.level} · ${Number(bond.points).toLocaleString()}</span>`
         : '';
-      return `<div class="sky-social-friend-row"><div class="sky-social-friend-summary">${personHeading(friend, online + unread)}${bondBadge}</div>` +
+      return `<div class="sky-social-friend-row"><div class="sky-social-friend-summary">${personHeading(friend, online + unread, { profile: true })}${bondBadge}</div>` +
         `<div class="sky-social-friend-actions">` +
         button('chat', '私聊', id, 'primary') +
         button('invite', '邀战', id, 'primary') +
@@ -1356,6 +1481,7 @@
   function close() {
     const modal = byId('friendsModal');
     if (modal) modal.classList.remove('show');
+    closeProfile(false);
   }
 
   function onActionClick(event) {
@@ -1369,6 +1495,7 @@
     const inviteId = target.dataset.inviteId || '';
     const roomCode = target.dataset.roomCode || '';
     if (action === 'search') search();
+    else if (action === 'profile') openProfile(targetUid, target);
     else if (action === 'request') sendFriendRequest(username);
     else if (action === 'request-accept') requestAction(requestId, 'accept');
     else if (action === 'request-reject') requestAction(requestId, 'reject');
@@ -1418,6 +1545,8 @@
       return;
     }
     const friendsModal = state.dom.friendsModal;
+    ensureProfileModal();
+    document.addEventListener('keydown', onProfileModalKeyDown);
     const chatModal = state.dom.socialChatModal;
     const inviteModal = state.dom.socialInviteModal;
     const searchInput = state.dom.socialSearchInput;
@@ -1485,6 +1614,8 @@
       }
     }
     state.domListeners = null;
+    document.removeEventListener('keydown', onProfileModalKeyDown);
+    closeProfile(false);
   }
 
   function onInviteModalClick(event) {

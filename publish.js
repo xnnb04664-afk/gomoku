@@ -306,6 +306,9 @@ if (fs.existsSync(appSourcePath)) {
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
+  `👤 【好友个人资料】点击好友头像可查看昵称、在线状态、棋力积分与亲密度，也可直接私聊或邀请对战`,
+  `🖤🤍 【中空爱心棋子】应用图标、首页预览与启动动画统一使用左黑右白的空心爱心棋子`,
+  `🚀 【启动动画】首帧显示空棋盘，图片后台解码并缩放后逐颗摆成爱心，减少冷启动卡顿`,
   `🔔 【好友提醒音效】好友邀请、好友申请和私聊消息加入主题提示音，并沿用游戏音量设置`,
   `⚡ 【匹配状态清理】退出房间后清除残留的匹配状态，重新进入匹配页不会继续显示旧队列`,
   `🎨 【应用图标】重绘晴空浮岛应用图标并同步桌面网页与 Android 各尺寸资源`,
@@ -404,6 +407,13 @@ try {
     'android_src/AndroidManifest.xml',
     'android_src/res/drawable/ic_launcher.png',
     'android_src/res/drawable/ic_stat_gomoku.xml',
+    'android_src/res/drawable-nodpi/splash_empty_board_art.webp',
+    'android_src/res/drawable-nodpi/splash_opening_poster.webp',
+    'android_src/res/animator/splash_heart_outline.xml',
+    'android_src/res/animator/splash_stones_inner.xml',
+    'android_src/res/animator/splash_stones_middle.xml',
+    'android_src/res/animator/splash_stones_outer.xml',
+    'android_src/res/drawable/splash_heart_icon_animated.xml',
     'android_src/res/mipmap-hdpi/ic_launcher.png',
     'android_src/res/mipmap-mdpi/ic_launcher.png',
     'android_src/res/mipmap-xhdpi/ic_launcher.png',
