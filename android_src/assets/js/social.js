@@ -46,6 +46,7 @@
     pendingRequests: new Set(),
     lastUnreadTotal: 0,
     lastNotifiedMessageId: '',
+    lastMessageSoundAt: 0,
     hasUnreadSnapshot: false,
     lastNotifiedUnreadTotal: 0,
     dom: Object.create(null),
@@ -89,6 +90,14 @@
 
   function notice(message, warning) {
     if (typeof showGameNotice === 'function') showGameNotice(String(message || ''), warning !== false);
+  }
+
+  function playSocialSound(kind) {
+    try {
+      if (typeof window.playGomokuSocialSoundEffect === 'function') {
+        window.playGomokuSocialSoundEffect(kind);
+      }
+    } catch (_) {}
   }
 
   function isRegistered() {
@@ -570,6 +579,11 @@
     if (state.currentChat && fromUid && String(state.currentChat.uid) === fromUid) return;
     if (messageId && state.lastNotifiedMessageId === messageId) return;
     if (messageId) state.lastNotifiedMessageId = messageId;
+    const now = Date.now();
+    if (now - state.lastMessageSoundAt >= 1000) {
+      playSocialSound('message');
+      state.lastMessageSoundAt = now;
+    }
     const title = '五子棋 · 好友消息';
     const body = '你有新的好友消息，打开游戏查看';
     try {
@@ -637,21 +651,32 @@
     ]).then(([friendsResult, recentResult, blocksResult]) => {
       if (lifecycle !== state.lifecycle || state.stopping || !state.started) return false;
       const social = friendsResult.data || {};
+      const previousInviteIds = new Set(state.pendingInvites.keys());
+      const previousIncomingRequestIds = new Set(state.requests
+        .filter(request => request.direction === 'incoming')
+        .map(request => String(request.id)));
       state.friends = Array.isArray(social.friends) ? social.friends : [];
       state.requests = Array.isArray(social.requests) ? social.requests : [];
       state.recent = Array.isArray(recentResult.data) ? recentResult.data : [];
       state.blocks = Array.isArray(blocksResult.data) ? blocksResult.data : [];
       const syncedInvites = Array.isArray(social.invites) ? social.invites
         : (Array.isArray(social.pendingInvites) ? social.pendingInvites : null);
+      let receivedInvite = false;
       if (syncedInvites) {
         const now = Date.now();
-        state.pendingInvites = new Map(syncedInvites
+        const nextInvites = new Map(syncedInvites
           .filter(invite => invite && invite.inviteId && Number(invite.expiresAt) > now && /^\d{6}$/.test(String(invite.roomCode || '')))
           .map(invite => [String(invite.inviteId), invite]));
+        receivedInvite = Array.from(nextInvites.keys()).some(inviteId => !previousInviteIds.has(inviteId));
+        state.pendingInvites = nextInvites;
         for (const inviteId of state.dismissedInviteIds) {
           if (!state.pendingInvites.has(inviteId)) state.dismissedInviteIds.delete(inviteId);
         }
+        if (receivedInvite) playSocialSound('invite');
       }
+      const receivedFriendRequest = state.requests.some(request => request.direction === 'incoming'
+        && !previousIncomingRequestIds.has(String(request.id)));
+      if (!receivedInvite && receivedFriendRequest) playSocialSound('friendRequest');
       syncSettings(social);
       renderAll();
       notifyUnreadSnapshot(state.lastUnreadTotal, previousUnreadTotal);
@@ -1271,6 +1296,7 @@
       const isNewInvite = !state.pendingInvites.has(inviteId);
       if (isNewInvite) {
         state.pendingInvites.set(inviteId, { ...event, __receivedAt: Date.now() });
+        playSocialSound('invite');
       }
       renderRequests();
       updateUnreadBadge();
@@ -1537,6 +1563,7 @@
     state.inviteActionsPending.clear();
     state.lastUnreadTotal = 0;
     state.lastNotifiedMessageId = '';
+    state.lastMessageSoundAt = 0;
     state.hasUnreadSnapshot = false;
     state.lastNotifiedUnreadTotal = 0;
     unbindDom();

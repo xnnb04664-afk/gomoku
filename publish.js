@@ -306,6 +306,8 @@ if (fs.existsSync(appSourcePath)) {
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
+  `🔔 【好友提醒音效】好友邀请、好友申请和私聊消息加入主题提示音，并沿用游戏音量设置`,
+  `⚡ 【匹配状态清理】退出房间后清除残留的匹配状态，重新进入匹配页不会继续显示旧队列`,
   `🎨 【应用图标】重绘晴空浮岛应用图标并同步桌面网页与 Android 各尺寸资源`,
   `💾 【对局恢复】恢复本地与联机棋局的额外落子、免费补子和预言封锁状态，避免划掉后台后技能状态丢失`,
   `🔐 【房间安全】联机房主票据绑定认证账号，阻止同一房间被其他账号接管`,

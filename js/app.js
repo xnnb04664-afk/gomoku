@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.137';
+    const CURRENT_VERSION_TAG = 'v1.0.138';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -2937,6 +2937,40 @@
         osc.start(t); osc.stop(t + 0.16);
       } catch (e) {}
     }
+
+    // 好友通知使用和云海配乐同一五声音阶，并沿用游戏音效开关与音量。
+    function playSocialSoundEffect(kind) {
+      if (!soundEnabled || !actx) return;
+      const patterns = {
+        invite: [587.33, 880.00, 1174.66],
+        friendRequest: [659.25, 987.77],
+        message: [739.99, 987.77]
+      };
+      const notes = patterns[kind];
+      if (!notes) return;
+      try {
+        resumeGameAudio();
+        const output = getGameSoundOutput();
+        if (!output) return;
+        const startAt = actx.currentTime;
+        notes.forEach((frequency, index) => {
+          const start = startAt + index * (kind === 'invite' ? 0.12 : 0.1);
+          const duration = kind === 'message' ? 0.17 : 0.25;
+          const osc = actx.createOscillator();
+          const gain = actx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(frequency, start);
+          gain.gain.setValueAtTime(0.0001, start);
+          gain.gain.linearRampToValueAtTime(kind === 'invite' ? 0.27 : 0.2, start + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+          osc.connect(gain);
+          gain.connect(output);
+          osc.start(start);
+          osc.stop(start + duration + 0.01);
+        });
+      } catch (_) {}
+    }
+    window.playGomokuSocialSoundEffect = playSocialSoundEffect;
 
     // 🌟 游戏内治愈果冻气泡 HUD 提示控制器 (彻底替代浏览器原生 alert)
     let noticeTimer = null;

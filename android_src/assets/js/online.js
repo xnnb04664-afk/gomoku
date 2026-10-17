@@ -4914,9 +4914,25 @@
     async function cancelQuickMatch() {
       const wasMatchmaking = isMatchmaking;
       const wasStartPending = matchStartPending;
-      if (!wasMatchmaking && !wasStartPending) return;
       const cancelUid = currentActiveMatchUid || String(currentUserUid || getOrCreateMatchUid() || '');
       const cancelMatchId = currentActiveMatchId;
+
+      // 房间结束后再次调用此函数时，队列已经不是 waiting 状态；仍需清理
+      // 匹配成功时遗留在大厅里的按钮、提示和本地匹配标识。
+      if (!wasMatchmaking && !wasStartPending) {
+        clearPendingQuickMatch(currentActiveMatchUid, currentActiveMatchId);
+        clearInterval(matchPollInterval);
+        clearInterval(matchTimerInterval);
+        matchPollInterval = null;
+        matchTimerInterval = null;
+        hideMatchingFloatingBar();
+        currentActiveMatchUid = '';
+        currentActiveMatchId = '';
+        activeMatchRoomKey = '';
+        resetQuickMatchControls();
+        return false;
+      }
+
       clearPendingQuickMatch(cancelUid, cancelMatchId);
       matchAttemptGeneration++;
       matchStartPending = false;
@@ -4927,22 +4943,11 @@
       matchTimerInterval = null;
       hideMatchingFloatingBar();
 
-      const btnStart = document.getElementById('btnStartMatch');
-      const btnCancel = document.getElementById('btnCancelMatch');
-      const statusEl = document.getElementById('matchStatusText');
-      const timerEl = document.getElementById('matchTimerText');
-      const vsCard = document.getElementById('matchVsCard');
-
-      const btnPlayAi = document.getElementById("btnPlayWithAi");
-      if (btnPlayAi) btnPlayAi.style.display = "none";
-      if (btnStart) btnStart.style.display = "block";
-      if (btnCancel) btnCancel.style.display = "none";
-      if (statusEl) statusEl.textContent = '⚡ 寻找全国实力相当的对手';
-      if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
-      if (vsCard) vsCard.style.display = 'none';
+      resetQuickMatchControls();
 
       currentActiveMatchUid = '';
       currentActiveMatchId = '';
+      activeMatchRoomKey = '';
       if (wasMatchmaking) {
         try {
           await safeApiFetch('/api/match/cancel', {
@@ -4953,6 +4958,7 @@
         } catch(e) {}
       }
       showGameNotice('已取消匹配');
+      return true;
     }
 
     function switchOnlineTab(tab) {
@@ -5033,6 +5039,10 @@
       document.getElementById('onlineModal').classList.add('show');
       void warmApiHost(false);
       switchOnlineTab(tab);
+      if (tab === 'match' && !isMatchmaking && !matchStartPending) {
+        hideMatchingFloatingBar();
+        resetQuickMatchControls();
+      }
       // Account/session restoration may finish after the app startup hook; entering
       // the matchmaking view gives any explicitly saved queue another safe attempt.
       if (tab === 'match') void resumePendingQuickMatch();
