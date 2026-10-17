@@ -256,3 +256,10 @@ adb install .\五子棋.apk
 - GitHub Release `v1.0.137` 指向 master 提交 `89323163fc2dedd19566a70362d5d258d87b63dc`，提供 APK、完整 HTML 与 307,262-byte HTML 增量包。APK `versionName=1.0.137` / `versionCode=138`；v1/v2/v3 签名验证通过，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。APK SHA-256：`b773b1907f14c0e940d27a4e74a0438b152186075679f54e03e6c15ae478e0c6`；单文件 HTML SHA-256：`69ef98d41ff546ea230fb0eda039dd2969bfd2e69bd679c9d8411586d5e63910`。
 - ECS 已切换到版本化 v1.0.137 Worker；部署前 SQLite 与服务配置已在服务器受限目录备份，部署后 SQLite `integrity_check=ok`，本机与公网 `/healthz` 均 HTTP 200，公网 `/api/version` 返回 v1.0.137。旧版本目录保留用于回滚。Cloudflare 未部署、未读写数据。
 - ADB 模拟器 `emulator-5554` 使用保留数据的 `adb install -r` 更新到 Build 138；`MainActivity` 已启动。未执行清除数据或卸载。真实两账号匹配、聊天、离房与重连流程未在本轮生产环境执行。
+
+## 2026-10-17 v1.0.138 好友音效与匹配状态修复
+
+- 好友邀请、好友申请和私聊消息加入主题提示音，沿用游戏音效开关与音量；私聊通知增加节流。退出房间后重新进入匹配页会清除残留匹配标识与浮条。
+- 发布脚本静态语法与凭据安全门禁通过。APK 为 `versionName=1.0.138` / `versionCode=139`，v1/v2/v3 签名验证通过，证书 SHA-256 与 v1.0.137 一致：`9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。APK SHA-256：`1cdd456b9acceb7bb56e8f6dc659f1823862760786a60c086f7138f4ff53ca91`；单文件 HTML SHA-256：`9804fc8e57a9300926a81e7e5da5807447952f411aab05f91485a61897997175`。Release 附带从 v1.0.137 基线生成的 92,959-byte HTML 增量包。
+- GitHub [Release v1.0.138](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.138) 指向 master 发布提交 `0dd16435b6d14ee0d3b3a4cb7d0d33a46e0516cd`。ECS 公网 `/api/version` 返回 v1.0.138 且 APK 摘要匹配 Release，`/healthz` 为 HTTP 200、SQLite 状态正常；该更新接口动态读取最新 GitHub Release，因此本次无需重启 ECS 或修改数据库。Cloudflare 未部署。
+- MuMu `emulator-5554` 通过 `adb install -r` 更新到 Build 139，应用数据保留，`MainActivity` 已启动。未单独运行完整行为回归套件；该模拟器检查不代表真实双账号联机验收。
