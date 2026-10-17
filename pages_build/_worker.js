@@ -23,7 +23,8 @@ const MAX_LEADERBOARD_AVATAR_CHARS = 300;
 const PRIVATE_RELEASE_CACHE_TTL_MS = 30000;
 const GITHUB_REQUEST_TIMEOUT_MS = 8000;
 const MAX_JSON_BODY_BYTES = 512 * 1024;
-const MAX_UPDATE_ASSET_BYTES = 8 * 1024 * 1024;
+const MAX_UPDATE_HTML_BYTES = 20 * 1024 * 1024;
+const MAX_UPDATE_APK_BYTES = 50 * 1024 * 1024;
 const AUTH_SESSION_TTL_MS = 365 * 24 * 3600 * 1000;
 const REFRESH_TOKEN_BYTES = 32;
 
@@ -156,6 +157,7 @@ export class GomokuRoom {
     this.roomCode = '';
     this.roomSessionId = '';
     this.joinTicket = '';
+    this.hostUid = '';
     this.host = null;
     this.client = null;
     this.pendingBootstrap = [];
@@ -167,14 +169,19 @@ export class GomokuRoom {
     const role = String(url.searchParams.get('role') || '');
     const requestedSessionId = String(url.searchParams.get('session') || '');
     const requestedJoinTicket = String(url.searchParams.get('ticket') || '');
+    const authenticatedUid = roomRelaySafeId(request.headers.get('X-Gomoku-Room-Uid'), 128);
     if (!/^\d{6}$/.test(roomCode) || !['host', 'client'].includes(role)) {
       return new Response('Invalid room relay parameters', { status: 400 });
     }
+    if (!authenticatedUid) return new Response('Authenticated room identity required', { status: 401 });
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('WebSocket upgrade required', { status: 426 });
     }
     if (role === 'host' && (!roomRelaySafeId(requestedSessionId) || !roomRelaySafeId(requestedJoinTicket))) {
       return new Response('Host session credentials required', { status: 401 });
+    }
+    if (role === 'host' && this.hostUid && this.hostUid !== authenticatedUid) {
+      return new Response('Room host identity mismatch', { status: 403 });
     }
     if (requestedSessionId && !roomRelaySafeId(requestedSessionId)) {
       return new Response('Invalid room session', { status: 400 });
@@ -191,6 +198,7 @@ export class GomokuRoom {
     const connection = {
       socket: serverSocket,
       role,
+      uid: authenticatedUid,
       sessionId: requestedSessionId,
       joinTicket: requestedJoinTicket,
       messageCount: 0,
@@ -214,10 +222,19 @@ export class GomokuRoom {
       }
       this.roomSessionId = requestedSessionId;
       this.joinTicket = requestedJoinTicket;
+      this.hostUid = authenticatedUid;
       this.host = connection;
       if (this.client && !this.client.closed && !this.client.sessionId) {
         // 客户端可能先于房主连入并把 join_request 放入 bootstrap 队列。
         this.client.sessionId = this.roomSessionId;
+        // Refresh the relay session cached by that already-open client before
+        // the host flushes the queued join bootstrap and starts the game.
+        this._send(this.client, {
+          type: 'relay_ready',
+          role: 'client',
+          room: this.roomCode,
+          sessionId: this.roomSessionId
+        });
       }
     } else {
       if (this.client) {
@@ -281,7 +298,12 @@ export class GomokuRoom {
     if (this.host === connection) this.host = null;
     if (this.client === connection) this.client = null;
     const peer = connection.role === 'host' ? this.client : this.host;
-    this._send(peer, { type: 'relay_peer_left', role: connection.role });
+    this._send(peer, {
+      type: 'relay_peer_left',
+      role: connection.role,
+      intentional: Boolean(connection.intentionalLeave),
+      sessionId: connection.sessionId || this.roomSessionId
+    });
   }
 
   _consumeBudget(connection) {
@@ -367,6 +389,11 @@ export class GomokuRoom {
     if (!this._topicDirectionAllowed(connection, topic, payloadObject)) return;
 
     const forwarded = this._forward(connection, topic, payload);
+    if (forwarded && payloadObject.type === 'leave_room') {
+      // Forward the normal room message first. If the sender closes immediately,
+      // _onClose emits a single session-bound intentional marker as a fallback.
+      connection.intentionalLeave = true;
+    }
     if (!forwarded && connection.role === 'client' && topic === `gomoku/v3/${this.roomCode}/c2h` &&
         payloadObject.type === 'join_request') {
       this.pendingBootstrap.push({ topic, payload });
@@ -527,7 +554,7 @@ export default {
 
       const corsHeaders = {
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Gomoku-Client, X-Gomoku-Update-Ticket, Range, If-Range',
       'Access-Control-Max-Age': '600',
       'Vary': 'Origin',
       'X-Content-Type-Options': 'nosniff',
@@ -1374,22 +1401,110 @@ export default {
       }
     };
 
+    const fetchReleaseAsset = async (assetUrl, sourceLabel, init, timeoutMs) => {
+      try {
+        const response = await fetchWithTimeout(assetUrl, init, timeoutMs);
+        const status = Number(response.status) || 0;
+        const rangeHeader = String(init?.headers?.Range || '').trim();
+        let invalidReason = '';
+        if (!response.body) invalidReason = '响应缺少文件内容';
+        else if (status === 200) {
+          if (response.headers.has('content-range')) invalidReason = '完整文件响应包含无效 Content-Range';
+        } else if (status === 206) {
+          if (!rangeHeader) invalidReason = '未请求分段下载却收到局部文件';
+          else {
+            const requested = rangeHeader.match(/^bytes=(\d+)-(\d*)$/i) || rangeHeader.match(/^bytes=-(\d+)$/i);
+            const actual = String(response.headers.get('content-range') || '').match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i);
+            if (!requested || !actual) invalidReason = '分段下载范围格式无效';
+            else {
+              const actualStart = Number(actual[1]);
+              const actualEnd = Number(actual[2]);
+              const total = actual[3] === '*' ? null : Number(actual[3]);
+              const actualLength = actualEnd - actualStart + 1;
+              const declaredLengthHeader = response.headers.get('content-length');
+              const declaredLength = declaredLengthHeader === null ? null : Number(declaredLengthHeader);
+              const isSuffix = requested[0].match(/^bytes=-(\d+)$/i);
+              if (!Number.isSafeInteger(actualStart) || !Number.isSafeInteger(actualEnd) ||
+                  actualStart < 0 || actualEnd < actualStart ||
+                  (total !== null && (!Number.isSafeInteger(total) || total <= actualEnd)) ||
+                  (declaredLength !== null && (!Number.isSafeInteger(declaredLength) || declaredLength !== actualLength))) {
+                invalidReason = '分段下载的 Content-Range 与文件长度不匹配';
+              } else if (isSuffix) {
+                const suffixLength = Number(isSuffix[1]);
+                if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0 ||
+                    (total !== null && (actualEnd !== total - 1 || actualStart !== Math.max(0, total - suffixLength)))) {
+                  invalidReason = '分段下载未匹配请求的后缀范围';
+                }
+              } else {
+                const requestedStart = Number(requested[1]);
+                const requestedEnd = requested[2] ? Number(requested[2]) : null;
+                if (!Number.isSafeInteger(requestedStart) || actualStart !== requestedStart ||
+                    (requestedEnd !== null && actualEnd > requestedEnd) ||
+                    (requestedEnd === null && total !== null && actualEnd !== total - 1)) {
+                  invalidReason = '分段下载未匹配请求范围';
+                }
+              }
+            }
+          }
+        } else invalidReason = `HTTP ${status || '无响应'}`;
+        if (!invalidReason) return { response, sourceLabel, error: '' };
+        try { await response.body?.cancel(); } catch (_) {}
+        return { response: null, sourceLabel, error: invalidReason };
+      } catch (error) {
+        const isTimeout = error?.name === 'AbortError' || error?.name === 'TimeoutError';
+        return { response: null, sourceLabel, error: isTimeout ? '请求超时' : '网络连接失败' };
+      }
+    };
+
     const streamPrivateReleaseAsset = async (assetType, ticketPayload = null) => {
       const result = await getPrivateReleaseAsset(assetType);
       if (result.error) return json({ code: 503, msg: result.error }, 503);
       const releaseTag = String(result.release?.tag_name || '').trim();
+      if (!/^v\d+\.\d+\.\d+$/.test(releaseTag)) {
+        return json({ code: 502, msg: 'GitHub Release 版本号无效，暂不能下载更新' }, 502);
+      }
       if (ticketPayload && ticketPayload.release !== releaseTag) {
         return json({ code: 401, msg: '更新票据已过期，请重新检查更新' }, 401);
       }
 
-      const assetResponse = await fetchWithTimeout(result.asset.url, {
-        headers: githubHeaders(result.token, 'application/octet-stream')
-      }, 20000);
-      if (!assetResponse.ok || !assetResponse.body) {
-        return json({ code: 502, msg: `更新文件读取失败 (${assetResponse.status})` }, 502);
+      const assetName = assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html';
+      const rangeHeader = String(request.headers.get('Range') || '').trim();
+      const ifRangeHeader = String(request.headers.get('If-Range') || '').trim();
+      const assetHeaders = {
+        'User-Agent': 'gomoku-update-proxy',
+        ...(rangeHeader ? { Range: rangeHeader } : {}),
+        ...(rangeHeader && ifRangeHeader ? { 'If-Range': ifRangeHeader } : {})
+      };
+      const mirrorUrl = `https://gh-proxy.com/https://github.com/${UPDATE_REPOSITORY}/releases/download/${releaseTag}/${assetName}`;
+      const mirror = await fetchReleaseAsset(mirrorUrl, 'GitHub 代理', {
+        headers: assetHeaders
+      }, 12000);
+      let selected = mirror;
+      if (!selected.response) {
+        const official = await fetchReleaseAsset(result.asset.url, 'GitHub 官方源', {
+          headers: { ...githubHeaders(result.token, 'application/octet-stream'), ...assetHeaders }
+        }, 20000);
+        selected = official.response ? official : {
+          response: null,
+          sourceLabel: '',
+          error: `GitHub 代理 ${mirror.error}；GitHub 官方源 ${official.error}`
+        };
+      }
+      const assetResponse = selected.response;
+      if (!assetResponse) {
+        console.warn(`[update proxy] ${assetType} download sources failed: ${selected.error}`);
+        return json({ code: 502, msg: `更新文件读取失败：${selected.error}` }, 502);
       }
       const declaredAssetSize = Number(assetResponse.headers.get('content-length') || 0);
-      if (Number.isFinite(declaredAssetSize) && declaredAssetSize > MAX_UPDATE_ASSET_BYTES) {
+      const maxAssetBytes = assetType === 'apk' ? MAX_UPDATE_APK_BYTES : MAX_UPDATE_HTML_BYTES;
+      if (Number.isFinite(declaredAssetSize) && declaredAssetSize > maxAssetBytes) {
+        try { await assetResponse.body?.cancel(); } catch (_) {}
+        return json({ code: 413, msg: '更新文件超过允许大小' }, 413);
+      }
+      const contentRange = String(assetResponse.headers.get('content-range') || '');
+      const rangeTotal = contentRange.match(/^bytes\s+\d+-\d+\/(\d+)$/i);
+      if (rangeTotal && Number(rangeTotal[1]) > maxAssetBytes) {
+        try { await assetResponse.body?.cancel(); } catch (_) {}
         return json({ code: 413, msg: '更新文件超过允许大小' }, 413);
       }
 
@@ -1397,9 +1512,19 @@ export default {
       headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       headers.set('Content-Type', assetType === 'apk' ? 'application/vnd.android.package-archive' : 'text/html; charset=utf-8');
       headers.set('Content-Disposition', `attachment; filename="${assetType === 'apk' ? 'gomoku.apk' : 'gomoku.html'}"`);
+      headers.set('X-Gomoku-Update-Source', selected.sourceLabel === 'GitHub 代理' ? 'github-proxy' : 'github-official');
+      headers.set('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Range, ETag, Last-Modified, X-Gomoku-Update-Source');
       const contentLength = assetResponse.headers.get('content-length');
       if (contentLength) headers.set('Content-Length', contentLength);
-      return new Response(assetResponse.body, { status: 200, headers });
+      for (const name of ['Accept-Ranges', 'Content-Range', 'ETag', 'Last-Modified']) {
+        const value = assetResponse.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      return new Response(assetResponse.body, {
+        status: assetResponse.status,
+        statusText: assetResponse.statusText,
+        headers
+      });
     };
 
     // 版本检测与文件下载统一从 Worker 出口完成，客户端不再直连私有仓库。
@@ -1410,6 +1535,10 @@ export default {
       return json({ code: 405, msg: '仅支持 GET 请求' }, 405);
     }
     if (url.pathname === "/api/version") {
+      const ticketProtectionEnabled = String(env.UPDATE_TICKET_ENFORCED || '1').trim() !== '0';
+      if (ticketProtectionEnabled && !getUpdateTicketSecret()) {
+        return json({ code: 503, msg: '更新服务未配置票据签名密钥，请联系管理员' }, 503);
+      }
       const latest = await getLatestPrivateRelease();
       if (latest.error) return json({ code: 503, msg: latest.error }, 503);
       const releaseTag = String(latest.release.tag_name || '').trim();
@@ -1574,6 +1703,18 @@ export default {
     const privateGameMode = () => String(env.PRIVATE_GAME_MODE || '1').trim() !== '0';
     const isPrivateGameUsername = username => privateGameConfigured && PRIVATE_GAME_ALLOWED_USERNAMES.includes(String(username || '').trim().toLowerCase());
     const isAllowedPrivateGameUser = user => !privateGameMode() || isPrivateGameUsername(user?.username);
+    const publicUidForAccount = username => {
+      if (!privateGameMode() || !isPrivateGameUsername(username)) return '';
+      const index = PRIVATE_GAME_ALLOWED_USERNAMES.indexOf(String(username || '').trim().toLowerCase());
+      return index === 0 ? 'lza' : (index === 1 ? 'qsq' : '');
+    };
+    const privateUsernameForPublicUid = value => {
+      if (!privateGameMode() || !privateGameConfigured) return '';
+      const publicUid = String(value || '').normalize('NFKC').trim().toLowerCase();
+      if (publicUid === 'lza') return PRIVATE_GAME_ALLOWED_USERNAMES[0];
+      if (publicUid === 'qsq') return PRIVATE_GAME_ALLOWED_USERNAMES[1];
+      return '';
+    };
     // 私人游戏的账号头像按 PRIVATE_GAME_USERNAMES 配置顺序固定：第一个男生，第二个女生。
     // 头像值以账号名为准，避免旧设备资料或资料编辑把固定情侣头像互相覆盖。
     const avatarForAccount = (username, avatar) => {
@@ -1760,7 +1901,12 @@ export default {
         `).bind(ticketHash, now).run();
         if (!Number(claimed?.meta?.changes)) return json({ code: 401, msg: '房间连接票据已使用' }, 401);
         const roomId = env.GOMOKU_ROOMS.idFromName(`gomoku-room:${roomCode}`);
-        return env.GOMOKU_ROOMS.get(roomId).fetch(request);
+        const relayHeaders = new Headers(request.headers);
+        // Never trust a client-supplied identity header; only the consumed ticket
+        // may choose the UID that the room Durable Object uses for host ownership.
+        relayHeaders.set('X-Gomoku-Room-Uid', String(record.uid));
+        const relayRequest = new Request(request, { headers: relayHeaders });
+        return env.GOMOKU_ROOMS.get(roomId).fetch(relayRequest);
       } catch (error) {
         return publicServerError('房间连接校验异常', error);
       }
@@ -2229,14 +2375,19 @@ export default {
       if (auth.response) return auth.response;
       if (!consumeSocialRequestRate(uid, 'search', 30, 3600000, 120)) return json({ code: 429, msg: '查找过于频繁，请稍后再试' }, 429);
       const username = String(url.searchParams.get('username') || '').trim();
-      // 不静默截断搜索词：否则超长输入可能被截断成另一个真实账号，
-      // 也会让客户端误以为支持模糊/前缀搜索。注册账号上限为 32 字符，
-      // 搜索必须使用完整、大小写敏感的账号名。
+      // 不静默截断搜索词：否则超长输入可能被截断成另一个真实账号。
+      // 原账号名仍按完整名称匹配；公开短 ID 由服务端做 NFKC 与大小写归一化。
       if (!username || username.length > 32) return json({ code: 400, msg: '请输入完整账号名（最多 32 个字符）' }, 400);
-      const target = await env.DB.prepare(`
-        SELECT uid, username, nickname, avatar, score FROM users
-        WHERE username = ? AND username IS NOT NULL AND username != ''
-      `).bind(username).first();
+      const aliasTarget = privateUsernameForPublicUid(username);
+      const target = aliasTarget
+        ? await env.DB.prepare(`
+          SELECT uid, username, nickname, avatar, score FROM users
+          WHERE LOWER(username) = ? AND username IS NOT NULL AND username != ''
+        `).bind(aliasTarget).first()
+        : await env.DB.prepare(`
+          SELECT uid, username, nickname, avatar, score FROM users
+          WHERE username = ? AND username IS NOT NULL AND username != ''
+        `).bind(username).first();
       if (!target || (privateGameMode() && !isPrivateGameUsername(target.username)) || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) {
         return json({ code: 404, msg: '未找到可添加的账号' }, 404);
       }
@@ -2250,6 +2401,7 @@ export default {
       return json({ code: 0, data: {
         uid: target.uid,
         username: target.username,
+        publicUid: publicUidForAccount(target.username),
         nickname: sanitizeText(target.nickname || target.username, 16),
         avatar: compactAvatarForAccount(target.username, target.avatar),
         score: Number(target.score) || 1000,
@@ -2345,8 +2497,14 @@ export default {
       if (auth.response) return auth.response;
       const uid = String(auth.user.uid);
       if (!consumeSocialRequestRate(uid, 'friend-request', 20, 86400000, 100)) return json({ code: 429, msg: '今日好友申请过多' }, 429);
-      const targetUsername = String(body.targetUsername || '').trim().slice(0, 32);
-      const target = await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
+      const targetUsername = String(body.targetUsername || '').trim();
+      if (!targetUsername || targetUsername.length > 32) {
+        return json({ code: 400, msg: '账号名长度无效' }, 400);
+      }
+      const aliasTarget = privateUsernameForPublicUid(targetUsername);
+      const target = aliasTarget
+        ? await env.DB.prepare(`SELECT uid, username FROM users WHERE LOWER(username) = ? AND username IS NOT NULL AND username != ''`).bind(aliasTarget).first()
+        : await env.DB.prepare(`SELECT uid, username FROM users WHERE username = ? AND username IS NOT NULL AND username != ''`).bind(targetUsername).first();
       if (!target || (privateGameMode() && !isPrivateGameUsername(target.username)) || target.uid === uid || await isBlockedEitherWay(uid, target.uid)) return json({ code: 404, msg: '未找到可添加的账号' }, 404);
       if (await areFriends(uid, target.uid)) return json({ code: 409, msg: '你们已经是好友' }, 409);
       if (await friendCount(uid) >= SOCIAL_MAX_FRIENDS || await friendCount(target.uid) >= SOCIAL_MAX_FRIENDS) return json({ code: 409, msg: '好友数量已达上限' }, 409);
@@ -3377,7 +3535,8 @@ async function allocateNextAvailableUid(env) {
                   uid: current.uid,
                   username: current.username,
                   nickname: current.nickname,
-                avatar: avatarForAccount(current.username, current.avatar),
+                  publicUid: publicUidForAccount(current.username),
+                  avatar: avatarForAccount(current.username, current.avatar),
                   score: current.score,
                   wins: current.wins,
                   total_games: current.total_games,
@@ -3394,6 +3553,7 @@ async function allocateNextAvailableUid(env) {
                 uid: user.uid,
                 username: user.username,
                 nickname: user.nickname,
+                publicUid: publicUidForAccount(user.username),
                 avatar: avatarForAccount(user.username, user.avatar),
                 score: user.score,
                 wins: user.wins,
@@ -3420,6 +3580,7 @@ async function allocateNextAvailableUid(env) {
               uid: user.uid,
               username: null,
               nickname: user.nickname,
+              publicUid: '',
               avatar: avatarForAccount(user.username, user.avatar),
               score: user.score,
               wins: user.wins,
@@ -3487,6 +3648,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -3514,7 +3676,10 @@ async function allocateNextAvailableUid(env) {
         const now = Date.now();
         const loginName = username.trim();
         const normalizedLoginName = loginName.toLowerCase();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE (LOWER(username) = ? OR uid = ? OR nickname = ?)').bind(normalizedLoginName, loginName, loginName).first();
+        const aliasTarget = privateUsernameForPublicUid(loginName);
+        const user = aliasTarget
+          ? await env.DB.prepare('SELECT * FROM users WHERE LOWER(username) = ?').bind(aliasTarget).first()
+          : await env.DB.prepare('SELECT * FROM users WHERE (LOWER(username) = ? OR uid = ? OR nickname = ?)').bind(normalizedLoginName, loginName, loginName).first();
         if (!user) {
           return json({ code: 1, msg: '账号或密码不正确' });
         }
@@ -3552,6 +3717,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -3639,6 +3805,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -3660,7 +3827,11 @@ async function allocateNextAvailableUid(env) {
         const { username } = await readJsonBody(request);
         if (!username) return json({ code: 1, msg: '请输入要找回的账号' });
 
-        const user = await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
+        const resetLookup = String(username).trim();
+        const resetAliasTarget = privateUsernameForPublicUid(resetLookup);
+        const user = resetAliasTarget
+          ? await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE LOWER(username) = ?').bind(resetAliasTarget).first()
+          : await env.DB.prepare('SELECT uid, username, security_q, reset_locked_until FROM users WHERE (username = ? OR uid = ?)').bind(resetLookup, resetLookup).first();
         if (!user) {
           return json({ code: 1, msg: '该账号不存在' });
         }
@@ -3695,7 +3866,11 @@ async function allocateNextAvailableUid(env) {
         }
 
         const now = Date.now();
-        const user = await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(String(username).trim(), String(username).trim()).first();
+        const resetLookup = String(username).trim();
+        const resetAliasTarget = privateUsernameForPublicUid(resetLookup);
+        const user = resetAliasTarget
+          ? await env.DB.prepare('SELECT * FROM users WHERE LOWER(username) = ?').bind(resetAliasTarget).first()
+          : await env.DB.prepare('SELECT * FROM users WHERE (username = ? OR uid = ?)').bind(resetLookup, resetLookup).first();
         if (!user) return json({ code: 1, msg: '账号不存在' });
         if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
@@ -3739,6 +3914,7 @@ async function allocateNextAvailableUid(env) {
             uid: user.uid,
             username: user.username,
             nickname: user.nickname,
+            publicUid: publicUidForAccount(user.username),
             avatar: avatarForAccount(user.username, user.avatar),
             score: user.score,
             wins: user.wins,
@@ -4159,7 +4335,9 @@ async function allocateNextAvailableUid(env) {
       if (!leaderboardQueryPromise) {
         leaderboardQueryPromise = (async () => {
           const { results } = await env.DB.prepare(`
-            SELECT uid, nickname AS name,
+            SELECT uid,
+                   CASE WHEN username = ? THEN 'lza' WHEN username = ? THEN 'qsq' ELSE '' END AS publicUid,
+                   nickname AS name,
                    CASE
                      WHEN username = ? THEN 'anime_boy'
                      WHEN username = ? THEN 'anime_girl'
@@ -4172,7 +4350,11 @@ async function allocateNextAvailableUid(env) {
             WHERE username IS NOT NULL AND username != '' AND password_hash IS NOT NULL ${privateRankFilter}
             ORDER BY score DESC, wins DESC, uid ASC
             LIMIT 30
-          `).bind(PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1], ...privateRankBindings).all();
+          `).bind(
+            PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1],
+            PRIVATE_GAME_ALLOWED_USERNAMES[0], PRIVATE_GAME_ALLOWED_USERNAMES[1],
+            ...privateRankBindings
+          ).all();
           const data = Array.isArray(results) ? results : [];
           cachedLeaderboard = data;
           lastLeaderboardTime = Date.now();

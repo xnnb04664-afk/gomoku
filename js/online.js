@@ -29,8 +29,8 @@
     function getOnlineRelayEndpoints() {
       const routing = window.GomokuBackendRouting;
       if (!routing || !routing.primaryHost || typeof routing.socketUrl !== 'function') return [];
-      // 房间状态存在各自的 relay 后端。不能按本机健康缓存重排，否则房主和
-      // 加入者可能分别落到 ECS/Cloudflare；始终先查权威 ECS，再顺序尝试备用。
+      // 房间码、票据和中继状态由 ECS 单点承载。默认不连 Cloudflare，避免
+      // ECS 房间在独立备用数据库/内存中继上被误判为不存在。
       const hosts = typeof routing.getAllHosts === 'function'
         ? routing.getAllHosts()
         : [routing.primaryHost, ...(typeof routing.getOrderedHosts === 'function' ? routing.getOrderedHosts() : [])];
@@ -217,7 +217,7 @@
 
     // 项目自有的 WebSocket 房间中继适配器。它故意实现和旧 MQTT 客户端相同的
     // 最小接口，这样既能复用已有的 ACK、去重、P2P 探测和重连状态机，
-    // 以便复用旧业务层，同时把生产信令固定在项目自己的 Cloudflare 入口。
+    // 以便复用旧业务层，同时把生产信令固定在项目自己的 ECS 入口。
     class RoomRelayClient {
       constructor(endpoint, roomCode, role, sessionId = '', joinTicket = '', socketTicket = '') {
         this.url = endpoint;
@@ -230,6 +230,7 @@
         this.transportType = 'relay';
         this.connected = false;
         this.closed = false;
+        this.intentionalPeerLeaveDelivered = false;
         this.listeners = new Map();
         this.subscriptions = new Map();
         this.ws = null;
@@ -313,6 +314,7 @@
           for (const topic of this.subscriptions.keys()) this._send({ type: 'subscribe', topic });
         };
         socket.onmessage = event => {
+          if (this.closed) return;
           const raw = typeof event.data === 'string' ? event.data : '';
           if (!raw || raw.length > 96 * 1024) return;
           let message;
@@ -326,6 +328,19 @@
             return;
           }
           if (message.type === 'relay_peer_left') {
+            const expectedPeerRole = this.role === 'host' ? 'client' : 'host';
+            if (message.intentional === true) {
+              if (this.intentionalPeerLeaveDelivered || message.role !== expectedPeerRole ||
+                  typeof message.sessionId !== 'string' || !message.sessionId ||
+                  message.sessionId !== this.relaySessionId) return;
+              // Deliver this control event straight to the active room client.
+              // Do not route it through a temporary v3 join subscription: the
+              // live game may already be listening only on a session-bound v4 topic.
+              this.intentionalPeerLeaveDelivered = true;
+              this._emit('peer_leave', message);
+              this.end(true);
+              return;
+            }
             this._emit('offline');
             this._emit('close');
             // 对端离开时主动释放本地 WebSocket；否则旧 relay 仍可能保持
@@ -842,7 +857,7 @@
     async function connectRoomRelay(roomKey, role, sessionId = '') {
       // 同一房间的同一角色不能并行连接两个 DO 入口：后建立的连接会让
       // 前一个连接被判定为重复会话，表现为“一边进房、另一边断开”。
-      // 因此这里按 ECS 主入口 -> Cloudflare 故障备用入口串行切换。
+      // 因此这里按当前显式启用的主备顺序串行连接；默认仅包含 ECS。
       let lastError = null;
       const orderedRelayEndpoints = getOnlineRelayEndpoints();
       for (const endpoint of orderedRelayEndpoints) {
@@ -879,12 +894,12 @@
       if (status === 404) return `房间不存在或邀请已过期（HTTP 404）：${detail}。请核对房间号并让好友重新开房。`;
       if (status === 429) return `加入请求过于频繁（HTTP 429）：${detail}。请稍等片刻再试。`;
       if (status >= 400 && status < 500) return `ECS 拒绝了房间请求（HTTP ${status}）：${detail}。请核对账号、房间号后重试。`;
-      if (status >= 500) return `ECS 房间服务异常（HTTP ${status}），备用节点也未能建立连接：${detail}。请稍后重试。`;
-      return `ECS 主节点和 Cloudflare 备用节点均未连通：${detail}。请检查网络，确认好友在线且房间未过期后重试。`;
+      if (status >= 500) return `ECS 房间服务异常（HTTP ${status}）：${detail}。请稍后重试。`;
+      return `ECS 房间服务暂时无法连接：${detail}。请检查网络，确认好友在线且房间未过期后重试。`;
     }
 
     function isLegacyMqttFallbackEnabled() {
-      // 私人游戏只使用带账号票据的 ECS/Cloudflare 房间中继。
+      // 私人游戏只使用带账号票据的项目自有房间中继；默认部署在 ECS。
       return false;
     }
 
@@ -955,9 +970,20 @@
     const P2P_DISCONNECTED_GRACE_MS = 2500;
     const P2P_ICE_RESTART_WAIT_MS = 1800;
     const MAX_P2P_REMOTE_ICE_CANDIDATES = 128;
+    const ECS_ICE_HOST = (() => {
+      try {
+        const apiBase = String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '');
+        const host = new URL(apiBase).hostname;
+        return host || '101.201.76.166';
+      } catch (_) {
+        return '101.201.76.166';
+      }
+    })();
+    const ECS_STUN_URL = `stun:${ECS_ICE_HOST}:3478`;
     const DEFAULT_WEBRTC_ICE_SERVERS = [
-      { urls: 'stun:stun.cloudflare.com:3478' }
+      { urls: ECS_STUN_URL }
     ];
+    window.__GOMOKU_ECS_STUN_URL = ECS_STUN_URL;
     const RTC_ICE_CACHE_MAX_AGE_MS = 45 * 60 * 1000;
     let cachedRtcIceServers = null;
     let cachedRtcIceServersExpiresAt = 0;
@@ -1138,6 +1164,16 @@
           if (topic !== this.subTopic) return;
           this._handleIncomingPayload(rawPayload, false, 'mqtt');
         };
+        this.relayPeerLeaveHandler = message => {
+          const expectedPeerRole = this.role === 'host' ? 'client' : 'host';
+          if (!message || message.role !== expectedPeerRole || typeof message.sessionId !== 'string' ||
+              message.sessionId !== this.sessionId) return;
+          this._handleIncomingPayload(JSON.stringify({
+            type: 'leave_room',
+            senderRole: message.role,
+            sessionId: message.sessionId
+          }), false, 'relay');
+        };
         this.mqttCloseHandler = () => this._markTransportClosed(new Error('信令连接已断开'));
         this.mqttOfflineHandler = () => this._markTransportClosed(new Error('信令连接已离线'));
         this.mqttErrorHandler = (err) => {
@@ -1145,6 +1181,7 @@
         };
 
         this.client.on('message', this.messageHandler);
+        if (typeof this.client.on === 'function') this.client.on('peer_leave', this.relayPeerLeaveHandler);
         this.client.on('close', this.mqttCloseHandler);
         this.client.on('offline', this.mqttOfflineHandler);
         this.client.on('error', this.mqttErrorHandler);
@@ -1857,6 +1894,7 @@
       _detachMqttListeners() {
         if (!this.client) return;
         try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
+        try { this.client.removeListener('peer_leave', this.relayPeerLeaveHandler); } catch(_) {}
         try { this.client.removeListener('close', this.mqttCloseHandler); } catch(_) {}
         try { this.client.removeListener('offline', this.mqttOfflineHandler); } catch(_) {}
         try { this.client.removeListener('error', this.mqttErrorHandler); } catch(_) {}
@@ -2617,6 +2655,7 @@
         board: board,
         history: history,
         turn: turn,
+        hasExtraMove: Boolean(hasExtraMove),
         isOver: isOver,
         isDraw: gameResultIsDraw,
         winnerColor: gameWinnerColor,
@@ -3054,6 +3093,7 @@
         if (!special && !move) return false;
       }
       if (data.turn !== BLACK && data.turn !== WHITE) return false;
+      if (data.hasExtraMove !== undefined && typeof data.hasExtraMove !== 'boolean') return false;
       if (typeof data.isOver !== 'boolean') return false;
       if (data.isDraw !== undefined && typeof data.isDraw !== 'boolean') return false;
       if (data.winnerColor !== undefined && data.winnerColor !== 0 && data.winnerColor !== BLACK && data.winnerColor !== WHITE) return false;
@@ -3085,6 +3125,7 @@
         board: data.board,
         history: data.history,
         turn: data.turn,
+        hasExtraMove: data.hasExtraMove,
         isOver: false,
         isDraw: false,
         currentDrawnCards: data.currentDrawnCards,
@@ -3373,6 +3414,7 @@
           board = data.board.map(row => [...row]);
           history = data.history.map(step => ({ ...step }));
           turn = data.turn;
+          if (typeof data.hasExtraMove === 'boolean') hasExtraMove = data.hasExtraMove;
           isOver = data.isOver;
           gameResultIsDraw = data.isDraw === true;
           gameWinnerColor = data.winnerColor === BLACK || data.winnerColor === WHITE ? data.winnerColor : 0;
@@ -3457,6 +3499,7 @@
               board = data.board.map(r => [...r]);
               history = data.history.map(h => ({ ...h }));
               if (data.turn !== undefined) turn = data.turn;
+              if (typeof data.hasExtraMove === 'boolean') hasExtraMove = data.hasExtraMove;
               isOver = false;
               gameWinnerColor = 0;
               gameResultIsDraw = false;
@@ -3531,6 +3574,11 @@
             player: myOnlineColor === BLACK ? WHITE : BLACK,
             ...quotaBefore
           });
+          if (data.skillId === 'double_move') {
+            hasExtraMove = true;
+            updateUI();
+            persistGameState();
+          }
           alert(`⚡ 对方发动了干扰卡【${incomingCard.name}】！`);
         } else if (data.type.startsWith("skill_") || data.type.startsWith("destiny_point_")) {
           const quotaBefore = {
@@ -3582,6 +3630,7 @@
           } else if (data.type === 'skill_prophecy') {
           prophecyPoint = { r: data.r, c: data.c, by: data.by };
           draw();
+          persistGameState();
           showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
         } else if (data.type === 'skill_remove_stone') {
           const removedP = board[data.r][data.c];
@@ -3706,6 +3755,7 @@
           opponentFreeMove = true;
           turn = myOnlineColor;
           updateUI();
+          persistGameState();
           showSkillBanner('💀', '对方掷出【大凶·空军】！', '对方本回合直接空过！您获得免费补下 1 子！');
         } else if (data.type === 'destiny_point_2') {
           const shiftColor = (myOnlineColor === BLACK ? WHITE : BLACK);
@@ -4864,9 +4914,25 @@
     async function cancelQuickMatch() {
       const wasMatchmaking = isMatchmaking;
       const wasStartPending = matchStartPending;
-      if (!wasMatchmaking && !wasStartPending) return;
       const cancelUid = currentActiveMatchUid || String(currentUserUid || getOrCreateMatchUid() || '');
       const cancelMatchId = currentActiveMatchId;
+
+      // 房间结束后再次调用此函数时，队列已经不是 waiting 状态；仍需清理
+      // 匹配成功时遗留在大厅里的按钮、提示和本地匹配标识。
+      if (!wasMatchmaking && !wasStartPending) {
+        clearPendingQuickMatch(currentActiveMatchUid, currentActiveMatchId);
+        clearInterval(matchPollInterval);
+        clearInterval(matchTimerInterval);
+        matchPollInterval = null;
+        matchTimerInterval = null;
+        hideMatchingFloatingBar();
+        currentActiveMatchUid = '';
+        currentActiveMatchId = '';
+        activeMatchRoomKey = '';
+        resetQuickMatchControls();
+        return false;
+      }
+
       clearPendingQuickMatch(cancelUid, cancelMatchId);
       matchAttemptGeneration++;
       matchStartPending = false;
@@ -4877,22 +4943,11 @@
       matchTimerInterval = null;
       hideMatchingFloatingBar();
 
-      const btnStart = document.getElementById('btnStartMatch');
-      const btnCancel = document.getElementById('btnCancelMatch');
-      const statusEl = document.getElementById('matchStatusText');
-      const timerEl = document.getElementById('matchTimerText');
-      const vsCard = document.getElementById('matchVsCard');
-
-      const btnPlayAi = document.getElementById("btnPlayWithAi");
-      if (btnPlayAi) btnPlayAi.style.display = "none";
-      if (btnStart) btnStart.style.display = "block";
-      if (btnCancel) btnCancel.style.display = "none";
-      if (statusEl) statusEl.textContent = '⚡ 寻找全国实力相当的对手';
-      if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
-      if (vsCard) vsCard.style.display = 'none';
+      resetQuickMatchControls();
 
       currentActiveMatchUid = '';
       currentActiveMatchId = '';
+      activeMatchRoomKey = '';
       if (wasMatchmaking) {
         try {
           await safeApiFetch('/api/match/cancel', {
@@ -4903,6 +4958,7 @@
         } catch(e) {}
       }
       showGameNotice('已取消匹配');
+      return true;
     }
 
     function switchOnlineTab(tab) {
@@ -4983,6 +5039,10 @@
       document.getElementById('onlineModal').classList.add('show');
       void warmApiHost(false);
       switchOnlineTab(tab);
+      if (tab === 'match' && !isMatchmaking && !matchStartPending) {
+        hideMatchingFloatingBar();
+        resetQuickMatchControls();
+      }
       // Account/session restoration may finish after the app startup hook; entering
       // the matchmaking view gives any explicitly saved queue another safe attempt.
       if (tab === 'match') void resumePendingQuickMatch();

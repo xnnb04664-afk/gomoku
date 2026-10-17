@@ -8,6 +8,6 @@
   },
   "devDependencies": {
     "terser": "5.51.2",
-    "wrangler": "4.147.0"
+    "wrangler": "4.151.1"
   }
 }

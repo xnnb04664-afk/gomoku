@@ -6,7 +6,35 @@ const { webcrypto } = require('node:crypto');
 const workerSource = fs.readFileSync('backend/worker.js', 'utf8')
   .replace('export class GomokuRoom', 'class GomokuRoom')
   .replace('export class SocialHub', 'class SocialHub')
-  .replace('export default {', 'globalThis.__gomokuSocialHub = SocialHub; globalThis.__gomokuWorker = {');
+  .replace('export default {', 'globalThis.__gomokuRoom = GomokuRoom; globalThis.__gomokuSocialHub = SocialHub; globalThis.__gomokuWorker = {');
+
+let lastWebSocketPair = null;
+class TestWebSocket {
+  constructor() { this.readyState = 1; this.listeners = new Map(); this.closed = false; }
+  accept() {}
+  send() {}
+  close() { this.closed = true; this.readyState = 3; }
+  addEventListener(type, handler) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type).add(handler);
+  }
+  removeEventListener(type, handler) { this.listeners.get(type)?.delete(handler); }
+}
+class TestWebSocketPair {
+  constructor() {
+    this[0] = new TestWebSocket();
+    this[1] = new TestWebSocket();
+    lastWebSocketPair = this;
+  }
+}
+class TestResponse extends Response {
+  constructor(body, init = {}) {
+    if (init.status === 101) {
+      super(null, { status: 200, headers: init.headers });
+      this.webSocket = init.webSocket;
+    } else super(body, init);
+  }
+}
 
 const sandbox = {
   console,
@@ -26,7 +54,7 @@ const sandbox = {
   URL,
   URLSearchParams,
   Request,
-  Response,
+  Response: TestResponse,
   Headers,
   Blob,
   FormData,
@@ -35,6 +63,7 @@ const sandbox = {
   clearTimeout,
   btoa,
   atob,
+  WebSocketPair: TestWebSocketPair,
   fetch: async url => { throw new Error(`unexpected network request: ${url}`); },
 };
 
@@ -162,6 +191,13 @@ class MemoryStatement {
     if (q.includes('from social_socket_tickets') && q.includes('ticket_hash = ?')) {
       const row = this.db.tickets.get(String(a[0]));
       return row && row.used === 0 && row.expires_at > Number(a[1]) ? { uid: row.uid, channel: row.channel || 'friends' } : null;
+    }
+    if (q.includes('from room_socket_tickets') && q.includes('ticket_hash = ?')) {
+      const row = this.db.roomSocketTickets.get(String(a[0]));
+      const user = row && this.db.users.get(String(row.uid));
+      return row && user && row.used === 0 && row.expires_at > Number(a[1])
+        ? { ...row, username: user.username }
+        : null;
     }
     if (q.includes('select * from game_invites where id = ? and receiver_uid = ?')) {
       const invite = this.db.gameInvites.get(String(a[0]));
@@ -411,6 +447,26 @@ class MemoryStatement {
       row.used = 1;
       return { meta: { changes: 1 } };
     }
+    if (q.startsWith('delete from room_socket_tickets')) {
+      for (const [hash, row] of this.db.roomSocketTickets) {
+        if (row.expires_at <= Number(a[0]) || row.used !== 0) this.db.roomSocketTickets.delete(hash);
+      }
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('insert into room_socket_tickets')) {
+      this.db.roomSocketTickets.set(String(a[0]), {
+        ticket_hash: String(a[0]), uid: String(a[1]), room_code: String(a[2]), role: String(a[3]),
+        session_id: String(a[4]), join_ticket: String(a[5]), expires_at: Number(a[6]), used: 0,
+        created_at: Number(a[7]),
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (q.startsWith('update room_socket_tickets set used = 1')) {
+      const row = this.db.roomSocketTickets.get(String(a[0]));
+      if (!row || row.used !== 0 || row.expires_at <= Number(a[1])) return { meta: { changes: 0 } };
+      row.used = 1;
+      return { meta: { changes: 1 } };
+    }
     if (q.startsWith('insert into game_invites')) {
       if (q.includes('where exists')) {
         const friendKey = pairKey(a[7], a[8]);
@@ -523,6 +579,7 @@ class MemoryDB {
     this.worldMessageStates = new Map();
     this.matchQueue = new Map();
     this.tickets = new Map();
+    this.roomSocketTickets = new Map();
     this.gameInvites = new Map();
     this.recentReports = new Map();
     this.recentOpponents = new Map();
@@ -579,6 +636,7 @@ async function main() {
   ]);
   const notifications = [];
   const socialFetches = [];
+  const roomFetches = [];
   const env = {
     DB: db,
     PRIVATE_GAME_MODE: '0',
@@ -598,6 +656,17 @@ async function main() {
               status: 200,
               headers: { 'Content-Type': 'application/json' },
             });
+          },
+        };
+      },
+    },
+    GOMOKU_ROOMS: {
+      idFromName(name) { return name; },
+      get(id) {
+        return {
+          async fetch(input) {
+            roomFetches.push({ id, request: input });
+            return new Response(JSON.stringify({ routed: true }), { status: 200 });
           },
         };
       },
@@ -655,6 +724,7 @@ async function main() {
     ['/api/blocks', { method: 'POST', body: { uid: '100001', targetUid: '100002' } }],
     ['/api/messages', { method: 'POST', body: { uid: '100001', receiverUid: '100002', text: 'x', clientMessageId: 'unauth0001' } }],
     ['/api/social/socket-ticket', { method: 'POST', body: { uid: '100001' } }],
+    ['/api/room/socket-ticket', { method: 'POST', body: { uid: '100001', roomCode: '123456', role: 'host', sessionId: 'session-a', joinTicket: 'join-a' } }],
   ]) {
     const result = await call(env, path, options);
     assert.ok([401, 403].includes(result.response.status), `${path} 必须拒绝未认证请求`);
@@ -694,6 +764,50 @@ async function main() {
   assert.equal(result.response.status, 404, '账号前缀不得产生模糊搜索结果');
   result = await call(env, `/api/friends/search?uid=100001&username=${'b'.repeat(33)}`, { token: 'token-alice' });
   assert.equal(result.response.status, 400, '超长搜索词不得被静默截断');
+
+  const longUsernamePrefix = 'x'.repeat(32);
+  db.users.set('100005', {
+    uid: '100005', username: longUsernamePrefix, nickname: 'Long User', avatar: '👦',
+    token: 'token-long-user', token_expires_at: Date.now() + 86400000,
+  });
+  result = await call(env, '/api/friends/requests', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { targetUsername: `${longUsernamePrefix}-suffix` },
+  });
+  assert.equal(result.response.status, 400, '超长好友申请账号名必须拒绝，不能截断到另一个真实账号');
+  assert.equal(db.friendRequests.size, 0, '拒绝超长账号名不得创建好友申请');
+  db.users.delete('100005');
+
+  const roomTicketIssued = await call(env, '/api/room/socket-ticket', {
+    method: 'POST', uid: '100001', token: 'token-alice',
+    body: { roomCode: '123456', role: 'host', sessionId: 'room-session-a', joinTicket: 'room-join-a' },
+  });
+  assert.equal(roomTicketIssued.response.status, 200);
+  const roomSocketTicket = roomTicketIssued.payload.data.ticket;
+  result = await call(env,
+    `/api/room/socket?room=123456&role=host&session=room-session-a&ticket=room-join-a&socketTicket=${roomSocketTicket}`,
+    { headers: { Upgrade: 'websocket', 'X-Gomoku-Room-Uid': '100002' } },
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(roomFetches.at(-1).request.headers.get('X-Gomoku-Room-Uid'), '100001',
+    '房间 DO 身份必须覆盖为一次性票据绑定的 UID，不能接受客户端伪造头');
+  result = await call(env,
+    `/api/room/socket?room=123456&role=host&session=room-session-a&ticket=room-join-a&socketTicket=${roomSocketTicket}`,
+    { headers: { Upgrade: 'websocket' } },
+  );
+  assert.equal(result.response.status, 401, '房间连接票据必须只能消费一次');
+
+  const room = new sandbox.__gomokuRoom({}, {});
+  const hostRequest = (uid, sessionId, joinTicket) => new Request(
+    `https://gomoku-api.pages.dev/api/room/socket?room=654321&role=host&session=${sessionId}&ticket=${joinTicket}`,
+    { headers: { Upgrade: 'websocket', 'X-Gomoku-Room-Uid': uid } },
+  );
+  const hostConnection = await room.fetch(hostRequest('100001', 'owner-session', 'owner-join'));
+  assert.equal(hostConnection.status, 200);
+  const originalHostSocket = lastWebSocketPair[1];
+  const takeover = await room.fetch(hostRequest('100002', 'attacker-session', 'attacker-join'));
+  assert.equal(takeover.status, 403, '另一账号不得接管已有房主的房间');
+  assert.equal(originalHostSocket.closed, false, '拒绝接管不得关闭现有房主连接');
 
   // 充值目录可展示，但余额和订单必须绑定正式账号；默认生产模式关闭，
   // 沙盒只创建 pending 订单，绝不能凭客户端请求增加钻石。

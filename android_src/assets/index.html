@@ -9,7 +9,7 @@
   <script>try{performance.mark('gomoku_boot_start')}catch(_){}</script>
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="preload" href="js/app.min.js" as="script">
-  <link rel="preload" href="img/startup/startup-01.webp" as="image" fetchpriority="high">
+  <link rel="preload" href="img/startup/sky-cloudsea-v2.webp" as="image" fetchpriority="high">
   <link rel="stylesheet" href="js/sky-island.css">
   <link rel="stylesheet" href="js/startup-splash.css">
   <script defer src="js/startup-splash.js"></script>
@@ -950,7 +950,10 @@
         completedDepth: 0,
         rootMove: null,
         killers: [],
-        history: new Map()
+        history: new Map(),
+        tacticalLeafLimit: Number(options.tacticalLeafLimit) > 0
+          ? Number(options.tacticalLeafLimit)
+          : 1800
       };
       let best = rootCandidates[0];
       let bestScore = -Infinity;
@@ -1574,7 +1577,8 @@
         ? context.killers[ply]
         : [];
       const history = context && context.history ? context.history : null;
-      return (candidates || []).slice().sort((a, b) => {
+      // 搜索节点拥有自己的候选数组；原地排序，避免递归搜索每层再复制一份数组。
+      return (candidates || []).sort((a, b) => {
         const priority = (move) => {
           if (!move) return -Infinity;
           let value = Number(move.score) || 0;
@@ -1596,7 +1600,7 @@
       // 叶节点做有限战术延伸：静态评分看不出“下一手就能赢”，
       // 这是普通 Alpha-Beta 在五子棋中最容易出现的假优势来源。
       context.tacticalLeaves = (context.tacticalLeaves || 0) + 1;
-      if (context.tacticalLeaves > (context.tacticalLeafLimit || 1800)) return base;
+      if (context.tacticalLeaves > context.tacticalLeafLimit) return base;
 
       const currentWins = this.getWinningMoves(
         position,
@@ -3626,28 +3630,24 @@
 </head>
 <body>
 
-  <div id="startupSplash" class="startup-splash" role="dialog" aria-modal="true" aria-label="天空棋岛正在启动" aria-hidden="true">
-    <div class="startup-splash-frame" data-startup-frame="0">
-      <img src="img/startup/startup-01.webp" alt="" fetchpriority="high" decoding="async">
+  <div id="startupSplash" class="startup-splash" role="dialog" aria-modal="true" aria-label="晴空棋岛正在开启" aria-hidden="true">
+    <div class="startup-splash-sky" aria-hidden="true">
+      <img src="img/startup/sky-cloudsea-v2.webp" alt="" fetchpriority="high" decoding="async">
     </div>
-    <div class="startup-splash-frame" data-startup-frame="1">
-      <img src="img/startup/startup-02.webp" alt="" loading="eager" decoding="async">
-    </div>
-    <div class="startup-splash-frame" data-startup-frame="2">
-      <img src="img/startup/startup-03.webp" alt="" loading="eager" decoding="async">
-    </div>
-    <div class="startup-splash-frame" data-startup-frame="3">
-      <img src="img/startup/startup-04.webp" alt="" loading="eager" decoding="async">
-    </div>
-    <div class="startup-splash-shade" aria-hidden="true"></div>
+    <div class="startup-splash-atmosphere" aria-hidden="true"></div>
     <div class="startup-splash-brand">
-      <div class="startup-splash-kicker">Sky Island · Gomoku</div>
-      <h1 class="startup-splash-title">天空棋岛</h1>
-      <p class="startup-splash-subtitle">落子有声，下一手唤醒整座岛</p>
+      <div class="startup-splash-kicker">SKY ISLAND <span>·</span> GOMOKU</div>
+      <h1 class="startup-splash-title">晴空棋岛</h1>
+      <p class="startup-splash-subtitle">云海之上 <i></i> 落子成局</p>
+    </div>
+    <div class="startup-splash-board" aria-hidden="true">
+      <img src="img/game/sky-board-cloudstone.webp" alt="" decoding="async">
+      <canvas data-startup-board></canvas>
+      <span class="startup-splash-board-orbit"></span>
     </div>
     <div class="startup-splash-footer">
-      <span class="startup-splash-progress">Loading island</span>
-      <button class="startup-splash-skip" type="button" data-startup-skip>跳过动画</button>
+      <span class="startup-splash-status"><i></i>云海棋局 · 即将开启</span>
+      <button class="startup-splash-skip" type="button" data-startup-skip>轻触继续</button>
     </div>
   </div>
 
@@ -3807,7 +3807,7 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.131" data-collapsed="false" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.139" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
       <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
@@ -4245,9 +4245,9 @@
       <!-- 选项卡 1：账号登录 -->
       <div id="viewAuthLogin">
         <div class="auth-input-group">
-          <div class="auth-input-label"><span>👤</span> 账号用户名 或 6位数字UID：</div>
-          <input type="text" id="loginUsername" placeholder="请输入游戏账号名称 或 专属UID" maxlength="32" class="auth-input-box" />
-          <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 提示：输入您注册时的账号名或专属 UID 均可快捷登录</div>
+          <div class="auth-input-label"><span>👤</span> 登录 ID 或账号名：</div>
+          <input type="text" id="loginUsername" placeholder="请输入 lza / qsq 或原账号名" maxlength="32" class="auth-input-box" />
+          <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 登录 ID 不区分大小写，也可输入原账号名</div>
         </div>
 
         <div class="auth-input-group">
@@ -4315,9 +4315,9 @@
       <div id="viewAuthReset" style="display:none;">
         <div id="resetStep1">
           <div class="auth-input-group">
-            <div class="auth-input-label"><span>👤</span> 需找回密码的账号名称 或 6位UID：</div>
-            <input type="text" id="resetUsername" placeholder="请输入游戏账号名称 或 专属UID" maxlength="32" class="auth-input-box" onkeydown="if(event.key==='Enter') fetchSecurityQuestion()" />
-            <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 支持输入账号名或专属 UID 查询绑定的密保问题</div>
+            <div class="auth-input-label"><span>👤</span> 找回账号密码：</div>
+            <input type="text" id="resetUsername" placeholder="请输入 lza / qsq 或原账号名" maxlength="32" class="auth-input-box" onkeydown="if(event.key==='Enter') fetchSecurityQuestion()" />
+            <div style="font-size:10px; color:#64748b; margin-top:3px; font-weight:700;">💡 支持使用不区分大小写的登录 ID 查询</div>
           </div>
           <button class="auth-submit-btn" onclick="fetchSecurityQuestion()" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8); box-shadow:0 3.5px 0 #1e40af;">🔍 下一步：查询我的密保 ➔</button>
         </div>
@@ -4572,7 +4572,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.3.1</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.3.9</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
@@ -5923,6 +5923,5 @@
   else observe();
 })();
 </script>
-<script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async></script>
 </body>
 </html>

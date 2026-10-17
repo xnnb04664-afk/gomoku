@@ -46,6 +46,11 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends Activity {
 
@@ -62,7 +67,7 @@ public class MainActivity extends Activity {
     private static final String[] GITHUB_RELEASE_PROXY_HOSTS = {
             "gh-proxy.com", "gh-proxy.org", "githubproxy.cc", "ghfast.top"
     };
-    private static final String DEFAULT_UPDATE_BASE = CLOUDFLARE_PAGES_UPDATE_BASE;
+    private static final String DEFAULT_UPDATE_BASE = ECS_UPDATE_BASE;
     private static final String UPDATE_PROXY_VERSION_PATH = "/api/version";
     private static final String UPDATE_PROXY_APK_PATH = "/api/update/apk";
     private static final String UPDATE_CLIENT_HEADER = "X-Gomoku-Client";
@@ -205,11 +210,23 @@ public class MainActivity extends Activity {
     private WebView       mWebView;
     private FrameLayout   mRootLayout;
     private GomokuSplashView mSplashView;
+    private final ConcurrentHashMap<String, Boolean> mPendingNativeAiRequests = new ConcurrentHashMap<>();
+    private final ThreadPoolExecutor mNativeAiExecutor = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1), runnable -> {
+                Thread thread = new Thread(runnable, "gomoku-native-ai");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
-    private final Runnable mSplashFailSafe = this::dismissNativeSplash;
+    private final Runnable mInitializeWebViewTask = this::initializeWebView;
+    private final Runnable mSplashLoadWarning = () -> {
+        if (mSplashView == null) return;
+        android.util.Log.w("MainActivity", "Startup is still waiting for the first visible WebView frame; keeping the splash visible.");
+        mSplashView.showLoadingHint();
+    };
     private final Runnable mSplashContentDismiss = this::dismissNativeSplash;
-    private static final long NATIVE_SPLASH_MIN_DURATION_MS = 1200L;
     private long mNativeSplashStartedAt = 0L;
+    private boolean mHasVisibleWebContent;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
     private ValueCallback<Uri[]> mFilePathCallback;
@@ -238,30 +255,135 @@ public class MainActivity extends Activity {
                 null
         );
     };
+
+    private boolean enqueueNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
+        if (mDestroyed || requestId == null
+                || !requestId.matches("[A-Za-z0-9_-]{1,80}")
+                || (aiColor != 1 && aiColor != 2)
+                || boardJson == null || boardJson.length() > 2048
+                || forbiddenJson == null || forbiddenJson.length() > 4096) {
+            return false;
+        }
+
+        final int[] board = new int[NativeGomokuAI.SIZE * NativeGomokuAI.SIZE];
+        final boolean[] forbidden = new boolean[board.length];
+        try {
+            org.json.JSONArray cells = new org.json.JSONArray(boardJson);
+            if (cells.length() != board.length) return false;
+            for (int i = 0; i < board.length; i++) {
+                Object value = cells.get(i);
+                if (!(value instanceof Number)) return false;
+                double number = ((Number) value).doubleValue();
+                int cell = (int) number;
+                if (number != cell || cell < 0 || cell > 2) return false;
+                board[i] = cell;
+            }
+
+            org.json.JSONArray forbiddenCells = new org.json.JSONArray(forbiddenJson);
+            if (forbiddenCells.length() > 64) return false;
+            for (int i = 0; i < forbiddenCells.length(); i++) {
+                org.json.JSONObject point = forbiddenCells.optJSONObject(i);
+                if (point == null) return false;
+                Object rowValue = point.opt("r");
+                Object colValue = point.opt("c");
+                if (!(rowValue instanceof Number) || !(colValue instanceof Number)) return false;
+                double rowNumber = ((Number) rowValue).doubleValue();
+                double colNumber = ((Number) colValue).doubleValue();
+                if (Double.isNaN(rowNumber) || Double.isInfinite(rowNumber)
+                        || Double.isNaN(colNumber) || Double.isInfinite(colNumber)
+                        || rowNumber != Math.rint(rowNumber) || colNumber != Math.rint(colNumber)) return false;
+                int row = (int) rowNumber;
+                int col = (int) colNumber;
+                if (row < 0 || row >= NativeGomokuAI.SIZE || col < 0 || col >= NativeGomokuAI.SIZE) return false;
+                forbidden[row * NativeGomokuAI.SIZE + col] = true;
+            }
+        } catch (Exception invalidPayload) {
+            return false;
+        }
+
+        if (mPendingNativeAiRequests.putIfAbsent(requestId, Boolean.TRUE) != null) return false;
+        try {
+            mNativeAiExecutor.execute(() -> {
+                long startedAt = System.nanoTime();
+                try {
+                    NativeGomokuAI.Move move = NativeGomokuAI.chooseMove(board, aiColor, forbidden);
+                    long elapsedMs = Math.max(0L, (System.nanoTime() - startedAt) / 1000000L);
+                    postNativeAiResult(requestId, move, elapsedMs, move == null ? "no_legal_move" : null);
+                } catch (RuntimeException error) {
+                    android.util.Log.w("NativeGomokuAI", "Native move selection failed", error);
+                    long elapsedMs = Math.max(0L, (System.nanoTime() - startedAt) / 1000000L);
+                    postNativeAiResult(requestId, null, elapsedMs, "calculation_failed");
+                } finally {
+                    mPendingNativeAiRequests.remove(requestId);
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException overloaded) {
+            mPendingNativeAiRequests.remove(requestId);
+            return false;
+        }
+    }
+
+    private void postNativeAiResult(String requestId, NativeGomokuAI.Move move, long elapsedMs, String error) {
+        org.json.JSONObject result = new org.json.JSONObject();
+        String resultJson;
+        try {
+            result.put("ok", move != null);
+            result.put("elapsedMs", elapsedMs);
+            if (move != null) {
+                result.put("r", move.r);
+                result.put("c", move.c);
+                result.put("depth", move.depth);
+                result.put("nodes", move.nodes);
+                result.put("score", move.score);
+            } else {
+                result.put("error", error == null ? "calculation_failed" : error);
+            }
+            resultJson = result.toString();
+        } catch (org.json.JSONException serializationError) {
+            resultJson = "{\"ok\":false,\"error\":\"serialization_failed\"}";
+        }
+
+        final String callback = "try{if(window.__gomokuNativeAiResult)window.__gomokuNativeAiResult(" +
+                org.json.JSONObject.quote(requestId) + "," + org.json.JSONObject.quote(resultJson) + ");}catch(e){}";
+        mMainHandler.post(() -> {
+            WebView webView = mWebView;
+            if (!mDestroyed && webView != null) webView.evaluateJavascript(callback, null);
+        });
+    }
+
     // 只在主线程递增；原生网络回调可能来自 ConnectivityService 的 Binder 线程。
     private long mNetworkEventSequence = 0L;
 
     /**
      * Installs the native splash over the WebView without putting WebView
      * startup behind an animation.  The user can dismiss it at any time;
-     * otherwise first committed content removes it and the timeout is only a
-     * last-resort guard for a broken/offline page.
+     * otherwise first committed content removes it and a slow-start timer only
+     * adds a visible waiting hint without exposing the empty WebView surface.
      */
     private void showNativeSplash() {
         if (mRootLayout == null || mSplashView != null) return;
         mSplashView = new GomokuSplashView(this);
-        mNativeSplashStartedAt = SystemClock.uptimeMillis();
+        mNativeSplashStartedAt = 0L;
         mSplashView.setDismissListener(this::dismissNativeSplash);
+        mSplashView.setAnimationStartedListener(startedAt -> {
+            mNativeSplashStartedAt = startedAt;
+            if (mHasVisibleWebContent) requestNativeSplashDismiss();
+        });
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         mRootLayout.addView(mSplashView, params);
-        mSplashView.startAnimation();
-        mMainHandler.postDelayed(mSplashFailSafe, 1400L);
+        // A slow cold start must keep showing the artwork. Removing it on a
+        // fixed timer exposed the splash background color as a blank gray page
+        // whenever WebView had not committed its first frame yet.
+        mMainHandler.postDelayed(mSplashLoadWarning, 1400L);
     }
 
     private void dismissNativeSplash() {
         if (mSplashView == null) return;
-        mMainHandler.removeCallbacks(mSplashFailSafe);
+        // Never let an early tap uncover the empty WebView surface.
+        if (!mHasVisibleWebContent) return;
+        mMainHandler.removeCallbacks(mSplashLoadWarning);
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         GomokuSplashView splash = mSplashView;
         mSplashView = null;
@@ -275,14 +397,19 @@ public class MainActivity extends Activity {
 
     private void requestNativeSplashDismiss() {
         if (mSplashView == null) return;
+        // The animation starts after WebView construction so its main-thread
+        // startup work cannot interrupt the visible stone-by-stone sequence.
+        if (mNativeSplashStartedAt <= 0L) return;
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         long elapsed = SystemClock.uptimeMillis() - mNativeSplashStartedAt;
-        long remaining = Math.max(0L, NATIVE_SPLASH_MIN_DURATION_MS - elapsed);
+        long minimumDuration = mSplashView.getMinimumDisplayDurationMs();
+        long remaining = Math.max(0L, minimumDuration - elapsed);
         mMainHandler.postDelayed(mSplashContentDismiss, remaining);
     }
 
     private void onWebContentVisible() {
-        // Keep the four-frame sequence visible through the first WebView draw.
+        // Keep the native island-opening sequence visible through the first WebView draw.
+        mHasVisibleWebContent = true;
         if (mSplashView != null) {
             requestNativeSplashDismiss();
         }
@@ -353,7 +480,7 @@ public class MainActivity extends Activity {
                 ? new Notification.Builder(this, SOCIAL_NOTIFICATION_CHANNEL_ID)
                 : new Notification.Builder(this);
         Notification notification = builder
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_gomoku)
                 .setContentTitle("五子棋 · 好友消息")
                 .setContentText("你有新的好友动态，打开游戏查看")
                 .setCategory(Notification.CATEGORY_MESSAGE)
@@ -542,35 +669,74 @@ public class MainActivity extends Activity {
             sp.edit().putInt("last_version_code", currentCode).apply();
         }
         if (!updateDir.exists()) updateDir.mkdirs();
+        recoverInterruptedHotUpdate(updateDir);
         mLocalServer = new LocalWebServer(getAssets(), updateDir);
 
-        // 先在后台绑定本地端口，再创建 WebView；两段初始化并行，避免冷启动白屏时额外等待 500ms。
+        // 先在后台绑定本地端口。WebView 创建放到启动画首帧之后，避免其冷启动阻塞期间只露出主题底色。
         mLocalServer.startAsync();
-
-        mWebView = new WebView(this);
-        // 使用与启动窗口一致的底色，避免 WebView 冷启动期间出现突兀空白。
-        mWebView.setBackgroundColor(getResources().getColor(R.color.splash_bg));
         mRootLayout = new FrameLayout(this);
         mRootLayout.setBackgroundColor(getResources().getColor(R.color.splash_bg));
-        mRootLayout.addView(mWebView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(mRootLayout);
-        // 原生动画与 WebView 并行启动；动画不作为页面可操作性的门槛。
         showNativeSplash();
+        // Give the native opening a few frames to appear before WebView's cold initialization
+        // competes for the UI thread and causes a visible hitch.
+        mMainHandler.postDelayed(mInitializeWebViewTask, 280L);
+    }
 
-        setupWebView();
-        registerNetworkMonitor();
+    private void initializeWebView() {
+        if (mDestroyed || isFinishing() || mRootLayout == null || mWebView != null) return;
+        try {
+            mWebView = new WebView(this);
+            mWebView.setBackgroundColor(getResources().getColor(R.color.splash_bg));
+            // 插入在启动画下面，首帧提交前保持原生画面可见。
+            mRootLayout.addView(mWebView, 0, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            setupWebView();
+            registerNetworkMonitor();
 
-        // WebView 初始化期间通常已经完成端口绑定；仅保留 120ms 极端兜底等待。
-        boolean serverReady = mLocalServer.awaitReady(120);
+            // Let the empty-board poster cover WebView's one-time construction.
+            // Start the animated layer after that work has left the UI thread.
+            if (mSplashView != null) mSplashView.startAnimation();
 
-        if (serverReady) {
-            mWebView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
-        } else {
-            // 极罕见情况：服务器未能及时就绪，回退到 file:// 并提示
-            android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
-            mWebView.loadUrl("file:///android_asset/index.html");
+            // Do not block the UI thread while waiting for the local asset server.
+            awaitLocalServerAndLoadPage();
+        } catch (RuntimeException error) {
+            android.util.Log.e("MainActivity", "WebView startup failed", error);
+            if (mSplashView != null) {
+                mSplashView.showLoadingHint();
+                mSplashView.startAnimation();
+            }
         }
+    }
+
+    private void awaitLocalServerAndLoadPage() {
+        final WebView webView = mWebView;
+        final LocalWebServer localServer = mLocalServer;
+        Thread readinessThread = new Thread(() -> {
+            boolean serverReady = localServer != null && localServer.awaitReady(120);
+            mMainHandler.post(() -> {
+                if (mDestroyed || isFinishing() || mWebView != webView || webView == null) return;
+                if (serverReady) {
+                    webView.loadUrl("http://localhost:" + LocalWebServer.getPort() + "/index.html");
+                } else {
+                    android.util.Log.w("MainActivity", "LocalWebServer not ready, falling back to file://");
+                    webView.loadUrl("file:///android_asset/index.html");
+                }
+            });
+        }, "gomoku-server-ready");
+        readinessThread.setDaemon(true);
+        readinessThread.start();
+    }
+
+    private static void recoverInterruptedHotUpdate(File updateDir) {
+        File target = new File(updateDir, "index.html");
+        File backup = new File(updateDir, "index.html.bak");
+        File temp = new File(updateDir, "index.html.tmp");
+        if (!target.isFile() && backup.isFile() && backup.length() >= 50000L) {
+            backup.renameTo(target);
+        }
+        if (target.isFile() && backup.exists()) backup.delete();
+        if (temp.exists()) temp.delete();
     }
 
     @Override
@@ -915,6 +1081,11 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public boolean requestNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
+                return MainActivity.this.enqueueNativeAiMove(requestId, boardJson, aiColor, forbiddenJson);
+            }
+
+            @android.webkit.JavascriptInterface
             public boolean saveHotUpdateFile(String fileName, String content) {
                 if (!"index.html".equals(fileName) || content == null) {
                     return false;
@@ -926,18 +1097,27 @@ public class MainActivity extends Activity {
                     if (!dir.exists()) dir.mkdirs();
                     File target = new File(dir, "index.html");
                     File temp = new File(dir, "index.html.tmp");
+                    File backup = new File(dir, "index.html.bak");
                     try (FileOutputStream fos = new FileOutputStream(temp)) {
                         fos.write(contentBytes);
                         fos.flush();
+                        fos.getFD().sync();
                     }
-                    if (target.exists() && !target.delete()) {
+                    if (backup.exists() && !backup.delete()) {
+                        temp.delete();
+                        return false;
+                    }
+                    boolean hadTarget = target.isFile();
+                    if (hadTarget && !target.renameTo(backup)) {
                         temp.delete();
                         return false;
                     }
                     if (!temp.renameTo(target)) {
+                        if (hadTarget) backup.renameTo(target);
                         temp.delete();
                         return false;
                     }
+                    if (backup.exists()) backup.delete();
                     return true;
                 } catch (Exception e) {
                     android.util.Log.e("MainActivity", "Hot update save failed: " + e.getMessage());
@@ -985,6 +1165,7 @@ public class MainActivity extends Activity {
                         .putString("token", token != null ? token : "")
                         .putString("nickname", nickname != null ? nickname : "")
                         .putString("avatar", avatar != null ? avatar : "")
+                        .putLong("authUpdatedAt", System.currentTimeMillis())
                         .apply();
                 } catch (Exception ignored) {}
             }
@@ -995,6 +1176,7 @@ public class MainActivity extends Activity {
                 try {
                     getSharedPreferences("app_user_login", MODE_PRIVATE).edit()
                         .putString("refreshToken", refreshToken != null ? refreshToken : "")
+                        .putLong("authUpdatedAt", System.currentTimeMillis())
                         .apply();
                 } catch (Exception ignored) {}
             }
@@ -1013,6 +1195,7 @@ public class MainActivity extends Activity {
                     obj.put("refreshToken", sp.getString("refreshToken", ""));
                     obj.put("nickname", sp.getString("nickname", ""));
                     obj.put("avatar", sp.getString("avatar", ""));
+                    obj.put("authUpdatedAt", sp.getLong("authUpdatedAt", 0L));
                     return obj.toString();
                 } catch (Exception e) {
                     return "";
@@ -1729,7 +1912,10 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         mDestroyed = true;
         mActivityResumed = false;
-        mMainHandler.removeCallbacks(mSplashFailSafe);
+        mPendingNativeAiRequests.clear();
+        mNativeAiExecutor.shutdownNow();
+        mMainHandler.removeCallbacks(mInitializeWebViewTask);
+        mMainHandler.removeCallbacks(mSplashLoadWarning);
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);

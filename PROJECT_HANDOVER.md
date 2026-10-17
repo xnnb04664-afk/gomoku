@@ -1,6 +1,6 @@
 # 五子棋项目交接手册：从零启动
 
-更新日期：2026-10-15
+更新日期：2026-10-17
 项目目录：D:\小游戏\五子棋
 本手册替代旧版按日期堆叠的长交接日志。历史记录与当前代码不一致时，以当前代码、测试和重新核验的线上状态为准。
 
@@ -14,7 +14,7 @@
 
 ## 项目概况
 
-中文优先的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 现在优先连接 ECS；Cloudflare Worker、Pages 和 D1 保留为客户端故障回退。仓库里的本地 Node 服务仍只托管静态文件。
+中文优先的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 和房间中继默认只连接 ECS；Cloudflare 游戏 API/中继应急开关默认关闭，更新下载仍保留 Cloudflare 最后应急出口。仓库里的本地 Node 服务仍只托管静态文件。
 
 - 源码仓库：https://github.com/xnnb04664-afk/gomoku
 - 官网：https://gomoku-home.pages.dev/
@@ -42,7 +42,7 @@ node server.js
 
 | 路径 | 用途 |
 | --- | --- |
-| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供四帧启动画面，img/game/sky-island-match-background.png 提供对局云海背景 |
+| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供“棋岛苏醒”启动底图，网页与 Android 在实际棋台上绘制网格和落子，img/game/sky-island-match-background.png 提供对局云海背景 |
 | backend/worker.js | Cloudflare API、账号/社交/聊天、房间路由及 Durable Object 实现 |
 | backend/ecs-host/ | 在 Node ECS 上运行同一 Worker 的 SQLite、WebSocket 与内存 Durable Object 适配层 |
 | js/ecs-config.js | ECS 公共 API 地址；需随网页、单文件和 Android 构建同步 |
@@ -71,11 +71,22 @@ node server.js
 
 ## ECS 主后端与 Cloudflare 备用
 
-- `js/ecs-config.js` 是 ECS API 地址的唯一前端配置。修改后运行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js` 和 `npm run build:official-site`，不要手改压缩或生成文件。
-- 公共只读 GET/HEAD/OPTIONS 请求先走 ECS，失败时可回退到 Cloudflare Pages/Worker。社交、私聊、世界频道、排行、战绩和金币等账号/数据库状态读取固定走 ECS，避免从未同步的 Cloudflare 数据库读到旧状态；写请求固定发往一个后端，ECS 超时或返回 5xx 时不会把同一写操作重放到独立数据库，客户端会提示提交状态未知。好友与世界频道 WebSocket 使用发出票据的同一后端地址；房间中继两端固定按 ECS 优先、Cloudflare 备用的同一顺序查找房间，但备用端不能接续另一端的内存房间状态。
+- `js/ecs-config.js` 是 ECS API 地址与应急开关的唯一前端配置。当前 `enableCloudflareEmergencyApi` 为 `false`，游戏数据与房间中继只连 ECS；修改后运行 `npm run build:app`、`node bundle_single_file.js`、`node build_apk.js` 和 `npm run build:official-site`，不要手改压缩或生成文件。
+- ECS 是游戏业务数据的唯一日常来源。只有运维明确把 `enableCloudflareEmergencyApi` 改成 `true` 并重新发布客户端后，游戏 API/房间中继才会尝试 Cloudflare。ECS 与 Cloudflare 使用独立数据库，房间中继也各自保存在进程内存；应急切换前必须确认数据和房间迁移策略，不能假定两边状态自动同步。写请求不会跨库重放。
 - ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。当前 `/healthz` 只检查 SQLite，不能证明公网 WebSocket 升级链路正常；发布验收还需独立连通实际房间中继。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
-- Cloudflare 数据库与 ECS SQLite 相互独立。客户端不会把 ECS 写入请求回放到 Cloudflare；不要据此假定两边数据会自动同步。
+- Cloudflare D1 与 ECS SQLite 相互独立。当前客户端不会把游戏 API 请求自动切到 Cloudflare；不要据此假定两边数据会自动同步。
 - 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新检查优先读取多个 GitHub 反向代理节点的公开 Release，下载失败后再走 ECS 短时票据更新服务，Cloudflare Pages/Worker 只作为最后应急出口。APK/HTML 下载按 Release SHA-256 校验；Android 还核对原签名证书。
+- Android 网页热更新先尝试按本机当前生效 HTML 的 SHA-256 精确匹配 GitHub HTML 增量包；网页端校验补丁 SHA、基线 SHA、生成文件 SHA 和启动引导，原生桥只负责写入已验证的完整 HTML。设备不支持 `DecompressionStream`、基线不匹配或补丁失败时回退完整 HTML，最后再走完整 APK 安装。增量包只覆盖单文件 HTML 热更新，APK 本身仍为完整包。旧客户端首次升级到带增量能力的网页时仍需完整 HTML 一次；之后无需先装新 APK，发布脚本会按上一版 GitHub HTML 自动生成补丁，补丁过大或基线不可取时跳过。
+- ECS/Cloudflare 的票据式完整 HTML 回退上限为 20 MiB，APK 上限为 50 MiB。生产单文件 HTML 约 12 MiB，不能再用 8 MiB 限额，否则 GitHub 多代理全部不可用时 ECS 完整热更新会返回 413。
+
+### ECS WebRTC STUN/TURN
+
+- 在线对局的 ICE 配置由 `js/online.js` 从 ECS `/api/rtc/ice-servers` 获取；公网路径为 `/gomoku-api/api/rtc/ice-servers`。服务端签发短时 TURN 凭据，客户端只在内存中缓存，不写入房间消息、URL、源码或日志。ICE 获取失败时只回退到 ECS 自有 STUN；不使用 Cloudflare、QQ 或 Syncthing 的 STUN/TURN 服务。`js/voice.js` 与保留兼容的 `js/p2p-network.js` 也使用 ECS ICE 地址。
+- WebRTC 会尝试建立客户端直连；网络不允许直连时可通过 ECS TURN 中继。ECS WebSocket 房间中继仍负责信令和可靠兜底，因此 ICE/TURN 不可用时不应被描述为“房间服务整体不可用”。
+- Coturn、TURN 凭据签发服务及端口范围、配置文件和受限备份记录见本机私有运维文档 `D:\服务器\游戏ECS-TURN说明.md`。密钥、真实运行配置和生产备份不得复制到仓库或公开文档。
+- 2026-10-16 已验证 ECS ICE 接口返回 ECS STUN 和 UDP/TCP TURN 配置、预检响应及 ECS 本机 STUN 映射；当前电脑到 ECS 的 TCP STUN Binding 成功。当前电脑的公网 UDP 探测未到达 ECS 网卡，尚未完成两台外部设备的 TURN 数据中继验收，因此不能据此确认所有网络下 P2P/TURN 已通。
+- 客户端源文件和 Android 资源副本已改为 ECS ICE；本次未构建、发布或安装客户端。已安装旧版本可能仍使用旧 ICE 配置，需升级后才会应用此次客户端改动。
+
 ## 账号访问边界
 
 - 生产环境启用 `PRIVATE_GAME_MODE=1`，允许名单只从 ECS 运行时环境变量 `PRIVATE_GAME_USERNAMES` 读取；缺失时 fail closed。账号名不得写入源码、文档、测试样例或 GitHub。
@@ -135,7 +146,7 @@ npm run build:official-site
 
 - build:app 使用 Terser 生成压缩 JS；build_apk.js 自身也会执行 build:app 并同步 android_src/assets。
 - node build_apk.js --sync-only 只同步资源，不会生成 APK。
-- 单文件版和 Android 入口共用 img/startup/ 四帧开屏；网页可跳过动画，Android 原生开屏最短展示 1.2 秒后随页面首绘关闭。
+- 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格先以空棋盘展示，再由黑白棋子逐步摆成中空爱心。网页尊重减少动态效果设置并可轻触继续；Android 12+ 系统启动主题先显示空棋台，WebView 完成一次性初始化后再启动约 3.6 秒的原生落子动画。Android 把静态云海/标题/棋台网格与动态棋子拆成独立图层，动画期间只刷新棋子层，避免反复重绘整屏；图片仍在后台解码，失败时保留空棋台预览；切到后台会暂停动画，恢复时接续播放。慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
 - APK 构建机需要 JDK（当前已验证 JDK 17）、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。
 - 更新游戏版号时同步 version.json、AndroidManifest.xml 和 JS 当前版本。node publish.js --help 会显示说明；该脚本会构建、改版本、提交并推送，还会创建或上传 GitHub Release。只有用户明确要求正式发版时才运行。
 - official-site/play/ 是忽略的构建产物，不要手改或强行纳入 Git。构建后再部署。
@@ -180,14 +191,14 @@ adb install .\五子棋.apk
 - Cloudflare 部署脚本不会更新 ECS。本次 ECS 发布不要运行 Wrangler，也不要迁移、重置或写入 Cloudflare 数据库。
 - Cloudflare 账号配置、令牌和更新服务密钥只存放在运维者管理的本机或云端 Secret 中。不要把凭据写入前端、Git、日志或交接文档。
 - `backup_d1.js` 只用于 Cloudflare D1 备用环境。ECS 发布前要单独备份 ECS SQLite 和运行配置；任何生产数据库备份均留在受限服务器目录。
-- 当前客户端的更新顺序固定为 GitHub 反向代理节点 → ECS 更新服务 → Cloudflare Pages/Worker 应急备用。ECS 的 `UPDATE_TICKET_SECRET` 由受限运行配置提供；公开 GitHub Release 不需要仓库读取令牌。更新来源必须与签发短时票据的来源一致，不能把一处服务的票据发给另一处服务。
+- 当前客户端的更新顺序固定为 GitHub 反向代理节点 → ECS 更新服务 → Cloudflare Pages/Worker 最后应急备用。Android 原生桥默认更新来源也是 ECS。ECS 的 `UPDATE_TICKET_SECRET` 由受限运行配置提供；公开 GitHub Release 不需要仓库读取令牌。更新来源必须与签发短时票据的来源一致，不能把一处服务的票据发给另一处服务。
 
 ## 线上状态核验
 
 线上服务状态会随部署和配置变化。每次更新都要从服务器读取当前服务与反向代理配置、先完成受限备份，再用健康检查和 SQLite 完整性检查验收。数据库内容、账号统计、主机地址、备份路径和密钥不应复制到公开文档或 GitHub。源码或构建成功不等于 ECS 已更新，也不等于真实客户端验收通过。
 ## Git 与提交边界
 
-最近业务代码基线是 master 上的 e5296d8（好友私聊实时刷新修复）。当时 tracked 工作区干净；已有未跟踪 .codex-diagnostics/，它是本地诊断资料，保留且不提交。当前手册修改需单独检查和提交，不要把其他文件一起带上。
+当前已发布业务基线是 master 上的 `89323163`（v1.0.137 / Android Build 138）。交接文档修订应单独提交；生产私有配置和账号数据不得进入仓库。
 
 提交前运行 git diff --check、git status --short、git diff -- PROJECT_HANDOVER.md。只按文件名暂存，例如 git add -- PROJECT_HANDOVER.md。需要推送或部署时先核实目标分支和项目；正式发版、Cloudflare Worker/Pages 或生产 D1 的改动应处于用户明确授权范围内。
 
@@ -205,3 +216,55 @@ adb install .\五子棋.apk
 - AI 对手使用 `img/game/ai-opponent-avatars.webp` 的原创灵兽头像；对局与棋谱共用映射，旧 AI 棋谱若保存了玩家头像路径则换用 AI 头像。单文件版内嵌图集，APK 清单显式包含图集。
 - 2026-10-16 复盘修复：从结算页进入逐手回放，退出时恢复终局状态；复盘不绘制终局五连光效、技能提示标记和临时 VFX。星轨按真实落子与技能记录生成可点击节点；不伪造“转折手/失误手”。切换人机的提示使用当前 AI 灵兽头像。
 - APK 正式签名、版本和 MuMu 安装状态需每次现场复核；上次构建/安装记录不能代替本轮设备验收。
+
+## 2026-10-16 v1.0.134 发布与验收
+
+已发布 **v1.0.134（Android Build 135）**。GitHub Release `v1.0.134` 和 ECS 均已更新；GitHub master 发布提交为 `2d9179429549fcb0ad572022d808d0bfa0b5d2bf`。Release 提供 APK、网页包和小型 HTML 差分包。APK SHA-256：`10275aceae0ef8d8b99ac83d730c5e5f37db0909250186df1ea178e67960d019`。
+
+- **GitHub 与 APK：**Release 标签指向上述发布提交；`com.gomoku.master` 的 `versionName=1.0.134`、`versionCode=135`。正式签名 v1/v2/v3 验证通过，与上一版签名一致；Release APK 与本地 APK 的 SHA-256 一致。覆盖安装使用 `adb install -r`，未清除 MuMu 应用数据。
+- **ECS：**服务由 `gomoku-ecs` 用户运行，`/opt/gomoku/current` 指向版本化发布目录，Node 使用 `/opt/gomoku/runtime/node-v22.23.3/bin/node`。本轮更新了 `backend/ecs-host/server.mjs`；ECS 健康检查和公网 `/api/version` 均返回 HTTP 200/v1.0.134，SQLite `integrity_check` 为 `ok`。部署前 SQLite、运行配置及旧服务文件已在 ECS 权限受限目录备份，旧版本仍保留。私有双账号允许名单数量、顺序和唯一性已用不回显账号名的方式核对。
+- **MuMu：**已安装并启动 Build 135。冷启动连续画面确认云海启动页先显示空棋盘与少量棋子，再逐步摆出爱心，随后进入首页；首页爱心棋盘完整显示。验收设备是 MuMu 模拟器，不代表实体手机验收。
+- **联机边界：**本轮验证了 ECS 健康状态和版本接口，但未做两名真实账号的完整 WebSocket 对局/互相离房端到端验收，也未重新验证双账号登录。不要将服务可用或客户端可启动描述为这些场景已通过。
+- **备用服务：**Cloudflare 未部署、未读写数据，仍只作为故障时备用。
+
+- **公开登录 ID 与固定头像：**后端按运行时 `PRIVATE_GAME_USERNAMES` 顺序映射公开 ID：第一个允许账号对应 `lza` 和男头像，第二个对应 `qsq` 和女头像。别名登录不区分大小写，也可用于好友查找/申请与密码找回；认证资料返回公开 ID 后，客户端锁定对应头像。数据库数字 UID 仍作为好友、房间、棋谱及统计关系键，不迁移主键。本轮已核对 ECS 私密运行配置的两项数量、顺序和唯一性；今后每次部署仍需重新核对。不要把真实账号名写入源码、文档、测试样例或 GitHub。
+- **资料离线保存：**服务器请求失败时昵称/头像只保存在本机；提示要求联网后重新打开资料页并再次保存，不承诺自动同步。云端资料是否成功以接口响应为准。
+- **主动离房通知：**`backend/worker.js` 是 ECS 使用的 Worker 源码，`pages_build/_worker.js` 是 Cloudflare 备用副本。离房消息由当前房间会话转发，WebSocket 关闭时发送带会话 ID 的主动离房标记；客户端校验角色与会话后直接通知对局层，避免投递到旧版 v3 临时订阅。客户端先于房主连接时，服务端会在会话号就绪后补发 `relay_ready`。这些更改需部署 ECS 后端并升级客户端才会影响线上房间；Cloudflare 副本只在切换备用环境时单独更新。
+- **进行中棋局：**AI/双人同屏棋局按账号 UID 写入本地 `localStorage` 检查点；首页有“进行中的对局”卡片，可恢复棋盘、落子历史、回合及已用卡牌。联机对局快照按账号保存在本机，杀后台后保留到主动离房或棋局结束，不因保存时间过长自动清除；恢复时还原本地棋盘并尝试重连 ECS 房间。ECS 房间状态当前由单个 Node 进程内存承载，进程重启后本机棋盘仍可查看/恢复，但不能保证重连到原对手或继续同步。
+- **后续验收：**如需进一步确认联机，安排维护时段并由两名账号持有者验证登录头像、好友/房间双向消息、双方离房、重连与棋局恢复。不要在公开记录里写真实账号名、生产统计或服务器备份位置。
+
+## v1.0.135 Android 登录保持改动
+
+- Android WebView 的账号凭证保存在应用本机 `localStorage`，并由原生 `SharedPreferences` 保存一份恢复副本；登录不依赖 Cookie。`gomoku_user_auth_updated_at` 与原生 `authUpdatedAt` 记录凭证更新时间。启动时若 WebView 来源变化（例如本地服务端口切换）留下了完整但较旧的凭证，会恢复更新时间较新的原生会话；主动退出同步清除该时间戳。
+- 本次只改客户端登录恢复与版本信息；不包含 `auth_sessions` 多设备会话服务端实验，也未部署 ECS 或 Cloudflare。该服务端候选仍需修复旧令牌重复迁移、并发验证轮换与单设备注销，再通过隔离 SQLite/D1 验证后才可部署。
+- APK 构建版本为 `1.0.135` / `versionCode=136`；正式签名验证通过 v1、v2、v3，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，与 v1.0.134 安装包一致。签名构建本身不代表真机或 MuMu 安装验收。
+- **发布核验：**GitHub Release `v1.0.135` 已发布，源提交为 `ad878921b9cab28191a21622c206cb8299439067`。APK SHA-256 为 `7da8716a87743a04b2d766c20fe4c9c9f0d4bbb170c1908b9fde28375ed93289`，单文件 HTML SHA-256 为 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`，增量包 328,511 bytes。ECS `/api/version` 已返回 v1.0.135 且哈希与 Release 一致，`/healthz` 为 HTTP 200；这是现有 ECS API 动态读取最新 GitHub Release，本轮未部署 Worker 或改数据库。MuMu/真机未安装本版，Cloudflare 未部署。
+
+## v1.0.136 启动画面
+
+- Android 12+ 系统启动图标使用动画矢量棋盘：第一帧是空的 15×15 棋盘，黑白棋子逐步落成爱心；Activity 初始化期间循环播放，避免动画结束后停在静态爱心图上。
+- 原生 `GomokuSplashView` 随 Activity 首帧接管，继续从空棋盘逐步显现网格和爱心棋子，再进入首页。动画资源位于 `android_src/res/animator/` 与 `android_src/res/drawable/`；系统主题配置在 `android_src/res/values/styles.xml`。
+- **构建与验证：**`python tests/android_splash_smoke.py` 通过，全部 Android 资源 XML 可解析，`node --check js/app.js` 通过。APK 为 `1.0.136` / `versionCode=137`，正式签名 v1/v2/v3 验证通过；证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，与 v1.0.135 相同。APK SHA-256 为 `46f0b28551ad241a3356bdee2c64bcf135765b1d57382ae61a83e5753a0846a0`，单文件 HTML SHA-256 为 `78df73cf65f446c0f51b3e3763d7db15b2e8ea571bd8925ee1dec6540019305e`。从 v1.0.135（基础 HTML SHA-256 `714c36d29ba5d039b3b56ae4471ebce5991216d0d124a3fc67af55ef011f726f`）生成的 HTML 增量包为 84,406 bytes。MuMu Android 15 覆盖安装成功，`firstInstallTime=2026-09-16 13:22:58` 未变；从模拟器拉取已安装 APK 后 SHA-256 与本次候选包完全一致。冷启动画面从无棋子的棋盘开始，随后逐步落子成爱心，再衔接游戏首页。此项是 MuMu 模拟器验收，不代表额外真机验收。
+- 本版只更新客户端启动画面和版本资源；未改 ECS 后端、数据库或 Cloudflare 备用配置。
+- **发布记录：**启动动画合并于 [PR #2](https://github.com/xnnb04664-afk/gomoku/pull/2)，验收信息修订于 [PR #3](https://github.com/xnnb04664-afk/gomoku/pull/3)。GitHub [Release v1.0.136](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.136) 指向提交 `4d8132387322eaabde649333b6bf33b359e05ad6`；ECS `/healthz` 返回 HTTP 200，`/api/version` 已读到 v1.0.136，APK 与 HTML 哈希匹配 Release。ECS 动态读取 GitHub 最新 Release，本次没有部署后端或改数据库。
+
+## 2026-10-17 v1.0.137 全面审查与发布
+
+- 使用 ImageGen 按晴空棋岛主题重新绘制应用图标，源图为 `design_assets/gomoku-app-icon-master.png`；发布脚本会一并提交官网 favicon，Android 各密度图标和状态栏通知图标已更新。
+- 修复棋局检查点恢复时技能状态丢失、房间票据允许错误账号接管房主、长好友账号名被截断、更新下载 Range 响应以及 GitHub 更新节点串行等待等问题；Wrangler 开发依赖升级后，`npm audit` 和 `npm audit --omit=dev` 均为 0 vulnerabilities。
+- 相关验证通过：后端 Worker/社交单元测试、更新清单竞速回归、棋局技能检查点浏览器冒烟、在线匹配/重连/传输及回放测试、AI 强度与性能测试、Android 启动画面/通知图标/生命周期/资源清单测试、完整 APK 与单文件构建。测试模拟没有替代真实双账号联网验收。
+- GitHub Release `v1.0.137` 指向 master 提交 `89323163fc2dedd19566a70362d5d258d87b63dc`，提供 APK、完整 HTML 与 307,262-byte HTML 增量包。APK `versionName=1.0.137` / `versionCode=138`；v1/v2/v3 签名验证通过，证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。APK SHA-256：`b773b1907f14c0e940d27a4e74a0438b152186075679f54e03e6c15ae478e0c6`；单文件 HTML SHA-256：`69ef98d41ff546ea230fb0eda039dd2969bfd2e69bd679c9d8411586d5e63910`。
+- ECS 已切换到版本化 v1.0.137 Worker；部署前 SQLite 与服务配置已在服务器受限目录备份，部署后 SQLite `integrity_check=ok`，本机与公网 `/healthz` 均 HTTP 200，公网 `/api/version` 返回 v1.0.137。旧版本目录保留用于回滚。Cloudflare 未部署、未读写数据。
+- ADB 模拟器 `emulator-5554` 使用保留数据的 `adb install -r` 更新到 Build 138；`MainActivity` 已启动。未执行清除数据或卸载。真实两账号匹配、聊天、离房与重连流程未在本轮生产环境执行。
+
+## 2026-10-17 v1.0.138 好友音效与匹配状态修复
+
+- 好友邀请、好友申请和私聊消息加入主题提示音，沿用游戏音效开关与音量；私聊通知增加节流。退出房间后重新进入匹配页会清除残留匹配标识与浮条。
+- 发布脚本静态语法与凭据安全门禁通过。APK 为 `versionName=1.0.138` / `versionCode=139`，v1/v2/v3 签名验证通过，证书 SHA-256 与 v1.0.137 一致：`9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。APK SHA-256：`1cdd456b9acceb7bb56e8f6dc659f1823862760786a60c086f7138f4ff53ca91`；单文件 HTML SHA-256：`9804fc8e57a9300926a81e7e5da5807447952f411aab05f91485a61897997175`。Release 附带从 v1.0.137 基线生成的 92,959-byte HTML 增量包。
+- GitHub [Release v1.0.138](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.138) 指向 master 发布提交 `0dd16435b6d14ee0d3b3a4cb7d0d33a46e0516cd`。ECS 公网 `/api/version` 返回 v1.0.138 且 APK 摘要匹配 Release，`/healthz` 为 HTTP 200、SQLite 状态正常；该更新接口动态读取最新 GitHub Release，因此本次无需重启 ECS 或修改数据库。Cloudflare 未部署。
+- MuMu `emulator-5554` 通过 `adb install -r` 更新到 Build 139，应用数据保留，`MainActivity` 已启动。未单独运行完整行为回归套件；该模拟器检查不代表真实双账号联机验收。
+
+## 2026-10-17 Android 原生人机决策
+
+- Android 端 `js/app.js` 的统一 `smartAiMove()` 优先调用 `AndroidNativeApp.requestNativeAiMove()`；Java 通过有界后台线程返回坐标，网页仍经 `makeMove()` 更新棋盘、技能、棋谱与存档。`android_src/src/com/gomoku/master/NativeGomokuAI.java` 已移植 `js/ai_fast.js` 大师路径：3^11 局部棋型统计、战术与开局候选扩展、10 ply 强制威胁证明、最多 12 层迭代加深、Alpha-Beta、双 Zobrist 校验的置换表、killer/history 着法排序和战术叶评估；共享 1.7 秒截止时间，只有完成的迭代才更新最终着法。置换表按请求代际复用，减少每步分配；棋型表按需在后台 AI 搜索期间初始化。原生结果把实际深度、节点数、耗时回传到 `gomokuLastAiStats`。当前 Android 人机固定使用自由五子棋（`enableFoul:false`），卡牌禁点仍在候选和威胁搜索中生效。悔棋、重开和进入复盘会使旧请求失效，响应坐标也会重新验证，异常时回退到 JavaScript Worker。构建 APK 才会更新原生引擎，网页热更新不会替换 Java 类。
+- 该 Java 引擎不是 JavaScript 大师引擎的完整威胁搜索移植，棋力可能有差异；目标设备上的实际落子耗时和棋力仍需观察。Android 需要重建完整 APK 才包含原生类，不能只靠 HTML 热更新。

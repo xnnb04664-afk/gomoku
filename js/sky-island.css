@@ -503,6 +503,56 @@ body.sky-lobby-open #socialInviteModal.show { z-index:100120 !important; }
   gap: 12px;
 }
 
+.sky-current-game {
+  display:grid;
+  grid-column:1 / -1;
+  grid-template-columns:42px minmax(0,1fr) auto;
+  align-items:center;
+  gap:12px;
+  width:min(100%,760px);
+  margin:0 auto;
+  padding:10px 13px;
+  border:1px solid rgba(70,109,75,.22);
+  border-radius:17px;
+  color:var(--sky-deep);
+  background:linear-gradient(110deg,rgba(248,252,239,.96),rgba(255,255,255,.86));
+  box-shadow:0 8px 22px rgba(29,53,67,.09),inset 0 1px 0 rgba(255,255,255,.9);
+}
+.sky-current-game-mark {
+  display:grid;
+  place-items:center;
+  width:40px;
+  height:40px;
+  border-radius:13px;
+  color:#fff;
+  background:linear-gradient(145deg,#769a71,#456b55);
+  box-shadow:0 3px 0 #355541;
+  font-size:24px;
+  font-weight:800;
+}
+.sky-current-game-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.sky-current-game-copy small { color:#63816a; font-size:9px; font-weight:900; letter-spacing:.08em; }
+.sky-current-game-copy strong { overflow:hidden; color:#193c4d; font-size:13px; font-weight:950; text-overflow:ellipsis; white-space:nowrap; }
+.sky-current-game-copy span { overflow:hidden; color:rgba(23,56,76,.62); font-size:9px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.sky-current-game > button {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  min-height:38px;
+  padding:8px 13px;
+  border:0;
+  border-radius:12px;
+  color:#fff;
+  background:linear-gradient(135deg,#60866a,#41634e);
+  box-shadow:0 3px 0 #34503d;
+  font-family:inherit;
+  font-size:10px;
+  font-weight:900;
+  cursor:pointer;
+}
+.sky-current-game > button b { color:#f6d787; font-size:16px; }
+.sky-current-game > button:focus-visible { outline:3px solid var(--sky-sun); outline-offset:3px; }
+
 .sky-route-button {
   position: relative;
   overflow: hidden;
@@ -1962,7 +2012,13 @@ body.sky-game-open {
   .sky-board-bay { order:1; width:100%; min-height:0; height:min(38vh,330px); flex:none; }
   .sky-preview-board { width:min(82vw,37vh,340px); }
   .sky-board-halo { width:min(88vw,340px); }
-  .sky-route-list { order:2; width:100%; margin-top:0; gap:8px; }
+  .sky-route-list { order:3; width:100%; margin-top:0; gap:8px; }
+  .sky-current-game { order:2; width:100%; grid-template-columns:36px minmax(0,1fr) auto; gap:9px; padding:9px; border-radius:15px; }
+  .sky-current-game-mark { width:34px; height:34px; border-radius:11px; font-size:20px; }
+  .sky-current-game-copy small { font-size:8px; }
+  .sky-current-game-copy strong { font-size:11px; }
+  .sky-current-game-copy span { font-size:8px; }
+  .sky-current-game > button { min-height:34px; gap:5px; padding:7px 9px; border-radius:10px; font-size:9px; }
   .sky-route-button { display:flex; align-items:center; flex-direction:column; justify-content:center; gap:6px; min-height:89px; padding:8px 4px; border-radius:16px; text-align:center; }
   .sky-route-button::before { inset:0 13px auto; width:auto; height:2px; border-radius:0 0 3px 3px; }
   .sky-route-icon { width:35px; height:35px; border-radius:12px; }
@@ -2629,6 +2685,195 @@ body.sky-lobby-open .chat-backdrop.show {
     justify-content:flex-start;
     padding-left:38px;
   }
+}
+
+.sky-social-avatar-trigger {
+  display:grid;
+  place-items:center;
+  flex:none;
+  padding:0;
+  border:0;
+  border-radius:50%;
+  background:transparent;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+.sky-social-avatar-trigger:focus-visible,
+.sky-social-profile-close:focus-visible,
+.sky-social-profile-actions button:focus-visible {
+  outline:3px solid rgba(223,179,92,.82);
+  outline-offset:3px;
+}
+#socialProfileModal.sky-social-profile-backdrop {
+  position:fixed;
+  z-index:100250;
+  inset:0;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  box-sizing:border-box;
+  padding:18px;
+  background:rgba(22,42,53,.48);
+  -webkit-backdrop-filter:blur(8px);
+  backdrop-filter:blur(8px);
+}
+#socialProfileModal.sky-social-profile-backdrop.show { display:flex; }
+.sky-social-profile-card {
+  position:relative;
+  box-sizing:border-box;
+  width:min(440px,100%);
+  max-height:min(620px,calc(100dvh - 36px));
+  overflow:auto;
+  padding:26px 24px 22px;
+  border:1px solid rgba(255,255,255,.86);
+  border-radius:26px;
+  background:linear-gradient(145deg,#fffdf4 0%,#f2f7f0 58%,#e5f0e9 100%);
+  box-shadow:0 28px 90px rgba(18,38,48,.28),inset 0 1px rgba(255,255,255,.9);
+  color:#1d3543;
+}
+.sky-social-profile-close {
+  position:absolute;
+  top:13px;
+  right:14px;
+  display:grid;
+  place-items:center;
+  width:36px;
+  height:36px;
+  border:1px solid rgba(90,112,105,.18);
+  border-radius:50%;
+  background:rgba(255,255,255,.8);
+  color:#405b4c;
+  font-size:25px;
+  line-height:1;
+  cursor:pointer;
+}
+.sky-social-profile-identity {
+  display:flex;
+  align-items:center;
+  gap:17px;
+  min-width:0;
+  padding:7px 42px 20px 0;
+  border-bottom:1px solid rgba(83,109,85,.16);
+}
+.sky-social-profile-avatar {
+  display:grid;
+  place-items:center;
+  flex:none;
+  width:98px;
+  height:98px;
+  border:1px solid rgba(223,179,92,.45);
+  border-radius:50%;
+  background:radial-gradient(circle,#fff8e6 0%,rgba(255,248,230,.35) 72%);
+  box-shadow:0 8px 24px rgba(83,109,85,.12);
+}
+.sky-social-profile-names { min-width:0; }
+.sky-social-profile-kicker {
+  color:#54715b;
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:.08em;
+}
+.sky-social-profile-names h2 {
+  margin:5px 0 2px;
+  overflow:hidden;
+  color:#1d3543;
+  font-size:23px;
+  font-weight:950;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.sky-social-profile-names p {
+  margin:0 0 8px;
+  overflow:hidden;
+  color:#72877c;
+  font-size:12px;
+  font-weight:750;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.sky-social-profile-relation {
+  display:inline-flex;
+  max-width:100%;
+  overflow:hidden;
+  padding:5px 9px;
+  border:1px solid rgba(83,109,85,.14);
+  border-radius:999px;
+  background:rgba(255,255,255,.78);
+  color:#52725d;
+  font-size:11px;
+  font-weight:850;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.sky-social-profile-stats {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+  margin-top:18px;
+}
+.sky-social-profile-stats > div {
+  display:flex;
+  min-width:0;
+  flex-direction:column;
+  gap:7px;
+  box-sizing:border-box;
+  padding:13px 9px;
+  border:1px solid rgba(83,109,85,.13);
+  border-radius:15px;
+  background:rgba(255,255,255,.72);
+  text-align:center;
+}
+.sky-social-profile-stats small {
+  overflow:hidden;
+  color:#71837a;
+  font-size:10px;
+  font-weight:850;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.sky-social-profile-stats strong {
+  overflow:hidden;
+  color:#244758;
+  font-size:17px;
+  font-weight:950;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.sky-social-profile-note {
+  margin:12px 0 0;
+  color:#a66552;
+  font-size:11px;
+  font-weight:850;
+  text-align:center;
+}
+.sky-social-profile-actions {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:9px;
+  margin-top:19px;
+}
+.sky-social-profile-actions button {
+  min-height:44px;
+  border:1px solid rgba(83,109,85,.24);
+  border-radius:13px;
+  background:linear-gradient(135deg,#6f9275,#496b57);
+  color:#fff;
+  font-size:14px;
+  font-weight:900;
+  cursor:pointer;
+}
+.sky-social-profile-actions button + button {
+  border-color:rgba(223,179,92,.5);
+  background:linear-gradient(135deg,#fff8e4,#f8e5b9);
+  color:#72552c;
+}
+@media (max-width:420px) {
+  .sky-social-profile-card { padding:22px 17px 18px; border-radius:22px; }
+  .sky-social-profile-identity { gap:12px; }
+  .sky-social-profile-avatar { width:82px; height:82px; }
+  .sky-social-profile-names h2 { font-size:20px; }
+  .sky-social-profile-stats > div { padding:11px 6px; }
+  .sky-social-profile-stats strong { font-size:15px; }
 }
 
 /* A compact cloud-stone leaderboard that keeps scores and profiles aligned. */

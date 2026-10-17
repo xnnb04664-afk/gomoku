@@ -1,18 +1,15 @@
 ﻿/**
- * 🚀 五子棋高可用中国极速 P2P WebRTC 直连引擎 (China-Optimized WebRTC P2P & Signaling Engine)
- * 
- * 核心架构：
- * 1. 信令通道：基于 MQTT（EMQX Anycast 节点，国内延迟 30~50ms 建立信令交换）
- * 2. 直连通道：原生 WebRTC RTCDataChannel（基于腾讯云 STUN stun.qq.com:3478 进行 NAT 穿透，手机设备间点对点 UDP 直传）
- * 3. 极速就绪：房主开房秒级就绪 (<100ms)，客机加入秒级握手 (<300ms)
- * 4. 优雅降级：若极少数大内网对称 NAT 环境下 UDP 打洞受阻，信令通道无缝承载棋局数据，永不断连！
+ * Legacy WebRTC transport retained for migration compatibility.
+ * Current rooms use ECS WebSocket signaling/relay, with ECS-hosted STUN/TURN
+ * configuration for WebRTC direct paths where the clients can establish them.
  */
 (function () {
-  const STUN_SERVERS = [
-    { urls: 'stun:stun.qq.com:3478' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:stun.syncthing.net:3478' }
-  ];
+  let ecsStunUrl = '';
+  try {
+    const host = new URL(String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '')).hostname;
+    if (host) ecsStunUrl = `stun:${host}:3478`;
+  } catch (_) {}
+  const STUN_SERVERS = [{ urls: ecsStunUrl || 'stun:101.201.76.166:3478' }];
 
   class GomokuP2PChannel {
     constructor(roomCode, role) {

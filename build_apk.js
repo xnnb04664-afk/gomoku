@@ -93,13 +93,10 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   // 晴空浮岛大厅是首屏入口，必须随包提供。
   'js/sky-hub.js',
   'js/sky-island.css',
-  // 启动动画四帧：网页与 Android 原生 splash 共用同一组离线画面。
+  // 晴空云海启动底图；棋台仍使用游戏内同一张云石棋台素材。
   'js/startup-splash.css',
   'js/startup-splash.js',
-  'img/startup/startup-01.webp',
-  'img/startup/startup-02.webp',
-  'img/startup/startup-03.webp',
-  'img/startup/startup-04.webp',
+  'img/startup/sky-cloudsea-v2.webp',
   // 对局模式专用云海背景，网页与首页大厅之外的游戏舞台共用。
   'img/game/sky-island-match-background.png',
   // AI 对手使用独立的原创灵兽头像图集，不复用情侣头像。

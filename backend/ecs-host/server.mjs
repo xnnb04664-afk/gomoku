@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { STATUS_CODES } from 'node:http';
+import { Readable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { D1Database } from './d1.mjs';
@@ -194,10 +195,20 @@ function sendNodeResponse(nodeResponse, workerResponse, context) {
     nodeResponse.end();
     return;
   }
-  void workerResponse.arrayBuffer().then(buffer => nodeResponse.end(Buffer.from(buffer))).catch(() => {
-    if (!nodeResponse.headersSent) nodeResponse.writeHead(502);
+  if (!workerResponse.body) {
     nodeResponse.end();
+    return;
+  }
+  const bodyStream = Readable.fromWeb(workerResponse.body);
+  bodyStream.on('error', error => {
+    const errorId = randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase();
+    console.error(`[gomoku-ecs][${errorId}] response stream failed (${safeErrorName(error)})`);
+    if (!nodeResponse.destroyed) nodeResponse.destroy();
   });
+  nodeResponse.once('close', () => {
+    if (!nodeResponse.writableEnded) bodyStream.destroy();
+  });
+  bodyStream.pipe(nodeResponse);
 }
 
 async function sendWebSocketUpgradeError(socket, workerResponse, context) {

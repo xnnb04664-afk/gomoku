@@ -260,6 +260,33 @@ def main():
             }, ensure_ascii=False))
         page.wait_for_selector("#socialFriendsList >> text=云端棋友")
 
+        # A pending incoming invitation opens a blocking modal. Dismiss only
+        # its prompt before testing search; the invite remains available in
+        # the requests tab for the later accept-flow assertion.
+        page.wait_for_selector("#socialInviteModal.show", timeout=5000)
+        page.locator('#socialInviteModal [data-social-action="invite-dismiss"]').click()
+        page.wait_for_function("!document.querySelector('#socialInviteModal')?.classList.contains('show')")
+
+        # A friend's portrait opens their profile card without turning the
+        # whole friend row into a competing click target.
+        profile_opener = page.locator('#socialFriendsList [data-social-action="profile"]').first
+        profile_opener.click()
+        page.wait_for_selector("#socialProfileModal.show")
+        profile_card = page.evaluate("""() => ({
+          name: document.querySelector('#socialProfileName')?.textContent || '',
+          text: document.querySelector('#socialProfileModal')?.textContent || '',
+          modal: document.querySelector('#socialProfileModal [role=dialog]')?.getAttribute('aria-modal') || ''
+        })""")
+        assert profile_card["name"] == "云端棋友" and "1,320" in profile_card["text"] and profile_card["modal"] == "true", profile_card
+        page.keyboard.press("Shift+Tab")
+        assert page.evaluate("() => document.activeElement?.textContent?.trim()") == "邀请对战"
+        page.keyboard.press("Tab")
+        assert page.evaluate("() => document.activeElement?.hasAttribute('data-profile-close')")
+        page.keyboard.press("Escape")
+        page.wait_for_function("!document.querySelector('#socialProfileModal')?.classList.contains('show')")
+        focus_restored = page.evaluate("() => document.activeElement?.dataset?.socialAction === 'profile'")
+        assert focus_restored, "Closing the friend profile should return focus to the friend's avatar"
+
         # 未读总数要同时出现在弹窗入口、底部好友按钮和收起后的悬浮入口。
         # 这里的 2 条私聊 + 2 条好友申请 + 1 条邀战来自同一份 /api/friends 快照。
         for badge_id in ("socialUnreadBadge", "gameFriendsUnreadBadge", "gameDockUnreadBadge"):
@@ -287,6 +314,7 @@ def main():
 
         # 输入变化只允许最后一次精确账号查找发出请求，避免移动端键入时刷接口。
         search_calls_before_debounce = len([call for call in calls if call["path"] == "/api/friends/search"])
+        assert not page.locator("#socialInviteModal").evaluate("element => element.classList.contains('show')"), "好友搜索开始前应先关闭邀战提示弹窗"
         page.locator("#socialSearchInput").fill("Auto.Partial")
         page.locator("#socialSearchInput").fill("Auto.Final")
         page.wait_for_timeout(650)
@@ -425,6 +453,7 @@ def main():
         read_call = next(call for call in calls if call["path"] == "/api/messages/read")
         checks = {
             "registeredGate": all(gate.values()),
+            "friendProfile": profile_card["name"] == "云端棋友" and "1,320" in profile_card["text"] and profile_card["modal"] == "true" and focus_restored,
             "debouncedSearch": debounced_search,
             "exactSearch": exact_search["query"].get("uid") == [UID],
             "authorization": exact_search["authorization"] == f"Bearer {TOKEN}",

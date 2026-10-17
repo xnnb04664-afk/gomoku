@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.131';
+    const CURRENT_VERSION_TAG = 'v1.0.139';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -663,12 +663,69 @@
       input.focus();
     }
 
+    function getFixedPrivateAvatarKind() {
+      if (!hasRegisteredAccountSession()) return '';
+      // 由认证服务返回的公开 ID/账号头像决定，绝不从可编辑昵称推断。
+      const publicUid = String(currentUserPublicUid || '').normalize('NFKC').trim().toLowerCase();
+      if (publicUid === 'lza') return 'anime_boy';
+      if (publicUid === 'qsq') return 'anime_girl';
+      if (currentUserAvatarKind === 'anime_boy' || currentUserAvatarKind === 'anime_girl') return currentUserAvatarKind;
+      return '';
+    }
+
+    function getFixedPrivateAvatarValue(kind = getFixedPrivateAvatarKind()) {
+      if (kind === 'anime_boy') return window.ANIME_AVATAR_BOY || 'anime_boy';
+      if (kind === 'anime_girl') return window.ANIME_AVATAR_GIRL || 'anime_girl';
+      return '';
+    }
+
+    function enforceFixedPrivateAvatar() {
+      const kind = getFixedPrivateAvatarKind();
+      if (!kind) return '';
+      const avatar = getFixedPrivateAvatarValue(kind);
+      p1Avatar = avatar;
+      selectedAvatarData = avatar;
+      localStorage.setItem('gomoku_p1Avatar', avatar);
+      return kind;
+    }
+
+    function updateProfileAvatarOptions(fixedKind = getFixedPrivateAvatarKind()) {
+      const selectedKind = getAvatarSyncValue(selectedAvatarData);
+      [
+        ['animeCardBoy', 'anime_boy'],
+        ['animeCardGirl', 'anime_girl']
+      ].forEach(([id, kind]) => {
+        const card = document.getElementById(id);
+        if (!card) return;
+        const locked = Boolean(fixedKind && kind !== fixedKind);
+        card.classList.toggle('selected', selectedKind === kind);
+        card.setAttribute('aria-disabled', locked ? 'true' : 'false');
+        card.style.opacity = locked ? '0.48' : '';
+        card.style.filter = locked ? 'grayscale(.7)' : '';
+        card.style.cursor = locked ? 'not-allowed' : '';
+        card.title = locked
+          ? `此账号固定使用${fixedKind === 'anime_boy' ? '男' : '女'}头像`
+          : '';
+      });
+    }
+
     // --- 📷 玩家相册照片上传与自动压缩为 Base64 ---
     function triggerPhotoUpload() {
+      const fixedKind = getFixedPrivateAvatarKind();
+      if (fixedKind) {
+        showGameNotice(`🔒 此账号固定使用${fixedKind === 'anime_boy' ? '男' : '女'}头像，不能更换照片`, true);
+        return;
+      }
       document.getElementById('avatarFileInput').click();
     }
 
     function handlePhotoUpload(event) {
+      const fixedKind = getFixedPrivateAvatarKind();
+      if (fixedKind) {
+        if (event && event.target) event.target.value = '';
+        showGameNotice(`🔒 此账号固定使用${fixedKind === 'anime_boy' ? '男' : '女'}头像，不能更换照片`, true);
+        return;
+      }
       const file = event.target.files && event.target.files[0];
       if (!file) return;
 
@@ -732,6 +789,8 @@
       return Promise.resolve(false);
     }
 
+    let profileModalOriginal = null;
+
     function openProfileModal(player = 1) {
       updateAccountUI();
       // 无论我方执黑还是执白，在本地屏幕上：
@@ -747,15 +806,21 @@
         }
       }
       editingPlayer = 1;
+      const fixedAvatarKind = enforceFixedPrivateAvatar();
+      if (fixedAvatarKind) updatePlayerHeaderUI();
       const currentName = p1Name;
       selectedAvatarData = p1Avatar;
+      profileModalOriginal = { name: p1Name, avatar: p1Avatar };
 
       const titleEl = document.getElementById('profileModalTitle');
       if (titleEl) titleEl.textContent = '👤 自定义我的昵称与头像';
       const syncTip = document.getElementById('profileSyncTip');
       if (syncTip) {
         if (hasRegisteredAccountSession()) {
-          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · 登录账号固定，昵称与头像可单独设置`;
+          const avatarTip = fixedAvatarKind
+            ? `头像固定为${fixedAvatarKind === 'anime_boy' ? '男' : '女'}头像，昵称可单独设置`
+            : '登录账号固定，昵称与头像可单独设置';
+          syncTip.innerHTML = `✅ <span style="color:#15803d;">已登录正式账号 (${escapeHtml(currentUsername || p1Name)})</span> · ${avatarTip}`;
         } else {
           syncTip.innerHTML = `🔒 <span style="color:#d97706;">当前未登录</span> · 本地修改保存在设备，联网功能需指定账号登录`;
         }
@@ -767,12 +832,16 @@
         prevEl.innerHTML = renderAvatarElement(selectedAvatarData);
       }
 
-      const boyVal = window.ANIME_AVATAR_BOY;
-      const girlVal = window.ANIME_AVATAR_GIRL;
-      const boyCard = document.getElementById('animeCardBoy');
-      const girlCard = document.getElementById('animeCardGirl');
-      if (boyCard) boyCard.classList.toggle('selected', selectedAvatarData === boyVal || selectedAvatarData === 'anime_boy' || selectedAvatarData === 'img/avatar_boy.png');
-      if (girlCard) girlCard.classList.toggle('selected', selectedAvatarData === girlVal || selectedAvatarData === 'anime_girl' || selectedAvatarData === 'img/avatar_girl.png');
+      updateProfileAvatarOptions(fixedAvatarKind);
+      const previewEl = document.getElementById('bigAvatarPreview');
+      if (previewEl) {
+        previewEl.onclick = fixedAvatarKind ? () => {
+          showGameNotice(`🔒 此账号固定使用${fixedAvatarKind === 'anime_boy' ? '男' : '女'}头像`, true);
+        } : triggerPhotoUpload;
+        previewEl.title = fixedAvatarKind
+          ? `此账号固定使用${fixedAvatarKind === 'anime_boy' ? '男' : '女'}头像`
+          : '点击直接从手机相册更换照片';
+      }
 
       // ✨ 实时预览：昵称输入框每次按键都立即更新 UI + 联机同步
       if (inputEl) {
@@ -811,7 +880,8 @@
 
     function randomizeProfileNameAndAvatar() {
       const newName = getRandomDefaultNickname();
-      const newAvatar = getAssignedCoupleAvatar() || getRandomProfileAvatar();
+      const fixedKind = getFixedPrivateAvatarKind();
+      const newAvatar = getFixedPrivateAvatarValue(fixedKind) || getAssignedCoupleAvatar() || getRandomProfileAvatar();
       p1Name = newName;
       p1Avatar = newAvatar;
       selectedAvatarData = newAvatar;
@@ -822,32 +892,52 @@
       if (inputEl) inputEl.value = newName;
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) prevEl.innerHTML = renderAvatarElement(newAvatar);
-      document.querySelectorAll('.anime-avatar-card').forEach(el => {
-        el.classList.toggle('selected', el.id === (newAvatar === 'anime_girl' ? 'animeCardGirl' : 'animeCardBoy'));
-      });
+      updateProfileAvatarOptions(fixedKind);
       updatePlayerHeaderUI();
       if (gameMode === 'online' && conn && conn.open) {
         conn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(selectedAvatarData) });
       }
-      showGameNotice(`🎲 已为您随机分配昵称【${newName}】与动漫头像`);
+      showGameNotice(fixedKind
+        ? `🎲 已随机生成昵称【${newName}】，账号继续使用固定${fixedKind === 'anime_boy' ? '男' : '女'}头像`
+        : `🎲 已为您随机分配昵称【${newName}】与动漫头像`);
     }
 
     // 选图片头像 → 立即更新预览 + 保存 + 同步
     function selectImgAvatar(elem, dataUrl) {
-      if (!dataUrl) dataUrl = (elem && elem.id === 'animeCardGirl') ? window.ANIME_AVATAR_GIRL : window.ANIME_AVATAR_BOY;
+      if (!dataUrl) {
+        const requestedKind = (elem && elem.id === 'animeCardGirl') ? 'anime_girl' : 'anime_boy';
+        dataUrl = requestedKind === 'anime_girl'
+          ? (window.ANIME_AVATAR_GIRL || requestedKind)
+          : (window.ANIME_AVATAR_BOY || requestedKind);
+      }
+      const fixedKind = getFixedPrivateAvatarKind();
+      if (fixedKind && getAvatarSyncValue(dataUrl) !== fixedKind) {
+        selectedAvatarData = getFixedPrivateAvatarValue(fixedKind);
+        p1Avatar = selectedAvatarData;
+        const prevEl = document.getElementById('bigAvatarPreview');
+        if (prevEl) prevEl.innerHTML = renderAvatarElement(selectedAvatarData);
+        updateProfileAvatarOptions(fixedKind);
+        showGameNotice(`🔒 此账号固定使用${fixedKind === 'anime_boy' ? '男' : '女'}头像`, true);
+        return;
+      }
       selectedAvatarData = dataUrl;
-      document.querySelectorAll('.anime-avatar-card').forEach(el => el.classList.remove('selected'));
-      elem.classList.add('selected');
+      updateProfileAvatarOptions(fixedKind);
       const prevEl = document.getElementById('bigAvatarPreview');
       if (prevEl) {
         prevEl.innerHTML = renderAvatarElement(dataUrl);
       }
       _applyAvatarChange(dataUrl);
-      showGameNotice('✨ 头像已更换！');
+      showGameNotice(fixedKind
+        ? `✅ 已确认使用固定${fixedKind === 'anime_boy' ? '男' : '女'}头像`
+        : '✨ 头像已更换！');
     }
 
     // 公共：应用头像变更到本地存储 + UI + 联机同步
     function _applyAvatarChange(avatarData) {
+      const fixedKind = getFixedPrivateAvatarKind();
+      if (fixedKind && getAvatarSyncValue(avatarData) !== fixedKind) {
+        avatarData = getFixedPrivateAvatarValue(fixedKind);
+      }
       const inputEl = document.getElementById('inputProfileName');
       const curName = (inputEl ? inputEl.value.trim() : '') || p1Name;
       p1Avatar = avatarData;
@@ -874,17 +964,23 @@
     }
 
     async function saveProfile() {
-      const nameInput = document.getElementById('inputProfileName').value.trim();
+      const inputEl = document.getElementById('inputProfileName');
+      const nameInput = inputEl ? inputEl.value.trim() : '';
       if (!nameInput) return showGameNotice('⚠️ 账号昵称不能为空哦！', true);
 
       if (editingPlayer === 1) {
         const hasRegisteredAccount = hasRegisteredAccountSession();
-        const prevP1Name = p1Name;
+        const originalProfile = profileModalOriginal || { name: p1Name, avatar: p1Avatar };
+        const prevP1Name = originalProfile.name;
         const prevUsername = currentUsername;
-        const prevP1Avatar = p1Avatar;
+        const prevP1Avatar = originalProfile.avatar;
+        const fixedKind = getFixedPrivateAvatarKind();
 
         p1Name = nameInput;
-        p1Avatar = selectedAvatarData;
+        p1Avatar = getFixedPrivateAvatarValue(fixedKind) || selectedAvatarData;
+        selectedAvatarData = p1Avatar;
+        localStorage.setItem('gomoku_p1Name', p1Name);
+        localStorage.setItem('gomoku_p1Avatar', p1Avatar);
 
         // 🌟 同步到云端数据库：修改 username 和 nickname
         if (hasRegisteredAccount) {
@@ -904,7 +1000,7 @@
             const data = await res.json();
             if (requestGeneration !== authSessionGeneration || String(currentUserUid) !== requestUid) return;
             if (data && data.code === 0) {
-              console.log('[saveProfile] 账号名与天梯榜已同步:', p1Name);
+              console.log('[saveProfile] 资料已保存到服务器:', p1Name);
               localStorage.setItem('gomoku_p1Name', p1Name);
               localStorage.setItem('gomoku_p1Avatar', p1Avatar);
               currentUsername = String(data.data?.username || prevUsername || '');
@@ -914,6 +1010,15 @@
               }
               if (data.data) {
                 applyUserData(data.data, requestGeneration);
+              }
+              // 服务端资料可能含有旧头像；固定账号仍以认证登录名对应的头像为准。
+              const finalFixedKind = getFixedPrivateAvatarKind();
+              if (finalFixedKind) p1Avatar = getFixedPrivateAvatarValue(finalFixedKind);
+              selectedAvatarData = p1Avatar;
+              localStorage.setItem('gomoku_p1Name', p1Name);
+              localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+              if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveUserLogin) {
+                try { AndroidNativeApp.saveUserLogin(currentUserUid, currentUsername, currentUserToken, p1Name, p1Avatar); } catch (_) {}
               }
               if (Array.isArray(cachedLeaderboard)) {
                 cachedLeaderboard.forEach(item => {
@@ -927,17 +1032,21 @@
               updateAccountUI();
               leaderboardLoadedAt = 0;
               fetchGlobalLeaderboard(false);
-              showGameNotice('🎉 保存成功！账号与昵称已应用并同步至全服天梯！', false);
+              profileModalOriginal = { name: p1Name, avatar: p1Avatar };
+              showGameNotice('🎉 资料已保存到服务器，天梯资料正在刷新', false);
             } else {
               // 服务器拒绝（如名称已占用）
               p1Name = prevP1Name;
               currentUsername = prevUsername;
               p1Avatar = prevP1Avatar;
               selectedAvatarData = prevP1Avatar;
-              const inputEl = document.getElementById('inputProfileName');
               if (inputEl) inputEl.value = prevP1Name;
+              localStorage.setItem('gomoku_p1Name', prevP1Name);
+              localStorage.setItem('gomoku_p1Avatar', prevP1Avatar);
               const prevEl = document.getElementById('bigAvatarPreview');
               if (prevEl) prevEl.innerHTML = renderAvatarElement(prevP1Avatar);
+              updateProfileAvatarOptions(getFixedPrivateAvatarKind());
+              profileModalOriginal = { name: prevP1Name, avatar: prevP1Avatar };
               updatePlayerHeaderUI();
               updateAccountUI();
               showGameNotice('⚠️ 修改未生效: ' + (data && data.msg ? data.msg : '该名称已被占用或校验失败'), true);
@@ -949,9 +1058,14 @@
             // 离线/网络故障兜底：先保留在本地，提醒用户稍后联网同步
             localStorage.setItem('gomoku_p1Name', p1Name);
             localStorage.setItem('gomoku_p1Avatar', p1Avatar);
+            selectedAvatarData = p1Avatar;
+            profileModalOriginal = { name: p1Name, avatar: p1Avatar };
             updatePlayerHeaderUI();
             updateAccountUI();
-            showGameNotice('⚠️ 网络离线，修改已暂存本地，联网后将自动同步天梯', true);
+            const reason = typeof getApiNetworkErrorMessage === 'function'
+              ? getApiNetworkErrorMessage(e)
+              : '网络连接失败，请检查网络后重试';
+            showGameNotice(`⚠️ 服务器保存失败（${reason}）。昵称与头像已在本机生效，云端和天梯未更新；联网后请重新打开资料页并再次点保存。`, true);
           }
         } else {
           // 游客模式
@@ -959,6 +1073,7 @@
           localStorage.setItem('gomoku_p1Avatar', p1Avatar);
           updatePlayerHeaderUI();
           updateAccountUI();
+          profileModalOriginal = { name: p1Name, avatar: p1Avatar };
           showGameNotice('💾 本地资料已保存在设备。好友、匹配和云端功能需指定账号登录', false);
         }
       } else {
@@ -968,6 +1083,7 @@
         localStorage.setItem('gomoku_p2Avatar', p2Avatar);
         updatePlayerHeaderUI();
         updateAccountUI();
+        profileModalOriginal = { name: p2Name, avatar: p2Avatar };
         showGameNotice('💾 对手设置已保存在本地', false);
       }
 
@@ -1390,8 +1506,10 @@
     let aiWorker = null;
     let aiWorkerBlobUrl = '';
     let aiWorkerRequestSeq = 0;
+    let nativeAiRequestSeq = 0;
     let aiTurnSeq = 0;
     let aiWorkerPending = new Map();
+    const nativeAiPending = new Map();
     let aiThinking = false;
 
     function disposeAiWorker(reason = 'AI Worker 已停止') {
@@ -1461,6 +1579,113 @@
       return flat;
     }
 
+    function isLegalAiMove(move, boardState, forbiddenPoints = []) {
+      if (!move || !Number.isInteger(move.r) || !Number.isInteger(move.c) ||
+          move.r < 0 || move.r >= BOARD_SIZE || move.c < 0 || move.c >= BOARD_SIZE ||
+          !Array.isArray(boardState) || !Array.isArray(boardState[move.r]) ||
+          boardState[move.r][move.c] !== EMPTY) return false;
+      return !Array.isArray(forbiddenPoints) || !forbiddenPoints.some(point =>
+        point && Number(point.r) === move.r && Number(point.c) === move.c
+      );
+    }
+
+    function findFirstLegalAiMove(boardState, forbiddenPoints = []) {
+      for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+          const move = { r, c };
+          if (isLegalAiMove(move, boardState, forbiddenPoints)) return move;
+        }
+      }
+      return null;
+    }
+
+    function invalidatePendingAiTurn() {
+      aiTurnSeq++;
+      aiThinking = false;
+    }
+    window.__gomokuInvalidateAiTurn = invalidatePendingAiTurn;
+
+    window.__gomokuNativeAiResult = function handleNativeAiResult(requestId, responseJson) {
+      const key = String(requestId || '');
+      const pending = nativeAiPending.get(key);
+      if (!pending) return;
+      nativeAiPending.delete(key);
+      clearTimeout(pending.timeoutId);
+      try {
+        const result = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
+        if (result && result.ok === true && Number.isInteger(result.r) && Number.isInteger(result.c) &&
+            result.r >= 0 && result.r < 15 && result.c >= 0 && result.c < 15) {
+          window.gomokuLastAiStats = {
+            native: true,
+            elapsedMs: Math.max(0, Number(result.elapsedMs) || 0),
+            nodes: Math.max(0, Number(result.nodes) || 0),
+            depth: Math.max(0, Number(result.depth) || 0),
+            score: Number.isFinite(Number(result.score)) ? Number(result.score) : 0
+          };
+          pending.resolve({ r: result.r, c: result.c });
+        } else {
+          pending.reject(new Error((result && result.error) || 'Android 原生 AI 未返回合法落点'));
+        }
+      } catch (error) {
+        pending.reject(error instanceof Error ? error : new Error('Android 原生 AI 响应解析失败'));
+      }
+    };
+
+    function requestNativeAiMove(boardState, forbiddenPoints = []) {
+      const bridge = window.AndroidNativeApp;
+      if (!bridge || typeof bridge.requestNativeAiMove !== 'function') {
+        return Promise.reject(new Error('当前 Android 版本没有原生 AI 接口'));
+      }
+      const board = Array.from(flattenAiBoard(boardState));
+      const forbidden = Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [];
+      const requestId = `native-ai-${++nativeAiRequestSeq}`;
+
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          if (!nativeAiPending.has(requestId)) return;
+          nativeAiPending.delete(requestId);
+          reject(new Error('Android 原生 AI 响应超时'));
+        }, 2000);
+        nativeAiPending.set(requestId, { resolve, reject, timeoutId });
+
+        try {
+          const accepted = bridge.requestNativeAiMove(
+            requestId,
+            JSON.stringify(board),
+            WHITE,
+            JSON.stringify(forbidden)
+          );
+          if (!accepted && nativeAiPending.has(requestId)) {
+            nativeAiPending.delete(requestId);
+            clearTimeout(timeoutId);
+            reject(new Error('Android 原生 AI 忙碌或棋盘数据无效'));
+          }
+        } catch (error) {
+          nativeAiPending.delete(requestId);
+          clearTimeout(timeoutId);
+          reject(error instanceof Error ? error : new Error('无法调用 Android 原生 AI'));
+        }
+      });
+    }
+
+    async function requestBestAiMove(boardState, forbiddenPoints = []) {
+      const bridge = window.AndroidNativeApp;
+      if (bridge && typeof bridge.requestNativeAiMove === 'function') {
+        try {
+          const nativeMove = await requestNativeAiMove(boardState, forbiddenPoints);
+          if (isLegalAiMove(nativeMove, boardState, forbiddenPoints)) return nativeMove;
+          throw new Error('原生 AI 返回的落点已占用或被禁用');
+        } catch (nativeError) {
+          console.warn('[Native AI] 原生计算不可用，切回 Worker:', nativeError && nativeError.message ? nativeError.message : nativeError);
+        }
+      }
+      const workerMove = await requestFastAiMove(boardState, forbiddenPoints);
+      if (!isLegalAiMove(workerMove, boardState, forbiddenPoints)) {
+        throw new Error('AI Worker 返回的落点已占用或被禁用');
+      }
+      return workerMove;
+    }
+
     function requestFastAiMove(boardState, forbiddenPoints = []) {
       const worker = getAiWorker();
       if (!worker) return Promise.reject(new Error('当前环境不支持 AI Worker'));
@@ -1485,13 +1710,14 @@
             difficulty: 'master',
             enableFoul: false,
             forbiddenPoints: Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [],
-            // 大师 AI 只在 Worker 中增加预算，主线程不会被搜索阻塞；
-            // 立即成五/必防/强制威胁仍会在引擎内部即时返回。
-            budgetMs: mobile ? 520 : 900,
-            maxDepth: mobile ? 7 : 9,
-            rootLimit: mobile ? 20 : 26,
-            candidateLimit: mobile ? 72 : 96,
-            threatPly: mobile ? 6 : 8
+            // 大师 AI 的主要算力放在 Worker；增加搜索时间、根候选和战术叶预算，
+            // 让迭代加深有机会看得更远，同时不阻塞棋盘交互。
+            budgetMs: mobile ? 1800 : 3200,
+            maxDepth: mobile ? 12 : 14,
+            rootLimit: mobile ? 24 : 32,
+            candidateLimit: mobile ? 96 : 128,
+            threatPly: mobile ? 10 : 12,
+            tacticalLeafLimit: mobile ? 3200 : 5200
           }, [flat.buffer]);
         } catch (error) {
           aiWorkerPending.delete(requestId);
@@ -1526,16 +1752,16 @@
 
     // 🚀 最强大师人机主落子决策函数
     async function smartAiMove(forbiddenPoints = []) {
-      if (isOver || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
+      if (isOver || isReplayMode || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
       const turnId = ++aiTurnSeq;
       aiThinking = true;
       updateUI();
       const boardSnapshot = board.map(row => row.slice());
       let bestMove = null;
       try {
-        bestMove = await requestFastAiMove(boardSnapshot, forbiddenPoints);
+        bestMove = await requestBestAiMove(boardSnapshot, forbiddenPoints);
       } catch (workerError) {
-        console.warn('[AI Worker] 使用同引擎低预算回退:', workerError && workerError.message ? workerError.message : workerError);
+        console.warn('[AI] 使用快速 JavaScript 回退:', workerError && workerError.message ? workerError.message : workerError);
         try {
           bestMove = await getFastAiFallback(boardSnapshot, forbiddenPoints);
           if (!bestMove && (!window.GomokuAI || typeof window.GomokuAI.getBestMove !== 'function') &&
@@ -1545,10 +1771,12 @@
           if (!bestMove && window.GomokuAI && window.GomokuAI.getBestMove) {
             bestMove = window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints);
           }
-          if (!bestMove) bestMove = { r: 7, c: 7 };
+          if (!isLegalAiMove(bestMove, boardSnapshot, forbiddenPoints)) {
+            bestMove = findFirstLegalAiMove(boardSnapshot, forbiddenPoints);
+          }
         } catch (fallbackError) {
           console.error('[AI fallback] 计算失败:', fallbackError);
-          bestMove = { r: 7, c: 7 };
+          bestMove = findFirstLegalAiMove(boardSnapshot, forbiddenPoints);
         }
       } finally {
         if (turnId === aiTurnSeq) {
@@ -1557,8 +1785,19 @@
         }
       }
 
-      if (turnId !== aiTurnSeq || isOver || gameMode !== 'ai' || turn !== WHITE) return;
-      if (bestMove && board[bestMove.r] && board[bestMove.r][bestMove.c] === EMPTY) {
+      if (turnId !== aiTurnSeq || isOver || isReplayMode || gameMode !== 'ai' || turn !== WHITE) return;
+      const boardStillMatches = board.every((row, r) =>
+        Array.isArray(row) && row.every((cell, c) => cell === boardSnapshot[r][c])
+      );
+      if (!boardStillMatches) {
+        if (!isOver && !isReplayMode && gameMode === 'ai' && turn === WHITE) setTimeout(() => smartAiMove(forbiddenPoints), 0);
+        return;
+      }
+      if (!isLegalAiMove(bestMove, board, forbiddenPoints)) {
+        console.warn('[AI] 所有计算结果均无效，选择首个合法落点');
+        bestMove = findFirstLegalAiMove(board, forbiddenPoints);
+      }
+      if (bestMove) {
         makeMove(bestMove.r, bestMove.c, WHITE);
       }
     }
@@ -1682,6 +1921,7 @@
               }
               turn = WHITE;
               updateUI();
+              persistGameState();
               setTimeout(smartAiMove, 650);
             }
           }, 850);
@@ -1689,6 +1929,7 @@
           opponentFreeMove = true;
           turn = enemyColor;
           updateUI();
+          persistGameState();
           showGameNotice(`💀 空过生效！轮到对手【${getPlayerNameByColor(turn)}】免费补子并接管回合！`, true);
         } else if (gameMode === 'online') {
           turn = enemyColor;
@@ -1696,6 +1937,7 @@
           if (conn && conn.open) {
             conn.send({ type: 'destiny_point_1' });
           }
+          persistGameState();
         }
       } else if (point === 2) {
         // 🙈 掷出 2（偷梁换柱）：闭上眼，让对手替你盲选棋盘上你的 1 颗子，移到最近的空格里
@@ -1707,6 +1949,7 @@
         }
         if (myStones.length === 0) {
           showSkillBanner('🙈', `🎲 投出点数 2：【偷梁换柱】！`, '棋盘尚无己方棋子，偷梁换柱落空~');
+          persistGameState();
           return;
         }
         const pick = myStones[Math.floor(Math.random() * myStones.length)];
@@ -1758,6 +2001,7 @@
         for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
         if (enemyCount === 0) {
           showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '对方场上暂无棋子，精准爆破落空~');
+          persistGameState();
           return;
         }
         showSkillBanner('💥', `🎲 投出点数 3：【精准爆破】！`, '请在棋盘上点击对方任意 1 颗棋子将其抹除！');
@@ -1774,6 +2018,7 @@
         for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) if (board[r][c] === enemyColor) enemyCount++;
         if (enemyCount === 0) {
           showSkillBanner('🎭', `🎲 投出点数 4：【绝地倒戈】！`, '对方场上暂无棋子，绝地倒戈落空~');
+          persistGameState();
           return;
         }
         showSkillBanner('🎭', `🎲 投出点数 4：【绝地倒戈】！`, '请在棋盘上点击对方任意 1 颗棋子翻为己用！');
@@ -1828,6 +2073,9 @@
           }
         }
       }
+      // Targeted dice results are saved after their target is chosen. Persist
+      // immediate outcomes now so consumed cards and turn flags stay in sync.
+      if (!activeSkill) persistGameState();
     }
 
     function handleCardClick(idx) {
@@ -1864,6 +2112,7 @@
           saveUndoSnapshot('skill', { slotIdx: idx, skillId: 'double_move', player: turn });
           hasExtraMove = true;
           markCardUsed(idx);
+          persistGameState();
           triggerSkillVFX('double_move');
           triggerBoardShake();
           playSkillSound('thunder');
@@ -2320,6 +2569,9 @@
           triggerGameDraw('天命降临后棋盘已无空位，双方本局和棋！');
         }
       }
+      // Save completed card effects, including non-board state such as
+      // prophecy and extra-move flags, before the app can be killed.
+      persistGameState();
     }
 
 
@@ -2808,6 +3060,40 @@
       } catch (e) {}
     }
 
+    // 好友通知使用和云海配乐同一五声音阶，并沿用游戏音效开关与音量。
+    function playSocialSoundEffect(kind) {
+      if (!soundEnabled || !actx) return;
+      const patterns = {
+        invite: [587.33, 880.00, 1174.66],
+        friendRequest: [659.25, 987.77],
+        message: [739.99, 987.77]
+      };
+      const notes = patterns[kind];
+      if (!notes) return;
+      try {
+        resumeGameAudio();
+        const output = getGameSoundOutput();
+        if (!output) return;
+        const startAt = actx.currentTime;
+        notes.forEach((frequency, index) => {
+          const start = startAt + index * (kind === 'invite' ? 0.12 : 0.1);
+          const duration = kind === 'message' ? 0.17 : 0.25;
+          const osc = actx.createOscillator();
+          const gain = actx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(frequency, start);
+          gain.gain.setValueAtTime(0.0001, start);
+          gain.gain.linearRampToValueAtTime(kind === 'invite' ? 0.27 : 0.2, start + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+          osc.connect(gain);
+          gain.connect(output);
+          osc.start(start);
+          osc.stop(start + duration + 0.01);
+        });
+      } catch (_) {}
+    }
+    window.playGomokuSocialSoundEffect = playSocialSoundEffect;
+
     // 🌟 游戏内治愈果冻气泡 HUD 提示控制器 (彻底替代浏览器原生 alert)
     let noticeTimer = null;
     function showGameNotice(message, isWarning = true) {
@@ -3122,14 +3408,16 @@
       } catch(e) {}
     }
     // ══════════════════════════════════════════════════════════════════
-    // 🌐 游戏 API 使用 ECS 主入口，Cloudflare Pages/Worker 保留故障回退
+    // 🌐 游戏账号、社交、棋谱、匹配与房间数据只读写 ECS。
+    // Cloudflare API 仅保留为显式开启的应急主机；默认关闭，避免独立数据库造成数据分叉。
     // ══════════════════════════════════════════════════════════════════
     const CLOUDFLARE_API_HOSTS = [
       "https://gomoku-api.pages.dev",
       "https://gomoku-backend.xnnb04664.workers.dev"
     ];
     const ECS_API_HOST = String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '').replace(/\/+$/, '');
-    const API_HOSTS = [...new Set([ECS_API_HOST, ...CLOUDFLARE_API_HOSTS].filter(Boolean))];
+    const enableCloudflareEmergencyApi = window.GOMOKU_BACKEND_CONFIG?.enableCloudflareEmergencyApi === true;
+    const API_HOSTS = [...new Set([ECS_API_HOST, ...(enableCloudflareEmergencyApi ? CLOUDFLARE_API_HOSTS : [])].filter(Boolean))];
     const API_PRIMARY_HOST = ECS_API_HOST;
     const API_HOST_FAILURES_STORAGE_KEY = 'gomoku_api_host_failures_v1';
     const API_HOST_FAILURE_COOLDOWN_MS = 60 * 1000;
@@ -3265,10 +3553,11 @@
     }
 
     function getOrderedApiHosts() {
-      // 每次请求都先验证 ECS；上次故障记录不能跳过已经恢复的主服务。
+      // 默认只使用 ECS；只有运维显式开启应急开关时，才把 Cloudflare 加入候选。
       if (!API_PRIMARY_HOST) return [];
-      const healthy = CLOUDFLARE_API_HOSTS.filter(host => !isApiHostCoolingDown(host));
-      const cooling = CLOUDFLARE_API_HOSTS.filter(host => isApiHostCoolingDown(host));
+      const fallbacks = API_HOSTS.filter(host => host !== API_PRIMARY_HOST);
+      const healthy = fallbacks.filter(host => !isApiHostCoolingDown(host));
+      const cooling = fallbacks.filter(host => isApiHostCoolingDown(host));
       return [API_PRIMARY_HOST, ...healthy, ...cooling];
     }
 
@@ -3276,8 +3565,8 @@
       primaryHost: API_PRIMARY_HOST,
       getActiveHost: () => activeApiHost,
       getOrderedHosts: () => getOrderedApiHosts(),
-      // 房间中继状态按后端隔离；两名玩家必须用相同的固定顺序查找短房间码。
-      getAllHosts: () => API_PRIMARY_HOST ? [API_PRIMARY_HOST, ...CLOUDFLARE_API_HOSTS] : [],
+      // 房间中继和短房间码默认固定使用 ECS；应急备用只有在配置开关显式开启后才可用。
+      getAllHosts: () => getOrderedApiHosts(),
       getHostForUrl: value => {
         try { return getAllowedApiHostForUrl(new URL(value)); }
         catch (_) { return ''; }
@@ -3335,7 +3624,7 @@
       return { host, elapsed: samples[Math.floor(samples.length / 2)] };
     }
 
-    // 登录弹窗打开时优先探测 ECS，再按 Cloudflare Pages/Worker 顺序回退；登录请求不会并发发送。
+    // 登录弹窗只探测当前启用的后端；默认只有 ECS，登录请求不会并发发送。
     function warmApiHost(force = false) {
       const now = Date.now();
       if (!force && hasApiHostHint && activeApiHost === API_PRIMARY_HOST && !isApiHostCoolingDown(API_PRIMARY_HOST)) {
@@ -3398,12 +3687,12 @@
       } catch (_) {}
       const operationLabel = apiOperationLabel(endpointPath);
       if (!API_PRIMARY_HOST) {
-        const configError = new Error('ECS 主服务地址未配置，已停止请求；Cloudflare 仅作为故障备用。');
+        const configError = new Error('ECS 主服务地址未配置，已停止请求；游戏数据不会自动切换到 Cloudflare。');
         configError.code = 'API_ECS_CONFIG_MISSING';
         throw configError;
       }
       const requestMethod = String(requestOptions.method || 'GET').toUpperCase();
-      // ECS 与 Cloudflare 使用彼此独立的数据库。只有不会改变服务端状态的请求可以跨主备回退。
+      // ECS 与 Cloudflare 使用彼此独立的数据库。默认不跨库读取或重放；应急切换必须由运维显式开启。
       const canFailover = ['GET', 'HEAD', 'OPTIONS'].includes(requestMethod);
       const explicitEndpointHost = fixedEndpointUrl ? getAllowedApiHostForUrl(fixedEndpointUrl) : '';
       const orderedHosts = canFailover
@@ -3453,7 +3742,7 @@
             markApiHostFailure(host);
             try {
               if (!anonymousRequest && typeof showGameNotice === 'function') {
-                const serviceLabel = host === API_PRIMARY_HOST ? 'ECS 主服务器' : 'Cloudflare 备用服务器';
+                const serviceLabel = host === API_PRIMARY_HOST ? 'ECS 主服务器' : '应急备用服务器';
                 let detail = '';
                 try {
                   const payload = await res.clone().json();
@@ -3485,7 +3774,7 @@
           attemptErrors.push({ error: err, timedOut: isApiAbortError(err), dispatchAttempted });
           markApiHostFailure(host);
           console.warn('Host ' + host + ' failed: ' + (err && err.message || err) +
-            (canFailover ? ', trying fallback...' : '; mutation will not be replayed'));
+            (hostIndex < orderedHosts.length - 1 ? ', trying emergency fallback...' : '; no automatic backend fallback is enabled'));
           if (!canFailover) break;
         } finally {
           if (timer) clearTimeout(timer);
@@ -3507,7 +3796,8 @@
         timeoutError.cause = lastErr;
         throw timeoutError;
       }
-      const networkError = new Error(`${operationLabel}无法连接 ECS 主服务或 Cloudflare 备用服务，请检查网络后重试。`);
+      const targets = orderedHosts.length > 1 ? 'ECS 主服务或已启用的应急备用服务' : 'ECS 主服务';
+      const networkError = new Error(`${operationLabel}无法连接${targets}，请检查网络或稍后重试。`);
       networkError.code = 'API_UNAVAILABLE';
       networkError.cause = lastErr;
       throw networkError;
@@ -3594,8 +3884,12 @@
     // 🛡️ 云端账号认证与永久免登持久化管理器 (Permanent Session & Native Sync)
     // ══════════════════════════════════════════════════════════════════
     let currentUserUid = localStorage.getItem('gomoku_user_uid') || '';
+    let currentUserPublicUid = localStorage.getItem('gomoku_user_public_uid') || '';
+    let currentUserAvatarKind = localStorage.getItem('gomoku_user_avatar_kind') || '';
     let currentUserToken = localStorage.getItem('gomoku_user_token') || '';
     let currentUserRefreshToken = localStorage.getItem('gomoku_user_refresh_token') || '';
+    const storedAuthUpdatedAt = Number(localStorage.getItem('gomoku_user_auth_updated_at') || 0);
+    let currentUserAuthUpdatedAt = Number.isFinite(storedAuthUpdatedAt) && storedAuthUpdatedAt > 0 ? storedAuthUpdatedAt : 0;
     let currentUserScore = parseInt(localStorage.getItem('gomoku_user_score') || '1000', 10);
     const PRIVATE_GAME_LOGIN_ONLY = true;
     const PRIVATE_GAME_LOGIN_NOTICE = '🔒 私人游戏，仅限指定账号登录';
@@ -3619,21 +3913,41 @@
       );
     }
 
-    // 🛡️ 尝试从 Android 原生 SharedPreferences 读取免登双保险备份
-    if ((!currentUsername || !currentUserUid || !currentUserToken || !currentUserRefreshToken) && typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
+    // WebView 的 localhost 端口变化会创建新的 localStorage 来源。启动时比较原生备份
+    // 与当前来源的凭证更新时间，避免完整但过期的旧来源遮住较新的原生会话。
+    if (typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.getUserLoginJson) {
       try {
         const nativeJson = AndroidNativeApp.getUserLoginJson();
         if (nativeJson) {
           const nativeUser = JSON.parse(nativeJson);
-          if (nativeUser.username) {
+          const nativeUpdatedAtValue = Number(nativeUser.authUpdatedAt || 0);
+          const nativeUpdatedAt = Number.isFinite(nativeUpdatedAtValue) && nativeUpdatedAtValue > 0 ? nativeUpdatedAtValue : 0;
+          const hasNativeSession = Boolean(nativeUser.username && nativeUser.uid && nativeUser.token && !String(nativeUser.uid).startsWith('guest_'));
+          const hasLocalSession = Boolean(currentUsername && currentUserUid && currentUserToken && currentUserRefreshToken && !String(currentUserUid).startsWith('guest_'));
+          const nativeSessionIsNewer = hasNativeSession && (
+            !hasLocalSession ||
+            currentUserAuthUpdatedAt <= 0 ||
+            (nativeUpdatedAt > 0 && nativeUpdatedAt >= currentUserAuthUpdatedAt)
+          );
+          if (nativeSessionIsNewer) {
+            const previousUid = String(currentUserUid || '');
             currentUsername = nativeUser.username;
-            currentUserUid = nativeUser.uid || currentUserUid;
-            currentUserToken = nativeUser.token || currentUserToken;
-            currentUserRefreshToken = nativeUser.refreshToken || currentUserRefreshToken;
+            currentUserUid = String(nativeUser.uid);
+            currentUserToken = String(nativeUser.token);
+            currentUserRefreshToken = String(nativeUser.refreshToken || '');
+            if (previousUid && previousUid !== currentUserUid) {
+              currentUserPublicUid = '';
+              currentUserAvatarKind = '';
+              localStorage.removeItem('gomoku_user_public_uid');
+              localStorage.removeItem('gomoku_user_avatar_kind');
+            }
             localStorage.setItem('gomoku_user_uid', currentUserUid);
             localStorage.setItem('gomoku_user_token', currentUserToken);
             if (currentUserRefreshToken) localStorage.setItem('gomoku_user_refresh_token', currentUserRefreshToken);
+            else localStorage.removeItem('gomoku_user_refresh_token');
             localStorage.setItem('gomoku_user_username', currentUsername);
+            currentUserAuthUpdatedAt = nativeUpdatedAt || Date.now();
+            localStorage.setItem('gomoku_user_auth_updated_at', String(currentUserAuthUpdatedAt));
             if (nativeUser.nickname) {
               p1Name = nativeUser.nickname;
               localStorage.setItem('gomoku_p1Name', p1Name);
@@ -3781,6 +4095,7 @@
 
     function applyUserData(data, expectedGeneration = null) {
       if (!data || (expectedGeneration !== null && expectedGeneration !== authSessionGeneration)) return false;
+      const previousUid = String(currentUserUid || '');
       if (typeof data.score === 'number') {
         const badge = document.getElementById('myLadderBadge');
         if (badge) badge.textContent = `${data.score} 分`;
@@ -3791,6 +4106,17 @@
       } else if (data.uid === null) {
         currentUserUid = "";
         localStorage.removeItem("gomoku_user_uid");
+        currentUserAuthUpdatedAt = 0;
+        localStorage.removeItem('gomoku_user_auth_updated_at');
+      }
+      if (data.publicUid === 'lza' || data.publicUid === 'qsq') {
+        currentUserPublicUid = data.publicUid;
+        localStorage.setItem('gomoku_user_public_uid', currentUserPublicUid);
+      } else if (data.publicUid === null || data.username === null || (data.uid && previousUid && previousUid !== String(data.uid))) {
+        currentUserPublicUid = '';
+        localStorage.removeItem('gomoku_user_public_uid');
+        currentUserAvatarKind = '';
+        localStorage.removeItem('gomoku_user_avatar_kind');
       }
       if (data.token) {
         currentUserToken = String(data.token);
@@ -3813,19 +4139,38 @@
         // 明确传入 null 时才表示注销
         currentUsername = "";
         localStorage.removeItem("gomoku_user_username");
+        currentUserAuthUpdatedAt = 0;
+        localStorage.removeItem('gomoku_user_auth_updated_at');
         if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.clearUserLogin) {
           try { AndroidNativeApp.clearUserLogin(); } catch(e) {}
         }
       }
 
+      if ((data.token || data.refreshToken) && currentUsername && currentUserUid && currentUserToken) {
+        currentUserAuthUpdatedAt = Date.now();
+        localStorage.setItem('gomoku_user_auth_updated_at', String(currentUserAuthUpdatedAt));
+      }
+
       // 恢复账号中持久化保存的头像与昵称
       if (data.avatar) {
-        if (data.avatar === "anime_boy") p1Avatar = window.ANIME_AVATAR_BOY || "img/avatar_boy.png";
-        else if (data.avatar === "anime_girl") p1Avatar = window.ANIME_AVATAR_GIRL || "img/avatar_girl.png";
-        else p1Avatar = data.avatar;
-        selectedAvatarData = p1Avatar;
-        localStorage.setItem("gomoku_p1Avatar", p1Avatar);
+        if (data.avatar === "anime_boy") {
+          currentUserAvatarKind = 'anime_boy';
+          p1Avatar = window.ANIME_AVATAR_BOY || "img/avatar_boy.png";
+        } else if (data.avatar === "anime_girl") {
+          currentUserAvatarKind = 'anime_girl';
+          p1Avatar = window.ANIME_AVATAR_GIRL || "img/avatar_girl.png";
+        } else {
+          currentUserAvatarKind = '';
+          p1Avatar = data.avatar;
+        }
+        if (currentUserAvatarKind) localStorage.setItem('gomoku_user_avatar_kind', currentUserAvatarKind);
+        else localStorage.removeItem('gomoku_user_avatar_kind');
       }
+      // 登录/静默校验/续期后先按服务器身份修正缓存头像，再更新 UI 与 Android 备份。
+      const fixedAvatarKind = getFixedPrivateAvatarKind();
+      if (fixedAvatarKind) p1Avatar = getFixedPrivateAvatarValue(fixedAvatarKind);
+      selectedAvatarData = p1Avatar;
+      if (data.avatar || fixedAvatarKind) localStorage.setItem("gomoku_p1Avatar", p1Avatar);
       if (data.nickname) {
         p1Name = data.nickname;
         localStorage.setItem("gomoku_p1Name", p1Name);
@@ -3867,8 +4212,10 @@
       const btnAuth = document.getElementById('btnAuthAction');
       const btnChangePassword = document.getElementById('btnChangePasswordAction');
 
-      if (uidBadge && currentUserUid) {
-        uidBadge.textContent = `UID: ${currentUserUid} 📋`;
+      const publicUid = currentUserPublicUid || currentUserUid;
+      if (uidBadge && publicUid) {
+        uidBadge.textContent = `UID: ${publicUid} 📋`;
+        uidBadge.title = currentUserPublicUid ? '点击复制公开登录 ID' : '点击复制内部账号 UID';
       } else if (uidBadge) uidBadge.textContent = 'UID: ------ 📋';
 
       const btnLogout = document.getElementById("btnLogoutAction");
@@ -3915,14 +4262,16 @@
       }
       updateHistoryCountUI();
       window.refreshSkyProfileCard?.();
+      window.refreshSkyCurrentGameEntry?.();
     }
 
     function copyMyUid() {
       if (!currentUserUid) return;
-      navigator.clipboard.writeText(currentUserUid).then(() => {
-        showGameNotice(`📋 专属 UID [${currentUserUid}] 已复制到剪贴板！`, true);
+      const publicUid = currentUserPublicUid || currentUserUid;
+      navigator.clipboard.writeText(publicUid).then(() => {
+        showGameNotice(`📋 公开登录 ID [${publicUid}] 已复制到剪贴板！`, true);
       }).catch(() => {
-        prompt('请复制您的专属 UID：', currentUserUid);
+        prompt('请复制您的公开登录 ID：', publicUid);
       });
     }
 
@@ -4894,7 +5243,7 @@
       activeSkill = null;
       const skillPromptBar = document.getElementById('skillPromptBar');
       if (skillPromptBar) skillPromptBar.style.display = 'none';
-      try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
+      removeCurrentOnlineRoomSnapshot();
 
       const drawReason = customDrawReason || '棋盘已无空位且没有五连，双方本局和棋！';
       showSkillBanner('🤝', '【棋逢对手】和棋！', drawReason, true);
@@ -4941,7 +5290,7 @@
       activeSkill = null;
       const skillPromptBar = document.getElementById('skillPromptBar');
       if (skillPromptBar) skillPromptBar.style.display = 'none';
-      try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
+      removeCurrentOnlineRoomSnapshot();
 
       let isPlayerWin = false;
       if (gameMode === 'online') {
@@ -5285,7 +5634,13 @@
       }
 
       const now = Number.isFinite(timestamp) ? timestamp : performance.now();
-      activeVFX = activeVFX.filter(vfx => now - vfx.startTime < vfx.duration);
+      // 粒子存活窗口内每帧原地压缩列表，避免 filter 为每一帧分配新数组。
+      let liveCount = 0;
+      for (let index = 0; index < activeVFX.length; index++) {
+        const vfx = activeVFX[index];
+        if (now - vfx.startTime < vfx.duration) activeVFX[liveCount++] = vfx;
+      }
+      activeVFX.length = liveCount;
       const frameBudget = getCanvasFrameBudgetMs();
       const shouldRender = vfxLastRenderAt === 0 || now - vfxLastRenderAt >= frameBudget;
       if (shouldRender) {
@@ -5677,16 +6032,13 @@
         ctx.clearRect(0, 0, cWidth, cHeight);
         drawHandmadeGrassBoard();
 
-        const sampleStones = [
-          [6, 6, BLACK], [6, 7, WHITE], [6, 8, BLACK],
-          [7, 7, WHITE], [7, 6, BLACK]
-        ];
-        sampleStones.forEach(([row, col, color]) => {
+        const heartStones = window.GOMOKU_HEART_STONES || [];
+        heartStones.forEach(([row, col, color]) => {
           drawThemedStone(
             paddingX + (col + 0.5) * gridX,
             paddingY + (row + 0.5) * gridY,
             radius,
-            color,
+            color === 0 ? BLACK : WHITE,
             activeThemeKey
           );
         });
@@ -5709,6 +6061,10 @@
 
     window.GomokuBoardPreview = Object.freeze({ draw: renderHomeBoardPreview });
     window.dispatchEvent(new Event('gomoku-board-preview-ready'));
+    window.addEventListener('gomoku-heart-stones-ready', () => {
+      const canvas = document.getElementById('skyHomeBoardPreview');
+      if (canvas) renderHomeBoardPreview(canvas);
+    }, { once: true });
 
 
 
@@ -6877,7 +7233,7 @@
       activeOnlineOpponentUid = '';
       if (typeof closeUndoModal === 'function') closeUndoModal();
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
-      try { localStorage.removeItem('gomoku_active_online_room'); } catch(_) {}
+      removeCurrentOnlineRoomSnapshot();
       cancelQuickMatch();
       hideMatchingFloatingBar();
       setMode("ai", false);
@@ -6900,8 +7256,11 @@
       if (window.GomokuSocial?.stop) window.GomokuSocial.stop();
       currentUsername = "";
       currentUserUid = "";
+      currentUserPublicUid = "";
+      currentUserAvatarKind = '';
       currentUserToken = "";
       currentUserRefreshToken = "";
+      currentUserAuthUpdatedAt = 0;
       currentUserScore = 1000;
       p1Name = '游客棋手';
       p1Avatar = 'anime_boy';
@@ -6909,7 +7268,10 @@
       localStorage.removeItem("gomoku_user_username");
       localStorage.removeItem("gomoku_user_token");
       localStorage.removeItem("gomoku_user_refresh_token");
+      localStorage.removeItem('gomoku_user_auth_updated_at');
       localStorage.removeItem("gomoku_user_uid");
+      localStorage.removeItem("gomoku_user_public_uid");
+      localStorage.removeItem("gomoku_user_avatar_kind");
       localStorage.removeItem("gomoku_p1Name");
       localStorage.removeItem("gomoku_p1Avatar");
       localStorage.setItem("gomoku_user_score", "1000");
@@ -6950,6 +7312,12 @@
 
     function resetBoardOnly(nextRoundId = null) {
       if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
+      if (gameMode === 'ai' || gameMode === 'pvp') {
+        const checkpointOwner = activeGameCheckpointOwner || getCurrentGameOwnerUid();
+        if ((history.length > 0 && !isOver) || history.length === 0) {
+          clearCurrentGameCheckpoint(checkpointOwner);
+        }
+      }
       if (gameMode === 'ai') {
         assignRandomAiOpponent();
         updatePlayerHeaderUI();
@@ -7023,6 +7391,7 @@
     function restoreSnapshot(snap) {
       if (!snap || !Array.isArray(snap.board) || snap.board.length !== 15 ||
           !Array.isArray(snap.history) || snap.history.length > 512) return false;
+      invalidatePendingAiTurn();
       const prevBoard = board.map(r => [...r]);
       const prevCardsUsed = [...cardUsedStatus];
 
@@ -7104,6 +7473,7 @@
 
     function doUndo() {
       if (undoStack.length === 0 && history.length === 0) return false;
+      invalidatePendingAiTurn();
       const wasGameOver = isOver;
 
       let undoSuccess = false;
@@ -7284,6 +7654,10 @@
         draw(); updateUI(); persistGameState();
       }
 
+      if (undoSuccess && !isOver && !isReplayMode && gameMode === 'ai' && turn === WHITE) {
+        setTimeout(() => smartAiMove(), 80);
+      }
+
       return undoSuccess;
     }
 
@@ -7362,7 +7736,8 @@
             requestId: acceptedUndoId,
             board: board.map(row => [...row]),
             history: history.map(step => ({ ...step })),
-            turn
+            turn,
+            hasExtraMove
           });
         }
       }
@@ -7467,107 +7842,394 @@
     // ==========================================
     // 💾 棋局状态跨页面互通保全 (对局不丢失，切换无忧，划掉后台自动恢复)
     // ==========================================
-    function persistGameState() {
-      try {
-        const state = {
-          board, history, turn, stepCount: history.length, isOver, winnerColor: gameWinnerColor, isDraw: gameResultIsDraw, gameMode,
-          p1Name, p2Name, p1Avatar, p2Avatar,
-          currentDrawnCards, cardUsedStatus,
-          opponentSkillsUsedCount, opponentReforgeUsed,
-          undoStack: undoStack.slice(-30)
-        };
-        sessionStorage.setItem('gomoku_active_game_state', JSON.stringify(state));
+    const CURRENT_GAME_CHECKPOINT_PREFIX = 'gomoku_current_game_v1_';
+    const ONLINE_ROOM_STORAGE_PREFIX = 'gomoku_active_online_room_v1_';
+    let activeGameCheckpointOwner = null;
+    let activeOnlineRoomOwnerUid = null;
 
-        // 💾 针对划掉后台/杀进程的永久保全 (有效期 5 分钟)
+    function getCurrentGameOwnerUid() {
+      return hasRegisteredAccountSession() ? String(currentUserUid) : 'guest';
+    }
+
+    function getCurrentGameCheckpointKey(ownerUid = getCurrentGameOwnerUid()) {
+      return `${CURRENT_GAME_CHECKPOINT_PREFIX}${encodeURIComponent(String(ownerUid || 'guest'))}`;
+    }
+
+    function getOnlineRoomStorageKey(ownerUid = getCurrentGameOwnerUid()) {
+      return `${ONLINE_ROOM_STORAGE_PREFIX}${encodeURIComponent(String(ownerUid || 'guest'))}`;
+    }
+
+    function removeCurrentOnlineRoomSnapshot(ownerUid = activeOnlineRoomOwnerUid || getCurrentGameOwnerUid()) {
+      try { localStorage.removeItem(getOnlineRoomStorageKey(ownerUid)); } catch (_) {}
+      // The original unscoped slot is only attributable to the guest profile.
+      if (ownerUid === 'guest') {
+        try { localStorage.removeItem('gomoku_active_online_room'); } catch (_) {}
+      }
+      if (activeOnlineRoomOwnerUid === ownerUid) activeOnlineRoomOwnerUid = null;
+    }
+
+    function isValidCurrentGameCheckpoint(snapshot, expectedOwnerUid = getCurrentGameOwnerUid()) {
+      return Boolean(
+        snapshot && typeof snapshot === 'object'
+        && snapshot.ownerUid === expectedOwnerUid
+        && (snapshot.gameMode === 'ai' || snapshot.gameMode === 'pvp')
+        && snapshot.isOver !== true
+        && (snapshot.hasExtraMove === undefined || typeof snapshot.hasExtraMove === 'boolean')
+        && (snapshot.consecutiveMovesLeft === undefined || (Number.isInteger(snapshot.consecutiveMovesLeft)
+          && snapshot.consecutiveMovesLeft >= 0 && snapshot.consecutiveMovesLeft <= 8))
+        && (snapshot.opponentFreeMove === undefined || typeof snapshot.opponentFreeMove === 'boolean')
+        && (snapshot.prophecyPoint === undefined || snapshot.prophecyPoint === null || (
+          Number.isInteger(snapshot.prophecyPoint?.r) && snapshot.prophecyPoint.r >= 0 && snapshot.prophecyPoint.r < BOARD_SIZE
+          && Number.isInteger(snapshot.prophecyPoint?.c) && snapshot.prophecyPoint.c >= 0 && snapshot.prophecyPoint.c < BOARD_SIZE
+          && (snapshot.prophecyPoint?.by === undefined || snapshot.prophecyPoint.by === BLACK || snapshot.prophecyPoint.by === WHITE)
+        ))
+        && Array.isArray(snapshot.history) && snapshot.history.length > 0 && snapshot.history.length <= 512
+        && Array.isArray(snapshot.board) && snapshot.board.length === BOARD_SIZE
+        && snapshot.board.every(row => Array.isArray(row) && row.length === BOARD_SIZE
+          && row.every(cell => cell === EMPTY || cell === BLACK || cell === WHITE))
+        && (snapshot.turn === BLACK || snapshot.turn === WHITE)
+      );
+    }
+
+    function readCurrentGameCheckpoint(ownerUid = getCurrentGameOwnerUid()) {
+      try {
+        const raw = localStorage.getItem(getCurrentGameCheckpointKey(ownerUid));
+        if (!raw) return null;
+        const snapshot = JSON.parse(raw);
+        return isValidCurrentGameCheckpoint(snapshot, ownerUid) ? snapshot : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function restoreGameSkillState(snapshot) {
+      hasExtraMove = snapshot?.hasExtraMove === true;
+      consecutiveMovesLeft = Number.isInteger(snapshot?.consecutiveMovesLeft)
+        ? Math.max(0, Math.min(8, snapshot.consecutiveMovesLeft)) : 0;
+      opponentFreeMove = snapshot?.opponentFreeMove === true;
+      const point = snapshot?.prophecyPoint;
+      prophecyPoint = point && Number.isInteger(point.r) && point.r >= 0 && point.r < BOARD_SIZE
+        && Number.isInteger(point.c) && point.c >= 0 && point.c < BOARD_SIZE
+        && (point.by === undefined || point.by === BLACK || point.by === WHITE)
+        ? { r: point.r, c: point.c, ...(point.by === undefined ? {} : { by: point.by }) }
+        : null;
+    }
+
+    function clearCurrentGameCheckpoint(ownerUid) {
+      if (!ownerUid) return false;
+      try { localStorage.removeItem(getCurrentGameCheckpointKey(ownerUid)); } catch (_) { return false; }
+      if (activeGameCheckpointOwner === ownerUid) activeGameCheckpointOwner = null;
+      window.refreshSkyCurrentGameEntry?.();
+      return true;
+    }
+
+    let restoredOnlineReconnectStarted = false;
+
+    function readCurrentOnlineRoomSnapshot(ownerUid = getCurrentGameOwnerUid()) {
+      try {
+        let key = getOnlineRoomStorageKey(ownerUid);
+        let raw = localStorage.getItem(key);
+        let legacyGuestRoom = false;
+        if (!raw && ownerUid === 'guest') {
+          key = 'gomoku_active_online_room';
+          raw = localStorage.getItem(key);
+          legacyGuestRoom = Boolean(raw);
+        }
+        if (!raw) return null;
+        const session = JSON.parse(raw);
+        const belongsToCurrentOwner = session && (
+          session.ownerUid === ownerUid || (!session.ownerUid && ownerUid === 'guest')
+        );
+        const age = Number(session?.timestamp) ? Date.now() - Number(session.timestamp) : Infinity;
+        const validBoard = Array.isArray(session?.board) && session.board.length === BOARD_SIZE
+          && session.board.every(row => Array.isArray(row) && row.length === BOARD_SIZE
+            && row.every(cell => cell === EMPTY || cell === BLACK || cell === WHITE));
+        const validState = validBoard && Array.isArray(session?.history) && session.history.length <= 512
+          && (session.turn === BLACK || session.turn === WHITE);
+        if (!belongsToCurrentOwner || !session.roomCode || !validState || age < 0) return null;
+        // Keep the last board until the player explicitly exits or the game ends.
+        // Killing the Android/WebView process must not silently expire local state.
+        return session;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function restoreOnlineRoomSnapshot(session) {
+      if (!session || !Array.isArray(session.board) || session.board.length !== BOARD_SIZE
+          || !session.board.every(row => Array.isArray(row) && row.length === BOARD_SIZE
+            && row.every(cell => cell === EMPTY || cell === BLACK || cell === WHITE))
+          || !Array.isArray(session.history) || session.history.length > 512
+          || (session.turn !== BLACK && session.turn !== WHITE)) return false;
+
+      currentRoomCode = String(session.roomCode || '');
+      if (!currentRoomCode) return false;
+      lastActiveRoomCode = currentRoomCode;
+      myOnlineColor = session.myColor === WHITE ? WHITE : BLACK;
+      onlineSessionId = typeof session.sessionId === 'string' && session.sessionId.length <= 96
+        ? session.sessionId : '';
+      onlineJoinTicket = typeof session.joinTicket === 'string' && session.joinTicket.length <= 96
+        ? session.joinTicket : '';
+      activeOnlineRoomOwnerUid = typeof session.ownerUid === 'string' && session.ownerUid
+        ? session.ownerUid : getCurrentGameOwnerUid();
+      activeOnlineGuestUid = typeof session.activeGuestUid === 'string' && session.activeGuestUid.length <= 128
+        ? session.activeGuestUid : '';
+      onlineRoundId = typeof session.roundId === 'string' ? session.roundId : onlineRoundId;
+      p1Name = typeof session.p1Name === 'string' && session.p1Name ? session.p1Name : p1Name;
+      p1Avatar = typeof session.p1Avatar === 'string' && session.p1Avatar ? session.p1Avatar : p1Avatar;
+      const fixedAvatarKind = getFixedPrivateAvatarKind();
+      if (fixedAvatarKind) p1Avatar = getFixedPrivateAvatarValue(fixedAvatarKind);
+      p2Name = typeof session.p2Name === 'string' && session.p2Name ? session.p2Name : '好友';
+      p2Avatar = typeof session.p2Avatar === 'string' && session.p2Avatar ? session.p2Avatar : 'anime_girl';
+      board = session.board.map(row => [...row]);
+      history = session.history.map(move => move && typeof move === 'object' ? { ...move } : move);
+      turn = session.turn;
+      restoreGameSkillState(session);
+      if (Array.isArray(session.currentDrawnCards)) {
+        const restoredCards = session.currentDrawnCards
+          .map(saved => SKILL_CARD_POOL.find(card => card.id === saved?.id))
+          .filter(Boolean)
+          .slice(0, 3);
+        if (restoredCards.length === 3) currentDrawnCards = restoredCards;
+      }
+      if (Array.isArray(session.cardUsedStatus) && session.cardUsedStatus.length === 3) {
+        cardUsedStatus = session.cardUsedStatus.map(value => value === true);
+      }
+      gameResultIsDraw = session.isDraw === true;
+      gameWinnerColor = session.winnerColor === BLACK || session.winnerColor === WHITE ? session.winnerColor : 0;
+      isOver = false;
+      opponentSkillsUsedCount = Number.isInteger(session.opponentSkillsUsedCount) ? session.opponentSkillsUsedCount : 0;
+      opponentReforgeUsed = session.opponentReforgeUsed === true;
+      undoStack = Array.isArray(session.undoStack) ? session.undoStack.slice(-30) : [];
+      gameMode = 'online';
+      activeSkill = null;
+      activeVFX = [];
+      winningLine = null;
+      updatePlayerHeaderUI();
+      renderCardSlots();
+      draw();
+      updateUI();
+      return true;
+    }
+
+    function requestRestoredOnlineReconnect(reason) {
+      if (restoredOnlineReconnectStarted || (conn && conn.open)) return false;
+      restoredOnlineReconnectStarted = true;
+      try { void triggerOnlineReconnect(reason); } catch (_) {}
+      return true;
+    }
+
+    function persistGameState() {
+      const isLocalGame = gameMode === 'ai' || gameMode === 'pvp';
+      if (isLocalGame && history.length > 0 && !isOver && !activeGameCheckpointOwner) {
+        // Pin the account that owns this game on its first move. Logging out or
+        // switching accounts later must not move the checkpoint to another UID.
+        activeGameCheckpointOwner = getCurrentGameOwnerUid();
+      }
+      const ownerUid = activeGameCheckpointOwner || getCurrentGameOwnerUid();
+      const state = {
+        board, history, turn, stepCount: history.length, isOver, winnerColor: gameWinnerColor, isDraw: gameResultIsDraw, gameMode,
+        p1Name, p2Name, p1Avatar: String(p1Avatar || '').length <= 4096 ? p1Avatar : '', p2Avatar, ownerUid,
+        aiOpponentProfile: gameMode === 'ai' ? { ...aiOpponentProfile } : null,
+        currentDrawnCards, cardUsedStatus,
+        opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
+        consecutiveMovesLeft, opponentFreeMove, prophecyPoint: prophecyPoint ? { ...prophecyPoint } : null,
+        undoStack: undoStack.slice(-30)
+      };
+
+      // Keep same-tab recovery, but let a failed sessionStorage write leave the
+      // durable per-account checkpoint and online snapshot unaffected.
+      try { sessionStorage.setItem('gomoku_active_game_state', JSON.stringify(state)); } catch (_) {}
+
+      // Preserve the last online room board per UID until explicit exit/game end.
+      try {
         if (gameMode === 'online' && !isOver && currentRoomCode) {
+          if (!activeOnlineRoomOwnerUid) activeOnlineRoomOwnerUid = getCurrentGameOwnerUid();
           const session = {
             roomCode: currentRoomCode,
             myColor: myOnlineColor,
             myRole: myOnlineColor === BLACK ? 'host' : 'client',
-            // 页面被系统回收后必须沿用原房间身份。只恢复房号会生成新的
-            // sessionId，仍在线的对端会按安全校验拒绝它，造成同房号两套会话。
+            // Page recovery must reuse the original room identity. A new
+            // sessionId for the same room is rejected by the peer.
             sessionId: onlineSessionId,
             joinTicket: onlineJoinTicket,
             activeGuestUid: activeOnlineGuestUid,
             roundId: onlineRoundId,
+            ownerUid: activeOnlineRoomOwnerUid,
             p1Name, p1Avatar, p2Name, p2Avatar,
             board, history, turn, winnerColor: gameWinnerColor,
             isDraw: gameResultIsDraw,
             currentDrawnCards, cardUsedStatus,
-            opponentSkillsUsedCount, opponentReforgeUsed,
+            opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
+            consecutiveMovesLeft, opponentFreeMove, prophecyPoint: prophecyPoint ? { ...prophecyPoint } : null,
             undoStack: undoStack.slice(-30),
             timestamp: Date.now()
           };
-          localStorage.setItem('gomoku_active_online_room', JSON.stringify(session));
+          localStorage.setItem(getOnlineRoomStorageKey(session.ownerUid), JSON.stringify(session));
+        } else if (gameMode === 'online' && !isOver && activeOnlineRoomOwnerUid) {
+          // Keep the prior room snapshot while the room code is temporarily
+          // unavailable during a reconnect attempt.
         } else {
-          localStorage.removeItem('gomoku_active_online_room');
+          removeCurrentOnlineRoomSnapshot(activeOnlineRoomOwnerUid || getCurrentGameOwnerUid());
         }
-      } catch(e) {}
+      } catch (_) {}
+
+      try {
+        if (isLocalGame && history.length > 0 && !isOver) {
+          const checkpoint = { ...state, savedAt: Date.now() };
+          localStorage.setItem(getCurrentGameCheckpointKey(activeGameCheckpointOwner), JSON.stringify(checkpoint));
+        } else if (isLocalGame && activeGameCheckpointOwner && (isOver || history.length === 0)) {
+          // Finished or fully undone games are never offered as resumable.
+          clearCurrentGameCheckpoint(activeGameCheckpointOwner);
+        }
+      } catch (_) {}
+      window.refreshSkyCurrentGameEntry?.();
     }
+
+    function getCurrentGameSummary() {
+      const onlineSession = readCurrentOnlineRoomSnapshot();
+      const localSnapshot = readCurrentGameCheckpoint();
+      const onlineIsNewest = onlineSession && (!localSnapshot ||
+        (Number(onlineSession.timestamp) || 0) >= (Number(localSnapshot.savedAt) || 0));
+      if (onlineIsNewest) {
+        return {
+          gameMode: 'online',
+          moveCount: Array.isArray(onlineSession.history) ? onlineSession.history.length : 0,
+          savedAt: Number(onlineSession.timestamp) || 0
+        };
+      }
+      if (!localSnapshot) return null;
+      return {
+        gameMode: localSnapshot.gameMode,
+        moveCount: localSnapshot.history.length,
+        savedAt: Number(localSnapshot.savedAt) || 0
+      };
+    }
+
+    function restoreCurrentGameCheckpoint() {
+      const ownerUid = getCurrentGameOwnerUid();
+      const onlineSession = readCurrentOnlineRoomSnapshot(ownerUid);
+      const localSnapshot = readCurrentGameCheckpoint(ownerUid);
+      const onlineIsNewest = onlineSession && (!localSnapshot ||
+        (Number(onlineSession.timestamp) || 0) >= (Number(localSnapshot.savedAt) || 0));
+      if (onlineIsNewest && restoreOnlineRoomSnapshot(onlineSession)) {
+        window.SkyIslandUI?.showGame();
+        requestRestoredOnlineReconnect('继续恢复联机对局');
+        showGameNotice('正在重新连接这场联机对局…', false);
+        return true;
+      }
+      const snapshot = readCurrentGameCheckpoint(ownerUid);
+      if (!snapshot) return false;
+
+      board = snapshot.board.map(row => [...row]);
+      history = snapshot.history.map(move => move && typeof move === 'object' ? { ...move } : move);
+      turn = snapshot.turn;
+      restoreGameSkillState(snapshot);
+      isOver = false;
+      gameWinnerColor = 0;
+      gameResultIsDraw = false;
+      gameMode = snapshot.gameMode;
+      p1Name = typeof snapshot.p1Name === 'string' && snapshot.p1Name ? snapshot.p1Name : p1Name;
+      p2Name = typeof snapshot.p2Name === 'string' && snapshot.p2Name ? snapshot.p2Name : p2Name;
+      p1Avatar = typeof snapshot.p1Avatar === 'string' && snapshot.p1Avatar ? snapshot.p1Avatar : p1Avatar;
+      const fixedAvatarKind = getFixedPrivateAvatarKind();
+      if (fixedAvatarKind) p1Avatar = getFixedPrivateAvatarValue(fixedAvatarKind);
+      p2Avatar = typeof snapshot.p2Avatar === 'string' && snapshot.p2Avatar ? snapshot.p2Avatar : p2Avatar;
+      const savedAiOpponent = AI_OPPONENT_PROFILES.find(profile =>
+        profile.name === snapshot.aiOpponentProfile?.name && profile.avatar === snapshot.aiOpponentProfile?.avatar
+      );
+      if (gameMode === 'ai' && savedAiOpponent) aiOpponentProfile = savedAiOpponent;
+      if (Array.isArray(snapshot.currentDrawnCards)) {
+        const restoredCards = snapshot.currentDrawnCards
+          .map(saved => SKILL_CARD_POOL.find(card => card.id === saved?.id))
+          .filter(Boolean)
+          .slice(0, 3);
+        if (restoredCards.length === 3) currentDrawnCards = restoredCards;
+      }
+      if (Array.isArray(snapshot.cardUsedStatus) && snapshot.cardUsedStatus.length === 3) {
+        cardUsedStatus = snapshot.cardUsedStatus.map(value => value === true);
+      }
+      opponentSkillsUsedCount = Number.isInteger(snapshot.opponentSkillsUsedCount) ? snapshot.opponentSkillsUsedCount : 0;
+      opponentReforgeUsed = snapshot.opponentReforgeUsed === true;
+      undoStack = Array.isArray(snapshot.undoStack) ? snapshot.undoStack.slice(-30) : [];
+      activeSkill = null;
+      activeVFX = [];
+      aiTurnSeq++;
+      aiThinking = false;
+      activeGameCheckpointOwner = ownerUid;
+      isReplayMode = false;
+      winningLine = null;
+      cancelPendingGameResultModal();
+      if (typeof closeGameResultModal === 'function') closeGameResultModal();
+      updatePlayerHeaderUI();
+      renderCardSlots();
+      draw();
+      updateUI();
+      window.SkyIslandUI?.showGame();
+      if (gameMode === 'ai' && turn === WHITE) setTimeout(smartAiMove, 300);
+      showGameNotice('已恢复这局对弈，可以继续落子', false);
+      return true;
+    }
+
+    window.getCurrentGameSummary = getCurrentGameSummary;
+    window.resumeSavedGame = restoreCurrentGameCheckpoint;
+    window.refreshSkyCurrentGameEntry?.();
 
     function restoreGameStateIfAny() {
       // 1. 优先检测是否刚刚在联机对局中被系统杀后台或划掉后台
       try {
-        const rawOnline = localStorage.getItem('gomoku_active_online_room');
-        if (rawOnline) {
-          const session = JSON.parse(rawOnline);
-          if (session && session.roomCode && (Date.now() - session.timestamp < 300000)) {
-            console.info('检测到刚刚有一局未完成的联机对战，自动恢复房间:', session.roomCode);
-            currentRoomCode = session.roomCode;
-            lastActiveRoomCode = session.roomCode;
-            myOnlineColor = session.myColor;
-            onlineSessionId = typeof session.sessionId === 'string' && session.sessionId.length <= 96
-              ? session.sessionId : '';
-            onlineJoinTicket = typeof session.joinTicket === 'string' && session.joinTicket.length <= 96
-              ? session.joinTicket : '';
-            activeOnlineGuestUid = typeof session.activeGuestUid === 'string' && session.activeGuestUid.length <= 128
-              ? session.activeGuestUid : '';
-            onlineRoundId = typeof session.roundId === 'string' ? session.roundId : onlineRoundId;
-            p1Name = session.p1Name || p1Name;
-            p1Avatar = session.p1Avatar || p1Avatar;
-            p2Name = session.p2Name || '好友';
-            p2Avatar = session.p2Avatar || 'anime_girl';
-            if (session.board) board = session.board;
-            if (session.history) history = session.history;
-            if (session.turn) turn = session.turn;
-            if (session.currentDrawnCards) currentDrawnCards = session.currentDrawnCards;
-            if (session.cardUsedStatus) cardUsedStatus = session.cardUsedStatus;
-            gameResultIsDraw = session.isDraw === true;
-            gameWinnerColor = session.winnerColor === BLACK || session.winnerColor === WHITE ? session.winnerColor : 0;
-            opponentSkillsUsedCount = Number.isInteger(session.opponentSkillsUsedCount) ? session.opponentSkillsUsedCount : 0;
-            opponentReforgeUsed = session.opponentReforgeUsed === true;
-            if (Array.isArray(session.undoStack)) undoStack = session.undoStack;
-            gameMode = 'online';
-
-            setTimeout(() => {
-              showGameNotice(`🔄 检测到您刚退出后台，正在自动重连回房间【${session.roomCode}】...`, false);
-              triggerOnlineReconnect("划掉后台恢复");
-            }, 800);
-            return;
-          } else {
-            localStorage.removeItem('gomoku_active_online_room');
-          }
+        const currentOwnerUid = getCurrentGameOwnerUid();
+        const session = readCurrentOnlineRoomSnapshot(currentOwnerUid);
+        const localSnapshot = readCurrentGameCheckpoint(currentOwnerUid);
+        const onlineIsNewest = session && (!localSnapshot ||
+          (Number(session.timestamp) || 0) >= (Number(localSnapshot.savedAt) || 0));
+        if (onlineIsNewest && restoreOnlineRoomSnapshot(session)) {
+          console.info('检测到当前账号未完成的联机对局，已恢复本地棋盘状态');
+          setTimeout(() => {
+            showGameNotice('正在重新连接上次的联机对局…', false);
+            requestRestoredOnlineReconnect('划掉后台恢复');
+          }, 800);
+          return;
         }
       } catch(e) {}
 
-      // 2. 常规 session 恢复
+      // 2. Same-tab session recovery. Old unscoped snapshots are accepted only
+      // for guests; a prior account's tab state must not cross into a new login.
       try {
         const raw = sessionStorage.getItem('gomoku_active_game_state');
         if (raw) {
           const s = JSON.parse(raw);
-          if (s.board && s.history && s.history.length > 0 && !s.isOver) {
-            board = s.board;
-            history = s.history;
+          const currentOwnerUid = getCurrentGameOwnerUid();
+          const belongsToCurrentOwner = s && (
+            s.ownerUid === currentOwnerUid
+            || (!s.ownerUid && currentOwnerUid === 'guest')
+          );
+          if (belongsToCurrentOwner && (s.gameMode === 'ai' || s.gameMode === 'pvp')
+              && isValidCurrentGameCheckpoint({ ...s, ownerUid: currentOwnerUid }, currentOwnerUid)) {
+            board = s.board.map(row => [...row]);
+            history = s.history.map(move => move && typeof move === 'object' ? { ...move } : move);
             turn = s.turn;
-            isOver = s.isOver || false;
-            gameWinnerColor = s.winnerColor === BLACK || s.winnerColor === WHITE ? s.winnerColor : 0;
-            gameResultIsDraw = s.isDraw === true;
+            restoreGameSkillState(s);
+            isOver = false;
+            gameWinnerColor = 0;
+            gameResultIsDraw = false;
             opponentSkillsUsedCount = Number.isInteger(s.opponentSkillsUsedCount) ? s.opponentSkillsUsedCount : 0;
             opponentReforgeUsed = s.opponentReforgeUsed === true;
+            if (typeof s.p1Name === 'string' && s.p1Name) p1Name = s.p1Name;
+            if (typeof s.p2Name === 'string' && s.p2Name) p2Name = s.p2Name;
+            if (typeof s.p1Avatar === 'string' && s.p1Avatar) p1Avatar = s.p1Avatar;
+            const fixedAvatarKind = getFixedPrivateAvatarKind();
+            if (fixedAvatarKind) p1Avatar = getFixedPrivateAvatarValue(fixedAvatarKind);
+            if (typeof s.p2Avatar === 'string' && s.p2Avatar) p2Avatar = s.p2Avatar;
             if (s.currentDrawnCards) currentDrawnCards = s.currentDrawnCards;
             if (s.cardUsedStatus) cardUsedStatus = s.cardUsedStatus;
             if (Array.isArray(s.undoStack)) undoStack = s.undoStack;
-            if (s.gameMode) gameMode = s.gameMode;
+            gameMode = s.gameMode;
+            const savedAiOpponent = AI_OPPONENT_PROFILES.find(profile =>
+              profile.name === s.aiOpponentProfile?.name && profile.avatar === s.aiOpponentProfile?.avatar
+            );
+            if (gameMode === 'ai' && savedAiOpponent) aiOpponentProfile = savedAiOpponent;
+            activeGameCheckpointOwner = currentOwnerUid;
             if (gameMode === 'ai' && turn === WHITE && !isOver) {
               setTimeout(smartAiMove, 300);
             }
@@ -7614,9 +8276,9 @@
 
     // 初始化：只锁定官方视觉，不覆盖大厅/棋局等页面状态 class。
     activeThemeKey = 'default';
-    restoreGameStateIfAny();
     renderQuickPhrases();
     drawRandomThreeCards();
+    restoreGameStateIfAny();
     updateGraphicsQualityUI();
     resizeBoard();
     try { performance.mark('gomoku_board_ready'); } catch (_) {}
@@ -7645,12 +8307,18 @@
     // 🚀 Cloudflare 保留私有仓库更新文件中转；游戏业务 API 以 ECS 为主。
         // 📜 当前版本官方更新内容说明（用于开机公告、弹窗展示与日志回顾）
     const CURRENT_UPDATE_NOTES = [
+      "🧩 【小流量热更新】优先下载与本机版本匹配的 HTML 增量包，并校验补丁与结果摘要；不匹配时自动回退完整更新",
+      "🌤️ 【启动体验】开屏画面覆盖 WebView 冷启动，等首帧可见后再关闭，避免固定超时露出灰屏",
       "🔔 【更新反馈】点检查更新后立即显示检查中状态、进度和按钮反馈，不必等网络请求结束才知道已开始",
       "⚡ 【匹配稳定性】等待中的匹配会定时续接，减少并发匹配时漏配；进房时校验房间状态，避免误进过期棋盘",
       "💬 【好友与私聊】好友邀请、私聊刷新和复制房间号增加即时反馈，社交数据读取统一使用 ECS 主库",
       "🔌 【联机恢复】应用回到前台时及时恢复实时连接，并清理旧会话残留，降低好友和房间状态错乱",
       "👤 【头像一致性】固定账号头像映射覆盖好友、邀请、排行、匹配与棋谱；人机头像不再借用情侣头像",
-      "🧭 【复盘体验】修正结束后返回棋盘复盘入口，并清理复盘画面中的终局和技能临时特效"
+      "🧭 【复盘体验】修正结束后返回棋盘复盘入口，并清理复盘画面中的终局和技能临时特效",
+      "🔑 【账号 ID】支持 lza 与 qsq 登录，大小写不敏感；账号显示头像按认证身份固定",
+      "💾 【棋局恢复】首页显示当前进行中的棋局；本地对局与联机棋盘进度写入设备存储",
+      "🚪 【房间退出】修正主动离房通知，另一方能退出旧房间状态且意外断线仍可重连",
+      "📝 【资料保存】离线提示区分本机保存与服务器同步状态，不再承诺自动同步"
     ];
     try {
       const verEl = document.getElementById('appVersionDisplay');
@@ -7694,7 +8362,7 @@
 
     function buildGithubProxyUrls(assetUrl) {
       const rawUrl = String(assetUrl || '').trim();
-      if (!/^https:\/\/github\.com\/xnnb04664-afk\/gomoku\/releases\/download\/v\d+\.\d+\.\d+\/gomoku\.(?:apk|html)$/.test(rawUrl)) return [];
+      if (!/^https:\/\/github\.com\/xnnb04664-afk\/gomoku\/releases\/download\/v\d+\.\d+\.\d+\/(?:gomoku\.(?:apk|html)|gomoku-html-[0-9a-f]{64}\.gmd)$/i.test(rawUrl)) return [];
       return GITHUB_RELEASE_PROXY_ORIGINS.map(origin => `${origin}/${rawUrl}`);
     }
 
@@ -7755,7 +8423,7 @@
       throw new Error(`安装包下载失败（已尝试 ${failures.length || candidates.length} 个可用入口）：${failures.slice(0, 4).join('；') || '没有可用下载地址'}`);
     }
 
-    function invokeProtectedNativeApkUpdate(ticket, apkSha256 = '', sourceOrigin = UPDATE_CLOUDFLARE_PAGES_ORIGIN) {
+    function invokeProtectedNativeApkUpdate(ticket, apkSha256 = '', sourceOrigin = ECS_API_HOST) {
       if (typeof AndroidNativeApp === 'undefined' || !ticket) return false;
       try {
         const safeHash = /^[0-9a-f]{64}$/i.test(String(apkSha256 || '')) ? String(apkSha256).toLowerCase() : '';
@@ -7862,7 +8530,8 @@
         apkTicket: String(data.apkTicket || '').trim(),
         htmlTicket: String(data.htmlTicket || '').trim(),
         apkSha256,
-        htmlSha256
+        htmlSha256,
+        htmlPatches: []
       };
     }
 
@@ -7886,6 +8555,29 @@
       const apk = normalizeAsset('gomoku.apk');
       let html = null;
       try { html = normalizeAsset('gomoku.html'); } catch (_) {}
+      const htmlPatches = html ? assets.flatMap((asset) => {
+        const assetName = String(asset?.name || '');
+        const match = assetName.match(/^gomoku-html-([0-9a-f]{64})\.gmd$/i);
+        if (!match) return [];
+        const digestMatch = String(asset?.digest || '').match(/^sha256:([0-9a-f]{64})$/i);
+        if (!digestMatch || !Number.isFinite(Number(asset?.size)) || Number(asset.size) < 16 || Number(asset.size) > 8 * 1024 * 1024) return [];
+        const expectedPath = `/xnnb04664-afk/gomoku/releases/download/${releaseTag}/${assetName}`;
+        let assetUrl = '';
+        try {
+          const parsed = new URL(String(asset?.browser_download_url || ''));
+          if (parsed.origin === 'https://github.com' && parsed.pathname === expectedPath && !parsed.search && !parsed.hash) assetUrl = parsed.href;
+        } catch (_) {}
+        const urls = assetUrl ? buildGithubProxyUrls(assetUrl) : [];
+        if (!urls.length) return [];
+        return [{
+          baseSha256: match[1].toLowerCase(),
+          targetSha256: html.sha256,
+          assetUrl,
+          urls,
+          sha256: digestMatch[1].toLowerCase(),
+          size: Number(asset.size)
+        }];
+      }) : [];
       const apkUrls = buildGithubProxyUrls(apk.assetUrl);
       const htmlUrls = html ? buildGithubProxyUrls(html.assetUrl) : [];
       if (!apkUrls.length) throw new Error('没有配置可用的 GitHub APK 代理节点');
@@ -7904,18 +8596,140 @@
         apkTicket: '',
         htmlTicket: '',
         apkSha256: apk.sha256,
-        htmlSha256: html?.sha256 || ''
+        htmlSha256: html?.sha256 || '',
+        htmlPatches
       };
     }
 
-    async function fetchUpdateJson(url, timeoutMs) {
+    async function downloadAndApplyHtmlDelta(updateData) {
+      if (updateData?.sourceType !== 'github'
+          || typeof AndroidNativeApp === 'undefined'
+          || typeof AndroidNativeApp.saveHotUpdateFile !== 'function') return false;
+      const delta = (updateData.htmlPatches || []).find((item) =>
+        item.targetSha256 === updateData.htmlSha256 && Array.isArray(item.urls) && item.urls.length
+      );
+      if (!delta) return false;
+
+      const downloadCandidate = async (url) => {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let timeoutId = null;
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            if (controller) controller.abort();
+            reject(new Error('增量更新下载超时'));
+          }, 12000);
+        });
+        const requestPromise = (async () => {
+          const response = await fetch(url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now(), {
+            cache: 'no-store',
+            ...(controller ? { signal: controller.signal } : {})
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const declaredLength = Number(response.headers.get('content-length') || 0);
+          if (declaredLength > 8 * 1024 * 1024) throw new Error('增量包超过 8 MB');
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          if (bytes.byteLength < 16 || bytes.byteLength > 8 * 1024 * 1024) throw new Error('增量包大小异常');
+          if (delta.size && bytes.byteLength !== delta.size) throw new Error('增量包长度与版本清单不符');
+          if (await sha256HexBytes(bytes.buffer) !== delta.sha256) throw new Error('增量包 SHA-256 校验失败');
+          return bytes;
+        })();
+        return Promise.race([requestPromise, timeoutPromise]).finally(() => {
+          if (timeoutId) clearTimeout(timeoutId);
+        });
+      };
+
+      try {
+        const activeUrl = new URL(window.location.href);
+        activeUrl.hash = '';
+        activeUrl.search = '';
+        const activeResponse = await fetch(activeUrl.href, { cache: 'no-store', credentials: 'same-origin' });
+        if (!activeResponse.ok) throw new Error(`无法读取本地更新基线（HTTP ${activeResponse.status}）`);
+        const baseBytes = new Uint8Array(await activeResponse.arrayBuffer());
+        if (baseBytes.byteLength < 50000 || baseBytes.byteLength > 20 * 1024 * 1024) throw new Error('本地 HTML 基线大小异常');
+        const baseSha256 = await sha256HexBytes(baseBytes.buffer);
+        if (baseSha256 !== delta.baseSha256) return false;
+
+        const patchBytes = await Promise.any(delta.urls.map(downloadCandidate));
+        if (String.fromCharCode(...patchBytes.subarray(0, 4)) !== 'GMD1') throw new Error('增量包格式无效');
+        const metadataLength = new DataView(patchBytes.buffer, patchBytes.byteOffset, patchBytes.byteLength).getUint32(4, false);
+        if (metadataLength < 2 || metadataLength > 1024 * 1024 || 8 + metadataLength >= patchBytes.byteLength) throw new Error('增量包清单长度异常');
+        const metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(patchBytes.subarray(8, 8 + metadataLength)));
+        if (metadata.version !== 1 || metadata.baseSha256 !== baseSha256 || metadata.targetSha256 !== delta.targetSha256
+            || !Number.isSafeInteger(metadata.targetSize) || metadata.targetSize < 50000 || metadata.targetSize > 20 * 1024 * 1024
+            || !Array.isArray(metadata.operations) || metadata.operations.length === 0 || metadata.operations.length > 20000) {
+          throw new Error('增量包基线或目标版本不匹配');
+        }
+        if (typeof DecompressionStream !== 'function') throw new Error('当前 WebView 不支持增量包解压');
+        const compressedInsertBytes = patchBytes.subarray(8 + metadataLength);
+        const insertReader = new Blob([compressedInsertBytes]).stream()
+          .pipeThrough(new DecompressionStream('deflate')).getReader();
+        const insertChunks = [];
+        let insertSize = 0;
+        while (true) {
+          const part = await insertReader.read();
+          if (part.done) break;
+          insertSize += part.value.byteLength;
+          if (insertSize > 20 * 1024 * 1024) {
+            try { await insertReader.cancel(); } catch (_) {}
+            throw new Error('增量包展开后超过 20 MB');
+          }
+          insertChunks.push(part.value);
+        }
+        const insertBytes = new Uint8Array(insertSize);
+        let insertOffset = 0;
+        for (const chunk of insertChunks) {
+          insertBytes.set(chunk, insertOffset);
+          insertOffset += chunk.byteLength;
+        }
+        const outputBytes = new Uint8Array(metadata.targetSize);
+        let outputOffset = 0;
+        for (const operation of metadata.operations) {
+          if (!Array.isArray(operation) || operation.length !== 3) throw new Error('增量包操作格式异常');
+          const [kind, rawOffset, rawLength] = operation;
+          const source = kind === 'C' ? baseBytes : kind === 'I' ? insertBytes : null;
+          const offset = Number(rawOffset);
+          const length = Number(rawLength);
+          if (!source || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0
+              || offset + length > source.byteLength || outputOffset + length > outputBytes.byteLength) {
+            throw new Error('增量包包含越界操作');
+          }
+          outputBytes.set(source.subarray(offset, offset + length), outputOffset);
+          outputOffset += length;
+        }
+        if (outputOffset !== outputBytes.byteLength || await sha256HexBytes(outputBytes.buffer) !== delta.targetSha256) {
+          throw new Error('增量结果 SHA-256 校验失败');
+        }
+        const newHtml = new TextDecoder('utf-8', { fatal: true }).decode(outputBytes);
+        const startupScriptBlocks = newHtml.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
+        const hasSafeStartupBootstrap = startupScriptBlocks.some(script =>
+          script.includes('GOMOKU_STARTUP_SPLASH_BOOTSTRAP_V1')
+          && /function\s+hasNativeBridge/.test(script)
+          && script.includes('DOMContentLoaded')
+        );
+        if (!newHtml.includes('五子棋') || !hasSafeStartupBootstrap) throw new Error('增量结果缺少有效启动页面');
+        if (!AndroidNativeApp.saveHotUpdateFile('index.html', newHtml)) throw new Error('增量更新写入本地沙盒失败');
+        return true;
+      } catch (error) {
+        console.warn('[HotUpdate Delta] 增量更新未应用，将尝试完整热更新:', error?.message || error);
+        return false;
+      }
+    }
+
+    async function fetchUpdateJson(url, timeoutMs, externalSignal = null) {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       let timeoutId = null;
+      const abortFromExternal = () => controller?.abort();
       const requestOptions = {
         method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store',
         headers: { Accept: 'application/vnd.github+json' }
       };
-      if (controller) requestOptions.signal = controller.signal;
+      if (controller) {
+        requestOptions.signal = controller.signal;
+        if (externalSignal?.aborted) controller.abort();
+        else externalSignal?.addEventListener?.('abort', abortFromExternal, { once: true });
+      } else if (externalSignal) {
+        requestOptions.signal = externalSignal;
+      }
       const timeoutPromise = new Promise((_, reject) => {
         timeoutId = setTimeout(() => {
           controller?.abort();
@@ -7933,6 +8747,7 @@
         })(), timeoutPromise]);
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
+        externalSignal?.removeEventListener?.('abort', abortFromExternal);
       }
     }
 
@@ -7965,15 +8780,37 @@
     async function fetchUpdateManifest(options = {}) {
       const failures = [];
       if (options.includeGithub !== false) {
-        for (const [index, url] of GITHUB_RELEASE_API_MIRRORS.entries()) {
-          const label = index === 0 ? 'GitHub 代理节点 A' : index === 1 ? 'GitHub 代理节点 B' : 'GitHub 官方接口';
-          try {
-            const release = await fetchUpdateJson(url, UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(index, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)]);
-            return normalizeGithubReleaseManifest(release, label);
-          } catch (error) {
-            const detail = String(error?.message || '连接失败').slice(0, 90);
-            failures.push(`${label}：${detail}`);
-          }
+        const controllers = GITHUB_RELEASE_API_MIRRORS.map(() =>
+          typeof AbortController === 'function' ? new AbortController() : null
+        );
+        let remaining = GITHUB_RELEASE_API_MIRRORS.length;
+        let resolved = false;
+        const githubRace = new Promise((resolve, reject) => {
+          const mirrorErrors = [];
+          GITHUB_RELEASE_API_MIRRORS.forEach((url, index) => {
+            const label = index === 0 ? 'GitHub 代理节点 A' : index === 1 ? 'GitHub 代理节点 B' : 'GitHub 官方接口';
+            const timeout = UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(index, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)];
+            fetchUpdateJson(url, timeout, controllers[index]?.signal)
+              .then(release => normalizeGithubReleaseManifest(release, label))
+              .then(manifest => {
+                if (resolved) return;
+                resolved = true;
+                resolve(manifest);
+              })
+              .catch(error => {
+                mirrorErrors[index] = `${label}：${String(error?.message || '连接失败').slice(0, 90)}`;
+                remaining -= 1;
+                if (remaining === 0 && !resolved) reject(mirrorErrors);
+              });
+          });
+        });
+        try {
+          const manifest = await githubRace;
+          controllers.forEach(controller => controller?.abort());
+          return manifest;
+        } catch (mirrorErrors) {
+          controllers.forEach(controller => controller?.abort());
+          failures.push(...(Array.isArray(mirrorErrors) ? mirrorErrors.filter(Boolean) : ['GitHub 更新入口全部失败']));
         }
       }
       for (const [index, sourceOrigin] of UPDATE_SERVICE_ORIGINS.entries()) {
@@ -8338,7 +9175,7 @@
           btnFast.style.display = "flex";
           // 🌟 核心革新：如果处于原生 App 环境，首推免安装秒级在线热更新！
           if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveHotUpdateFile) {
-            btnFast.innerHTML = "<span>⚡ 免安装一键秒更 (推荐·2秒无感)</span>";
+            btnFast.innerHTML = "<span>⚡ 小流量免安装更新 (推荐)</span>";
             btnFast.onclick = async (e) => {
               e.preventDefault();
               if (btnFast.disabled) return;
@@ -8363,12 +9200,20 @@
                 }
                 if (!clickVersionData.apkTicket && clickVersionData.sourceType !== 'github') throw new Error('更新服务未签发有效下载授权');
 
+                setVisualProgress(24, "🧩 正在查找与本机版本匹配的增量包...");
+                if (await downloadAndApplyHtmlDelta(clickVersionData)) {
+                  setVisualProgress(100, "🎉 增量更新完成，正在重载进入新版...");
+                  showGameNotice("🎉 少量数据已更新完成，即将进入最新版", false);
+                  setTimeout(() => window.location.reload(), 800);
+                  return;
+                }
+
                 const rawHotUrls = clickVersionData.sourceType === 'github'
                   ? clickVersionData.htmlUrls
                   : (clickVersionData.htmlUrl ? [clickVersionData.htmlUrl] : []);
                 const hotUrls = rawHotUrls.map(url => url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now());
 
-                const fetchCandidate = (url, timeoutMs = 20000) => {
+                const fetchCandidate = (sourceData, url, timeoutMs = 20000) => {
                   const controller = typeof AbortController === 'function' ? new AbortController() : null;
                   let timeoutId = null;
                   const timeoutPromise = new Promise((_, reject) => {
@@ -8380,7 +9225,7 @@
                   const downloadPromise = (async () => {
                     const requestOptions = {
                       cache: 'no-store',
-                      ...(clickVersionData.htmlTicket ? { headers: getUpdateHeaders(clickVersionData.htmlTicket) } : {})
+                      ...(sourceData.htmlTicket ? { headers: getUpdateHeaders(sourceData.htmlTicket) } : {})
                     };
                     if (controller) requestOptions.signal = controller.signal;
                     const res = await fetch(url, requestOptions);
@@ -8389,9 +9234,9 @@
                     if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
                       throw new Error("更新文件内容无效");
                     }
-                    if (!clickVersionData.htmlSha256) throw new Error("更新文件缺少完整性摘要");
+                    if (!sourceData.htmlSha256) throw new Error("更新文件缺少完整性摘要");
                     const actualHash = await sha256Hex(txt);
-                    if (actualHash !== clickVersionData.htmlSha256) {
+                    if (actualHash !== sourceData.htmlSha256) {
                       throw new Error("更新文件完整性校验失败");
                     }
                     return txt;
@@ -8401,12 +9246,24 @@
                   });
                 };
 
-                setVisualProgress(30, "📥 正在接收并校验最新版游戏...");
-                if (hotUrls.length === 0 || !clickVersionData.htmlSha256 ||
-                    (clickVersionData.sourceType !== 'github' && !clickVersionData.htmlTicket)) {
+                setVisualProgress(30, "📥 正在接收并校验完整备用更新...");
+                if (!clickVersionData.htmlSha256 ||
+                    (clickVersionData.sourceType !== 'github' && (hotUrls.length === 0 || !clickVersionData.htmlTicket))) {
                   throw new Error('更新清单未提供完整热更新文件、摘要或下载授权');
                 }
-                const newHtml = await Promise.any(hotUrls.map(u => fetchCandidate(u)));
+                let newHtml = '';
+                try {
+                  newHtml = await Promise.any(hotUrls.map(url => fetchCandidate(clickVersionData, url)));
+                } catch (githubHtmlError) {
+                  if (clickVersionData.sourceType !== 'github') throw githubHtmlError;
+                  setVisualProgress(42, "🔁 GitHub 完整文件暂不可用，正在切换 ECS 更新服务...");
+                  const serviceManifests = await fetchTicketedUpdateManifests(clickVersionData.tag, clickVersionData.apkSha256);
+                  const serviceCandidates = serviceManifests
+                    .filter(item => item.htmlUrl && item.htmlSha256 === clickVersionData.htmlSha256 && item.htmlTicket)
+                    .map(item => fetchCandidate(item, `${item.htmlUrl}?_t=${Date.now()}`));
+                  if (!serviceCandidates.length) throw new Error('GitHub HTML 代理不可用，ECS 未提供匹配版本的完整更新文件');
+                  newHtml = await Promise.any(serviceCandidates);
+                }
 
                 const startupScriptBlocks = newHtml.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
                 const hasSafeStartupBootstrap = startupScriptBlocks.some(script =>

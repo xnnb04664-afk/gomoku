@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="@android:style/Theme.NoTitleBar.Fullscreen">
-        <item name="android:windowBackground">@color/splash_bg</item>
+        <!-- Start with the empty board so the app does not show the old static heart icon. -->
+        <item name="android:windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_empty_board_art</item>
+        <item name="android:windowBackground">@drawable/splash_opening_poster</item>
     </style>
 </resources>

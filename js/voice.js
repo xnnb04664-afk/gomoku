@@ -71,7 +71,14 @@
       const value = await window.__gomokuGetWebRtcIceServers?.();
       if (Array.isArray(value) && value.length) return value;
     } catch (_) {}
-    return [{ urls: 'stun:stun.cloudflare.com:3478' }];
+    let stunUrl = String(window.__GOMOKU_ECS_STUN_URL || '');
+    if (!stunUrl) {
+      try {
+        const host = new URL(String(window.GOMOKU_BACKEND_CONFIG?.apiBase || '')).hostname;
+        if (host) stunUrl = `stun:${host}:3478`;
+      } catch (_) {}
+    }
+    return [{ urls: stunUrl || 'stun:101.201.76.166:3478' }];
   }
   function clearRemoteAudio() {
     const audio = byId('gomokuVoiceRemoteAudio');

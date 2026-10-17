@@ -388,7 +388,10 @@
         completedDepth: 0,
         rootMove: null,
         killers: [],
-        history: new Map()
+        history: new Map(),
+        tacticalLeafLimit: Number(options.tacticalLeafLimit) > 0
+          ? Number(options.tacticalLeafLimit)
+          : 1800
       };
       let best = rootCandidates[0];
       let bestScore = -Infinity;
@@ -1012,7 +1015,8 @@
         ? context.killers[ply]
         : [];
       const history = context && context.history ? context.history : null;
-      return (candidates || []).slice().sort((a, b) => {
+      // 搜索节点拥有自己的候选数组；原地排序，避免递归搜索每层再复制一份数组。
+      return (candidates || []).sort((a, b) => {
         const priority = (move) => {
           if (!move) return -Infinity;
           let value = Number(move.score) || 0;
@@ -1034,7 +1038,7 @@
       // 叶节点做有限战术延伸：静态评分看不出“下一手就能赢”，
       // 这是普通 Alpha-Beta 在五子棋中最容易出现的假优势来源。
       context.tacticalLeaves = (context.tacticalLeaves || 0) + 1;
-      if (context.tacticalLeaves > (context.tacticalLeafLimit || 1800)) return base;
+      if (context.tacticalLeaves > context.tacticalLeafLimit) return base;
 
       const currentWins = this.getWinningMoves(
         position,
