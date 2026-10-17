@@ -307,7 +307,7 @@ const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
   `🤖 【Android 原生大师 AI】人机对局使用 Java 原生搜索，避免深度思考阻塞 WebView 游戏界面`,
-  `🧠 【完整深层搜索】移植大师 AI 的迭代加深、Alpha-Beta 剪枝、强制威胁分析和置换表，保留战术应对能力`,
+  `🧠 【大师搜索策略】围绕大师 AI 深层搜索路径，应用迭代加深、Alpha-Beta 剪枝、强制威胁分析和置换表，复杂攻防继续搜索`,
   `⚡ 【落子响应提速】搜索预算从最多约 1.7 秒缩短到约 1.1 秒；安静局面主着法稳定时提前返回，复杂攻防继续搜索`
 ];const releaseUpdateLog = [
   `五子棋 v${newName} 官方正式版更新说明：`,
