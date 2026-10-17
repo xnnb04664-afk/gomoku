@@ -58,8 +58,13 @@ html.startup-splash-active { overflow: hidden; }
   position: absolute; z-index: 2; top: 52%; left: 50%;
   width: min(80vw,42vh,520px); aspect-ratio: 1;
   transform: translate(-50%,calc(-50% + 7vh)) scale(.86); opacity: 0;
-  filter: drop-shadow(0 22px 30px rgba(24,67,83,.24));
+  isolation: isolate; will-change: transform, opacity;
   animation: board-arrive 1.34s cubic-bezier(.17,.82,.24,1) 120ms both;
+}
+.startup-splash-board::before {
+  content: ""; position: absolute; z-index: -1; left: 12%; right: 12%; bottom: 1%; height: 15%;
+  border-radius: 50%; background: radial-gradient(ellipse, rgba(24,67,83,.25), rgba(24,67,83,0) 72%);
+  pointer-events: none;
 }
 .startup-splash-board > img, .startup-splash-board > canvas {
   position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none;

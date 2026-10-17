@@ -563,7 +563,9 @@ public class MainActivity extends Activity {
         mRootLayout.setBackgroundColor(getResources().getColor(R.color.splash_bg));
         setContentView(mRootLayout);
         showNativeSplash();
-        mMainHandler.postDelayed(mInitializeWebViewTask, 80L);
+        // Give the native opening a few frames to appear before WebView's cold initialization
+        // competes for the UI thread and causes a visible hitch.
+        mMainHandler.postDelayed(mInitializeWebViewTask, 280L);
     }
 
     private void initializeWebView() {

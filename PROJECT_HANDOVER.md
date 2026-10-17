@@ -42,7 +42,7 @@ node server.js
 
 | 路径 | 用途 |
 | --- | --- |
-| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供“棋岛苏醒”启动底图，网页与 Android 在实际棋台上绘制网格和落子，img/game/sky-island-match-background.png 提供对局云海背景 |
+| index.html、js/、img/ | 网页游戏源代码与静态资源；改动首先落在这里。真实棋局与首页预览共用 js/app.js 的 Canvas 绘制器和 img/game/sky-board-cloudstone.webp；四页大厅使用 img/game/sky-island-lobby-background.webp 与 img/game/sky-cloudstone-panel-texture.webp；img/startup/ 提供“棋岛苏醒”底图和 Android 启动棋台预绘网格素材；网页在实际棋台上绘制网格与落子，Android 原生 Canvas 只逐帧绘制落子，img/game/sky-island-match-background.png 提供对局云海背景 |
 | backend/worker.js | Cloudflare API、账号/社交/聊天、房间路由及 Durable Object 实现 |
 | backend/ecs-host/ | 在 Node ECS 上运行同一 Worker 的 SQLite、WebSocket 与内存 Durable Object 适配层 |
 | js/ecs-config.js | ECS 公共 API 地址；需随网页、单文件和 Android 构建同步 |
@@ -146,7 +146,7 @@ npm run build:official-site
 
 - build:app 使用 Terser 生成压缩 JS；build_apk.js 自身也会执行 build:app 并同步 android_src/assets。
 - node build_apk.js --sync-only 只同步资源，不会生成 APK。
-- 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格和黑白棋子逐步摆成爱心。网页尊重减少动态效果设置并可轻触继续；Android 12+ 系统启动主题使用匹配的云海浅色与爱心棋子图标，原生 Canvas 动画约 3.6 秒后才允许随网页首绘关闭。慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
+- 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格和黑左白右的中空爱心逐步落子。网页尊重减少动态效果设置并可轻触继续；Android 启动画面先显示同款空棋台图标，Activity 首帧用全屏开场预览衔接，再由原生 Canvas 播放落子动画。Android 12+ 的系统首帧只能使用系统规定的背景色与居中图标，完整全屏画面从 Activity 首帧开始；启动场景图片在后台解码，解码期间保留预览图，WebView 冷启动延后到原生开场绘制数帧后开始。动画结束后仍须等待网页首绘才关闭，慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
 - APK 构建机需要 JDK（当前已验证 JDK 17）、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。
 - 更新游戏版号时同步 version.json、AndroidManifest.xml 和 JS 当前版本。node publish.js --help 会显示说明；该脚本会构建、改版本、提交并推送，还会创建或上传 GitHub Release。只有用户明确要求正式发版时才运行。
 - official-site/play/ 是忽略的构建产物，不要手改或强行纳入 Git。构建后再部署。

@@ -10,15 +10,17 @@
   const reducedMotion = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const lowPower = Number(navigator.hardwareConcurrency || 8) <= 4 || Number(navigator.deviceMemory || 8) <= 3;
   const duration = lowPower ? 3000 : 3600;
+  // Keep the center empty: the stones draw only the heart's outline.
+  // Black occupies the left half; white occupies the right half.
   const stones = Object.freeze([
-    [2, 4, 0], [2, 10, 0], [2, 5, 1], [2, 9, 1],
-    [3, 3, 1], [3, 11, 1], [3, 6, 0], [3, 8, 0],
-    [4, 2, 0], [4, 12, 0], [4, 7, 1],
-    [5, 1, 1], [5, 13, 1], [6, 1, 0], [6, 13, 0],
-    [7, 2, 1], [7, 12, 1], [8, 3, 0], [8, 11, 0],
-    [9, 4, 1], [9, 10, 1], [10, 5, 0], [10, 9, 0],
-    [11, 6, 1], [11, 8, 1], [12, 7, 0]
-  ].map((stone) => Object.freeze(stone)));
+    [2, 4], [2, 10], [2, 5], [2, 9],
+    [3, 3], [3, 11], [3, 6], [3, 8],
+    [4, 2], [4, 12], [4, 7],
+    [5, 1], [5, 13], [6, 1], [6, 13],
+    [7, 2], [7, 12], [8, 3], [8, 11],
+    [9, 4], [9, 10], [10, 5], [10, 9],
+    [11, 6], [11, 8], [12, 7]
+  ].map(([row, col]) => Object.freeze([row, col, col < 7 ? 0 : 1])));
   window.GOMOKU_HEART_STONES = stones;
   window.dispatchEvent(new Event('gomoku-heart-stones-ready'));
   let finished = false;
@@ -30,6 +32,7 @@
   let canvasWidth = 0;
   let canvasHeight = 0;
   let canvasDpr = 1;
+  const stoneSprites = [null, null];
 
   function hasNativeBridge() {
     try {
@@ -111,11 +114,25 @@
     context.beginPath();
     context.ellipse(x, y + radius * .42, drawRadius * 1.04, drawRadius * .58, 0, 0, Math.PI * 2);
     context.fill();
-
     const centerY = y + drop;
-    const gradient = context.createRadialGradient(
-      x - drawRadius * .34, centerY - drawRadius * .42, drawRadius * .06,
-      x, centerY, drawRadius * 1.22
+    const sprite = stoneSprites[color];
+    if (sprite) context.drawImage(sprite, x - drawRadius, centerY - drawRadius, drawRadius * 2, drawRadius * 2);
+    context.restore();
+  }
+
+  function createStoneSprite(color) {
+    const sprite = document.createElement('canvas');
+    const size = 96;
+    const center = size / 2;
+    const radius = size * .48;
+    sprite.width = size;
+    sprite.height = size;
+    const spriteContext = sprite.getContext('2d');
+    if (!spriteContext) return null;
+
+    const gradient = spriteContext.createRadialGradient(
+      center - radius * .34, center - radius * .42, radius * .06,
+      center, center, radius * 1.22
     );
     if (color === 0) {
       gradient.addColorStop(0, '#83919b');
@@ -126,16 +143,16 @@
       gradient.addColorStop(.5, '#f5f8fa');
       gradient.addColorStop(1, '#aebdc5');
     }
-    context.fillStyle = gradient;
-    context.beginPath();
-    context.arc(x, centerY, drawRadius, 0, Math.PI * 2);
-    context.fill();
-
-    context.fillStyle = color === 0 ? 'rgba(255,255,255,.24)' : 'rgba(255,255,255,.86)';
-    context.beginPath();
-    context.ellipse(x - drawRadius * .25, centerY - drawRadius * .32, drawRadius * .24, drawRadius * .13, -.42, 0, Math.PI * 2);
-    context.fill();
-    context.restore();
+    spriteContext.fillStyle = gradient;
+    spriteContext.beginPath();
+    spriteContext.arc(center, center, radius, 0, Math.PI * 2);
+    spriteContext.fill();
+    spriteContext.fillStyle = color === 0 ? 'rgba(255,255,255,.24)' : 'rgba(255,255,255,.86)';
+    spriteContext.beginPath();
+    spriteContext.ellipse(center - radius * .25, center - radius * .32,
+      radius * .24, radius * .13, -.42, 0, Math.PI * 2);
+    spriteContext.fill();
+    return sprite;
   }
 
   function drawBoard(progress) {
@@ -158,7 +175,8 @@
     context.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
     context.clearRect(0, 0, width, height);
     context.lineCap = 'round';
-    const reveal = easeOut((progress - .11) / .45);
+    // Begin with a complete empty board; the animation focuses on forming the heart.
+    const reveal = 1;
     if (reveal > 0) {
       for (let index = 0; index < 15; index++) {
         const distance = Math.abs(index - 7) / 7;
@@ -175,7 +193,7 @@
         context.lineTo(centerX + halfWidth, firstY + index * step);
         context.stroke();
       }
-      const starReveal = easeOut((progress - .38) / .16);
+      const starReveal = 1;
       if (starReveal > 0) {
         context.fillStyle = 'rgba(52, 75, 46, ' + (.42 * starReveal) + ')';
         for (const row of [3, 7, 11]) {
@@ -201,6 +219,11 @@
     });
   }
 
+  function createStoneSprites() {
+    stoneSprites[0] = createStoneSprite(0);
+    stoneSprites[1] = createStoneSprite(1);
+  }
+
   function dismissAfterAnimation() {
     root.classList.add('is-complete');
     window.setTimeout(() => dismiss('complete'), 420);
@@ -222,6 +245,7 @@
   root.classList.add('is-running');
   root.setAttribute('aria-hidden', 'false');
   document.documentElement.classList.add('startup-splash-active');
+  createStoneSprites();
   resizeBoard();
   window.addEventListener('resize', resizeBoard, { passive: true });
 
