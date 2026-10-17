@@ -35,7 +35,7 @@ final class NativeGomokuAI {
     private static final int CANDIDATE_LIMIT = 96;
     private static final int THREAT_PLY = 10;
     private static final int TACTICAL_LEAF_LIMIT = 3200;
-    private static final long SEARCH_BUDGET_NS = 1700_000_000L;
+    private static final long SEARCH_BUDGET_NS = 1100_000_000L;
     private static final int LOCAL_LENGTH = 11;
     private static final int LOCAL_CODE_COUNT = 177147;
     private static final int[][] DIRECTIONS = {{0, 1}, {1, 0}, {1, 1}, {1, -1}};
@@ -83,6 +83,8 @@ final class NativeGomokuAI {
     private static final class Position {
         final int[] board;
         final boolean[] forbidden;
+        final short[] nearTwo = new short[SIZE * SIZE];
+        final short[] nearThree = new short[SIZE * SIZE];
         int stones;
         int hashA, hashB;
 
@@ -95,6 +97,7 @@ final class NativeGomokuAI {
                     stones++;
                     hashA ^= ZOBRIST_A[i * 3 + color];
                     hashB ^= ZOBRIST_B[i * 3 + color];
+                    updateNeighborhood(i, 1);
                 }
             }
         }
@@ -107,15 +110,29 @@ final class NativeGomokuAI {
             hashA ^= ZOBRIST_A[index * 3 + color];
             hashB ^= ZOBRIST_B[index * 3 + color];
             stones++;
+            updateNeighborhood(index, 1);
             return true;
         }
 
         void remove(int index, int color) {
             if (board[index] != color) return;
+            updateNeighborhood(index, -1);
             board[index] = EMPTY;
             hashA ^= ZOBRIST_A[index * 3 + color];
             hashB ^= ZOBRIST_B[index * 3 + color];
             stones--;
+        }
+
+        private void updateNeighborhood(int index, int delta) {
+            int row = index / SIZE, col = index % SIZE;
+            for (int dr = -3; dr <= 3; dr++) for (int dc = -3; dc <= 3; dc++) {
+                if (dr == 0 && dc == 0) continue;
+                int r = row + dr, c = col + dc;
+                if (!valid(r, c)) continue;
+                int target = r * SIZE + c;
+                nearThree[target] = (short) (nearThree[target] + delta);
+                if (Math.abs(dr) <= 2 && Math.abs(dc) <= 2) nearTwo[target] = (short) (nearTwo[target] + delta);
+            }
         }
     }
 
@@ -316,6 +333,7 @@ final class NativeGomokuAI {
         List<Candidate> roots = rootCandidates(position, aiColor, opponent, legal);
         Candidate best = roots.isEmpty() ? legal.get(0) : roots.get(0);
         double bestScore = best.score;
+        int previousBestIndex = best.index, stableIterations = 0;
         for (int depth = 1; depth <= MAX_DEPTH; depth++) {
             context.tacticalLeaves = 0;
             sortMoves(roots, context, 0, context.rootMove, -1);
@@ -326,6 +344,13 @@ final class NativeGomokuAI {
             }
             context.completedDepth = depth;
             if (result.score >= WIN - 1000) break;
+            if (best.index == previousBestIndex) stableIterations++;
+            else stableIterations = 0;
+            previousBestIndex = best.index;
+            // Save time only in quiet positions. Tactical roots keep searching so a
+            // deeper defense or forcing continuation is not skipped for responsiveness.
+            if (depth >= 5 && stableIterations >= 2 && !hasTacticalCandidate(roots)
+                    && System.nanoTime() - started >= 180_000_000L) break;
         }
         return new Move(best.index, bestScore, context.completedDepth, context.nodes);
     }
@@ -335,14 +360,13 @@ final class NativeGomokuAI {
         return -1;
     }
 
-    private static boolean nearStone(Position p, int index, int radius) {
-        int r = GEOMETRY.rows[index], c = GEOMETRY.cols[index];
-        for (int dr = -radius; dr <= radius; dr++) for (int dc = -radius; dc <= radius; dc++) {
-            if (dr == 0 && dc == 0) continue;
-            int nr = r + dr, nc = c + dc;
-            if (valid(nr, nc) && p.board[nr * SIZE + nc] != EMPTY) return true;
-        }
+    private static boolean hasTacticalCandidate(List<Candidate> candidates) {
+        for (Candidate candidate : candidates) if (candidate.tactical) return true;
         return false;
+    }
+
+    private static boolean nearStone(Position p, int index, int radius) {
+        return radius >= 3 ? p.nearThree[index] > 0 : p.nearTwo[index] > 0;
     }
 
     private static List<Candidate> candidates(Position p, int color, int limit) {
@@ -455,17 +479,28 @@ final class NativeGomokuAI {
 
     private static List<Candidate> winningMoves(Position p, int color, int limit) {
         List<Candidate> wins = new ArrayList<>(4);
-        for (Candidate move : candidates(p, color, limit)) {
-            if (isWinningMove(p, move.index, color)) wins.add(move);
+        for (int index = 0; index < p.board.length; index++) {
+            if (p.empty(index) && !p.forbidden[index] && winsAt(p, index, color)) {
+                wins.add(new Candidate(index, null, null, true, WIN));
+            }
         }
         return wins;
     }
 
-    private static boolean isWinningMove(Position p, int index, int color) {
-        if (!p.put(index, color)) return false;
-        boolean win = hasFive(p, index, color);
-        p.remove(index, color);
-        return win;
+    private static boolean winsAt(Position p, int index, int color) {
+        int row = index / SIZE, col = index % SIZE;
+        for (int[] direction : DIRECTIONS) {
+            int count = 1 + countExisting(p, row, col, direction[0], direction[1], color)
+                    + countExisting(p, row, col, -direction[0], -direction[1], color);
+            if (count >= 5) return true;
+        }
+        return false;
+    }
+
+    private static int countExisting(Position p, int row, int col, int dr, int dc, int color) {
+        int count = 0, r = row + dr, c = col + dc;
+        while (valid(r, c) && p.board[r * SIZE + c] == color) { count++; r += dr; c += dc; }
+        return count;
     }
 
     private static Candidate findThreatSpaceMove(Position p, int color, List<Candidate> candidates, int maxPly, long threatDeadline) {

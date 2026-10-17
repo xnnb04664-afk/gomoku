@@ -266,5 +266,5 @@ adb install .\五子棋.apk
 
 ## 2026-10-17 Android 原生人机决策
 
-- Android 端 `js/app.js` 的统一 `smartAiMove()` 优先调用 `AndroidNativeApp.requestNativeAiMove()`；Java 通过有界后台线程返回坐标，网页仍经 `makeMove()` 更新棋盘、技能、棋谱与存档。`android_src/src/com/gomoku/master/NativeGomokuAI.java` 已移植 `js/ai_fast.js` 大师路径：3^11 局部棋型统计、战术与开局候选扩展、10 ply 强制威胁证明、最多 12 层迭代加深、Alpha-Beta、双 Zobrist 校验的置换表、killer/history 着法排序和战术叶评估；共享 1.7 秒截止时间，只有完成的迭代才更新最终着法。置换表按请求代际复用，减少每步分配；棋型表按需在后台 AI 搜索期间初始化。原生结果把实际深度、节点数、耗时回传到 `gomokuLastAiStats`。当前 Android 人机固定使用自由五子棋（`enableFoul:false`），卡牌禁点仍在候选和威胁搜索中生效。悔棋、重开和进入复盘会使旧请求失效，响应坐标也会重新验证，异常时回退到 JavaScript Worker。构建 APK 才会更新原生引擎，网页热更新不会替换 Java 类。
+- Android 端 `js/app.js` 的统一 `smartAiMove()` 优先调用 `AndroidNativeApp.requestNativeAiMove()`；Java 通过有界后台线程返回坐标，网页仍经 `makeMove()` 更新棋盘、技能、棋谱与存档。`android_src/src/com/gomoku/master/NativeGomokuAI.java` 已移植 `js/ai_fast.js` 大师路径：3^11 局部棋型统计、战术与开局候选扩展、10 ply 强制威胁证明、最多 12 层迭代加深、Alpha-Beta、双 Zobrist 校验的置换表、killer/history 着法排序和战术叶评估；共享 1.1 秒截止时间，只有安静局面连续三层稳定在同一主着法时才提前返回，战术局面继续搜索，只有完成的迭代才更新最终着法。棋盘维护半径 2/3 的邻子计数，胜点检查直接按四方向扫描；置换表按请求代际复用，减少每步扫描和分配。原生结果把实际深度、节点数、耗时回传到 `gomokuLastAiStats`。当前 Android 人机固定使用自由五子棋（`enableFoul:false`），卡牌禁点仍在候选和威胁搜索中生效。悔棋、重开和进入复盘会使旧请求失效，响应坐标也会重新验证，异常时回退到 JavaScript Worker。构建 APK 才会更新原生引擎，网页热更新不会替换 Java 类。
 - 该 Java 引擎不是 JavaScript 大师引擎的完整威胁搜索移植，棋力可能有差异；目标设备上的实际落子耗时和棋力仍需观察。Android 需要重建完整 APK 才包含原生类，不能只靠 HTML 热更新。
