@@ -63,6 +63,7 @@
         const skillPromptBar = document.getElementById('skillPromptBar');
         if (skillPromptBar) skillPromptBar.style.display = 'none';
         if (Array.isArray(activeVFX)) activeVFX = [];
+        if (typeof window.__gomokuInvalidateAiTurn === 'function') window.__gomokuInvalidateAiTurn();
 
         // 旧战绩兼容：第一手异常记录为白子且无身份互换标记时校正色盘。
         if (moves[0] && moves[0].p === WHITE && !moves.some(move => move.action === 'identity_swap' || move.type === 'identity_swap')) {
@@ -408,6 +409,7 @@
 
       draw();
       updateUI();
+      if (!isOver && gameMode === 'ai' && turn === WHITE) setTimeout(() => smartAiMove(), 80);
       if (!silent) showGameNotice("已退出复盘模式");
     }
 

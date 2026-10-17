@@ -15,19 +15,26 @@ import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Build;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.LinearInterpolator;
+import android.widget.FrameLayout;
 
 /**
- * Native version of the Sky Island opening: dawn clouds, the live cloudstone
- * board, a center-out grid reveal, and a heart-shaped black-and-white stone pattern.
+ * Native version of the Sky Island opening: a cached dawn scene and cloudstone
+ * board, followed by a heart-shaped black-and-white stone animation.
  */
-public final class GomokuSplashView extends View {
+public final class GomokuSplashView extends FrameLayout {
     public interface DismissListener {
         void onDismissRequested();
+    }
+
+    public interface AnimationStartedListener {
+        void onAnimationStarted(long uptimeMs);
     }
 
     private static final long ANIMATION_DURATION_MS = 3600L;
@@ -64,6 +71,8 @@ public final class GomokuSplashView extends View {
     private final String splashTitle;
     private final String splashSubtitle;
     private final String splashSkipLabel;
+    private final SceneLayer sceneLayer;
+    private final HeartLayer heartLayer;
     private Bitmap skyBitmap;
     private Bitmap boardBitmap;
     private Bitmap blackStoneBitmap;
@@ -79,6 +88,8 @@ public final class GomokuSplashView extends View {
     private boolean paused;
     private volatile boolean stopped;
     private DismissListener dismissListener;
+    private AnimationStartedListener animationStartedListener;
+    private long animationStartedAtUptimeMs;
 
     public GomokuSplashView(Context context) {
         super(context);
@@ -90,7 +101,6 @@ public final class GomokuSplashView extends View {
         splashSubtitle = context.getString(R.string.splash_subtitle);
         splashSkipLabel = context.getString(R.string.splash_skip);
         reducedMotion = isReducedMotion(context);
-        loadArtworkAsync(context.getApplicationContext(), getResources().getDisplayMetrics());
 
         setClickable(true);
         setFocusable(true);
@@ -102,10 +112,23 @@ public final class GomokuSplashView extends View {
             setElevation(2f * getResources().getDisplayMetrics().density);
         }
         textPaint.setTypeface(TYPEFACE_BOLD);
+
+        sceneLayer = new SceneLayer(context);
+        heartLayer = new HeartLayer(context);
+        FrameLayout.LayoutParams fillScreen = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        addView(sceneLayer, fillScreen);
+        addView(heartLayer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        loadArtworkAsync(context.getApplicationContext(), getResources().getDisplayMetrics());
     }
 
     public void setDismissListener(DismissListener listener) {
         dismissListener = listener;
+    }
+
+    public void setAnimationStartedListener(AnimationStartedListener listener) {
+        animationStartedListener = listener;
     }
 
     public long getMinimumDisplayDurationMs() {
@@ -115,7 +138,7 @@ public final class GomokuSplashView extends View {
     public void showLoadingHint() {
         if (showLoadingHint) return;
         showLoadingHint = true;
-        postInvalidate();
+        sceneLayer.invalidate();
     }
 
     public void startAnimation() {
@@ -127,9 +150,13 @@ public final class GomokuSplashView extends View {
     private void beginAnimation() {
         if (!artworkReady || stopped || paused || animationStarted) return;
         animationStarted = true;
+        animationStartedAtUptimeMs = SystemClock.uptimeMillis();
+        if (animationStartedListener != null) {
+            animationStartedListener.onAnimationStarted(animationStartedAtUptimeMs);
+        }
         if (reducedMotion) {
             progress = 1f;
-            invalidate();
+            heartLayer.invalidate();
             return;
         }
         if (animator != null) animator.cancel();
@@ -141,13 +168,13 @@ public final class GomokuSplashView extends View {
         animator.setInterpolator(new LinearInterpolator());
         animator.addUpdateListener(valueAnimator -> {
             progress = (Float) valueAnimator.getAnimatedValue();
-            postInvalidateOnAnimation();
+            heartLayer.postInvalidateOnAnimation();
         });
         animator.addListener(new AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(Animator animation) {
                 progress = 1f;
-                postInvalidateOnAnimation();
+                heartLayer.postInvalidateOnAnimation();
             }
         });
         animator.start();
@@ -179,21 +206,16 @@ public final class GomokuSplashView extends View {
         releaseBitmaps();
     }
 
-    @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        final float width = getWidth();
-        final float height = getHeight();
-        final float density = getResources().getDisplayMetrics().density;
+    private void drawStaticScene(Canvas canvas, float width, float height, float density) {
         if (!artworkReady) {
-            drawBrand(canvas, width, height, density);
+            drawBrand(canvas, width, height, density, 1f);
             drawFooter(canvas, width, height, density);
             return;
         }
         canvas.drawColor(backgroundColor);
         drawSky(canvas, width, height);
         drawAtmosphere(canvas, width, height);
-        drawBrand(canvas, width, height, density);
+        drawBrand(canvas, width, height, density, 1f);
         drawBoard(canvas, width, height, density);
         drawFooter(canvas, width, height, density);
     }
@@ -201,11 +223,13 @@ public final class GomokuSplashView extends View {
     private void drawSky(Canvas canvas, float width, float height) {
         if (skyBitmap == null || skyBitmap.isRecycled()) return;
         float cover = Math.max(width / skyBitmap.getWidth(), height / skyBitmap.getHeight());
-        float breathingZoom = 1.05f - 0.025f * easeOut(progress);
+        // Keep the sky still while the stones move. This lets Android cache the
+        // large background layer instead of repainting the full screen every frame.
+        float breathingZoom = 1.025f;
         float drawWidth = skyBitmap.getWidth() * cover * breathingZoom;
         float drawHeight = skyBitmap.getHeight() * cover * breathingZoom;
-        float driftX = (float) Math.sin(progress * Math.PI) * width * 0.004f;
-        float driftY = (0.5f - progress) * height * 0.006f;
+        float driftX = 0f;
+        float driftY = -height * 0.003f;
         skyRect.set(
                 (width - drawWidth) * 0.5f + driftX,
                 (height - drawHeight) * 0.5f + driftY,
@@ -236,11 +260,11 @@ public final class GomokuSplashView extends View {
         paint.setShader(null);
     }
 
-    private void drawBrand(Canvas canvas, float width, float height, float density) {
+    private void drawBrand(Canvas canvas, float width, float height, float density, float reveal) {
         final float centerX = width * 0.5f;
-        final float kickerReveal = easeOut(progress / 0.18f);
-        final float titleReveal = easeOut((progress - 0.06f) / 0.24f);
-        final float subtitleReveal = easeOut((progress - 0.15f) / 0.24f);
+        final float kickerReveal = reveal;
+        final float titleReveal = reveal;
+        final float subtitleReveal = reveal;
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setTypeface(TYPEFACE_MEDIUM);
         textPaint.setColor(Color.WHITE);
@@ -270,12 +294,9 @@ public final class GomokuSplashView extends View {
 
     private void drawBoard(Canvas canvas, float width, float height, float density) {
         float boardSide = Math.min(Math.min(width * 0.82f, height * 0.41f), 480f * density);
-        float entrance = 0.9f + 0.1f * easeOut(progress / 0.22f);
-        float scale = 0.96f + 0.04f * easeOut(progress / 0.22f);
-        float verticalOffset = height * 0.008f * (1f - easeOut(progress / 0.22f));
         float centerX = width * 0.5f;
-        float centerY = height * 0.515f + verticalOffset;
-        float drawnSide = boardSide * scale;
+        float centerY = height * 0.515f;
+        float drawnSide = boardSide;
         boardRect.set(centerX - drawnSide * 0.5f, centerY - drawnSide * 0.5f,
                 centerX + drawnSide * 0.5f, centerY + drawnSide * 0.5f);
 
@@ -290,7 +311,7 @@ public final class GomokuSplashView extends View {
                 paint
         );
         if (boardBitmap != null && !boardBitmap.isRecycled()) {
-            paint.setAlpha((int) (255f * entrance));
+            paint.setAlpha(255);
             paint.setFilterBitmap(true);
             canvas.drawBitmap(boardBitmap, null, boardRect, paint);
             paint.setAlpha(255);
@@ -299,10 +320,10 @@ public final class GomokuSplashView extends View {
             canvas.drawRoundRect(boardRect, 16f * density, 16f * density, paint);
         }
 
-        drawGridAndStones(canvas, boardRect, progress, density);
+        drawGrid(canvas, boardRect, density);
     }
 
-    private void drawGridAndStones(Canvas canvas, RectF board, float animationProgress, float density) {
+    private void drawGrid(Canvas canvas, RectF board, float density) {
         float side = board.width();
         float grassLeft = board.left + side * 0.130f;
         float grassRight = board.left + side * 0.869f;
@@ -313,40 +334,44 @@ public final class GomokuSplashView extends View {
         float firstY = grassTop + 0.5f * step;
         float lastX = firstX + 14f * step;
         float lastY = firstY + 14f * step;
-        float centerX = (firstX + lastX) * 0.5f;
-        float centerY = (firstY + lastY) * 0.5f;
-        // Match the web opening: show the complete empty grid first, then let
-        // the stones arrive one by one to form the hollow heart.
-        float gridReveal = 1f;
-
-        if (gridReveal > 0f) {
-            paint.setShader(null);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setColor(0xff354c30);
-            paint.setAlpha(175);
-            paint.setStrokeWidth(Math.max(1f, step * 0.026f));
-            for (int index = 0; index < 15; index++) {
-                float centerDistance = Math.abs(index - 7f) / 7f;
-                float span = easeOut((gridReveal - centerDistance * 0.11f) / 0.9f);
-                if (span <= 0f) continue;
-                float halfHeight = (lastY - firstY) * 0.5f * span;
-                float halfWidth = (lastX - firstX) * 0.5f * span;
-                float x = firstX + index * step;
-                float y = firstY + index * step;
-                canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint);
-                canvas.drawLine(centerX - halfWidth, y, centerX + halfWidth, y, paint);
-            }
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0xff344b2e);
-            paint.setAlpha(170);
-            for (int row : STAR_POINTS) {
-                for (int col : STAR_POINTS) {
-                    canvas.drawCircle(firstX + col * step, firstY + row * step,
-                            Math.max(1.5f * density, step * 0.055f), paint);
-                }
+        // The empty grid is static. Android can retain this layer's display list
+        // while the transparent heart layer below redraws only the moving stones.
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setColor(0xff354c30);
+        paint.setAlpha(175);
+        paint.setStrokeWidth(Math.max(1f, step * 0.026f));
+        for (int index = 0; index < 15; index++) {
+            float x = firstX + index * step;
+            float y = firstY + index * step;
+            canvas.drawLine(x, firstY, x, lastY, paint);
+            canvas.drawLine(firstX, y, lastX, y, paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xff344b2e);
+        paint.setAlpha(170);
+        for (int row : STAR_POINTS) {
+            for (int col : STAR_POINTS) {
+                canvas.drawCircle(firstX + col * step, firstY + row * step,
+                        Math.max(1.5f * density, step * 0.055f), paint);
             }
         }
 
+        paint.setAlpha(255);
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawHeartStones(Canvas canvas, float animationProgress) {
+        float side = boardRect.width();
+        if (side <= 0f) return;
+        float grassLeft = boardRect.left + side * 0.130f;
+        float grassRight = boardRect.left + side * 0.869f;
+        float grassTop = boardRect.top + side * 0.132f;
+        float grassBottom = boardRect.top + side * 0.785f;
+        float step = Math.min((grassRight - grassLeft) / 15f, (grassBottom - grassTop) / 15f);
+        float firstX = (grassLeft + grassRight) * 0.5f - 7f * step;
+        float firstY = grassTop + 0.5f * step;
         for (int index = 0; index < STONES.length; index++) {
             float start = 0.22f + index * 0.027f;
             float stoneProgress = clamp((animationProgress - start) / 0.09f);
@@ -359,10 +384,6 @@ public final class GomokuSplashView extends View {
                     stoneProgress
             );
         }
-
-        paint.setAlpha(255);
-        paint.setShader(null);
-        paint.setStyle(Paint.Style.FILL);
     }
 
     private void drawStone(Canvas canvas, float x, float y, float radius, boolean black,
@@ -485,7 +506,7 @@ public final class GomokuSplashView extends View {
                     recycle(finalWhite);
                     android.util.Log.e("GomokuSplash", "Splash assets unavailable; keeping opening poster fallback");
                     showLoadingHint = true;
-                    invalidate();
+                    sceneLayer.invalidate();
                     return;
                 }
                 skyBitmap = finalSky;
@@ -494,7 +515,8 @@ public final class GomokuSplashView extends View {
                 whiteStoneBitmap = finalWhite;
                 artworkReady = true;
                 if (animationRequested && !paused) beginAnimation();
-                invalidate();
+                sceneLayer.invalidate();
+                heartLayer.invalidate();
             });
             if (!posted) {
                 recycle(finalSky);
@@ -505,6 +527,37 @@ public final class GomokuSplashView extends View {
         }, "gomoku-splash-assets");
         loader.setDaemon(true);
         loader.start();
+    }
+
+    private final class SceneLayer extends View {
+        SceneLayer(Context context) {
+            super(context);
+            setClickable(false);
+            setFocusable(false);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            drawStaticScene(canvas, getWidth(), getHeight(),
+                    getResources().getDisplayMetrics().density);
+        }
+    }
+
+    private final class HeartLayer extends View {
+        HeartLayer(Context context) {
+            super(context);
+            setClickable(false);
+            setFocusable(false);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (artworkReady) {
+                drawHeartStones(canvas, progress);
+            }
+        }
     }
 
     private static Bitmap loadBitmap(Context context, String path, Bitmap.Config config,

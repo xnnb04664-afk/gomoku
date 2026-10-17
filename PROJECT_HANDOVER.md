@@ -146,7 +146,7 @@ npm run build:official-site
 
 - build:app 使用 Terser 生成压缩 JS；build_apk.js 自身也会执行 build:app 并同步 android_src/assets。
 - node build_apk.js --sync-only 只同步资源，不会生成 APK。
-- 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格先以空棋盘展示，再由黑白棋子逐步摆成中空爱心。网页尊重减少动态效果设置并可轻触继续；Android 12+ 系统启动主题先显示空棋台，原生 Canvas 动画约 3.6 秒后才允许随网页首绘关闭。图片在后台解码，失败时保留空棋台预览；切到后台会暂停动画，恢复时接续播放。慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
+- 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格先以空棋盘展示，再由黑白棋子逐步摆成中空爱心。网页尊重减少动态效果设置并可轻触继续；Android 12+ 系统启动主题先显示空棋台，WebView 完成一次性初始化后再启动约 3.6 秒的原生落子动画。Android 把静态云海/标题/棋台网格与动态棋子拆成独立图层，动画期间只刷新棋子层，避免反复重绘整屏；图片仍在后台解码，失败时保留空棋台预览；切到后台会暂停动画，恢复时接续播放。慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
 - APK 构建机需要 JDK（当前已验证 JDK 17）、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。
 - 更新游戏版号时同步 version.json、AndroidManifest.xml 和 JS 当前版本。node publish.js --help 会显示说明；该脚本会构建、改版本、提交并推送，还会创建或上传 GitHub Release。只有用户明确要求正式发版时才运行。
 - official-site/play/ 是忽略的构建产物，不要手改或强行纳入 Git。构建后再部署。
@@ -263,3 +263,8 @@ adb install .\五子棋.apk
 - 发布脚本静态语法与凭据安全门禁通过。APK 为 `versionName=1.0.138` / `versionCode=139`，v1/v2/v3 签名验证通过，证书 SHA-256 与 v1.0.137 一致：`9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。APK SHA-256：`1cdd456b9acceb7bb56e8f6dc659f1823862760786a60c086f7138f4ff53ca91`；单文件 HTML SHA-256：`9804fc8e57a9300926a81e7e5da5807447952f411aab05f91485a61897997175`。Release 附带从 v1.0.137 基线生成的 92,959-byte HTML 增量包。
 - GitHub [Release v1.0.138](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.138) 指向 master 发布提交 `0dd16435b6d14ee0d3b3a4cb7d0d33a46e0516cd`。ECS 公网 `/api/version` 返回 v1.0.138 且 APK 摘要匹配 Release，`/healthz` 为 HTTP 200、SQLite 状态正常；该更新接口动态读取最新 GitHub Release，因此本次无需重启 ECS 或修改数据库。Cloudflare 未部署。
 - MuMu `emulator-5554` 通过 `adb install -r` 更新到 Build 139，应用数据保留，`MainActivity` 已启动。未单独运行完整行为回归套件；该模拟器检查不代表真实双账号联机验收。
+
+## 2026-10-17 Android 原生人机决策
+
+- Android 端 `js/app.js` 的统一 `smartAiMove()` 优先调用 `AndroidNativeApp.requestNativeAiMove()`；Java 通过有界后台线程返回坐标，网页仍经 `makeMove()` 更新棋盘、技能、棋谱与存档。`android_src/src/com/gomoku/master/NativeGomokuAI.java` 已移植 `js/ai_fast.js` 大师路径：3^11 局部棋型统计、战术与开局候选扩展、10 ply 强制威胁证明、最多 12 层迭代加深、Alpha-Beta、双 Zobrist 校验的置换表、killer/history 着法排序和战术叶评估；共享 1.7 秒截止时间，只有完成的迭代才更新最终着法。置换表按请求代际复用，减少每步分配；棋型表按需在后台 AI 搜索期间初始化。原生结果把实际深度、节点数、耗时回传到 `gomokuLastAiStats`。当前 Android 人机固定使用自由五子棋（`enableFoul:false`），卡牌禁点仍在候选和威胁搜索中生效。悔棋、重开和进入复盘会使旧请求失效，响应坐标也会重新验证，异常时回退到 JavaScript Worker。构建 APK 才会更新原生引擎，网页热更新不会替换 Java 类。
+- 该 Java 引擎不是 JavaScript 大师引擎的完整威胁搜索移植，棋力可能有差异；目标设备上的实际落子耗时和棋力仍需观察。Android 需要重建完整 APK 才包含原生类，不能只靠 HTML 热更新。

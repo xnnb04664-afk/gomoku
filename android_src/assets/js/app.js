@@ -1506,8 +1506,10 @@
     let aiWorker = null;
     let aiWorkerBlobUrl = '';
     let aiWorkerRequestSeq = 0;
+    let nativeAiRequestSeq = 0;
     let aiTurnSeq = 0;
     let aiWorkerPending = new Map();
+    const nativeAiPending = new Map();
     let aiThinking = false;
 
     function disposeAiWorker(reason = 'AI Worker 已停止') {
@@ -1577,6 +1579,113 @@
       return flat;
     }
 
+    function isLegalAiMove(move, boardState, forbiddenPoints = []) {
+      if (!move || !Number.isInteger(move.r) || !Number.isInteger(move.c) ||
+          move.r < 0 || move.r >= BOARD_SIZE || move.c < 0 || move.c >= BOARD_SIZE ||
+          !Array.isArray(boardState) || !Array.isArray(boardState[move.r]) ||
+          boardState[move.r][move.c] !== EMPTY) return false;
+      return !Array.isArray(forbiddenPoints) || !forbiddenPoints.some(point =>
+        point && Number(point.r) === move.r && Number(point.c) === move.c
+      );
+    }
+
+    function findFirstLegalAiMove(boardState, forbiddenPoints = []) {
+      for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+          const move = { r, c };
+          if (isLegalAiMove(move, boardState, forbiddenPoints)) return move;
+        }
+      }
+      return null;
+    }
+
+    function invalidatePendingAiTurn() {
+      aiTurnSeq++;
+      aiThinking = false;
+    }
+    window.__gomokuInvalidateAiTurn = invalidatePendingAiTurn;
+
+    window.__gomokuNativeAiResult = function handleNativeAiResult(requestId, responseJson) {
+      const key = String(requestId || '');
+      const pending = nativeAiPending.get(key);
+      if (!pending) return;
+      nativeAiPending.delete(key);
+      clearTimeout(pending.timeoutId);
+      try {
+        const result = typeof responseJson === 'string' ? JSON.parse(responseJson) : responseJson;
+        if (result && result.ok === true && Number.isInteger(result.r) && Number.isInteger(result.c) &&
+            result.r >= 0 && result.r < 15 && result.c >= 0 && result.c < 15) {
+          window.gomokuLastAiStats = {
+            native: true,
+            elapsedMs: Math.max(0, Number(result.elapsedMs) || 0),
+            nodes: Math.max(0, Number(result.nodes) || 0),
+            depth: Math.max(0, Number(result.depth) || 0),
+            score: Number.isFinite(Number(result.score)) ? Number(result.score) : 0
+          };
+          pending.resolve({ r: result.r, c: result.c });
+        } else {
+          pending.reject(new Error((result && result.error) || 'Android 原生 AI 未返回合法落点'));
+        }
+      } catch (error) {
+        pending.reject(error instanceof Error ? error : new Error('Android 原生 AI 响应解析失败'));
+      }
+    };
+
+    function requestNativeAiMove(boardState, forbiddenPoints = []) {
+      const bridge = window.AndroidNativeApp;
+      if (!bridge || typeof bridge.requestNativeAiMove !== 'function') {
+        return Promise.reject(new Error('当前 Android 版本没有原生 AI 接口'));
+      }
+      const board = Array.from(flattenAiBoard(boardState));
+      const forbidden = Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [];
+      const requestId = `native-ai-${++nativeAiRequestSeq}`;
+
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          if (!nativeAiPending.has(requestId)) return;
+          nativeAiPending.delete(requestId);
+          reject(new Error('Android 原生 AI 响应超时'));
+        }, 2000);
+        nativeAiPending.set(requestId, { resolve, reject, timeoutId });
+
+        try {
+          const accepted = bridge.requestNativeAiMove(
+            requestId,
+            JSON.stringify(board),
+            WHITE,
+            JSON.stringify(forbidden)
+          );
+          if (!accepted && nativeAiPending.has(requestId)) {
+            nativeAiPending.delete(requestId);
+            clearTimeout(timeoutId);
+            reject(new Error('Android 原生 AI 忙碌或棋盘数据无效'));
+          }
+        } catch (error) {
+          nativeAiPending.delete(requestId);
+          clearTimeout(timeoutId);
+          reject(error instanceof Error ? error : new Error('无法调用 Android 原生 AI'));
+        }
+      });
+    }
+
+    async function requestBestAiMove(boardState, forbiddenPoints = []) {
+      const bridge = window.AndroidNativeApp;
+      if (bridge && typeof bridge.requestNativeAiMove === 'function') {
+        try {
+          const nativeMove = await requestNativeAiMove(boardState, forbiddenPoints);
+          if (isLegalAiMove(nativeMove, boardState, forbiddenPoints)) return nativeMove;
+          throw new Error('原生 AI 返回的落点已占用或被禁用');
+        } catch (nativeError) {
+          console.warn('[Native AI] 原生计算不可用，切回 Worker:', nativeError && nativeError.message ? nativeError.message : nativeError);
+        }
+      }
+      const workerMove = await requestFastAiMove(boardState, forbiddenPoints);
+      if (!isLegalAiMove(workerMove, boardState, forbiddenPoints)) {
+        throw new Error('AI Worker 返回的落点已占用或被禁用');
+      }
+      return workerMove;
+    }
+
     function requestFastAiMove(boardState, forbiddenPoints = []) {
       const worker = getAiWorker();
       if (!worker) return Promise.reject(new Error('当前环境不支持 AI Worker'));
@@ -1643,16 +1752,16 @@
 
     // 🚀 最强大师人机主落子决策函数
     async function smartAiMove(forbiddenPoints = []) {
-      if (isOver || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
+      if (isOver || isReplayMode || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
       const turnId = ++aiTurnSeq;
       aiThinking = true;
       updateUI();
       const boardSnapshot = board.map(row => row.slice());
       let bestMove = null;
       try {
-        bestMove = await requestFastAiMove(boardSnapshot, forbiddenPoints);
+        bestMove = await requestBestAiMove(boardSnapshot, forbiddenPoints);
       } catch (workerError) {
-        console.warn('[AI Worker] 使用同引擎低预算回退:', workerError && workerError.message ? workerError.message : workerError);
+        console.warn('[AI] 使用快速 JavaScript 回退:', workerError && workerError.message ? workerError.message : workerError);
         try {
           bestMove = await getFastAiFallback(boardSnapshot, forbiddenPoints);
           if (!bestMove && (!window.GomokuAI || typeof window.GomokuAI.getBestMove !== 'function') &&
@@ -1662,10 +1771,12 @@
           if (!bestMove && window.GomokuAI && window.GomokuAI.getBestMove) {
             bestMove = window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints);
           }
-          if (!bestMove) bestMove = { r: 7, c: 7 };
+          if (!isLegalAiMove(bestMove, boardSnapshot, forbiddenPoints)) {
+            bestMove = findFirstLegalAiMove(boardSnapshot, forbiddenPoints);
+          }
         } catch (fallbackError) {
           console.error('[AI fallback] 计算失败:', fallbackError);
-          bestMove = { r: 7, c: 7 };
+          bestMove = findFirstLegalAiMove(boardSnapshot, forbiddenPoints);
         }
       } finally {
         if (turnId === aiTurnSeq) {
@@ -1674,8 +1785,19 @@
         }
       }
 
-      if (turnId !== aiTurnSeq || isOver || gameMode !== 'ai' || turn !== WHITE) return;
-      if (bestMove && board[bestMove.r] && board[bestMove.r][bestMove.c] === EMPTY) {
+      if (turnId !== aiTurnSeq || isOver || isReplayMode || gameMode !== 'ai' || turn !== WHITE) return;
+      const boardStillMatches = board.every((row, r) =>
+        Array.isArray(row) && row.every((cell, c) => cell === boardSnapshot[r][c])
+      );
+      if (!boardStillMatches) {
+        if (!isOver && !isReplayMode && gameMode === 'ai' && turn === WHITE) setTimeout(() => smartAiMove(forbiddenPoints), 0);
+        return;
+      }
+      if (!isLegalAiMove(bestMove, board, forbiddenPoints)) {
+        console.warn('[AI] 所有计算结果均无效，选择首个合法落点');
+        bestMove = findFirstLegalAiMove(board, forbiddenPoints);
+      }
+      if (bestMove) {
         makeMove(bestMove.r, bestMove.c, WHITE);
       }
     }
@@ -7269,6 +7391,7 @@
     function restoreSnapshot(snap) {
       if (!snap || !Array.isArray(snap.board) || snap.board.length !== 15 ||
           !Array.isArray(snap.history) || snap.history.length > 512) return false;
+      invalidatePendingAiTurn();
       const prevBoard = board.map(r => [...r]);
       const prevCardsUsed = [...cardUsedStatus];
 
@@ -7350,6 +7473,7 @@
 
     function doUndo() {
       if (undoStack.length === 0 && history.length === 0) return false;
+      invalidatePendingAiTurn();
       const wasGameOver = isOver;
 
       let undoSuccess = false;
@@ -7528,6 +7652,10 @@
         const skillPromptBar = document.getElementById('skillPromptBar');
         if (skillPromptBar) skillPromptBar.style.display = 'none';
         draw(); updateUI(); persistGameState();
+      }
+
+      if (undoSuccess && !isOver && !isReplayMode && gameMode === 'ai' && turn === WHITE) {
+        setTimeout(() => smartAiMove(), 80);
       }
 
       return undoSuccess;

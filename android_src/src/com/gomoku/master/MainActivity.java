@@ -46,6 +46,11 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends Activity {
 
@@ -205,6 +210,13 @@ public class MainActivity extends Activity {
     private WebView       mWebView;
     private FrameLayout   mRootLayout;
     private GomokuSplashView mSplashView;
+    private final ConcurrentHashMap<String, Boolean> mPendingNativeAiRequests = new ConcurrentHashMap<>();
+    private final ThreadPoolExecutor mNativeAiExecutor = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1), runnable -> {
+                Thread thread = new Thread(runnable, "gomoku-native-ai");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final Runnable mInitializeWebViewTask = this::initializeWebView;
     private final Runnable mSplashLoadWarning = () -> {
@@ -243,6 +255,103 @@ public class MainActivity extends Activity {
                 null
         );
     };
+
+    private boolean enqueueNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
+        if (mDestroyed || requestId == null
+                || !requestId.matches("[A-Za-z0-9_-]{1,80}")
+                || (aiColor != 1 && aiColor != 2)
+                || boardJson == null || boardJson.length() > 2048
+                || forbiddenJson == null || forbiddenJson.length() > 4096) {
+            return false;
+        }
+
+        final int[] board = new int[NativeGomokuAI.SIZE * NativeGomokuAI.SIZE];
+        final boolean[] forbidden = new boolean[board.length];
+        try {
+            org.json.JSONArray cells = new org.json.JSONArray(boardJson);
+            if (cells.length() != board.length) return false;
+            for (int i = 0; i < board.length; i++) {
+                Object value = cells.get(i);
+                if (!(value instanceof Number)) return false;
+                double number = ((Number) value).doubleValue();
+                int cell = (int) number;
+                if (number != cell || cell < 0 || cell > 2) return false;
+                board[i] = cell;
+            }
+
+            org.json.JSONArray forbiddenCells = new org.json.JSONArray(forbiddenJson);
+            if (forbiddenCells.length() > 64) return false;
+            for (int i = 0; i < forbiddenCells.length(); i++) {
+                org.json.JSONObject point = forbiddenCells.optJSONObject(i);
+                if (point == null) return false;
+                Object rowValue = point.opt("r");
+                Object colValue = point.opt("c");
+                if (!(rowValue instanceof Number) || !(colValue instanceof Number)) return false;
+                double rowNumber = ((Number) rowValue).doubleValue();
+                double colNumber = ((Number) colValue).doubleValue();
+                if (Double.isNaN(rowNumber) || Double.isInfinite(rowNumber)
+                        || Double.isNaN(colNumber) || Double.isInfinite(colNumber)
+                        || rowNumber != Math.rint(rowNumber) || colNumber != Math.rint(colNumber)) return false;
+                int row = (int) rowNumber;
+                int col = (int) colNumber;
+                if (row < 0 || row >= NativeGomokuAI.SIZE || col < 0 || col >= NativeGomokuAI.SIZE) return false;
+                forbidden[row * NativeGomokuAI.SIZE + col] = true;
+            }
+        } catch (Exception invalidPayload) {
+            return false;
+        }
+
+        if (mPendingNativeAiRequests.putIfAbsent(requestId, Boolean.TRUE) != null) return false;
+        try {
+            mNativeAiExecutor.execute(() -> {
+                long startedAt = System.nanoTime();
+                try {
+                    NativeGomokuAI.Move move = NativeGomokuAI.chooseMove(board, aiColor, forbidden);
+                    long elapsedMs = Math.max(0L, (System.nanoTime() - startedAt) / 1000000L);
+                    postNativeAiResult(requestId, move, elapsedMs, move == null ? "no_legal_move" : null);
+                } catch (RuntimeException error) {
+                    android.util.Log.w("NativeGomokuAI", "Native move selection failed", error);
+                    long elapsedMs = Math.max(0L, (System.nanoTime() - startedAt) / 1000000L);
+                    postNativeAiResult(requestId, null, elapsedMs, "calculation_failed");
+                } finally {
+                    mPendingNativeAiRequests.remove(requestId);
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException overloaded) {
+            mPendingNativeAiRequests.remove(requestId);
+            return false;
+        }
+    }
+
+    private void postNativeAiResult(String requestId, NativeGomokuAI.Move move, long elapsedMs, String error) {
+        org.json.JSONObject result = new org.json.JSONObject();
+        String resultJson;
+        try {
+            result.put("ok", move != null);
+            result.put("elapsedMs", elapsedMs);
+            if (move != null) {
+                result.put("r", move.r);
+                result.put("c", move.c);
+                result.put("depth", move.depth);
+                result.put("nodes", move.nodes);
+                result.put("score", move.score);
+            } else {
+                result.put("error", error == null ? "calculation_failed" : error);
+            }
+            resultJson = result.toString();
+        } catch (org.json.JSONException serializationError) {
+            resultJson = "{\"ok\":false,\"error\":\"serialization_failed\"}";
+        }
+
+        final String callback = "try{if(window.__gomokuNativeAiResult)window.__gomokuNativeAiResult(" +
+                org.json.JSONObject.quote(requestId) + "," + org.json.JSONObject.quote(resultJson) + ");}catch(e){}";
+        mMainHandler.post(() -> {
+            WebView webView = mWebView;
+            if (!mDestroyed && webView != null) webView.evaluateJavascript(callback, null);
+        });
+    }
+
     // 只在主线程递增；原生网络回调可能来自 ConnectivityService 的 Binder 线程。
     private long mNetworkEventSequence = 0L;
 
@@ -255,12 +364,15 @@ public class MainActivity extends Activity {
     private void showNativeSplash() {
         if (mRootLayout == null || mSplashView != null) return;
         mSplashView = new GomokuSplashView(this);
-        mNativeSplashStartedAt = SystemClock.uptimeMillis();
+        mNativeSplashStartedAt = 0L;
         mSplashView.setDismissListener(this::dismissNativeSplash);
+        mSplashView.setAnimationStartedListener(startedAt -> {
+            mNativeSplashStartedAt = startedAt;
+            if (mHasVisibleWebContent) requestNativeSplashDismiss();
+        });
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         mRootLayout.addView(mSplashView, params);
-        mSplashView.startAnimation();
         // A slow cold start must keep showing the artwork. Removing it on a
         // fixed timer exposed the splash background color as a blank gray page
         // whenever WebView had not committed its first frame yet.
@@ -285,6 +397,9 @@ public class MainActivity extends Activity {
 
     private void requestNativeSplashDismiss() {
         if (mSplashView == null) return;
+        // The animation starts after WebView construction so its main-thread
+        // startup work cannot interrupt the visible stone-by-stone sequence.
+        if (mNativeSplashStartedAt <= 0L) return;
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         long elapsed = SystemClock.uptimeMillis() - mNativeSplashStartedAt;
         long minimumDuration = mSplashView.getMinimumDisplayDurationMs();
@@ -579,11 +694,18 @@ public class MainActivity extends Activity {
             setupWebView();
             registerNetworkMonitor();
 
+            // Let the empty-board poster cover WebView's one-time construction.
+            // Start the animated layer after that work has left the UI thread.
+            if (mSplashView != null) mSplashView.startAnimation();
+
             // Do not block the UI thread while waiting for the local asset server.
             awaitLocalServerAndLoadPage();
         } catch (RuntimeException error) {
             android.util.Log.e("MainActivity", "WebView startup failed", error);
-            if (mSplashView != null) mSplashView.showLoadingHint();
+            if (mSplashView != null) {
+                mSplashView.showLoadingHint();
+                mSplashView.startAnimation();
+            }
         }
     }
 
@@ -956,6 +1078,11 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public boolean isNativeApp() {
                 return true;
+            }
+
+            @android.webkit.JavascriptInterface
+            public boolean requestNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
+                return MainActivity.this.enqueueNativeAiMove(requestId, boardJson, aiColor, forbiddenJson);
             }
 
             @android.webkit.JavascriptInterface
@@ -1785,6 +1912,8 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         mDestroyed = true;
         mActivityResumed = false;
+        mPendingNativeAiRequests.clear();
+        mNativeAiExecutor.shutdownNow();
         mMainHandler.removeCallbacks(mInitializeWebViewTask);
         mMainHandler.removeCallbacks(mSplashLoadWarning);
         mMainHandler.removeCallbacks(mSplashContentDismiss);
