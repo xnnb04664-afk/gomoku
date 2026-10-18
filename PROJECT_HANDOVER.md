@@ -76,7 +76,8 @@ node server.js
 - ECS 运行 Node 22 的单实例服务，只绑定回环地址；由受控反向代理提供 HTTPS 和 WebSocket。当前 `/healthz` 只检查 SQLite，不能证明公网 WebSocket 升级链路正常；发布验收还需独立连通实际房间中继。SQLite 主库、系统服务配置、代理配置和备份位置属于运维信息，应从服务器现状或私有运维记录读取，不写入公开交接文档。
 - Cloudflare D1 与 ECS SQLite 相互独立。当前客户端不会把游戏 API 请求自动切到 Cloudflare；不要据此假定两边数据会自动同步。
 - 在线房间和实时社交连接由单个 Node 进程内存承载，进程重启会断开现有 WebSocket；不要横向启动第二个实例。更新检查优先读取多个 GitHub 反向代理节点的公开 Release，下载失败后再走 ECS 短时票据更新服务，Cloudflare Pages/Worker 只作为最后应急出口。APK/HTML 下载按 Release SHA-256 校验；Android 还核对原签名证书。
-- Android 网页热更新先尝试按本机当前生效 HTML 的 SHA-256 精确匹配 GitHub HTML 增量包；网页端校验补丁 SHA、基线 SHA、生成文件 SHA 和启动引导，原生桥只负责写入已验证的完整 HTML。设备不支持 `DecompressionStream`、基线不匹配或补丁失败时回退完整 HTML，最后再走完整 APK 安装。增量包只覆盖单文件 HTML 热更新，APK 本身仍为完整包。旧客户端首次升级到带增量能力的网页时仍需完整 HTML 一次；之后无需先装新 APK，发布脚本会按上一版 GitHub HTML 自动生成补丁，补丁过大或基线不可取时跳过。
+- Android 网页热更新先尝试按本机当前生效 HTML 的 SHA-256 精确匹配 GitHub HTML 增量包；网页端校验补丁 SHA、基线 SHA、生成文件 SHA 和启动引导，原生桥只负责写入已验证的完整 HTML。设备不支持 `DecompressionStream`、基线不匹配或补丁失败时回退完整 HTML。完整 APK 另行更新 Android 启动器图标与原生 Java 组件，网页热更新不会替换这些 APK 资源。
+- 新版原生桥通过 `AndroidNativeApp.getAppVersionCode()` 报告已安装 APK Build。游戏会把已安装 Build 与图标/原生桥最低 Build 比较；旧桥缺少该方法也视为需完整 APK。网页内容可先小流量更新；更新后的页面会提示用户再点“我的 → 检查更新”，安装按钮会直接走已校验的完整 APK，不会再次走网页热更新。`js/app.js` 中的 `MINIMUM_APK_BUILD_FOR_CURRENT_ICON` 只在重绘 Android 图标时提高；`MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK` 只在原生版本查询协议改变时提高。APK 覆盖安装使用相同正式签名并保留应用数据。
 - ECS/Cloudflare 的票据式完整 HTML 回退上限为 20 MiB，APK 上限为 50 MiB。生产单文件 HTML 约 12 MiB，不能再用 8 MiB 限额，否则 GitHub 多代理全部不可用时 ECS 完整热更新会返回 413。
 
 ### ECS WebRTC STUN/TURN

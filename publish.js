@@ -306,6 +306,7 @@ if (fs.existsSync(appSourcePath)) {
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
+  `📦 【APK 更新识别】旧版热更新网页后会提示安装完整 APK 来更新桌面图标和原生组件；普通网页改动仍使用小流量增量更新`,
   `🤖 【Android 原生大师 AI】人机对局使用 Java 原生搜索，避免深度思考阻塞 WebView 游戏界面`,
   `🧠 【大师搜索策略】围绕大师 AI 深层搜索路径，应用迭代加深、Alpha-Beta 剪枝、强制威胁分析和置换表，复杂攻防继续搜索`,
   `⚡ 【落子响应提速】搜索预算从最多约 1.7 秒缩短到约 1.1 秒；安静局面主着法稳定时提前返回，复杂攻防继续搜索`
