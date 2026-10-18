@@ -11,6 +11,7 @@ import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.RadialGradient;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -63,6 +64,7 @@ public final class GomokuSplashView extends FrameLayout {
     private final RectF footerRect = new RectF();
     private final RectF skyRect = new RectF();
     private final RectF stoneRect = new RectF();
+    private final Rect heartDirtyBounds = new Rect();
     private final boolean reducedMotion;
     private final int backgroundColor;
     private final int inkColor;
@@ -168,13 +170,13 @@ public final class GomokuSplashView extends FrameLayout {
         animator.setInterpolator(new LinearInterpolator());
         animator.addUpdateListener(valueAnimator -> {
             progress = (Float) valueAnimator.getAnimatedValue();
-            heartLayer.postInvalidateOnAnimation();
+            postInvalidateHeartRegionOnAnimation();
         });
         animator.addListener(new AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(Animator animation) {
                 progress = 1f;
-                heartLayer.postInvalidateOnAnimation();
+                postInvalidateHeartRegionOnAnimation();
             }
         });
         animator.start();
@@ -299,6 +301,13 @@ public final class GomokuSplashView extends FrameLayout {
         float drawnSide = boardSide;
         boardRect.set(centerX - drawnSide * 0.5f, centerY - drawnSide * 0.5f,
                 centerX + drawnSide * 0.5f, centerY + drawnSide * 0.5f);
+        int margin = Math.max(2, (int) Math.ceil(4f * density));
+        heartDirtyBounds.set(
+                Math.max(0, (int) Math.floor(boardRect.left) - margin),
+                Math.max(0, (int) Math.floor(boardRect.top) - margin),
+                Math.min(Math.round(width), (int) Math.ceil(boardRect.right) + margin),
+                Math.min(Math.round(height), (int) Math.ceil(boardRect.bottom) + margin)
+        );
 
         paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
@@ -384,6 +393,20 @@ public final class GomokuSplashView extends FrameLayout {
                     stoneProgress
             );
         }
+    }
+
+    private void postInvalidateHeartRegionOnAnimation() {
+        if (heartDirtyBounds.isEmpty()) {
+            // The first layout may not have drawn the static board yet.
+            heartLayer.postInvalidateOnAnimation();
+            return;
+        }
+        // Only the board can change during this animation. Keeping invalidation
+        // inside its bounds avoids recompositing the full-screen transparent layer.
+        heartLayer.postInvalidateOnAnimation(
+                heartDirtyBounds.left, heartDirtyBounds.top,
+                heartDirtyBounds.right, heartDirtyBounds.bottom
+        );
     }
 
     private void drawStone(Canvas canvas, float x, float y, float radius, boolean black,
