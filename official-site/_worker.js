@@ -1,6 +1,6 @@
 const API_ORIGIN = 'https://gomoku-api.pages.dev';
 // 由 build_official_site.js 从 version.json 同步；官网版本接口以此为准，避免 API 与静态资源漂移。
-const STATIC_SITE_VERSION = Object.freeze({ tag: 'v1.0.142', build: 143 });
+const STATIC_SITE_VERSION = Object.freeze({ tag: 'v1.0.144', build: 145 });
 const UPDATE_CLIENT = 'gomoku-app-client-v2';
 const LANDING_CSP_PATHS = new Set(['/','/index.html']);
 

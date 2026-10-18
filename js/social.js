@@ -51,7 +51,6 @@
     lastNotifiedUnreadTotal: 0,
     dom: Object.create(null),
     domListeners: null,
-    profileReturnFocus: null,
     lifecycle: 0
   };
 
@@ -263,131 +262,281 @@
     return `<div style="padding:18px 8px;text-align:center;color:#64748b;font-size:13px">${escapeHtml(text)}</div>`;
   }
 
-  function personHeading(person, suffix, options) {
+  function personHeading(person, suffix) {
     const username = person && person.username ? ` @${person.username}` : '';
-    const personUid = String(person && person.uid || '');
-    const avatar = options && options.profile && personUid
-      ? `<button type="button" class="sky-social-avatar-trigger" data-social-action="profile" data-uid="${attr(personUid)}" aria-label="查看 ${attr(displayName(person))} 的资料" title="查看个人资料">${avatarMarkup(person)}</button>`
+    const avatar = person && person.uid
+      ? `<button type="button" class="sky-social-avatar-profile" data-social-action="profile" data-uid="${attr(person.uid)}" aria-label="查看 ${attr(displayName(person))} 的个人资料" title="查看个人资料">${avatarMarkup(person)}</button>`
       : avatarMarkup(person);
     return `<div class="sky-social-person-heading" style="min-width:0;flex:1"><div style="display:flex;align-items:center;gap:7px;min-width:0;font-weight:900;color:#1e293b">${avatar}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(displayName(person))}</span>${coupleBadge(person)}</div><div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(username)}${suffix ? ` · ${escapeHtml(suffix)}` : ''}</div></div>`;
   }
 
-  function ensureProfileModal() {
-    let modal = byId('socialProfileModal');
+  function profilePersonForUid(uid) {
+    const key = String(uid || '');
+    if (!key) return null;
+    return state.friends.find(person => String(person.uid) === key)
+      || state.recent.find(person => String(person.uid) === key)
+      || state.requests.find(person => String(person.uid) === key || String(person.user_uid) === key)
+      || state.blocks.find(person => String(person.uid) === key)
+      || (state.searchResult && String(state.searchResult.uid) === key ? state.searchResult : null);
+  }
+
+  function ensureFriendProfileModal() {
+    let modal = document.getElementById('socialFriendProfileModal');
     if (modal) return modal;
     modal = document.createElement('div');
-    modal.id = 'socialProfileModal';
-    modal.className = 'sky-social-profile-backdrop';
+    modal.id = 'socialFriendProfileModal';
+    modal.className = 'sky-friend-profile-backdrop';
     modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML = '<section class="sky-friend-profile-card" role="dialog" aria-modal="true" aria-labelledby="skyFriendProfileTitle" tabindex="-1"><header class="sky-friend-profile-head"><div><span>晴空棋岛 · 棋友档案</span><h2 id="skyFriendProfileTitle">个人资料</h2></div><button type="button" class="sky-friend-profile-close" data-profile-close aria-label="关闭个人资料">×</button></header><div class="sky-friend-profile-content" id="skyFriendProfileContent"></div></section>';
+    modal.addEventListener('click', event => {
+      if (event.target === modal || event.target.closest('[data-profile-close]')) {
+        closeFriendProfile();
+        return;
+      }
+      const action = event.target.closest('[data-profile-action]');
+      if (!action || !modal.dataset.uid) return;
+      const uid = modal.dataset.uid;
+      if (action.dataset.profileAction === 'retry-matches') {
+        void loadFriendProfileMatches(uid);
+        return;
+      }
+      if (action.dataset.profileAction === 'load-more-matches') {
+        void loadFriendProfileMatches(uid, { append: true });
+        return;
+      }
+      if (action.dataset.profileAction === 'replay-match') {
+        void loadFriendMatchReplay(uid, action.dataset.historyId, action);
+        return;
+      }
+      closeFriendProfile();
+      if (action.dataset.profileAction === 'chat') void openChat(uid);
+      else if (action.dataset.profileAction === 'invite') void inviteFriend(uid);
+    });
+    modal.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeFriendProfile();
+        return;
+      }
+      if (event.key === 'Tab') {
+        const focusable = Array.from(modal.querySelectorAll('button:not(:disabled),[href],input:not(:disabled),[tabindex]:not([tabindex="-1"])'))
+          .filter(element => element.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey && (active === first || !modal.contains(active))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (active === last || !modal.contains(active))) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    });
     document.body.appendChild(modal);
-    modal.addEventListener('click', onProfileModalClick);
-    state.dom.socialProfileModal = modal;
     return modal;
   }
 
-  function openProfile(friendUid, opener) {
-    const targetUid = String(friendUid || '');
-    const person = state.friends.find(friend => String(friend && friend.uid || '') === targetUid);
+  let friendProfileReturnFocus = null;
+  let friendProfileMatchesGeneration = 0;
+
+  async function loadFriendProfileMatches(uid, options) {
+    const modal = document.getElementById('socialFriendProfileModal');
+    const list = modal?.querySelector('#skyFriendProfileMatches');
+    if (!modal || !list || !modal.classList.contains('show')) return;
+    const key = String(uid || '');
+    const append = options?.append === true;
+    const cursor = append ? String(modal.dataset.nextMatchCursor || '') : '';
+    if (append && !cursor) return;
+    const generation = ++friendProfileMatchesGeneration;
+    modal.dataset.matchesGeneration = String(generation);
+    if (append) {
+      const moreButton = list.querySelector('[data-profile-action="load-more-matches"]');
+      if (moreButton) {
+        moreButton.disabled = true;
+        moreButton.textContent = '正在读取…';
+      }
+    } else {
+      delete modal.dataset.nextMatchCursor;
+      list.innerHTML = '<div class="sky-friend-profile-record-empty">正在读取好友保存的对局记录…</div>';
+    }
+    try {
+      const query = new URLSearchParams({ friendUid: key });
+      if (cursor) query.set('before', cursor);
+      const result = await api(`/api/friends/matches?${query.toString()}`);
+      if (!modal.isConnected || !modal.classList.contains('show') || modal.dataset.uid !== key || modal.dataset.matchesGeneration !== String(generation)) return;
+      const matches = Array.isArray(result.data?.matches) ? result.data.matches : [];
+      if (!matches.length && !append) {
+        list.innerHTML = '<div class="sky-friend-profile-record-empty">暂时还没有已保存的对局记录</div>';
+        return;
+      }
+      const modeLabels = { ai: '人机对局', online: '联机对局', pvp: '双人同屏', other: '其他模式' };
+      const resultLabels = { win: '胜利', loss: '惜败', draw: '和棋', 'black-win': '黑方胜', 'white-win': '白方胜', complete: '已结束' };
+      const markup = matches.map(match => {
+        const historyId = String(match.historyId || '').trim();
+        const replayAvailable = match.replayAvailable !== false && Boolean(historyId);
+        const unavailableText = historyId
+          ? '完整棋谱已超出云端最近 30 局保留范围'
+          : '此记录暂不支持逐手复盘';
+        const candidateResult = String(match.result || '');
+        const resultKey = Object.prototype.hasOwnProperty.call(resultLabels, candidateResult) ? candidateResult : 'complete';
+        const label = resultLabels[resultKey];
+        const createdAt = String(match.createdAt || '').trim();
+        const timestamp = createdAt ? createdAt.replace(' ', 'T') + (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(createdAt) ? '' : 'Z') : '';
+        const parsedDate = timestamp ? new Date(timestamp) : null;
+        const date = parsedDate && Number.isFinite(parsedDate.getTime())
+          ? parsedDate.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+          : '日期未知';
+        const mode = modeLabels[String(match.mode || '')] || modeLabels.other;
+        const opponent = String(match.opponentName || '对手');
+        const moves = Math.max(0, Math.min(512, Number(match.moves) || 0));
+        const content = `<div class="sky-friend-profile-match-copy"><time>${escapeHtml(date)}</time><span>VS ${escapeHtml(opponent)} · ${escapeHtml(mode)} · ${moves} 手</span></div><strong class="is-${resultKey}">${label}</strong>`;
+        return replayAvailable
+          ? `<button type="button" class="sky-friend-profile-match" data-profile-action="replay-match" data-history-id="${attr(historyId)}" aria-label="查看 ${attr(opponent)} 的对局复盘" style="width:100%;border:0;border-bottom:1px solid rgba(75,105,85,.1);background:transparent;text-align:left;font:inherit;cursor:pointer">${content}<span aria-hidden="true" style="flex:none;color:#54715b;font-size:9px;font-weight:850">复盘 ›</span></button>`
+          : `<div class="sky-friend-profile-match" aria-disabled="true" title="${attr(unavailableText)}" style="flex-wrap:wrap">${content}<small style="flex:1 0 100%;color:#9aa39d;font-size:9px;font-weight:800">${escapeHtml(unavailableText)}</small></div>`;
+      }).join('');
+      if (append) {
+        list.querySelector('[data-profile-action="load-more-matches"]')?.remove();
+        const matchList = list.querySelector('.sky-friend-profile-match-list');
+        if (matchList && markup) matchList.insertAdjacentHTML('beforeend', markup);
+      } else {
+        list.innerHTML = `<div class="sky-friend-profile-match-list">${markup}</div>`;
+      }
+      const hasMore = result.data?.hasMore === true;
+      const nextCursor = String(result.data?.nextCursor || '');
+      if (hasMore && nextCursor) {
+        modal.dataset.nextMatchCursor = nextCursor;
+        list.insertAdjacentHTML('beforeend', '<button type="button" class="sky-friend-profile-load-more" data-profile-action="load-more-matches">加载更早的对局</button>');
+      } else {
+        delete modal.dataset.nextMatchCursor;
+      }
+    } catch (error) {
+      if (!modal.isConnected || !modal.classList.contains('show') || modal.dataset.uid !== key || modal.dataset.matchesGeneration !== String(generation)) return;
+      const message = `<div class="sky-friend-profile-record-error">${escapeHtml(error.message || '对局记录暂时无法读取')} <button type="button" data-profile-action="retry-matches">重试</button></div>`;
+      if (append) {
+        list.querySelector('[data-profile-action="load-more-matches"]')?.remove();
+        list.insertAdjacentHTML('beforeend', message);
+      } else {
+        list.innerHTML = message;
+      }
+    }
+  }
+
+  async function loadFriendMatchReplay(friendUid, historyId, trigger) {
+    const modal = document.getElementById('socialFriendProfileModal');
+    const friendKey = String(friendUid || '');
+    const id = String(historyId || '');
+    if (!modal || !trigger || !friendKey || !/^\d{1,15}$/.test(id) || trigger.disabled) return;
+    const wasDisabled = trigger.disabled;
+    trigger.disabled = true;
+    trigger.setAttribute('aria-busy', 'true');
+    trigger.style.opacity = '.65';
+    try {
+      if (typeof window.ensureGomokuFeature === 'function') {
+        await window.ensureGomokuFeature('replay');
+      } else if (window.__GOMOKU_REPLAY_READY__ !== true) {
+        throw new Error('复盘模块尚未加载，请重试');
+      }
+      const query = new URLSearchParams({ friendUid: friendKey, historyId: id });
+      const result = await api(`/api/friends/matches/replay?${query.toString()}`);
+      const match = result.data?.match;
+      if (!match || !Array.isArray(match.movesData) || !match.movesData.length) {
+        throw new Error('这局没有可用的完整棋谱');
+      }
+      if (!modal.isConnected || !modal.classList.contains('show') || modal.dataset.uid !== friendKey) return;
+      if (typeof window.openFriendMatchReplay !== 'function') {
+        throw new Error('复盘模块加载后未注册好友棋谱入口');
+      }
+
+      const friend = profilePersonForUid(friendKey);
+      const replayMatch = {
+        ...match,
+        playerName: friend ? displayName(friend) : '好友',
+        playerAvatar: friend?.avatar || '👤'
+      };
+      closeFriendProfile(false);
+      const friendsModal = byId('friendsModal');
+      if (friendsModal) friendsModal.classList.remove('show');
+      if (window.openFriendMatchReplay(replayMatch) !== true) {
+        throw new Error('这局棋谱无法启动复盘，请稍后重试');
+      }
+    } catch (error) {
+      notice(error.message || '好友棋谱暂时无法读取', true);
+    } finally {
+      if (trigger.isConnected) {
+        trigger.disabled = wasDisabled;
+        trigger.removeAttribute('aria-busy');
+        trigger.style.opacity = '';
+      }
+    }
+  }
+
+  function openFriendProfile(uid, opener) {
+    const person = profilePersonForUid(uid);
     if (!person) {
-      notice('好友资料暂不可用，请刷新好友列表后重试', true);
+      notice('棋友资料暂不可用，请刷新好友列表后重试', true);
       return false;
     }
-    const modal = ensureProfileModal();
+    const modal = ensureFriendProfileModal();
+    const content = modal.querySelector('#skyFriendProfileContent');
+    const friendUid = String(person.uid || uid);
+    const friend = state.friends.find(item => String(item.uid) === friendUid);
+    const isFriend = Boolean(friend);
+    const record = friend || person;
+    const hasTotal = record.totalGames != null || record.total_games != null;
+    const totalGames = Math.max(0, Number(record.totalGames ?? record.total_games) || 0);
+    const wins = Math.min(totalGames, Math.max(0, Number(record.wins) || 0));
+    const winRate = totalGames ? Math.round(wins * 100 / totalGames) : 0;
+    const affinity = isFriend ? affinityFor(friend, state.affinity.get(friendUid)) : null;
+    const status = record.presenceHidden ? '在线状态已隐藏'
+      : (record.online === true ? '在线' : (record.online === false ? '离线' : '状态暂不可用'));
+    const relationship = record.relationshipType === 'couple' || record.relationship === 'couple'
+      ? '情侣' : (isFriend || record.relationship === 'friend' ? '好友' : '棋友');
+    const publicUid = String(record.publicUid || '').trim();
+    const score = Math.max(0, Number(record.score) || 1000);
+    const statsMarkup = hasTotal
+      ? `<div class="sky-friend-profile-stat"><span>天梯胜场</span><strong>${wins}</strong></div><div class="sky-friend-profile-stat"><span>天梯总局</span><strong>${totalGames}</strong></div><div class="sky-friend-profile-stat"><span>天梯胜率</span><strong>${winRate}%</strong></div>`
+      : '<div class="sky-friend-profile-stat sky-friend-profile-stat-wide"><span>正式天梯战绩</span><strong>暂无可展示记录</strong></div>';
+    const affinityMarkup = affinity
+      ? `<div class="sky-friend-profile-stat"><span>亲密等级</span><strong>Lv.${Number(affinity.level) || 1}</strong></div><div class="sky-friend-profile-stat"><span>亲密度</span><strong>${Math.max(0, Number(affinity.points) || 0).toLocaleString()}</strong></div>`
+      : '';
+    content.innerHTML = `<div class="sky-friend-profile-hero"><div class="sky-friend-profile-avatar">${avatarMarkup(record, 78)}</div><div class="sky-friend-profile-identity"><span class="sky-friend-profile-status ${record.online === true && !record.presenceHidden ? 'is-online' : ''}"><i></i>${escapeHtml(status)}</span><strong>${escapeHtml(displayName(record))}</strong><div class="sky-friend-profile-tags"><span>${escapeHtml(relationship)}</span>${publicUid ? `<span>棋友 ID · ${escapeHtml(publicUid)}</span>` : ''}</div></div></div><section class="sky-friend-profile-section"><h3>正式天梯战绩</h3><div class="sky-friend-profile-stats"><div class="sky-friend-profile-stat"><span>天梯积分</span><strong>${score.toLocaleString()}</strong></div>${statsMarkup}${affinityMarkup}</div></section>${isFriend ? '<section class="sky-friend-profile-section"><div class="sky-friend-profile-record-heading"><h3>对局记录</h3><span>玩家保存 · 含人机</span></div><div id="skyFriendProfileMatches" class="sky-friend-profile-records"></div><p class="sky-friend-profile-record-note">个人保存记录，不作为天梯结算凭证</p></section><div class="sky-friend-profile-actions"><button type="button" data-profile-action="chat">💬 私聊</button><button type="button" data-profile-action="invite">⚔️ 邀战</button></div>' : '<p class="sky-friend-profile-note">成为好友后可查看关系信息并发起私聊或邀战。</p>'}`;
+    modal.dataset.uid = friendUid;
     if (!modal.classList.contains('show')) {
-      state.profileReturnFocus = opener && typeof opener.focus === 'function'
+      friendProfileReturnFocus = opener && typeof opener.focus === 'function'
         ? opener
         : (document.activeElement && typeof document.activeElement.focus === 'function' ? document.activeElement : null);
     }
-    const bond = affinityFor(person, state.affinity.get(targetUid));
-    const hasBond = Boolean(bond);
-    const level = hasBond ? Number(bond.level) || 1 : 0;
-    const points = hasBond ? Number(bond.points) || 0 : 0;
-    const presence = person.presenceHidden ? '在线状态已隐藏' : (person.online ? '当前在线' : '当前离线');
-    const relationship = isCoupleFriend(person) ? '情侣棋友' : '好友';
-    const accountName = person.username ? `@${person.username}` : '已添加的棋友';
-    const score = Math.max(0, Number(person.score) || 1000);
-    const bondLevel = hasBond ? `Lv.${level}` : '未开始';
-    const bondPoints = hasBond ? points.toLocaleString() : '—';
-    modal.innerHTML = `
-      <section class="sky-social-profile-card" role="dialog" aria-modal="true" aria-labelledby="socialProfileName">
-        <button type="button" class="sky-social-profile-close" data-profile-close aria-label="关闭个人资料">×</button>
-        <div class="sky-social-profile-identity">
-          <div class="sky-social-profile-avatar">${avatarMarkup(person, 82)}</div>
-          <div class="sky-social-profile-names">
-            <span class="sky-social-profile-kicker">晴空棋岛 · 棋友资料</span>
-            <h2 id="socialProfileName">${escapeHtml(displayName(person))}</h2>
-            <p>${escapeHtml(accountName)}</p>
-            <span class="sky-social-profile-relation">${escapeHtml(relationship)} · ${escapeHtml(presence)}</span>
-          </div>
-        </div>
-        <div class="sky-social-profile-stats" aria-label="棋友信息">
-          <div><small>棋力积分</small><strong>${score.toLocaleString()}</strong></div>
-          <div><small>亲密等级</small><strong>${escapeHtml(bondLevel)}</strong></div>
-          <div><small>亲密度</small><strong>${escapeHtml(bondPoints)}</strong></div>
-        </div>
-        ${bond && bond.fixed ? '<p class="sky-social-profile-note">情侣亲密信息固定为 Lv.521 · 1314</p>' : ''}
-        <div class="sky-social-profile-actions">
-          <button type="button" data-social-action="chat" data-uid="${attr(targetUid)}">私聊</button>
-          <button type="button" data-social-action="invite" data-uid="${attr(targetUid)}">邀请对战</button>
-        </div>
-      </section>`;
     modal.classList.add('show');
     modal.setAttribute('aria-hidden', 'false');
-    const closeButton = modal.querySelector('[data-profile-close]');
-    if (closeButton) closeButton.focus();
+    modal.querySelector('.sky-friend-profile-close')?.focus({ preventScroll: true });
+    if (!window.ANIME_AVATAR_BOY || !window.ANIME_AVATAR_GIRL) {
+      void ensureAvatarAssets().then(loaded => {
+        const avatar = content.querySelector('.sky-friend-profile-avatar');
+        if (loaded && avatar && modal.classList.contains('show') && modal.dataset.uid === friendUid) {
+          avatar.innerHTML = avatarMarkup(record, 78);
+        }
+      });
+    }
+    if (isFriend) void loadFriendProfileMatches(friendUid);
     return true;
   }
 
-  function closeProfile(restoreFocus) {
-    const modal = byId('socialProfileModal');
-    if (!modal) return;
-    modal.classList.remove('show');
-    modal.setAttribute('aria-hidden', 'true');
-    const opener = state.profileReturnFocus;
-    state.profileReturnFocus = null;
-    if (restoreFocus !== false && opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
-  }
-
-  function onProfileModalClick(event) {
-    const modal = state.dom.socialProfileModal;
-    if (!modal) return;
-    if (event.target === modal || event.target.closest('[data-profile-close]')) {
-      closeProfile();
-      return;
+  function closeFriendProfile(restoreFocus) {
+    const modal = document.getElementById('socialFriendProfileModal');
+    if (modal) {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      delete modal.dataset.uid;
+      delete modal.dataset.matchesGeneration;
+      delete modal.dataset.nextMatchCursor;
     }
-    if (event.target.closest('[data-social-action]')) {
-      closeProfile();
-      onActionClick(event);
+    friendProfileMatchesGeneration += 1;
+    if (restoreFocus !== false && friendProfileReturnFocus && friendProfileReturnFocus.isConnected) {
+      try { friendProfileReturnFocus.focus({ preventScroll: true }); } catch (_) {}
     }
-  }
-
-  function onProfileModalKeyDown(event) {
-    const modal = state.dom.socialProfileModal;
-    if (!modal || !modal.classList.contains('show')) return;
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      closeProfile();
-      return;
-    }
-    if (event.key !== 'Tab') return;
-    const focusable = Array.from(modal.querySelectorAll(
-      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )).filter(element => element.getClientRects().length > 0);
-    if (!focusable.length) {
-      event.preventDefault();
-      return;
-    }
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || !modal.contains(active))) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (active === last || !modal.contains(active))) {
-      event.preventDefault();
-      first.focus();
-    }
+    friendProfileReturnFocus = null;
   }
 
   function card(content) {
@@ -415,11 +564,13 @@
       const points = bond ? (bond.fixed ? Number(bond.points) : Math.max(0, Math.min(10000, Number(bond.points) || 0))) : 0;
       const bondMarkup = bond ? `<span class="sky-friend-bond">💞 Lv.${level} · ${points}</span>` : '';
       const unread = Number(friend.unread) > 0 ? ` · ${Math.min(99, Number(friend.unread))} 条未读` : '';
-      return `<button type="button" class="sky-friend-preview-row" data-sky-friend-preview data-uid="${attr(friend.uid)}" aria-label="与 ${attr(displayName(friend))} 私聊">
-        <span class="sky-friend-preview-avatar">${avatarMarkup(friend)}</span>
-        <span class="sky-friend-preview-copy"><strong>${escapeHtml(displayName(friend))}</strong><small><i class="${friend.online ? 'is-online' : ''}"></i>${escapeHtml(online + unread)}</small></span>
-        <span class="sky-friend-preview-badges">${coupleBadge(friend)}${bondMarkup}</span><span class="sky-friend-preview-arrow" aria-hidden="true">›</span>
-      </button>`;
+      return `<div class="sky-friend-preview-row">
+        <button type="button" class="sky-friend-preview-avatar" data-sky-friend-profile data-uid="${attr(friend.uid)}" aria-label="查看 ${attr(displayName(friend))} 的个人资料" title="查看个人资料">${avatarMarkup(friend)}</button>
+        <button type="button" class="sky-friend-preview-open" data-sky-friend-preview data-uid="${attr(friend.uid)}" aria-label="与 ${attr(displayName(friend))} 私聊">
+          <span class="sky-friend-preview-copy"><strong>${escapeHtml(displayName(friend))}</strong><small><i class="${friend.online ? 'is-online' : ''}"></i>${escapeHtml(online + unread)}</small></span>
+          <span class="sky-friend-preview-badges">${coupleBadge(friend)}${bondMarkup}</span><span class="sky-friend-preview-arrow" aria-hidden="true">›</span>
+        </button>
+      </div>`;
     }).join('');
     if (!window.ANIME_AVATAR_BOY || !window.ANIME_AVATAR_GIRL) {
       void ensureAvatarAssets().then(loaded => {
@@ -429,6 +580,12 @@
   }
 
   function onLobbyRosterClick(event) {
+    const profile = event.target?.closest?.('[data-sky-friend-profile]');
+    if (profile) {
+      event.preventDefault();
+      openFriendProfile(profile.dataset.uid);
+      return;
+    }
     const friend = event.target?.closest?.('[data-sky-friend-preview]');
     if (!friend) return;
     const uid = friend.dataset.uid;
@@ -1237,14 +1394,18 @@
         return;
       }
       if (typeof initHostPeer !== 'function') throw new Error('联机房间功能尚未加载');
-      await initHostPeer(null, false);
+      const roomReady = await initHostPeer(null, false);
+      if (roomReady !== true) throw new Error('好友房间暂未连接成功，请检查网络后重试');
       const roomCode = typeof currentRoomCode !== 'undefined' ? String(currentRoomCode || '') : '';
       if (!/^\d{6}$/.test(roomCode)) throw new Error('房间尚未准备好，请稍后重试');
       await api('/api/game-invites', { method: 'POST', body: JSON.stringify({ friendUid, roomCode }) });
       notice(`⚔️ 邀战已发送，房间码 ${roomCode}`, false);
       const modal = byId('friendsModal');
       if (modal) modal.classList.remove('show');
-      if (typeof openOnlineModal === 'function') openOnlineModal('create');
+      if (typeof setMode === 'function') setMode('online', true);
+      if (window.SkyIslandUI && typeof window.SkyIslandUI.showGame === 'function') {
+        window.SkyIslandUI.showGame();
+      }
     } catch (error) {
       notice(error.message || '邀战发送失败', true);
     }
@@ -1481,7 +1642,7 @@
   function close() {
     const modal = byId('friendsModal');
     if (modal) modal.classList.remove('show');
-    closeProfile(false);
+    closeFriendProfile(false);
   }
 
   function onActionClick(event) {
@@ -1495,7 +1656,7 @@
     const inviteId = target.dataset.inviteId || '';
     const roomCode = target.dataset.roomCode || '';
     if (action === 'search') search();
-    else if (action === 'profile') openProfile(targetUid, target);
+    else if (action === 'profile') openFriendProfile(targetUid, target);
     else if (action === 'request') sendFriendRequest(username);
     else if (action === 'request-accept') requestAction(requestId, 'accept');
     else if (action === 'request-reject') requestAction(requestId, 'reject');
@@ -1545,8 +1706,6 @@
       return;
     }
     const friendsModal = state.dom.friendsModal;
-    ensureProfileModal();
-    document.addEventListener('keydown', onProfileModalKeyDown);
     const chatModal = state.dom.socialChatModal;
     const inviteModal = state.dom.socialInviteModal;
     const searchInput = state.dom.socialSearchInput;
@@ -1614,8 +1773,7 @@
       }
     }
     state.domListeners = null;
-    document.removeEventListener('keydown', onProfileModalKeyDown);
-    closeProfile(false);
+    closeFriendProfile(false);
   }
 
   function onInviteModalClick(event) {

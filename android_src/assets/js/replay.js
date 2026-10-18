@@ -93,6 +93,27 @@
           };
         }
 
+        // 好友资料中的云端棋谱属于“好友本人”保存的记录；按其 myColor
+        // 映射黑白双方身份，避免复盘时仍显示当前用户上一局的人机头像和名字。
+        const profilePlayerName = String(item?.playerName || '').trim().slice(0, 32);
+        if (profilePlayerName) {
+          const playerAvatar = item?.playerAvatar || '👤';
+          const opponentName = String(item?.oppName || '对手').trim().slice(0, 32);
+          const opponentAvatar = item?.oppAvatar || '👤';
+          if (Number(item.myColor) === WHITE) {
+            p1Name = opponentName;
+            p1Avatar = opponentAvatar;
+            p2Name = profilePlayerName;
+            p2Avatar = playerAvatar;
+          } else {
+            p1Name = profilePlayerName;
+            p1Avatar = playerAvatar;
+            p2Name = opponentName;
+            p2Avatar = opponentAvatar;
+          }
+          if (typeof updatePlayerHeaderUI === 'function') updatePlayerHeaderUI();
+        }
+
         replayAllMoves = moves;
         const replayWinnerColor = Number(item.winnerColor) || 0;
         const replayWinningLine = Array.isArray(item.winningLine)
@@ -168,6 +189,26 @@
         console.error("Main board replay error:", error);
         return false;
       }
+    }
+
+    // 好友资料页的受权云端详情复用同一套主棋盘复盘与退出状态恢复。
+    function openFriendMatchReplay(item) {
+      if (!item || !Array.isArray(item.movesData) || item.movesData.length === 0) {
+        showGameNotice('📜 这局没有可用的完整棋谱，暂时无法复盘！', true);
+        return false;
+      }
+      return startMainBoardReplay({
+        movesData: item.movesData,
+        boardData: item.boardData,
+        winnerColor: item.winnerColor,
+        myColor: item.myColor,
+        isWin: item.isWin === true,
+        isDraw: item.isDraw === true,
+        oppName: item.oppName || '对手',
+        oppAvatar: item.oppAvatar || '👤',
+        playerName: item.playerName || '',
+        playerAvatar: item.playerAvatar || '👤'
+      });
     }
 
     // 结算页“返回棋盘复盘”与星轨节点共用当前对局，不写入待确认战绩。
@@ -422,6 +463,7 @@
     }
 
     window.openCurrentGameReplay = openCurrentGameReplay;
+    window.openFriendMatchReplay = openFriendMatchReplay;
 
     // 云端战绩以 ECS 主库为准 (登录即拉取、换手机找回，仅限正式账号)
     async function syncCloudHistory() {

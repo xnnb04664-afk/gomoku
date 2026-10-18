@@ -41,25 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.142';
-    // 完整 APK 才能更新 Android 启动器图标和原生桥。Build 142 首次提供原生版本查询；
-    // 图标资源首次随 Build 140 发布。图标重绘时只需提高图标最低版本，不影响普通网页热更新。
-    const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;
-    const MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK = 142;
-    function getInstalledAndroidBuildCode() {
-      if (typeof AndroidNativeApp === 'undefined' || typeof AndroidNativeApp.getAppVersionCode !== 'function') return 0;
-      try {
-        const code = Number(AndroidNativeApp.getAppVersionCode());
-        return Number.isSafeInteger(code) && code > 0 ? code : 0;
-      } catch (_) {
-        return 0;
-      }
-    }
-    function isAndroidApkUpdateRequired() {
-      if (typeof AndroidNativeApp === 'undefined') return false;
-      const installedCode = getInstalledAndroidBuildCode();
-      return installedCode < Math.max(MINIMUM_APK_BUILD_FOR_CURRENT_ICON, MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK);
-    }
+    const CURRENT_VERSION_TAG = 'v1.0.144';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -87,7 +69,7 @@
     let resultModalTimer = null;
     let resultModalGeneration = 0;
     const GAME_SOUND_SETTINGS_KEY = 'gomoku_sound_settings_v1';
-    const DEFAULT_GAME_SOUND_SETTINGS = Object.freeze({ enabled: true, volume: 0.62 });
+    const DEFAULT_GAME_SOUND_SETTINGS = Object.freeze({ enabled: true, volume: 0.8 });
     function readGameSoundSettings() {
       try {
         const saved = JSON.parse(localStorage.getItem(GAME_SOUND_SETTINGS_KEY) || 'null');
@@ -105,7 +87,7 @@
     let soundEnabled = gameSoundSettings.enabled;
     let gameSoundVolume = gameSoundSettings.volume;
     const GAME_MUSIC_SETTINGS_KEY = 'gomoku_music_settings_v1';
-    const DEFAULT_GAME_MUSIC_SETTINGS = Object.freeze({ enabled: true, volume: 0.38 });
+    const DEFAULT_GAME_MUSIC_SETTINGS = Object.freeze({ enabled: true, volume: 1 });
     function readGameMusicSettings() {
       try {
         const saved = JSON.parse(localStorage.getItem(GAME_MUSIC_SETTINGS_KEY) || 'null');
@@ -2930,6 +2912,8 @@
       if (!actx || actx.state !== 'running' || !gameMusicEnabled || gameMusicVolume <= 0 ||
           !gameMusicUnlocked || gameMusicLifecyclePaused || document.hidden || gameMusicScheduler !== null) return;
       getGameMusicOutput();
+      if (gameMusicEcho) gameMusicEcho.gain.value = 0.16;
+      if (gameMusicFeedback) gameMusicFeedback.gain.value = 0.18;
       gameMusicStartedAt = actx.currentTime;
       gameMusicCycle = 0;
       gameMusicActiveChord = -1;
@@ -2945,6 +2929,27 @@
       }
       releaseGameMusicChord(0.18);
       setGameMusicOutputLevel(0.025);
+    }
+    function muteGameAudioImmediately() {
+      if (actx) {
+        const now = actx.currentTime;
+        [gameMusicOutput, gameSoundOutput].forEach(output => {
+          if (!output) return;
+          try {
+            output.gain.cancelScheduledValues(now);
+            output.gain.setValueAtTime(0, now);
+          } catch (_) { output.gain.value = 0; }
+        });
+        if (gameMusicEcho) gameMusicEcho.gain.value = 0;
+        if (gameMusicFeedback) gameMusicFeedback.gain.value = 0;
+      }
+      const standaloneAudio = window._cherryBombAudio;
+      if (standaloneAudio) {
+        try {
+          standaloneAudio.pause();
+          standaloneAudio.currentTime = 0;
+        } catch (_) {}
+      }
     }
     function setGameMusicEnabled(enabled) {
       gameMusicEnabled = Boolean(enabled);
@@ -2967,8 +2972,21 @@
     }
     function setGameMusicLifecyclePaused(paused) {
       gameMusicLifecyclePaused = Boolean(paused);
-      if (gameMusicLifecyclePaused) stopGameMusic();
-      else if (gameMusicEnabled && gameMusicUnlocked) resumeGameAudio();
+      if (gameMusicLifecyclePaused) {
+        stopGameMusic();
+        // A short scheduled fade still lets already-created oscillators and the echo
+        // tail play after Android has sent the app to background. Cut the output now,
+        // then suspend the context so no queued sound can leak through.
+        muteGameAudioImmediately();
+        if (actx && actx.state === 'running' && typeof actx.suspend === 'function') {
+          try {
+            const suspended = actx.suspend();
+            if (suspended && typeof suspended.catch === 'function') suspended.catch(() => {});
+          } catch (_) {}
+        }
+      } else if (gameMusicUnlocked) {
+        resumeGameAudio();
+      }
     }
     if (actx && typeof actx.addEventListener === 'function') {
       actx.addEventListener('statechange', () => {
@@ -2985,10 +3003,15 @@
     window.__gomokuSetMusicLifecyclePaused = setGameMusicLifecyclePaused;
     window.addEventListener('pagehide', () => setGameMusicLifecyclePaused(true));
     document.addEventListener('visibilitychange', () => setGameMusicLifecyclePaused(document.hidden));
+    window.addEventListener('pageshow', () => setGameMusicLifecyclePaused(document.hidden));
     syncGameMusicControls();
     function resumeGameAudio() {
-      if (!actx) return;
+      if (!actx || gameMusicLifecyclePaused || document.hidden) return;
       const maybeStartMusic = () => {
+        if (gameMusicLifecyclePaused || document.hidden) return;
+        setGameSoundOutputLevel();
+        if (gameMusicEcho) gameMusicEcho.gain.value = 0.16;
+        if (gameMusicFeedback) gameMusicFeedback.gain.value = 0.18;
         if (gameMusicEnabled && gameMusicVolume > 0 && gameMusicUnlocked && !gameMusicLifecyclePaused && !document.hidden) {
           startGameMusic();
         }
@@ -7205,10 +7228,13 @@
     }
 
     function leaveOnlineRoom(sendNotice = true) {
-      if (typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
+      const hadActiveRoom = gameMode === 'online' ||
+        Boolean(conn && conn.open && currentRoomCode && currentRoomCode === lastActiveRoomCode) ||
+        Boolean(window.hasReadyFriendRoom?.());
+      if (hadActiveRoom && typeof commitPendingMatchRecord === 'function') commitPendingMatchRecord();
       stopReconnectHandshakeLoop();
       detachHostInviteListener();
-      if (sendNotice && conn && conn.open) {
+      if (hadActiveRoom && sendNotice && conn && conn.open) {
         try { conn.send({ type: "leave_room", name: p1Name }); } catch(_) {}
       }
       if (conn) {
@@ -7254,11 +7280,13 @@
       removeCurrentOnlineRoomSnapshot();
       cancelQuickMatch();
       hideMatchingFloatingBar();
-      setMode("ai", false);
-      resetBoardOnly();
-      updatePlayerHeaderUI();
+      if (hadActiveRoom) {
+        setMode("ai", true);
+        resetBoardOnly();
+        updatePlayerHeaderUI();
+      }
       closeOnlineModal();
-      showGameNotice("🚪 您已退出联机房间，已切回人机对弈模式~", false);
+      if (hadActiveRoom) showGameNotice("🚪 您已退出联机房间，已切回人机对弈模式~", false);
     }
 
     // 👤 退出当前账号功能
@@ -9096,37 +9124,28 @@
       // 检查当前应用版本
       // 当前加载的 HTML 才是实际运行版本；旧版遗留的本地标记不能把新版本误判为已安装。
       const effectiveVersion = CURRENT_VERSION_TAG;
-      const androidApkUpdateRequired = isAndroidApkUpdateRequired();
-      const hasNewVersion = versionData
-        ? (compareVersions(versionData.tag, effectiveVersion) > 0 || androidApkUpdateRequired)
-        : androidApkUpdateRequired;
+      const hasNewVersion = versionData ? (compareVersions(versionData.tag, effectiveVersion) > 0) : false;
       if (isManual) {
         finishManualUpdateCheck();
         const versionEl = document.getElementById('appVersionDisplay');
         if (versionEl) {
-          versionEl.textContent = !versionData ? '检查失败，点此重试' : androidApkUpdateRequired ? '需要安装完整 APK' : hasNewVersion ? '发现新版本' : '已是最新';
-          versionEl.title = !versionData ? '无法连接更新服务，点击重试' : androidApkUpdateRequired ? '网页版本已更新，但 Android 应用图标/原生组件仍旧；需安装完整 APK' : hasNewVersion ? `发现 ${formatDisplayVersionTag(versionData.tag)}` : '当前已是最新版本';
+          versionEl.textContent = !versionData ? '检查失败，点此重试' : hasNewVersion ? '发现新版本' : '已是最新';
+          versionEl.title = !versionData ? '无法连接更新服务，点击重试' : hasNewVersion ? `发现 ${formatDisplayVersionTag(versionData.tag)}` : '当前已是最新版本';
         }
       }
 
       // 静默后台检查分支：有新版本仅做静默提示
       if (!isManual) {
         if (hasNewVersion && versionData) {
-          const sessKey = androidApkUpdateRequired
-            ? `notified_native_apk_refresh_${MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK}`
-            : "notified_update_" + versionData.tag;
+          const sessKey = "notified_update_" + versionData.tag;
           if (!sessionStorage.getItem(sessKey)) {
             sessionStorage.setItem(sessKey, "1");
-            showGameNotice(androidApkUpdateRequired
-              ? '📦 游戏页面已更新，但应用图标/原生组件仍是旧版；打开“我的 → 检查更新”安装完整 APK。'
-              : `🔔 发现新版本 ${formatDisplayVersionTag(versionData.tag)}，可随时在个人中心点击更新`, false);
+            showGameNotice(`🔔 发现新版本 ${formatDisplayVersionTag(versionData.tag)}，可随时在个人中心点击更新`, false);
           }
           const versionEl = document.getElementById('appVersionDisplay');
           if (versionEl) {
-            versionEl.textContent = androidApkUpdateRequired ? '需安装完整 APK' : `有新版本 ${formatDisplayVersionTag(versionData.tag)}`;
-            versionEl.title = androidApkUpdateRequired
-              ? '网页热更新不会修改 Android 桌面图标，点击检查更新安装完整 APK'
-              : `发现 ${formatDisplayVersionTag(versionData.tag)}，点击检查更新`;
+            versionEl.textContent = `有新版本 ${formatDisplayVersionTag(versionData.tag)}`;
+            versionEl.title = `发现 ${formatDisplayVersionTag(versionData.tag)}，点击检查更新`;
           }
         }
         return;
@@ -9187,28 +9206,22 @@
 
       if (hasNewVersion) {
         // 发现新版本！
-        if (modalIcon) modalIcon.textContent = androidApkUpdateRequired ? "📦" : "🚀";
-        if (modalTitle) modalTitle.textContent = androidApkUpdateRequired ? "需要安装完整 APK" : "发现新版本！";
+        if (modalIcon) modalIcon.textContent = "🚀";
+        if (modalTitle) modalTitle.textContent = "发现新版本！";
         if (tagEl) {
-          tagEl.textContent = androidApkUpdateRequired
-            ? `${formatDisplayVersionTag(versionData.tag)} · 应用图标/原生组件待更新`
-            : `${DISPLAY_VERSION_TAG} ➔ ${formatDisplayVersionTag(versionData.tag)}`;
-          tagEl.style.background = androidApkUpdateRequired ? "#fff7ed" : "#e0f2fe";
-          tagEl.style.color = androidApkUpdateRequired ? "#c2410c" : "#0369a1";
+          tagEl.textContent = `${DISPLAY_VERSION_TAG} ➔ ${formatDisplayVersionTag(versionData.tag)}`;
+          tagEl.style.background = "#e0f2fe";
+          tagEl.style.color = "#0369a1";
         }
-        if (notesTitle) notesTitle.textContent = androidApkUpdateRequired ? "📦 安装说明：" : "🚀 本次更新内容说明：";
+        if (notesTitle) notesTitle.textContent = "🚀 本次更新内容说明：";
         const incomingNotes = versionData.updateLog || versionData.notes || CURRENT_UPDATE_NOTES.join("\n\n");
-        if (notesEl) notesEl.textContent = androidApkUpdateRequired
-          ? `当前游戏页面已更新，但本机 Android 应用包仍旧。网页热更新不会替换桌面图标或原生功能；请安装完整 APK，安装后个人资料和对局存档会由系统保留。\n\n${incomingNotes}`
-          : incomingNotes;
+        if (notesEl) notesEl.textContent = incomingNotes;
 
         if (btnFast) {
           btnFast.style.display = "flex";
           // 🌟 核心革新：如果处于原生 App 环境，首推免安装秒级在线热更新！
           if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveHotUpdateFile) {
-            btnFast.innerHTML = androidApkUpdateRequired
-              ? "<span>📦 下载完整 APK（更新图标与应用组件）</span>"
-              : "<span>⚡ 小流量免安装更新 (推荐)</span>";
+            btnFast.innerHTML = "<span>⚡ 小流量免安装更新 (推荐)</span>";
             btnFast.onclick = async (e) => {
               e.preventDefault();
               if (btnFast.disabled) return;
@@ -9223,8 +9236,7 @@
               try {
                 // 更新票据只有短时有效；用户确认更新时重新取一张，避免继续用过期授权。
                 clickVersionData = await fetchUpdateManifest();
-                const requireFullApk = isAndroidApkUpdateRequired();
-                if (compareVersions(clickVersionData.tag, effectiveVersion) <= 0 && !requireFullApk) {
+                if (compareVersions(clickVersionData.tag, effectiveVersion) <= 0) {
                   isAppDownloading = false;
                   btnFast.disabled = false;
                   btnFast.style.opacity = "1";
@@ -9233,15 +9245,6 @@
                   return;
                 }
                 if (!clickVersionData.apkTicket && clickVersionData.sourceType !== 'github') throw new Error('更新服务未签发有效下载授权');
-
-                if (requireFullApk) {
-                  setVisualProgress(32, "📦 检测到 Android 应用包仍旧，正在获取完整 APK 以更新桌面图标和原生组件...");
-                  if (await startNativeApkUpdateWithFallback(clickVersionData)) {
-                    showGameNotice('📦 完整 APK 已开始下载；安装确认完成后，应用图标和原生组件会一起更新。', false);
-                    return;
-                  }
-                  throw new Error('未能启动完整 APK 安装，请检查下载权限后重试');
-                }
 
                 setVisualProgress(24, "🧩 正在查找与本机版本匹配的增量包...");
                 if (await downloadAndApplyHtmlDelta(clickVersionData)) {

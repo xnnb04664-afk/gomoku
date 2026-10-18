@@ -2232,7 +2232,7 @@
   </style>
 <style id="skyIslandEnhancementsStyle">
 
-    /* 天空棋岛视觉增强：棋盘外余韵、星轨摘要和轻量浮岛选中态 */
+    /* 天空棋岛视觉增强：胜利余韵和轻量浮岛选中态 */
     .island-wrapper.sky-victory-afterglow::before {
       content: "";
       position: absolute;
@@ -2258,57 +2258,6 @@
       filter: none;
       box-shadow: 0 0 14px rgba(245,158,11,.25);
     }
-    .sky-replay-insights {
-      width: 100%;
-      box-sizing: border-box;
-      margin-top: 8px;
-      padding: 7px 8px;
-      border: 1px solid rgba(250,204,21,.42);
-      border-radius: 10px;
-      background: linear-gradient(135deg, rgba(255,251,235,.96), rgba(254,249,195,.72));
-      color: #713f12;
-      font-size: 10px;
-      font-weight: 800;
-      line-height: 1.35;
-      text-align: left;
-    }
-    .sky-replay-insights-title {
-      color: #92400e;
-      font-size: 10.5px;
-      font-weight: 900;
-      letter-spacing: .03em;
-      margin-bottom: 4px;
-    }
-    .sky-replay-insights-row {
-      display: flex;
-      align-items: baseline;
-      gap: 5px;
-      min-width: 0;
-    }
-    .sky-replay-insights-row strong { min-width: 48px; color: #b45309; }
-    .sky-replay-insights-summary { color: #80664a; font-size: 9.5px; margin: -1px 0 5px; }
-    .sky-replay-insights-list { display: grid; gap: 4px; max-height: 142px; overflow-y: auto; overscroll-behavior: contain; }
-    .sky-replay-insights-event {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      width: 100%;
-      min-width: 0;
-      box-sizing: border-box;
-      padding: 5px 7px;
-      border: 1px solid rgba(180,83,9,.18);
-      border-radius: 7px;
-      background: rgba(255,255,255,.76);
-      color: #493521;
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-    }
-    .sky-replay-insights-event:hover,
-    .sky-replay-insights-event.is-current { border-color: #d99e41; background: #fff4d6; }
-    .sky-replay-insights-step { flex: 0 0 auto; color: #a45d16; font-weight: 900; }
-    .sky-replay-insights-event-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sky-replay-insights-go { flex: 0 0 auto; color: #967247; font-size: 9px; }
     .game-social-dock-grid button.sky-island-selected {
       transform: translateY(-1px);
       box-shadow: 0 3px 0 rgba(14,116,144,.16), 0 0 0 2px rgba(250,204,21,.5);
@@ -2327,7 +2276,6 @@
     }
     @media (max-width: 600px) {
       .island-wrapper.sky-victory-afterglow::before { inset: -6px; border-radius: 18px; }
-      .sky-replay-insights { font-size: 9.5px; padding: 6px 7px; }
     }
 
 </style>
@@ -2562,7 +2510,7 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.142" data-collapsed="false" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.144" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
       <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
@@ -3327,7 +3275,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.4.2</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.4.4</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">
@@ -3479,7 +3427,6 @@
   });
 
   const byId = id => document.getElementById(id);
-  const textOf = node => node ? String(node.textContent || '').trim() : '';
   const reducedMotion = () => {
     try { return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
     catch (_) { return false; }
@@ -3495,152 +3442,11 @@
     window.setTimeout(() => wrapper.classList.remove('sky-victory-afterglow'), reducedMotion() || lowSpec() ? 300 : 1050);
   }
 
-  function getReplaySnapshot() {
-    try {
-      const snapshot = window.getReplayInsightSnapshot?.();
-      if (snapshot && Array.isArray(snapshot.moves)) return snapshot;
-    } catch (_) {}
-    return { moves: [], currentStep: 0, isReplay: false, winnerColor: 0, isDraw: false, winningLine: null };
-  }
-
   function isWinningResult() {
-    const icon = textOf(byId('resultModalIcon'));
-    const title = textOf(byId('resultModalTitle'));
-    const badge = textOf(byId('replayBadgeLabel'));
-    return icon.includes('👑') || title.includes('获胜') || badge.includes('胜利');
-  }
-
-  function renderInsights(host, mode) {
-    if (!host) return;
-    let panel = host.querySelector('.sky-replay-insights');
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.className = 'sky-replay-insights';
-      panel.setAttribute('role', 'status');
-      panel.setAttribute('aria-live', 'polite');
-      host.appendChild(panel);
-    }
-    const snapshot = getReplaySnapshot();
-    const moves = snapshot.moves;
-    const currentStep = Number(snapshot.currentStep) || 0;
-    const winningLine = Array.isArray(snapshot.winningLine) ? snapshot.winningLine : [];
-    let moveHash = 2166136261;
-    for (const move of moves) {
-      const value = [move?.action || move?.type || '', move?.r, move?.c, move?.p, move?.desc || ''].join(':');
-      for (let index = 0; index < value.length; index++) {
-        moveHash ^= value.charCodeAt(index);
-        moveHash = Math.imul(moveHash, 16777619);
-      }
-    }
-    const signature = [mode, moves.length, moveHash >>> 0, currentStep, snapshot.isReplay ? 1 : 0, snapshot.winnerColor || 0, snapshot.isDraw ? 1 : 0, winningLine.map(point => `${point.r},${point.c}`).join(';')].join('|');
-    if (panel.dataset.skySignature === signature) return;
-    panel.dataset.skySignature = signature;
-    panel.replaceChildren();
-
-    const title = document.createElement('div');
-    title.className = 'sky-replay-insights-title';
-    title.textContent = '✦ 星轨复盘 · 真实棋谱节点';
-    panel.appendChild(title);
-
-    const summary = document.createElement('div');
-    summary.className = 'sky-replay-insights-summary';
-    summary.textContent = moves.length
-      ? `共 ${moves.length} 步记录 · 点击节点跳到对应棋盘`
-      : '当前还没有可回看的落子记录';
-    panel.appendChild(summary);
-
-    const labels = {
-      identity_swap: '身份互换', mega_bomb: '乾坤大乱', remove_stone: '虚空陨石',
-      destiny_wipe_danger: '天命掀桌', shift_stone: '移星换斗',
-      swap_color: '偷天换日', swap_positions: '移形换影'
-    };
-    const skillKeys = new Set(Object.keys(labels));
-    const isSkillEvent = move => {
-      const rawKey = String(move?.action || move?.type || '');
-      const key = rawKey.replace(/^skill_/, '');
-      return skillKeys.has(key) || rawKey.startsWith('skill_') || Boolean(move?.action && move.action !== 'move');
-    };
-    const formatEvent = (move, step) => {
-      const key = String(move?.action || move?.type || '').replace(/^skill_/, '');
-      if (isSkillEvent(move)) return move?.desc || labels[key] || '技能事件';
-      const row = Number(move?.r);
-      const col = Number(move?.c);
-      const color = Number(move?.p) === 1 ? '黑方' : (Number(move?.p) === 2 ? '白方' : '棋手');
-      if (Number.isInteger(row) && Number.isInteger(col) && row >= 0 && row < 15 && col >= 0 && col < 15) {
-        return `${color}落子 · 第 ${row + 1} 行第 ${col + 1} 列`;
-      }
-      return move?.desc || `第 ${step} 步棋谱事件`;
-    };
-
-    const events = [{ step: 0, label: '开局 · 黑方先手', kind: 'start' }];
-    const skillEvents = [];
-    const normalEvents = [];
-    moves.forEach((move, index) => {
-      const event = { step: index + 1, label: formatEvent(move, index + 1), kind: isSkillEvent(move) ? 'skill' : 'move' };
-      if (isSkillEvent(move)) skillEvents.push(event);
-      else if (Number.isFinite(Number(move?.r)) && Number.isFinite(Number(move?.c))) normalEvents.push(event);
-    });
-
-    const selectedSkills = skillEvents.length > 5
-      ? [skillEvents[0], ...skillEvents.slice(-4)]
-      : skillEvents;
-    events.push(...selectedSkills);
-
-    let winningStep = 0;
-    if (snapshot.winnerColor && winningLine.length) {
-      const winningPoints = new Set(winningLine.map(point => `${Number(point.r)},${Number(point.c)}`));
-      for (let index = moves.length - 1; index >= 0; index--) {
-        const move = moves[index];
-        if (!isSkillEvent(move) && Number(move?.p) === Number(snapshot.winnerColor) && winningPoints.has(`${Number(move?.r)},${Number(move?.c)}`)) {
-          winningStep = index + 1;
-          break;
-        }
-      }
-    }
-    const tailMoves = normalEvents.slice(-3).filter(event => event.step !== winningStep);
-    events.push(...tailMoves);
-    if (snapshot.winnerColor || snapshot.isDraw) {
-      const winner = Number(snapshot.winnerColor) === 1 ? '黑方' : (Number(snapshot.winnerColor) === 2 ? '白方' : '');
-      events.push({
-        step: winningStep || moves.length,
-        label: snapshot.isDraw ? '本局和棋 · 终局' : `${winner || '对局'}获胜 · ${winningStep ? '五连落子' : '结果记录'}`,
-        kind: 'result'
-      });
-    }
-
-    events.sort((a, b) => a.step - b.step || Number(a.kind === 'result') - Number(b.kind === 'result'));
-    const uniqueEvents = [];
-    const seenEvents = new Set();
-    events.forEach(event => {
-      const key = `${event.step}|${event.kind}`;
-      if (seenEvents.has(key)) return;
-      seenEvents.add(key);
-      uniqueEvents.push(event);
-    });
-
-    const list = document.createElement('div');
-    list.className = 'sky-replay-insights-list';
-    uniqueEvents.slice(0, 10).forEach(event => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'sky-replay-insights-event';
-      if (snapshot.isReplay && event.step === currentStep) button.classList.add('is-current');
-      button.setAttribute('aria-label', `跳转到第 ${event.step} 步：${event.label}`);
-
-      const stepLabel = document.createElement('span');
-      stepLabel.className = 'sky-replay-insights-step';
-      stepLabel.textContent = event.step === 0 ? '开局' : `第 ${event.step} 步`;
-      const eventLabel = document.createElement('span');
-      eventLabel.className = 'sky-replay-insights-event-label';
-      eventLabel.textContent = event.label;
-      const go = document.createElement('span');
-      go.className = 'sky-replay-insights-go';
-      go.textContent = '回看 ›';
-      button.append(stepLabel, eventLabel, go);
-      button.addEventListener('click', () => window.openCurrentGameReplayAtStep?.(event.step));
-      list.appendChild(button);
-    });
-    panel.appendChild(list);
+    const icon = byId('resultModalIcon');
+    const title = byId('resultModalTitle');
+    return String(icon?.textContent || '').includes('👑')
+      || String(title?.textContent || '').includes('获胜');
   }
 
   function syncSelectedButton() {
@@ -3668,17 +3474,13 @@
     syncSelectedButton();
     const result = byId('gameResultModal');
     if (result && result.classList.contains('show')) {
-      const winning = isWinningResult();
-      if (winning && result.dataset.skyGlowSeen !== '1') {
+      if (isWinningResult() && result.dataset.skyGlowSeen !== '1') {
         result.dataset.skyGlowSeen = '1';
         playVictoryAfterglow();
       }
-      renderInsights(result.querySelector('.custom-confirm-card') || result, 'result');
     } else if (result) {
       result.dataset.skyGlowSeen = '0';
     }
-    const replay = byId('replayControlDock');
-    if (replay && getComputedStyle(replay).display !== 'none') renderInsights(replay, 'replay');
   }
 
   function init() {
@@ -3690,35 +3492,21 @@
       const raf = window.requestAnimationFrame || (fn => window.setTimeout(fn, 0));
       raf(() => { scheduled = false; refresh(); });
     };
-    const replaySlider = byId('replayMainSlider');
-    if (replaySlider && replaySlider.dataset.skyInsightsBound !== '1') {
-      replaySlider.dataset.skyInsightsBound = '1';
-      replaySlider.addEventListener('input', schedule);
-    }
+    const attachResultObserver = () => {
+      const target = byId('gameResultModal');
+      if (!target || target.dataset.skyObserverBound === '1') return false;
+      const targetObserver = new MutationObserver(schedule);
+      targetObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
+      target.dataset.skyObserverBound = '1';
+      return true;
+    };
     if (typeof MutationObserver === 'function') {
-      let resultObserverAttached = false;
-      const attachResultObservers = () => {
-        let attached = false;
-        ['gameResultModal', 'replayControlDock'].forEach(id => {
-          const target = byId(id);
-          if (!target || target.dataset.skyObserverBound === '1') return;
-          const targetObserver = new MutationObserver(schedule);
-          targetObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
-          target.dataset.skyObserverBound = '1';
-          attached = true;
-        });
-        return attached;
-      };
-      resultObserverAttached = attachResultObservers();
+      attachResultObserver();
       const bodyObserver = new MutationObserver(() => {
-        if (attachResultObservers()) schedule();
+        if (attachResultObserver()) schedule();
       });
       bodyObserver.observe(document.body, { childList: true, subtree: true });
-      if (resultObserverAttached) schedule();
     }
-    document.addEventListener('click', event => {
-      if (event.target.closest('#gameSocialDockGrid button')) schedule();
-    }, true);
     schedule();
   }
 

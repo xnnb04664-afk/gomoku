@@ -1966,11 +1966,13 @@ body.sky-game-open {
 .sky-panel-heading small,.sky-profile-copy small { display:block; color:#638574; font-size:10px; font-weight:900; letter-spacing:.11em; }
 .sky-panel-heading strong { display:block; margin-top:3px; color:#17384c; font-family:"STKaiti","KaiTi",serif; font-size:23px; line-height:1.1; }
 .sky-friend-count { padding:5px 9px; border:1px solid rgba(98,139,110,.18); border-radius:999px; color:#416b58; background:rgba(236,246,235,.86); font-size:10px; font-weight:900; white-space:nowrap; }
-.sky-friend-preview-row { display:flex; align-items:center; gap:11px; width:100%; min-width:0; padding:12px 2px; border:0; border-bottom:1px solid rgba(31,69,88,.09); color:var(--sky-deep); background:transparent; text-align:left; cursor:pointer; }
+.sky-friend-preview-row { display:flex; align-items:center; gap:11px; width:100%; min-width:0; padding:8px 2px; border-bottom:1px solid rgba(31,69,88,.09); color:var(--sky-deep); background:transparent; }
 .sky-friend-preview-row:hover { background:rgba(255,255,255,.48); }
-.sky-friend-preview-avatar { display:grid; place-items:center; width:48px; height:48px; flex:none; overflow:hidden; border:1px solid rgba(255,255,255,.9); border-radius:50%; background:#fff; box-shadow:0 3px 10px rgba(31,69,88,.12); }
+.sky-friend-preview-avatar { display:grid; place-items:center; width:48px; height:48px; flex:none; overflow:hidden; padding:0; border:1px solid rgba(255,255,255,.9); border-radius:50%; background:#fff; box-shadow:0 3px 10px rgba(31,69,88,.12); cursor:pointer; }
 .sky-friend-preview-avatar img { width:44px !important; height:44px !important; border-radius:50% !important; object-fit:cover !important; }
 .sky-friend-preview-avatar > span { display:grid; place-items:center; width:44px !important; height:44px; font-size:24px; }
+.sky-friend-preview-open { display:flex; align-items:center; gap:11px; flex:1; width:0; min-width:0; padding:4px 0; border:0; color:var(--sky-deep); background:transparent; text-align:left; cursor:pointer; }
+.sky-friend-preview-open:hover { background:transparent; }
 .sky-friend-preview-copy { display:flex; flex:1; flex-direction:column; gap:4px; min-width:0; }
 .sky-friend-preview-copy strong { overflow:hidden; color:#17384c; font-size:14px; font-weight:900; text-overflow:ellipsis; white-space:nowrap; }
 .sky-friend-preview-copy small { display:flex; align-items:center; gap:5px; overflow:hidden; color:rgba(23,56,76,.62); font-size:10px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
@@ -1980,6 +1982,8 @@ body.sky-game-open {
 .sky-social-couple-badge { display:block; width:64px; height:24px; flex:none; border-radius:999px; object-fit:fill; vertical-align:middle; }
 .sky-friend-bond { color:#a64c76; font-size:9px; font-weight:900; white-space:nowrap; }
 .sky-friend-preview-arrow { color:#77948a; font-size:22px; line-height:1; }
+.sky-social-avatar-profile { display:grid; flex:none; place-items:center; margin:0; padding:0; border:0; border-radius:50%; background:transparent; cursor:pointer; }
+.sky-social-avatar-profile:focus-visible,.sky-friend-preview-avatar:focus-visible,.sky-friend-preview-open:focus-visible { outline:3px solid rgba(85,139,108,.58); outline-offset:2px; }
 .sky-friend-roster-empty { display:flex; align-items:center; flex-direction:column; gap:5px; padding:20px 10px 16px; text-align:center; }
 .sky-friend-roster-empty > span { color:#6b9278; font-size:24px; }
 .sky-friend-roster-empty b { color:#234a5c; font-size:13px; }
@@ -2045,7 +2049,8 @@ body.sky-game-open {
   .sky-entry-card i { font-size:12px; }
   .sky-friend-roster-panel { padding:13px; border-radius:17px; }
   .sky-panel-heading strong { font-size:21px; }
-  .sky-friend-preview-row { gap:9px; padding:11px 1px; }
+  .sky-friend-preview-row { gap:9px; padding:8px 1px; }
+  .sky-friend-preview-open { gap:9px; }
   .sky-friend-preview-avatar { width:44px; height:44px; }
   .sky-friend-preview-avatar img,.sky-friend-preview-avatar > span { width:40px !important; height:40px !important; }
   .sky-friend-preview-copy strong { font-size:13px; }
@@ -2063,6 +2068,91 @@ body.sky-game-open {
   .sky-me-update { gap:9px; padding:10px; }
   .sky-update-copy strong { font-size:11px; }
   .sky-update-copy span { font-size:9px; }
+}
+
+/* Friend avatar opens a focused profile sheet; the row action stays available for chat. */
+.sky-friend-profile-backdrop {
+  position:fixed;
+  z-index:100130;
+  inset:0;
+  display:none;
+  align-items:flex-end;
+  justify-content:center;
+  box-sizing:border-box;
+  padding:14px;
+  background:rgba(22,39,43,.42);
+  -webkit-backdrop-filter:blur(8px);
+  backdrop-filter:blur(8px);
+}
+.sky-friend-profile-backdrop.show { display:flex; }
+.sky-friend-profile-card {
+  display:flex;
+  flex-direction:column;
+  box-sizing:border-box;
+  width:min(470px,100%);
+  max-height:min(78dvh,640px);
+  overflow:auto;
+  padding:20px;
+  border:1px solid rgba(255,255,255,.94);
+  border-radius:25px 25px 17px 17px;
+  color:#193d50;
+  background:linear-gradient(145deg,rgba(253,253,247,.99),rgba(230,241,234,.99));
+  box-shadow:0 26px 72px rgba(18,43,51,.32),inset 0 1px rgba(255,255,255,.98);
+}
+.sky-friend-profile-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-bottom:13px; border-bottom:1px solid rgba(59,92,73,.15); }
+.sky-friend-profile-head span { color:#658171; font-size:10px; font-weight:900; letter-spacing:.12em; }
+.sky-friend-profile-head h2 { margin:4px 0 0; color:#17384c; font-size:21px; line-height:1.2; }
+.sky-friend-profile-close { display:grid; width:38px; height:38px; flex:none; place-items:center; border:1px solid rgba(60,87,73,.16); border-radius:50%; color:#365c4a; background:rgba(255,255,255,.86); font-size:24px; line-height:1; cursor:pointer; }
+.sky-friend-profile-content { padding-top:15px; }
+.sky-friend-profile-hero { display:flex; align-items:center; gap:15px; min-width:0; padding:15px; border:1px solid rgba(94,135,105,.15); border-radius:20px; background:linear-gradient(135deg,rgba(255,255,255,.92),rgba(238,246,237,.9)); box-shadow:inset 0 1px rgba(255,255,255,.94); }
+.sky-friend-profile-avatar { display:grid; width:88px; height:88px; flex:none; place-items:center; overflow:hidden; border:3px solid #d8b35d; border-radius:50%; background:#fff; box-shadow:0 7px 19px rgba(84,105,77,.17); }
+.sky-friend-profile-identity { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.sky-friend-profile-identity > strong { overflow:hidden; color:#17384c; font-size:19px; font-weight:950; text-overflow:ellipsis; white-space:nowrap; }
+.sky-friend-profile-status { display:flex; align-items:center; gap:6px; color:#72847c; font-size:11px; font-weight:800; }
+.sky-friend-profile-status i { width:7px; height:7px; flex:none; border-radius:50%; background:#a9b6ae; }
+.sky-friend-profile-status.is-online { color:#438064; }
+.sky-friend-profile-status.is-online i { background:#4ca879; box-shadow:0 0 0 3px rgba(76,168,121,.13); }
+.sky-friend-profile-tags { display:flex; align-items:center; flex-wrap:wrap; gap:5px; }
+.sky-friend-profile-tags span { padding:4px 8px; border:1px solid rgba(83,125,98,.16); border-radius:999px; color:#55735f; background:rgba(235,244,233,.86); font-size:10px; font-weight:900; }
+.sky-friend-profile-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:12px; }
+.sky-friend-profile-section { margin-top:15px; }
+.sky-friend-profile-section h3 { margin:0; color:#315c4c; font-size:13px; font-weight:950; }
+.sky-friend-profile-record-heading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.sky-friend-profile-record-heading > span { color:#839188; font-size:10px; font-weight:800; }
+.sky-friend-profile-record-note { margin:6px 3px 0; color:#839188; font-size:10px; font-weight:700; line-height:1.4; }
+.sky-friend-profile-records { min-height:44px; margin-top:8px; padding:4px 11px; border:1px solid rgba(75,105,85,.13); border-radius:15px; background:rgba(255,255,255,.76); }
+.sky-friend-profile-record-empty,.sky-friend-profile-record-error { padding:12px 4px; color:#7a8981; font-size:11px; font-weight:750; line-height:1.45; text-align:center; }
+.sky-friend-profile-record-error { color:#a35454; }
+.sky-friend-profile-record-error button { margin-left:5px; padding:4px 8px; border:1px solid rgba(69,108,83,.2); border-radius:8px; color:#416b58; background:#f3f8f1; font:inherit; cursor:pointer; }
+.sky-friend-profile-match-list { display:flex; flex-direction:column; }
+.sky-friend-profile-match { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:46px; padding:5px 0; border-bottom:1px solid rgba(75,105,85,.1); }
+.sky-friend-profile-match:last-child { border-bottom:0; }
+.sky-friend-profile-match-copy { display:flex; min-width:0; flex:1; flex-direction:column; gap:3px; }
+.sky-friend-profile-match time { color:#72847c; font-size:10px; font-weight:750; }
+.sky-friend-profile-match-copy > span { overflow:hidden; color:#52665b; font-size:10px; font-weight:750; text-overflow:ellipsis; white-space:nowrap; }
+.sky-friend-profile-match strong { min-width:58px; padding:4px 8px; border-radius:999px; color:#4d765a; background:#eaf4e8; font-size:10px; font-weight:900; text-align:center; }
+.sky-friend-profile-match strong.is-loss { color:#9e5d54; background:#faeae5; }
+.sky-friend-profile-match strong.is-draw { color:#64748b; background:#eef2f5; }
+.sky-friend-profile-load-more { display:block; width:100%; margin:7px 0 3px; padding:8px 10px; border:1px solid rgba(69,108,83,.18); border-radius:10px; color:#416b58; background:#f3f8f1; font:inherit; font-size:11px; font-weight:850; cursor:pointer; }
+.sky-friend-profile-load-more:disabled { opacity:.65; cursor:wait; }
+.sky-friend-profile-stat { display:flex; flex-direction:column; gap:5px; min-width:0; padding:12px 13px; border:1px solid rgba(75,105,85,.13); border-radius:15px; background:rgba(255,255,255,.76); }
+.sky-friend-profile-stat > span { color:#72847c; font-size:10px; font-weight:800; }
+.sky-friend-profile-stat > strong { overflow:hidden; color:#214d3d; font-size:19px; font-weight:950; text-overflow:ellipsis; white-space:nowrap; }
+.sky-friend-profile-stat > strong small { color:#839188; font-size:12px; }
+.sky-friend-profile-stat-wide { grid-column:1/-1; }
+.sky-friend-profile-stat-wide > strong { font-size:13px; }
+.sky-friend-profile-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:14px; }
+.sky-friend-profile-actions button { min-height:46px; border:1px solid rgba(69,108,83,.24); border-radius:14px; color:#fff; background:linear-gradient(145deg,#6d9277,#456b54); box-shadow:0 3px 0 #365840; font:inherit; font-size:14px; font-weight:900; cursor:pointer; }
+.sky-friend-profile-actions button:last-child { border-color:rgba(201,157,70,.32); color:#58431f; background:linear-gradient(145deg,#f8e6b3,#ead08d); box-shadow:0 3px 0 #c9a85d; }
+.sky-friend-profile-note { margin:12px 2px 0; color:#718077; font-size:11px; font-weight:700; line-height:1.5; text-align:center; }
+@media (max-width:520px) {
+  .sky-friend-profile-backdrop { padding:10px; }
+  .sky-friend-profile-card { max-height:min(82dvh,640px); padding:16px; border-radius:22px 22px 14px 14px; }
+  .sky-friend-profile-hero { gap:11px; padding:12px; }
+  .sky-friend-profile-avatar { width:74px; height:74px; }
+  .sky-friend-profile-avatar img,.sky-friend-profile-avatar > span { width:68px !important; height:68px !important; }
+  .sky-friend-profile-identity > strong { font-size:17px; }
+  .sky-friend-profile-stat { padding:10px; }
 }
 
 @media (max-height:700px) and (max-width:600px) {

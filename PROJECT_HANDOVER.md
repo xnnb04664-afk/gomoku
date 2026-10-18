@@ -48,7 +48,7 @@ node server.js
 | js/ecs-config.js | ECS 公共 API 地址；需随网页、单文件和 Android 构建同步 |
 | migrations/ | D1 SQL 迁移；Worker 也有幂等建表逻辑，改表前需检查两处 |
 | android_src/ | Android WebView 容器、Java 源码、Manifest 和资源镜像 |
-| build_apk.js | 同步 Android 资源、构建并使用正式签名密钥签 APK |
+| build_apk.js | 按 APK 运行资源清单同步资源、构建并使用正式签名密钥签 APK；Android 图片资源有独立的 WebP 优化副本 |
 | bundle_single_file.js | 生成根目录离线单文件 HTML |
 | build_official_site.js | 同步官网游戏资源并更新版本信息 |
 | official-site/ | 官网首页、帮助、隐私、独立社交页和 Pages Worker |
@@ -64,8 +64,10 @@ node server.js
 - 游戏页首页只显示 AI 对战、匹配对决、跟好友玩三个标准五子棋入口；底部游戏、好友、棋谱、我的四页保持独立。
 - 好友页的“创建好友房间/加入房间”使用全屏棋友专房界面，不切回棋盘、不透出棋盘背景；入口状态在 `js/sky-hub.js`，房间码/加入页逻辑在 `js/online.js`，布局在 `js/sky-island.css`。修改后仍从源文件同步 Android、单文件和官网游戏副本。
 - 好友列表头像与情侣徽章由服务端返回的头像标识和关系类型驱动；不按账号名硬编码。
+- 好友头像打开棋友资料卡，显示公开昵称/短 ID、在线状态、积分、官方累计胜场/总局/胜率与亲密度。对局记录展示好友已保存的全部模式，包含 AI、人机匹配、好友联机与双人同屏；接口要求双方仍为好友且未互相拉黑，仅返回模式、胜负、服务端保存时间、对手昵称和手数，不返回棋谱走子、棋盘快照或内部 UID。逐条记录来自玩家端保存的个人历史，不能视作服务端验证的天梯结算；累计天梯战绩仍以 `users` 表为准。记录以 20 条游标分页。`friend_match_history` 只留小型摘要并长期保留，完整棋谱仍按旧策略只保留最近 30 局；已被旧版裁掉的资料无法恢复。
+- `migrations/0006_friend_match_history.sql` 创建轻量好友对局摘要表、索引、将现有可用记录回填并为新记录设插入触发器；`backend/worker.js` 启动时也会幂等建表、回填及建触发器，覆盖 ECS SQLite。清空或删除玩家的云端棋谱时同步删除对应好友摘要。上线 D1 前应用该迁移，ECS 可由 Worker 初始化补表。
 - 游戏、好友、棋谱、我的四页保持各自独立入口与原功能，统一使用 ImageGen 浮岛背景和云石卡片材质。实际对局与首页预览共用 `js/app.js` 的 `drawHandmadeGrassBoard()`、`drawThemedStone()`；`window.GomokuBoardPreview` 将同一 Canvas 绘制器用于 `js/sky-hub.js` 的首页预览。`img/game/sky-board-cloudstone.webp` 提供金边云石棋台底图，Canvas 继续实时绘制与落子位置对齐的 15×15 网格、星位和黑白棋子；`body.sky-game-open` 使用 `img/game/sky-island-match-background.png` 作为对局专属云海浮岛背景。
-- 背景音乐在 `js/app.js` 用 Web Audio 按晴空浮岛云海主题合成：D 大调五声音阶、舒缓和弦与轻回响，无鼓点；与落子/提示音效分开设置，默认开启低音量，首次触摸后解锁播放，页面隐藏或 Android `onPause()` 时暂停，回前台时按开关状态恢复。入口在“我的 → 设置”和游戏功能区“⚙ 设置”；Android 生命周期通知由 `MainActivity.notifyWebMusicLifecycle()` 发给网页。
+- 背景音乐在 `js/app.js` 用 Web Audio 按晴空浮岛云海主题合成：D 大调五声音阶、舒缓和弦与轻回响，无鼓点；与落子/提示音效分开设置，默认开启，背景音乐默认音量 100%、对局音效默认音量 80%，已保存的个人音量设置继续优先生效。首次触摸后解锁播放，页面隐藏或 Android `onPause()` 时立即静音、停止独立音频并暂停 AudioContext；Android 等网页处理暂停通知后再暂停 WebView/timers，回前台后按开关状态恢复。入口在“我的 → 设置”和游戏功能区“⚙ 设置”；Android 生命周期通知由 `MainActivity.notifyWebMusicLifecycle()` 发给网页。
 - 残局远征和实验十字棋已于 2026-10-14 从当前产品入口、运行时加载器、APK/单文件构建和官网文案中移除。旧模块、专用测试和截图已移出当前项目并归档到本机回收目录。
 - 未清理手机或浏览器里的远征进度/棋局存档。旧版更新兼容 meta 暂留在网页和单文件输出中；新版本更新校验不再要求 48 关。
 
@@ -281,3 +283,8 @@ adb install .\五子棋.apk
 - `NativeGomokuAI` 将候选落点双方的六项棋型计数压入一个整数，避免候选生成阶段为每一方创建临时 `Pattern` 对象；递归搜索直接返回分数，并由搜索上下文传递超时状态，减少逐节点结果对象及置换表命中时无用的着法对象。评分、候选范围、Alpha-Beta/威胁搜索规则和 1.1 秒搜索预算保持不变。
 - 基于 JDK 17 的 Windows 主机对照中，50 个随机棋盘的 22,500 组落点/颜色棋型计数与评分逐项一致。固定局面在相同预算下的落子、评分和完成深度一致。线程分配计数从约 4.84 KB/节点降至约 2.49 KB/节点（约减少 49%）；节点吞吐有计时波动，不能据此承诺设备端延迟会同比下降。
 - 本次仅做源码优化与主机验证，尚未在 MuMu/真机验证。改动需要完整重建 APK 才会进入 Android 安装包；网页热更新不会更新原生 Java AI。
+
+## 2026-10-18 后台音频生命周期修复
+
+- 页面进入后台时立即静音 Web Audio 输出和独立爆炸音频，并暂停 AudioContext；返回前台时恢复音效与音乐。Android 等网页完成生命周期处理回调后再暂停 WebView 和定时器，并保留有界兜底。
+- 需要构建并安装新 APK 才能验证 Android 原生生命周期路径；发布构建本身不代表已在 MuMu 或真机完成后台/前台验收。

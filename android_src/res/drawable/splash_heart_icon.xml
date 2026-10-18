@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="432dp"
+    android:height="432dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:name="heart_outline"
+        android:fillColor="#00000000"
+        android:strokeColor="#D6A94F"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:trimPathStart="0"
+        android:trimPathEnd="0"
+        android:pathData="M54,83 C47,76 27,62 23,50 C18,37 27,27 39,29 C47,30 52,36 54,43 C57,36 62,30 70,29 C82,27 90,37 85,50 C81,62 61,76 54,83 Z" />
+
+    <group android:name="stones_inner" android:alpha="0">
+        <path
+            android:fillColor="#20384C"
+            android:pathData="M45,48 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M63,48 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M54,72 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0" />
+        <path
+            android:fillColor="#FFF9EC"
+            android:pathData="M54,54 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M54,64 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0" />
+    </group>
+
+    <group android:name="stones_middle" android:alpha="0">
+        <path
+            android:fillColor="#20384C"
+            android:pathData="M29,48 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M79,48 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M35,59 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M73,59 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M45,61 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M63,61 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0" />
+        <path
+            android:fillColor="#FFF9EC"
+            android:pathData="M37,48 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M71,48 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0" />
+    </group>
+
+    <group android:name="stones_outer" android:alpha="0">
+        <path
+            android:fillColor="#20384C"
+            android:pathData="M35,37 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M72,37 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0" />
+        <path
+            android:fillColor="#FFF9EC"
+            android:pathData="M46,37 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0 M63,37 m-5,0 a5,5 0,1 0,10 0 a5,5 0,1 0,-10 0" />
+    </group>
+</vector>

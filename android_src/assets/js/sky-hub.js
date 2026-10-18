@@ -397,8 +397,7 @@
     refreshCurrentGameEntry();
   }
 
-  function enterStandardMode(mode) {
-    closeSheet();
+  function startStandardMode(mode) {
     if (mode !== 'online' && typeof window.cancelQuickMatch === 'function') {
       try { void window.cancelQuickMatch(); } catch (_) {}
     }
@@ -408,6 +407,32 @@
       document.body.classList.remove('sky-mode-loading');
       showGame();
     });
+    return true;
+  }
+
+  function enterStandardMode(mode) {
+    closeSheet();
+    const hasActiveRoom = mode !== 'online' && (
+      window.hasActiveOnlineRoom?.() === true ||
+      window.getCurrentGameSummary?.()?.gameMode === 'online'
+    );
+    if (hasActiveRoom) {
+      if (typeof window.showCustomConfirm !== 'function' || typeof window.leaveOnlineRoom !== 'function') {
+        window.showGameNotice?.('当前好友房间仍在进行，请先退出房间后再开始其他对局。', true);
+        return false;
+      }
+      window.showCustomConfirm(
+        `开始${mode === 'ai' ? 'AI 对战' : '双人同屏'}会退出当前好友房间，并通知对方。是否继续？`,
+        () => {
+          window.leaveOnlineRoom(true);
+          startStandardMode(mode);
+        },
+        null,
+        { title: '结束当前好友对局？', icon: '🚪', okText: '退出并开始', cancelText: '留在房间' }
+      );
+      return false;
+    }
+    return startStandardMode(mode);
   }
 
   function openFriends(tab = 'friends') {

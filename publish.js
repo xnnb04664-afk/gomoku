@@ -305,12 +305,20 @@ if (fs.existsSync(appSourcePath)) {
 // 同步更新 version.json（兼容旧客户端；新客户端依次尝试 GitHub 代理、ECS 与 Cloudflare 应急备用）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
+const previousReleaseHighlights = (() => {
+  try {
+    const previousLog = JSON.parse(fs.readFileSync(versionJsonPath, 'utf8')).updateLog || '';
+    return previousLog.split(/\r?\n\r?\n/).slice(1).map(line => line.trim()).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+})();
 const releaseHighlights = [
-  `📦 【APK 更新识别】旧版热更新网页后会提示安装完整 APK 来更新桌面图标和原生组件；普通网页改动仍使用小流量增量更新`,
-  `🤖 【Android 原生大师 AI】人机对局使用 Java 原生搜索，避免深度思考阻塞 WebView 游戏界面`,
-  `🧠 【大师搜索策略】围绕大师 AI 深层搜索路径，应用迭代加深、Alpha-Beta 剪枝、强制威胁分析和置换表，复杂攻防继续搜索`,
-  `⚡ 【落子响应提速】搜索预算从最多约 1.7 秒缩短到约 1.1 秒；安静局面主着法稳定时提前返回，复杂攻防继续搜索`
-];const releaseUpdateLog = [
+  `🔇 【后台音频修复】切到后台立即静音并暂停音乐、音效和爆炸音频；回到前台后按原设置恢复`,
+  `⚡ 【AI 搜索优化】减少 Android 原生大师 AI 搜索过程中的临时对象分配，保持搜索规则与时限`,
+  ...previousReleaseHighlights
+];
+const releaseUpdateLog = [
   `五子棋 v${newName} 官方正式版更新说明：`,
   ...releaseHighlights
 ].join('\n\n');
@@ -407,6 +415,7 @@ try {
     'android_src/res/values/styles.xml',
     'android_src/src/com/gomoku/master/GomokuSplashView.java',
     'android_src/src/com/gomoku/master/MainActivity.java',
+    'android_src/src/com/gomoku/master/NativeGomokuAI.java',
     'backend/worker.js',
     'backend/ecs-host/README.md',
     'backend/ecs-host/deploy/gomoku-ecs.service',
@@ -418,6 +427,8 @@ try {
     'deploy_worker.js',
     'index.html',
     'img/startup/sky-cloudsea-v2.webp',
+    'img/android/couple-badge.webp',
+    'img/android/sky-island-match-background.webp',
     'img/startup/startup-01.webp',
     'img/startup/startup-02.webp',
     'img/startup/startup-03.webp',
@@ -440,6 +451,8 @@ try {
     'js/startup-splash.css',
     'js/startup-splash.js',
     'js/voice.js',
+    'migrations/0005_auth_sessions.sql',
+    'migrations/0006_friend_match_history.sql',
     'official-site/index.html',
     'official-site/favicon.png',
     'official-site/privacy/index.html',

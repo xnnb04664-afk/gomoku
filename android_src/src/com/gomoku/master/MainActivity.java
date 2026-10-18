@@ -245,6 +245,7 @@ public class MainActivity extends Activity {
     private volatile boolean mUsingDefaultNetworkCallback;
     private volatile boolean mActivityResumed;
     private volatile boolean mDestroyed;
+    private int mWebMusicLifecycleGeneration;
     private String mPendingNetworkReason;
     private static final long NETWORK_EVENT_DEBOUNCE_MS = 250L;
     private final Runnable mDispatchNetworkChange = this::dispatchPendingNetworkChange;
@@ -1439,6 +1440,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         mActivityResumed = true;
+        mWebMusicLifecycleGeneration++;
         if (mSplashView != null) {
             mSplashView.resumeAnimation();
         }
@@ -1477,8 +1479,9 @@ public class MainActivity extends Activity {
             // COMPLETE 表示后台进程已接近被系统回收。此时只暂停定时器；onResume
             // 会恢复它们。避免 freeMemory/System.gc 造成前台卡顿或破坏热更新缓存。
             if (trimLevel >= TRIM_MEMORY_COMPLETE && !hasWindowFocus()) {
-                notifyWebMusicLifecycle(true);
-                mWebView.pauseTimers();
+                WebView webView = mWebView;
+                int generation = mWebMusicLifecycleGeneration;
+                pauseWebViewAfterBackgroundMusic(webView, generation, false);
             }
         });
     }
@@ -1486,6 +1489,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         mActivityResumed = false;
+        final int generation = ++mWebMusicLifecycleGeneration;
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mPendingNetworkReason = null;
         super.onPause();
@@ -1493,9 +1497,7 @@ public class MainActivity extends Activity {
             mSplashView.pauseAnimation();
         }
         if (mWebView != null) {
-            notifyWebMusicLifecycle(true);
-            mWebView.onPause();
-            mWebView.pauseTimers();
+            pauseWebViewAfterBackgroundMusic(mWebView, generation, true);
         }
         // 页面进入后台后不需要继续接收多网络能力变化；恢复时重新注册默认
         // 网络回调并主动同步一次，避免后台回调堆积和回前台重复重连。
@@ -1503,11 +1505,33 @@ public class MainActivity extends Activity {
     }
 
     private void notifyWebMusicLifecycle(boolean paused) {
+        notifyWebMusicLifecycle(paused, null);
+    }
+
+    private void notifyWebMusicLifecycle(boolean paused, Runnable afterEvaluation) {
         if (mWebView == null) return;
         mWebView.evaluateJavascript(
                 "try{if(typeof window.__gomokuSetMusicLifecyclePaused==='function')" +
                         "window.__gomokuSetMusicLifecyclePaused(" + paused + ");}catch(e){}",
-                null);
+                afterEvaluation == null ? null : value -> afterEvaluation.run());
+    }
+
+    private void pauseWebViewAfterBackgroundMusic(WebView webView, int generation, boolean activityMustBePaused) {
+        if (webView == null) return;
+        Runnable pauseWebView = () -> {
+            if (mDestroyed || mWebView != webView || generation != mWebMusicLifecycleGeneration) return;
+            if (activityMustBePaused ? mActivityResumed : hasWindowFocus()) return;
+            if (activityMustBePaused) webView.onPause();
+            webView.pauseTimers();
+        };
+        // evaluateJavascript is asynchronous. Give its callback a chance to execute
+        // the synchronous WebAudio mute/suspend before pausing WebView timers; retain
+        // a bounded fallback so process teardown cannot leave timers running.
+        mMainHandler.postDelayed(pauseWebView, 250L);
+        notifyWebMusicLifecycle(true, () -> {
+            mMainHandler.removeCallbacks(pauseWebView);
+            pauseWebView.run();
+        });
     }
 
     private static final Object sDownloadLock = new Object();

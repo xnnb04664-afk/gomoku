@@ -89,7 +89,8 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   'img/anime_avatar_girl.jpg',
   'img/avatar_boy.png',
   'img/avatar_girl.png',
-  'img/social/couple-badge.png',
+  // APK 专用 WebP：保持源码 PNG 供网页端使用，同时显著降低安装包体积。
+  'img/android/couple-badge.webp',
   // 晴空浮岛大厅是首屏入口，必须随包提供。
   'js/sky-hub.js',
   'js/sky-island.css',
@@ -98,7 +99,7 @@ const APK_REQUIRED_ASSETS = Object.freeze([
   'js/startup-splash.js',
   'img/startup/sky-cloudsea-v2.webp',
   // 对局模式专用云海背景，网页与首页大厅之外的游戏舞台共用。
-  'img/game/sky-island-match-background.png',
+  'img/android/sky-island-match-background.webp',
   // AI 对手使用独立的原创灵兽头像图集，不复用情侣头像。
   'img/game/ai-opponent-avatars.webp',
   // ImageGen 棋台、四页浮岛背景与共用云石界面材质。
@@ -176,6 +177,32 @@ function copyAssetManifest(files, destRoot) {
     copiedBytes += fs.statSync(sourcePath).size;
   }
   return { copiedFiles, copiedBytes };
+}
+
+function rewriteApkRuntimeAssetReferences(assetsRoot) {
+  const rewrites = [
+    {
+      file: 'js/sky-island.css',
+      from: '../img/game/sky-island-match-background.png',
+      to: '../img/android/sky-island-match-background.webp'
+    },
+    {
+      file: 'js/social.min.js',
+      from: 'img/social/couple-badge.png',
+      to: 'img/android/couple-badge.webp'
+    }
+  ];
+  for (const item of rewrites) {
+    const target = path.join(assetsRoot, ...item.file.split('/'));
+    if (!fs.existsSync(target)) throw new Error(`APK 资源引用文件缺失：${item.file}`);
+    const source = fs.readFileSync(target, 'utf8');
+    const occurrences = source.split(item.from).length - 1;
+    if (occurrences < 1) {
+      throw new Error(`APK 资源引用未匹配，拒绝打包：${item.file} -> ${item.from}`);
+    }
+    fs.writeFileSync(target, source.split(item.from).join(item.to), 'utf8');
+    console.log(`>>> [APK WebP] ${item.file} 替换 ${occurrences} 处资源引用`);
+  }
 }
 
 if (process.argv.includes('--print-resource-manifest')) {
@@ -288,6 +315,7 @@ fs.writeFileSync(path.join(SRC_DIR, 'assets', 'index.html'), runtimeIndexHtml, '
 
 const stagedAssets = copyAssetManifest(resourceManifest.files, path.join(TEMP_BUILD, 'assets'));
 console.log(`>>> [资源裁剪] staging 已复制 ${stagedAssets.copiedFiles} 个文件，源文件合计 ${stagedAssets.copiedBytes} bytes`);
+rewriteApkRuntimeAssetReferences(path.join(TEMP_BUILD, 'assets'));
 // 不再用未内嵌的母本覆盖 Android assets；上面的 runtimeIndexHtml 才是可热更新的完整页面。
 
 if (SYNC_ONLY) {

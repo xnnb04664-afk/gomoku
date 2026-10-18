@@ -2095,6 +2095,11 @@
     let isHostConnecting = false;
     let hostInviteBinding = null;
 
+    function hasReadyFriendRoom() {
+      return Boolean(hostInviteBinding && hostInviteBinding.ready &&
+        hostInviteBinding.roomCode && hostInviteBinding.roomCode === currentRoomCode);
+    }
+
     function rotateOnlineSessionId() {
       onlineSessionId = generateSecureId(18, 'room_').slice(0, 96);
       onlineJoinTicket = generateSecureId(24, 'join_').slice(0, 96);
@@ -2408,7 +2413,7 @@
         };
 
         client.on('message', onHostInvite);
-        hostInviteBinding = { client, handler: onHostInvite, topic: c2hTopic, roomCode };
+        hostInviteBinding = { client, handler: onHostInvite, topic: c2hTopic, roomCode, ready: false };
 
         // 房间创建函数现在真正等待信道订阅完成，匹配流程不再凭“已开始连接”提前进入房间。
         await new Promise((resolve, reject) => {
@@ -2418,6 +2423,12 @@
             reject(err);
           }
         });
+        if (transportGeneration !== onlineTransportGeneration || currentRoomCode !== roomCode ||
+            onlineSessionId !== sessionId || !hostInviteBinding ||
+            hostInviteBinding.client !== client || hostInviteBinding.roomCode !== roomCode) {
+          return false;
+        }
+        hostInviteBinding.ready = true;
         if (badgeEl) {
           badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
           badgeEl.style.color = '#10b981';
@@ -3306,6 +3317,8 @@
           if (typeof closeUndoModal === 'function') closeUndoModal();
           if (typeof closeGameResultModal === 'function') closeGameResultModal();
           setMode("ai", false);
+          // 清掉已匹配的服务端配对行，避免下一次匹配重试时复用这场旧房间。
+          void cancelQuickMatch();
           return;
         }
         if (data.type === 'ping') {
@@ -4559,6 +4572,21 @@
       if (typeof openAuthModal === 'function') openAuthModal('login');
     }
 
+    function getExistingOnlineSessionState() {
+      let savedOnlineGame = false;
+      try { savedOnlineGame = window.getCurrentGameSummary?.()?.gameMode === 'online'; } catch (_) {}
+      return {
+        hasOnlineGame: gameMode === 'online' || savedOnlineGame,
+        hasRoomBeingPrepared: Boolean(activeMatchRoomKey),
+        hasOtherRoom: Boolean(currentRoomCode || window.hasReadyFriendRoom?.())
+      };
+    }
+
+    function hasExistingOnlineSessionState() {
+      const state = getExistingOnlineSessionState();
+      return state.hasOnlineGame || state.hasRoomBeingPrepared || state.hasOtherRoom;
+    }
+
     function startQuickMatchPolling(record, attemptGeneration, retryState = { authRetried: false }) {
       clearInterval(matchPollInterval);
       let pollInFlight = false;
@@ -4691,6 +4719,23 @@
       }
       if (matchStartPending) return false;
 
+      const interruptedRecord = readPendingQuickMatch();
+      if (interruptedRecord && hasExistingOnlineSessionState()) {
+        let activeUid = String(currentUserUid || '').trim();
+        if (!activeUid) {
+          try { activeUid = String(localStorage.getItem('gomoku_user_uid') || '').trim(); } catch (_) {}
+        }
+        if (activeUid === interruptedRecord.uid) {
+          clearPendingQuickMatch(interruptedRecord.uid, interruptedRecord.matchId);
+          void safeApiFetch('/api/match/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: interruptedRecord.uid, matchId: interruptedRecord.matchId })
+          }).catch(() => {});
+        }
+        return false;
+      }
+
       const resumePromise = (async () => {
         const record = readPendingQuickMatch();
         if (!record) return false;
@@ -4734,8 +4779,40 @@
       }
     }
 
+    function guardQuickMatchAgainstExistingRoom() {
+      const { hasOnlineGame, hasRoomBeingPrepared, hasOtherRoom } = getExistingOnlineSessionState();
+      if (!hasOnlineGame && !hasRoomBeingPrepared && !hasOtherRoom) return false;
+
+      // 完成的旧局可以在开始下一次匹配时正常收尾；未完成的联机局始终先恢复，
+      // 避免第二个房间覆盖同一份棋盘、session 和重连快照。
+      if (gameMode === 'online' && isOver && typeof leaveOnlineRoom === 'function') {
+        leaveOnlineRoom(false);
+        return false;
+      }
+
+      if (hasOnlineGame) {
+        closeOnlineModal();
+        let resumed = false;
+        try { resumed = Boolean(window.resumeSavedGame?.()); } catch (_) {}
+        if (!resumed) {
+          window.SkyIslandUI?.showGame?.();
+          if (gameMode === 'online' && typeof triggerOnlineReconnect === 'function' && !(conn && conn.open)) {
+            void triggerOnlineReconnect('恢复已有联机对局');
+          }
+        }
+        showGameNotice('你有一场进行中的联机对局，已为你恢复。请先退出当前房间，再开始新匹配。', true);
+        return true;
+      }
+
+      showGameNotice(hasRoomBeingPrepared
+        ? '上一场已匹配成功，正在连接房间，请稍候；连接完成或退出后再开始新匹配。'
+        : '当前已有一个好友房间，请先关闭房间后再开始全服匹配。', true);
+      return true;
+    }
+
     async function startQuickMatch() {
       if (isMatchmaking || matchStartPending) return;
+      if (guardQuickMatchAgainstExistingRoom()) return;
       const attemptGeneration = ++matchAttemptGeneration;
       matchStartPending = true;
       let authorized = false;
@@ -4920,6 +4997,7 @@
       // 房间结束后再次调用此函数时，队列已经不是 waiting 状态；仍需清理
       // 匹配成功时遗留在大厅里的按钮、提示和本地匹配标识。
       if (!wasMatchmaking && !wasStartPending) {
+        const matchedQueueRecord = Boolean(currentActiveMatchUid && cancelMatchId);
         clearPendingQuickMatch(currentActiveMatchUid, currentActiveMatchId);
         clearInterval(matchPollInterval);
         clearInterval(matchTimerInterval);
@@ -4930,6 +5008,15 @@
         currentActiveMatchId = '';
         activeMatchRoomKey = '';
         resetQuickMatchControls();
+        if (matchedQueueRecord) {
+          try {
+            await safeApiFetch('/api/match/cancel', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ uid: cancelUid, matchId: cancelMatchId })
+            });
+          } catch (_) {}
+        }
         return false;
       }
 
@@ -5110,4 +5197,8 @@
 
 
 window.resumePendingQuickMatch = resumePendingQuickMatch;
+window.hasReadyFriendRoom = hasReadyFriendRoom;
+window.hasActiveOnlineRoom = () => Boolean(
+  gameMode === 'online' || currentRoomCode || onlineSessionId || (conn && conn.open) || hasReadyFriendRoom()
+);
 window.__GOMOKU_ONLINE_READY__ = true;

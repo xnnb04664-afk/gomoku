@@ -796,8 +796,34 @@ export default {
         // 兼容已存在的 D1：为旧版 game_history 增加和棋标记，不影响历史记录。
         try { await env.DB.prepare(`ALTER TABLE game_history ADD COLUMN is_draw INTEGER NOT NULL DEFAULT 0`).run(); } catch(e) {}
         try {
-          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_history_uid ON game_history(uid)`).run();
+          await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_history_uid_id ON game_history(uid, id DESC)`).run();
         } catch(e) {}
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS friend_match_history (
+            history_id INTEGER PRIMARY KEY,
+            uid TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            is_win INTEGER NOT NULL,
+            is_draw INTEGER NOT NULL DEFAULT 0,
+            winner_color INTEGER NOT NULL DEFAULT 0,
+            opp_name TEXT,
+            moves_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_friend_match_history_uid_id ON friend_match_history(uid, history_id DESC)`).run();
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO friend_match_history (history_id, uid, mode, is_win, is_draw, winner_color, opp_name, moves_count, created_at)
+          SELECT id, uid, mode, is_win, is_draw, winner_color, opp_name, moves_count, created_at FROM game_history
+        `).run();
+        await env.DB.prepare(`
+          CREATE TRIGGER IF NOT EXISTS trg_game_history_friend_match_insert
+          AFTER INSERT ON game_history
+          BEGIN
+            INSERT OR IGNORE INTO friend_match_history (history_id, uid, mode, is_win, is_draw, winner_color, opp_name, moves_count, created_at)
+            VALUES (NEW.id, NEW.uid, NEW.mode, NEW.is_win, COALESCE(NEW.is_draw, 0), NEW.winner_color, NEW.opp_name, NEW.moves_count, COALESCE(NEW.created_at, CURRENT_TIMESTAMP));
+          END
+        `).run();
 
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS users (
@@ -838,6 +864,22 @@ export default {
         for (const col of cols) {
           try { await env.DB.prepare(`ALTER TABLE users ADD COLUMN ${col}`).run(); } catch(e){}
         }
+
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS auth_sessions (
+            session_id TEXT PRIMARY KEY,
+            uid TEXT NOT NULL,
+            access_token_hash TEXT NOT NULL UNIQUE,
+            access_expires_at INTEGER NOT NULL DEFAULT 0,
+            refresh_token_hash TEXT UNIQUE,
+            refresh_expires_at INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            last_used_at INTEGER NOT NULL,
+            revoked_at INTEGER
+          )
+        `).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_uid_active ON auth_sessions(uid, revoked_at, access_expires_at)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_uid_refresh ON auth_sessions(uid, refresh_token_hash, revoked_at)`).run();
 
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS match_queue (
@@ -1776,21 +1818,82 @@ export default {
       return isPrivateGameUsername(await usernameForUid(uid));
     }
 
+    async function storeAuthSession(uid, accessToken, refreshToken, accessExpiresAt, refreshExpiresAt, options = {}) {
+      const cleanUid = String(uid || '').trim();
+      const cleanAccessToken = String(accessToken || '').trim();
+      if (!cleanUid || !cleanAccessToken) throw new Error('会话缺少 uid 或 access token');
+      const now = Date.now();
+      const accessTokenHash = await hashWithSalt(cleanAccessToken, `${cleanUid}:access`);
+      const refreshTokenHash = options.refreshTokenHash || (refreshToken
+        ? await hashWithSalt(String(refreshToken), cleanUid)
+        : null);
+      const sessionId = options.sessionId || generateSecureHex(16);
+      await env.DB.prepare(`
+        INSERT OR IGNORE INTO auth_sessions (
+          session_id, uid, access_token_hash, access_expires_at,
+          refresh_token_hash, refresh_expires_at, created_at, last_used_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      `).bind(
+        sessionId, cleanUid, accessTokenHash, Number(accessExpiresAt) || 0,
+        refreshTokenHash, Number(refreshExpiresAt) || 0, now, now
+      ).run();
+      return { sessionId, accessTokenHash, refreshTokenHash };
+    }
+
+    async function findAuthSessionByAccess(uid, accessToken) {
+      const cleanUid = String(uid || '').trim();
+      const cleanAccessToken = String(accessToken || '').trim();
+      if (!cleanUid || !cleanAccessToken) return null;
+      const accessTokenHash = await hashWithSalt(cleanAccessToken, `${cleanUid}:access`);
+      return env.DB.prepare(`
+        SELECT session_id, uid, access_token_hash, access_expires_at,
+               refresh_token_hash, refresh_expires_at, revoked_at
+        FROM auth_sessions WHERE uid = ? AND access_token_hash = ?
+      `).bind(cleanUid, accessTokenHash).first();
+    }
+
     async function requireUser(uid, token) {
       const cleanUid = String(uid || '').trim();
       const cleanToken = String(token || '').trim();
       if (!env.DB) return { response: json({ code: 1, msg: '数据库未连接' }, 500) };
       if (!cleanUid || !cleanToken) return { response: json({ code: 401, msg: '未授权：缺少身份凭证' }, 401) };
 
-      const user = await env.DB.prepare(`
-        SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at
-        FROM users WHERE uid = ? AND token = ?
-      `).bind(cleanUid, cleanToken).first();
-      if (!user) return { response: json({ code: 403, msg: '未授权：Token 无效' }, 403) };
-      if (!isAllowedPrivateGameUser(user)) return { response: privateGameDenied() };
-      if (user.token_expires_at && Number(user.token_expires_at) <= Date.now()) {
-        return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
+      let session = await findAuthSessionByAccess(cleanUid, cleanToken);
+      if (session && session.revoked_at) {
+        return { response: json({ code: 403, msg: '未授权：登录会话已退出' }, 403) };
       }
+
+      let user;
+      if (session) {
+        user = await env.DB.prepare(`
+          SELECT uid, username, nickname, avatar, score, wins, total_games
+          FROM users WHERE uid = ?
+        `).bind(cleanUid).first();
+        if (session.access_expires_at && Number(session.access_expires_at) <= Date.now()) {
+          return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
+        }
+      } else {
+        // 首次升级时，按需把尚有效的旧版单设备令牌迁入会话表；保留旧字段供回滚兼容。
+        user = await env.DB.prepare(`
+          SELECT uid, username, nickname, avatar, score, wins, total_games,
+                 token_expires_at, refresh_token_hash, refresh_token_expires_at, token
+          FROM users WHERE uid = ? AND token = ?
+        `).bind(cleanUid, cleanToken).first();
+        if (!user) return { response: json({ code: 403, msg: '未授权：Token 无效' }, 403) };
+        if (user.token_expires_at && Number(user.token_expires_at) <= Date.now()) {
+          return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
+        }
+        if (user.username) {
+          await storeAuthSession(
+            cleanUid, cleanToken, null,
+            Number(user.token_expires_at) || Date.now() + AUTH_SESSION_TTL_MS,
+            Number(user.refresh_token_expires_at) || 0,
+            { refreshTokenHash: user.refresh_token_hash || null }
+          );
+        }
+      }
+      if (!user) return { response: json({ code: 403, msg: '未授权：账号不存在' }, 403) };
+      if (!isAllowedPrivateGameUser(user)) return { response: privateGameDenied() };
       return { user };
     }
 
@@ -2411,6 +2514,122 @@ export default {
       }});
     }
 
+    if (url.pathname === '/api/friends/matches' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const friendUid = String(url.searchParams.get('friendUid') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!friendUid || friendUid === uid) return json({ code: 400, msg: '好友身份无效' }, 400);
+      if (!consumeSocialRequestRate(uid, 'friend-profile-matches', 120, 60000, 300)) {
+        return json({ code: 429, msg: '对局记录读取过于频繁，请稍后再试' }, 429);
+      }
+      if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid) ||
+          (privateGameMode() && !await isAllowedPrivateGameUid(friendUid))) {
+        return json({ code: 403, msg: '仅能查看好友保存的对局记录' }, 403);
+      }
+      const cursorRaw = String(url.searchParams.get('before') || '').trim();
+      const cursor = cursorRaw ? Number(cursorRaw) : 0;
+      if (cursorRaw && (!/^\d{1,15}$/.test(cursorRaw) || !Number.isSafeInteger(cursor) || cursor <= 0)) {
+        return json({ code: 400, msg: '对局记录分页位置无效，请重新打开资料页' }, 400);
+      }
+      const pageSize = 20;
+      const rows = cursor
+        ? await env.DB.prepare(`
+            SELECT history_id, mode, is_win, is_draw, winner_color, opp_name, moves_count, created_at,
+                   EXISTS(SELECT 1 FROM game_history gh WHERE gh.uid = friend_match_history.uid AND gh.id = friend_match_history.history_id) AS replay_available
+            FROM friend_match_history WHERE uid = ? AND history_id < ?
+            ORDER BY history_id DESC LIMIT ?
+          `).bind(friendUid, cursor, pageSize + 1).all()
+        : await env.DB.prepare(`
+            SELECT history_id, mode, is_win, is_draw, winner_color, opp_name, moves_count, created_at,
+                   EXISTS(SELECT 1 FROM game_history gh WHERE gh.uid = friend_match_history.uid AND gh.id = friend_match_history.history_id) AS replay_available
+            FROM friend_match_history WHERE uid = ?
+            ORDER BY history_id DESC LIMIT ?
+          `).bind(friendUid, pageSize + 1).all();
+      const resultRows = Array.isArray(rows.results) ? rows.results : [];
+      const hasMore = resultRows.length > pageSize;
+      const page = resultRows.slice(0, pageSize);
+      return json({ code: 0, data: {
+        matches: page.map(row => {
+          const mode = ['ai', 'online', 'pvp'].includes(String(row.mode || '')) ? String(row.mode) : 'other';
+          const winnerColor = Number(row.winner_color);
+          const result = Number(row.is_draw) === 1 ? 'draw'
+            : (mode === 'pvp' ? (winnerColor === 1 ? 'black-win' : (winnerColor === 2 ? 'white-win' : 'complete'))
+              : (Number(row.is_win) === 1 ? 'win' : 'loss'));
+          return {
+            historyId: String(row.history_id),
+            replayAvailable: Number(row.replay_available) === 1,
+            result,
+            mode,
+            opponentName: sanitizeText(row.opp_name || '对手', 32),
+            moves: Math.max(0, Math.min(512, Number(row.moves_count) || 0)),
+            createdAt: sanitizeText(row.created_at || '', 32)
+          };
+        }),
+        hasMore,
+        nextCursor: hasMore && page.length ? String(page[page.length - 1].history_id) : ''
+      }});
+    }
+
+    if (url.pathname === '/api/friends/matches/replay' && request.method === 'GET') {
+      const uid = String(url.searchParams.get('uid') || '').trim();
+      const friendUid = String(url.searchParams.get('friendUid') || '').trim();
+      const historyIdRaw = String(url.searchParams.get('historyId') || '').trim();
+      const auth = await requireRegisteredUser(uid, getRequestToken(request));
+      if (auth.response) return auth.response;
+      if (!friendUid || friendUid === uid) return json({ code: 400, msg: '好友身份无效' }, 400);
+      if (!/^\d{1,15}$/.test(historyIdRaw) || !Number.isSafeInteger(Number(historyIdRaw)) || Number(historyIdRaw) <= 0) {
+        return json({ code: 400, msg: '棋局记录编号无效，请重新打开好友资料' }, 400);
+      }
+      const historyId = Number(historyIdRaw);
+      if (!consumeSocialRequestRate(uid, 'friend-profile-replay', 30, 60000, 300)) {
+        return json({ code: 429, msg: '棋局复盘读取过于频繁，请稍后再试' }, 429);
+      }
+      if (!await areFriends(uid, friendUid) || await isBlockedEitherWay(uid, friendUid) ||
+          (privateGameMode() && !await isAllowedPrivateGameUid(friendUid))) {
+        return json({ code: 403, msg: '只有当前好友可以查看这局棋谱' }, 403);
+      }
+
+      const summary = await env.DB.prepare(`
+        SELECT 1 AS visible FROM friend_match_history WHERE uid = ? AND history_id = ? LIMIT 1
+      `).bind(friendUid, historyId).first();
+      if (!summary) return json({ code: 404, msg: '好友对局记录不存在或已不可见' }, 404);
+
+      const row = await env.DB.prepare(`
+        SELECT id, mode, is_win, is_draw, winner_color, my_color, opp_name, opp_avatar,
+               moves_count, moves_data, board_data, time, date, created_at
+        FROM game_history WHERE uid = ? AND id = ? LIMIT 1
+      `).bind(friendUid, historyId).first();
+      if (!row) {
+        return json({ code: 410, msg: '这条对局摘要仍保留，但完整棋谱已超出云端最近 30 局保留范围，无法逐手复盘。' }, 410);
+      }
+
+      let movesData = null;
+      let boardData = null;
+      try { movesData = JSON.parse(String(row.moves_data || '')); } catch (_) {}
+      try { boardData = JSON.parse(String(row.board_data || '')); } catch (_) {}
+      if (!Array.isArray(movesData) || movesData.length === 0) {
+        return json({ code: 410, msg: '这条对局没有保存完整走法，暂时无法逐手复盘。' }, 410);
+      }
+      const mode = ['ai', 'online', 'pvp'].includes(String(row.mode || '')) ? String(row.mode) : 'other';
+      return json({ code: 0, data: { match: {
+        historyId: String(row.id),
+        mode,
+        isWin: Number(row.is_win) === 1,
+        isDraw: Number(row.is_draw) === 1,
+        winnerColor: Number(row.winner_color) === 2 ? 2 : (Number(row.winner_color) === 1 ? 1 : 0),
+        myColor: Number(row.my_color) === 2 ? 2 : 1,
+        oppName: sanitizeText(row.opp_name || '对手', 32),
+        oppAvatar: sanitizeText(row.opp_avatar || '👤', 100),
+        moves: Math.max(0, Math.min(512, Number(row.moves_count) || movesData.length)),
+        movesData: movesData.slice(0, 512),
+        boardData: Array.isArray(boardData) ? boardData : null,
+        time: sanitizeText(row.time || '', 20),
+        date: sanitizeText(row.date || '', 20),
+        createdAt: sanitizeText(row.created_at || '', 32)
+      }}});
+    }
+
     if (url.pathname === '/api/friends' && request.method === 'GET') {
       const uid = String(url.searchParams.get('uid') || '').trim();
       const auth = await requireRegisteredUser(uid, getRequestToken(request));
@@ -2418,7 +2637,7 @@ export default {
       const privateFriendFilter = privateGameMode() ? ' AND u.username IN (?, ?)' : '';
       const privateFriendBindings = privateGameMode() ? PRIVATE_GAME_ALLOWED_USERNAMES : [];
       const friendsResult = await env.DB.prepare(`
-        SELECT u.uid, u.username, u.nickname, u.avatar, u.score, f.created_at, f.relationship_type,
+        SELECT u.uid, u.username, u.nickname, u.avatar, u.score, u.wins, u.total_games, f.created_at, f.relationship_type,
                COALESCE(s.presence_hidden, 0) AS presence_hidden,
                COALESCE(s.presence_online, 0) AS presence_online
         FROM friendships f
@@ -2455,7 +2674,10 @@ export default {
         username: row.username,
         nickname: sanitizeText(row.nickname || row.username, 16),
         avatar: compactAvatarForAccount(row.username, row.avatar),
+        publicUid: publicUidForAccount(row.username),
         score: Number(row.score) || 1000,
+        wins: Math.max(0, Number(row.wins) || 0),
+        totalGames: Math.max(0, Number(row.total_games) || 0),
         relationshipType: String(row.relationship_type || 'friend'),
         online: Number(row.presence_hidden) === 0 && Number(row.presence_online) !== 0,
         presenceHidden: Number(row.presence_hidden) !== 0,
@@ -3392,6 +3614,7 @@ async function allocateNextAvailableUid(env) {
                   failed_login_count = 0, locked_until = 0, nickname = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP
               WHERE uid = ?
             `).bind(safeUsername, passwordHash, salt, newToken, expiresAt, guestRefreshTokenHash, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar, uid).run();
+            await storeAuthSession(uid, newToken, newRefreshToken, expiresAt, expiresAt);
 
             try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
             const updated = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(uid).first();
@@ -3407,6 +3630,7 @@ async function allocateNextAvailableUid(env) {
           INSERT INTO users (uid, username, password_hash, salt, password_algo, token, token_expires_at, refresh_token_hash, refresh_token_expires_at, security_q, security_a_hash, security_salt, failed_login_count, locked_until, nickname, avatar, score, wins, total_games)
           VALUES (?, ?, ?, ?, 'pbkdf2', ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1000, 0, 0)
         `).bind(newUid, safeUsername, passwordHash, salt, newToken, expiresAt, finalRefreshTokenHash, expiresAt, safeQ, secAnswerHash, secSalt, safeNick, safeAvatar).run();
+        await storeAuthSession(newUid, newToken, newRefreshToken, expiresAt, expiresAt);
 
         try { await env.DB.prepare('INSERT INTO ip_register_log (ip, created_at) VALUES (?, ?)').bind(clientIp, Date.now()).run(); } catch(e){}
         const created = await env.DB.prepare('SELECT uid, username, nickname, avatar, score, wins, total_games, token, security_q FROM users WHERE uid = ?').bind(newUid).first();
@@ -3505,17 +3729,27 @@ async function allocateNextAvailableUid(env) {
 
         // 如果用户已绑定了正式账号名
         if (user.username) {
-          if (token && user.token && token === user.token && (!user.token_expires_at || user.token_expires_at > now)) {
-            const freshToken = user.token || generateSecureHex(24);
+          const session = token ? await findAuthSessionByAccess(user.uid, token) : null;
+          if (session) {
+            if (session.revoked_at || (session.access_expires_at && Number(session.access_expires_at) <= now)) {
+              return json({ code: 2, msg: "登录凭证已失效，需输入密码登录" }, 401);
+            }
+            const freshToken = generateSecureHex(24);
             const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+            const freshAccessTokenHash = await hashWithSalt(freshToken, `${user.uid}:access`);
             const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
             const expiresAt = now + oneYear;
             const refreshed = await env.DB.prepare(`
-              UPDATE users
-              SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-              WHERE uid = ? AND token = ? AND refresh_token_hash IS ?
-                AND (token_expires_at IS NULL OR token_expires_at = 0 OR token_expires_at > ?)
-            `).bind(freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid, user.token, user.refresh_token_hash ?? null, now).run();
+              UPDATE auth_sessions
+              SET access_token_hash = ?, access_expires_at = ?, refresh_token_hash = ?,
+                  refresh_expires_at = ?, last_used_at = ?
+              WHERE session_id = ? AND uid = ? AND access_token_hash = ?
+                AND refresh_token_hash IS ? AND revoked_at IS NULL
+                AND (access_expires_at IS NULL OR access_expires_at = 0 OR access_expires_at > ?)
+            `).bind(
+              freshAccessTokenHash, expiresAt, freshRefreshTokenHash, expiresAt, now,
+              session.session_id, user.uid, session.access_token_hash, session.refresh_token_hash ?? null, now
+            ).run();
             if (Number(refreshed?.meta?.changes) !== 1) {
               // Several tabs can verify one access token at the same time. Only
               // one may rotate the refresh token; a loser must never return a
@@ -3606,38 +3840,62 @@ async function allocateNextAvailableUid(env) {
         }
 
         const user = await env.DB.prepare(
-          "SELECT uid, username, nickname, avatar, score, wins, total_games, security_q, refresh_token_hash, refresh_token_expires_at FROM users WHERE uid = ? AND username IS NOT NULL AND username != ?"
+          "SELECT uid, username, nickname, avatar, score, wins, total_games, security_q, token, token_expires_at, refresh_token_hash, refresh_token_expires_at FROM users WHERE uid = ? AND username IS NOT NULL AND username != ?"
         ).bind(uid, '').first();
         if (privateGameMode() && !isPrivateGameUsername(user?.username)) return privateGameDenied();
         const now = Date.now();
-        if (!user || !user.refresh_token_hash || !user.refresh_token_expires_at || Number(user.refresh_token_expires_at) <= now) {
+        if (!user) {
           return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
         }
 
         const calculatedHash = await hashWithSalt(refreshToken, String(user.uid));
-        if (calculatedHash !== user.refresh_token_hash) {
-          // The other tab may have rotated the token before this request read
-          // the user row. This is only a retry hint; the server never returns
-          // or accepts the superseded token.
-          return json({ code: 2, retryable: true, msg: "登录凭证已失效，请重新登录" }, 401);
+        let session = await env.DB.prepare(`
+          SELECT session_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, revoked_at
+          FROM auth_sessions WHERE uid = ? AND refresh_token_hash = ?
+        `).bind(user.uid, calculatedHash).first();
+        const isLegacySession = !session && calculatedHash === user.refresh_token_hash &&
+          Number(user.refresh_token_expires_at) > now;
+        if (session && (session.revoked_at || !session.refresh_expires_at || Number(session.refresh_expires_at) <= now)) {
+          return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
+        }
+        if (!session && !isLegacySession) {
+          // A parallel request may already have rotated this device's token.
+          return json({ code: 2, retryable: true, msg: "登录凭证已在其他请求中更新，请重试" }, 401);
         }
 
         const freshToken = generateSecureHex(24);
         const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const freshAccessTokenHash = await hashWithSalt(freshToken, `${user.uid}:access`);
         const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
         const expiresAt = now + AUTH_SESSION_TTL_MS;
-        const refreshed = await env.DB.prepare(`
-          UPDATE users
-          SET token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE uid = ? AND refresh_token_hash = ? AND refresh_token_expires_at > ?
-        `).bind(
-          freshToken, expiresAt, freshRefreshTokenHash, expiresAt,
-          user.uid, user.refresh_token_hash, now
-        ).run();
+        let refreshed;
+        if (session) {
+          refreshed = await env.DB.prepare(`
+            UPDATE auth_sessions
+            SET access_token_hash = ?, access_expires_at = ?, refresh_token_hash = ?,
+                refresh_expires_at = ?, last_used_at = ?
+            WHERE session_id = ? AND uid = ? AND refresh_token_hash = ?
+              AND revoked_at IS NULL AND refresh_expires_at > ?
+          `).bind(
+            freshAccessTokenHash, expiresAt, freshRefreshTokenHash, expiresAt, now,
+            session.session_id, user.uid, calculatedHash, now
+          ).run();
+        } else {
+          const legacyAccessToken = String(user.token || '');
+          if (!legacyAccessToken || (user.token_expires_at && Number(user.token_expires_at) <= now)) {
+            return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
+          }
+          const created = await storeAuthSession(user.uid, freshToken, freshRefreshToken, expiresAt, expiresAt);
+          refreshed = await env.DB.prepare(`
+            UPDATE users SET refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE uid = ? AND refresh_token_hash = ? AND refresh_token_expires_at > ?
+          `).bind(freshRefreshTokenHash, expiresAt, user.uid, calculatedHash, now).run();
+          if (Number(refreshed?.meta?.changes) !== 1) {
+            await env.DB.prepare(`UPDATE auth_sessions SET revoked_at = ? WHERE session_id = ? AND uid = ?`)
+              .bind(now, created.sessionId, user.uid).run();
+          }
+        }
         if (Number(refreshed?.meta?.changes) !== 1) {
-          // A same-browser tab may have won the single-use refresh-token CAS.
-          // The client may retry only after it observes that tab's new token
-          // in shared localStorage; the old token itself remains unusable.
           return json({ code: 2, retryable: true, msg: "登录凭证已在其他请求中更新，请重试" }, 401);
         }
 
@@ -3701,14 +3959,14 @@ async function allocateNextAvailableUid(env) {
 
         const freshToken = generateSecureHex(24);
         const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
-        const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
         const expiresAt = now + AUTH_SESSION_TTL_MS;
         await env.DB.prepare(`
           UPDATE users
           SET failed_login_count = 0, locked_until = 0, password_hash = ?, salt = ?, password_algo = 'pbkdf2',
-              token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+              updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(calcHash, user.salt, freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
+        `).bind(calcHash, user.salt, user.uid).run();
+        await storeAuthSession(user.uid, freshToken, freshRefreshToken, expiresAt, expiresAt);
 
         return json({
           code: 0,
@@ -3758,18 +4016,15 @@ async function allocateNextAvailableUid(env) {
           return json({ code: 1, msg: '新密码不能与当前密码相同' });
         }
 
+        const auth = await requireUser(uid, token);
+        if (auth.response) return auth.response;
         const user = await env.DB.prepare(
-          'SELECT uid, username, nickname, avatar, password_hash, salt, token_expires_at, failed_login_count, locked_until, score, wins, total_games, security_q FROM users WHERE uid = ? AND token = ? AND username IS NOT NULL AND username != ?'
-        ).bind(uid, token, '').first();
-        if (!user) {
-          return json({ code: 401, msg: '登录状态已失效，请重新登录' }, 401);
-        }
+          'SELECT uid, username, nickname, avatar, password_hash, salt, token_expires_at, failed_login_count, locked_until, score, wins, total_games, security_q FROM users WHERE uid = ? AND username IS NOT NULL AND username != ?'
+        ).bind(uid, '').first();
+        if (!user) return json({ code: 401, msg: '登录状态已失效，请重新登录' }, 401);
         if (privateGameMode() && !isPrivateGameUsername(user.username)) return privateGameDenied();
 
         const now = Date.now();
-        if (user.token_expires_at && user.token_expires_at <= now) {
-          return json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401);
-        }
         if (user.locked_until && user.locked_until > now) {
           const remain = Math.ceil((user.locked_until - now) / 1000);
           return json({ code: 429, msg: `密码输错过多，账号保护性锁定中！请在 ${remain} 秒后再试` }, 429);
@@ -3788,15 +4043,27 @@ async function allocateNextAvailableUid(env) {
         const newPasswordHash = await hashPassword(newPassword, newSalt);
         const freshToken = generateSecureHex(24);
         const freshRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const freshAccessTokenHash = await hashWithSalt(freshToken, `${user.uid}:access`);
         const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
         const expiresAt = now + AUTH_SESSION_TTL_MS;
-        await env.DB.prepare(`
+        const newSessionId = generateSecureHex(16);
+        await env.DB.batch([
+          env.DB.prepare(`
           UPDATE users
           SET password_hash = ?, salt = ?, password_algo = 'pbkdf2',
               token = ?, token_expires_at = ?, refresh_token_hash = ?, refresh_token_expires_at = ?, failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(newPasswordHash, newSalt, freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid).run();
+          `).bind(newPasswordHash, newSalt, freshToken, expiresAt, freshRefreshTokenHash, expiresAt, user.uid),
+          env.DB.prepare(`UPDATE auth_sessions SET revoked_at = ? WHERE uid = ? AND revoked_at IS NULL`)
+            .bind(now, user.uid),
+          env.DB.prepare(`
+            INSERT INTO auth_sessions (
+              session_id, uid, access_token_hash, access_expires_at,
+              refresh_token_hash, refresh_expires_at, created_at, last_used_at, revoked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+          `).bind(newSessionId, user.uid, freshAccessTokenHash, expiresAt, freshRefreshTokenHash, expiresAt, now, now)
+        ]);
 
         return json({
           code: 0,
@@ -3894,10 +4161,13 @@ async function allocateNextAvailableUid(env) {
         const newPwdHash = await hashPassword(newPassword, newSalt);
         const newToken = generateSecureHex(24);
         const newRefreshToken = generateSecureHex(REFRESH_TOKEN_BYTES);
+        const newAccessTokenHash = await hashWithSalt(newToken, `${user.uid}:access`);
         const newRefreshTokenHash = await hashWithSalt(newRefreshToken, String(user.uid));
         const expiresAt = now + AUTH_SESSION_TTL_MS;
+        const newSessionId = generateSecureHex(16);
 
-        await env.DB.prepare(`
+        await env.DB.batch([
+          env.DB.prepare(`
           UPDATE users
           SET password_hash = ?, salt = ?, password_algo = 'pbkdf2', token = ?, token_expires_at = ?,
               refresh_token_hash = ?, refresh_token_expires_at = ?,
@@ -3905,7 +4175,16 @@ async function allocateNextAvailableUid(env) {
               failed_login_count = 0, locked_until = 0,
               updated_at = CURRENT_TIMESTAMP
           WHERE uid = ?
-        `).bind(newPwdHash, newSalt, newToken, expiresAt, newRefreshTokenHash, expiresAt, user.uid).run();
+          `).bind(newPwdHash, newSalt, newToken, expiresAt, newRefreshTokenHash, expiresAt, user.uid),
+          env.DB.prepare(`UPDATE auth_sessions SET revoked_at = ? WHERE uid = ? AND revoked_at IS NULL`)
+            .bind(now, user.uid),
+          env.DB.prepare(`
+            INSERT INTO auth_sessions (
+              session_id, uid, access_token_hash, access_expires_at,
+              refresh_token_hash, refresh_expires_at, created_at, last_used_at, revoked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+          `).bind(newSessionId, user.uid, newAccessTokenHash, expiresAt, newRefreshTokenHash, expiresAt, now, now)
+        ]);
 
         return json({
           code: 0,
@@ -3945,6 +4224,9 @@ async function allocateNextAvailableUid(env) {
         const auth = await requireUser(uid, getRequestToken(request, body));
         if (auth.response) return auth.response;
         const cleanUid = auth.user.uid;
+        if (!consumeSocialRequestRate(cleanUid, 'history-record', 60, 60000, 120)) {
+          return json({ code: 429, msg: '对局保存过于频繁，请稍后重试' }, 429);
+        }
         const movesJson = typeof movesData === 'string' ? movesData : JSON.stringify(movesData || []);
         const boardJson = typeof boardData === 'string' ? boardData : JSON.stringify(boardData || []);
         if (movesJson.length > 120000 || boardJson.length > 120000) {
@@ -3958,7 +4240,7 @@ async function allocateNextAvailableUid(env) {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           cleanUid,
-          String(mode || 'ai'),
+          ['ai', 'online', 'pvp'].includes(String(mode || '')) ? String(mode) : 'other',
           isWin ? 1 : 0,
           isDraw === true ? 1 : 0,
           cleanWinnerColor,
@@ -3972,7 +4254,7 @@ async function allocateNextAvailableUid(env) {
           String(date || '').slice(0, 20)
         ).run();
 
-        // 仅保留该用户最新 30 局，自动裁剪超额历史
+        // 个人完整棋谱仍只保留最近 30 局；SQLite 触发器已将摘要存入好友资料归档。
         try {
           await env.DB.prepare(`
             DELETE FROM game_history
@@ -4036,7 +4318,10 @@ async function allocateNextAvailableUid(env) {
 
         const auth = await requireUser(uid, getRequestToken(request, body));
         if (auth.response) return auth.response;
-        await env.DB.prepare('DELETE FROM game_history WHERE uid = ?').bind(auth.user.uid).run();
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM friend_match_history WHERE uid = ?').bind(auth.user.uid),
+          env.DB.prepare('DELETE FROM game_history WHERE uid = ?').bind(auth.user.uid)
+        ]);
         return json({ code: 0, msg: '云端历史战报已彻底同步清空！' });
       } catch (err) {
         return publicServerError('清空云端战绩异常', err);
@@ -4053,7 +4338,10 @@ async function allocateNextAvailableUid(env) {
 
         const auth = await requireUser(uid, getRequestToken(request, body));
         if (auth.response) return auth.response;
-        await env.DB.prepare('DELETE FROM game_history WHERE uid = ? AND id = ?').bind(auth.user.uid, parseInt(id, 10)).run();
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM friend_match_history WHERE uid = ? AND history_id = ?').bind(auth.user.uid, parseInt(id, 10)),
+          env.DB.prepare('DELETE FROM game_history WHERE uid = ? AND id = ?').bind(auth.user.uid, parseInt(id, 10))
+        ]);
         return json({ code: 0, msg: '该条云端战绩已同步删除！' });
       } catch (err) {
         return publicServerError('删除云端战绩异常', err);
@@ -4492,7 +4780,7 @@ async function allocateNextAvailableUid(env) {
             now, matchUid, match.matched_with,
             match.matched_with, matchUid, settlementClaimId, settlementClaimId,
             outcome, opponentOutcome
-          )
+          ),
         ]);
 
         const settled = await env.DB.prepare(`
