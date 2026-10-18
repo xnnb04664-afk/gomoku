@@ -38,6 +38,8 @@ final class NativeGomokuAI {
     private static final long SEARCH_BUDGET_NS = 1100_000_000L;
     private static final int LOCAL_LENGTH = 11;
     private static final int LOCAL_CODE_COUNT = 177147;
+    // Five bits per count are sufficient: the largest table-backed total is four directions x five patterns.
+    private static final int NO_PATTERN = -1, INVALID_PATTERN = 0x7fffffff, PATTERN_MASK = 0x1f;
     private static final int[][] DIRECTIONS = {{0, 1}, {1, 0}, {1, 1}, {1, -1}};
     private static final int[][] FOUR_PATTERNS = {
             {0, 1, 1, 1, 1, 2}, {2, 1, 1, 1, 1, 0},
@@ -136,27 +138,15 @@ final class NativeGomokuAI {
         }
     }
 
-    private static final class Pattern {
-        final int five, openFour, four, openThree, brokenThree, openTwo;
-        final double score;
-        Pattern(int five, int openFour, int four, int openThree, int brokenThree, int openTwo, double score) {
-            this.five = five; this.openFour = openFour; this.four = four;
-            this.openThree = openThree; this.brokenThree = brokenThree;
-            this.openTwo = openTwo; this.score = score;
-        }
-        boolean tactical() {
-            return five > 0 || openFour > 0 || four > 0 || openThree > 0 || brokenThree > 0;
-        }
-    }
-
     private static final class Candidate {
         final int index, r, c;
-        final Pattern own, opp;
+        final int ownPattern, opponentPattern;
         final boolean tactical;
         final double score;
-        Candidate(int index, Pattern own, Pattern opp, boolean tactical, double score) {
+        Candidate(int index, int ownPattern, int opponentPattern, boolean tactical, double score) {
             this.index = index; this.r = index / SIZE; this.c = index % SIZE;
-            this.own = own; this.opp = opp; this.tactical = tactical; this.score = score;
+            this.ownPattern = ownPattern; this.opponentPattern = opponentPattern;
+            this.tactical = tactical; this.score = score;
         }
     }
 
@@ -244,6 +234,7 @@ final class NativeGomokuAI {
         final int[][] killers = new int[32][2];
         final int[] history = new int[SIZE * SIZE];
         int nodes, tacticalLeaves, completedDepth, rootMove = -1;
+        boolean aborted;
         final int tacticalLeafLimit;
         Context(Position position, int aiColor, long deadline, int tacticalLeafLimit) {
             this.position = position; this.aiColor = aiColor;
@@ -381,15 +372,14 @@ final class NativeGomokuAI {
             int r = GEOMETRY.rows[index], c = GEOMETRY.cols[index];
             boolean openingAnchor = p.stones <= 4 && Math.abs(r - 7) <= 3 && Math.abs(c - 7) <= 3;
             if (!p.empty(index) || p.forbidden[index] || (!openingAnchor && !nearStone(p, index, radius))) continue;
-            Pattern own = analyzeMove(p, index, color), opp = analyzeMove(p, index, opponent);
-            boolean tactical = own.five > 0 || opp.five > 0 || own.openFour > 0 || opp.openFour > 0 ||
-                    own.four > 0 || opp.four > 0 || own.openThree > 0 || opp.openThree > 0 ||
-                    own.brokenThree > 0 || opp.brokenThree > 0;
-            raw.add(new Candidate(index, own, opp, tactical, moveOrderingScore(own, opp) + GEOMETRY.positionValues[index]));
+            int ownPattern = analyzeMove(p, index, color), opponentPattern = analyzeMove(p, index, opponent);
+            boolean tactical = patternTactical(ownPattern) || patternTactical(opponentPattern);
+            raw.add(new Candidate(index, ownPattern, opponentPattern, tactical,
+                    moveOrderingScore(ownPattern, opponentPattern) + GEOMETRY.positionValues[index]));
         }
         if (raw.isEmpty()) {
             for (int i = 0; i < p.board.length; i++) if (p.empty(i) && !p.forbidden[i]) {
-                raw.add(new Candidate(i, null, null, false, GEOMETRY.positionValues[i]));
+                raw.add(new Candidate(i, NO_PATTERN, NO_PATTERN, false, GEOMETRY.positionValues[i]));
             }
         }
         raw.sort(CANDIDATE_ORDER);
@@ -411,8 +401,11 @@ final class NativeGomokuAI {
 
     private static List<Candidate> singletonCandidate(Position p, int color, int index) {
         List<Candidate> one = new ArrayList<>(1);
-        Pattern own = analyzeMove(p, index, color), opp = analyzeMove(p, index, color == BLACK ? WHITE : BLACK);
-        one.add(new Candidate(index, own, opp, own.tactical() || opp.tactical(), moveOrderingScore(own, opp)));
+        int ownPattern = analyzeMove(p, index, color);
+        int opponentPattern = analyzeMove(p, index, color == BLACK ? WHITE : BLACK);
+        one.add(new Candidate(index, ownPattern, opponentPattern,
+                patternTactical(ownPattern) || patternTactical(opponentPattern),
+                moveOrderingScore(ownPattern, opponentPattern)));
         return one;
     }
 
@@ -438,9 +431,10 @@ final class NativeGomokuAI {
         if (anchors.size() > limit) anchors = new ArrayList<>(anchors.subList(0, limit));
         List<Candidate> result = new ArrayList<>(anchors.size());
         for (Candidate m : anchors) {
-            Pattern own = analyzeMove(p, m.index, color), opp = analyzeMove(p, m.index, opponent);
-            boolean tactical = own.tactical() || opp.tactical();
-            result.add(new Candidate(m.index, own, opp, tactical, moveOrderingScore(own, opp) + GEOMETRY.positionValues[m.index]));
+            int ownPattern = analyzeMove(p, m.index, color), opponentPattern = analyzeMove(p, m.index, opponent);
+            boolean tactical = patternTactical(ownPattern) || patternTactical(opponentPattern);
+            result.add(new Candidate(m.index, ownPattern, opponentPattern, tactical,
+                    moveOrderingScore(ownPattern, opponentPattern) + GEOMETRY.positionValues[m.index]));
         }
         return result;
     }
@@ -449,7 +443,7 @@ final class NativeGomokuAI {
         if (!valid(r, c)) return;
         int index = r * SIZE + c;
         if (!seen[index] && p.empty(index) && !p.forbidden[index]) {
-            seen[index] = true; list.add(new Candidate(index, null, null, false, GEOMETRY.positionValues[index]));
+            seen[index] = true; list.add(new Candidate(index, NO_PATTERN, NO_PATTERN, false, GEOMETRY.positionValues[index]));
         }
     }
 
@@ -471,17 +465,18 @@ final class NativeGomokuAI {
     private static void addRoot(Position p, List<Candidate> out, boolean[] seen, Candidate source, int color, int opponent) {
         int index = source.index;
         if (index < 0 || index >= p.board.length || !p.empty(index) || p.forbidden[index] || seen[index]) return;
-        Pattern own = analyzeMove(p, index, color), opp = analyzeMove(p, index, opponent);
-        boolean tactical = own.tactical() || opp.tactical();
-        double score = Double.isFinite(source.score) ? source.score : moveOrderingScore(own, opp) + GEOMETRY.positionValues[index];
-        out.add(new Candidate(index, own, opp, tactical, score)); seen[index] = true;
+        int ownPattern = analyzeMove(p, index, color), opponentPattern = analyzeMove(p, index, opponent);
+        boolean tactical = patternTactical(ownPattern) || patternTactical(opponentPattern);
+        double score = Double.isFinite(source.score) ? source.score :
+                moveOrderingScore(ownPattern, opponentPattern) + GEOMETRY.positionValues[index];
+        out.add(new Candidate(index, ownPattern, opponentPattern, tactical, score)); seen[index] = true;
     }
 
     private static List<Candidate> winningMoves(Position p, int color, int limit) {
         List<Candidate> wins = new ArrayList<>(4);
         for (int index = 0; index < p.board.length; index++) {
             if (p.empty(index) && !p.forbidden[index] && winsAt(p, index, color)) {
-                wins.add(new Candidate(index, null, null, true, WIN));
+                wins.add(new Candidate(index, NO_PATTERN, NO_PATTERN, true, WIN));
             }
         }
         return wins;
@@ -517,10 +512,10 @@ final class NativeGomokuAI {
     private static void addThreatRoot(Position p, Map<Integer, Candidate> roots, Candidate source, int color) {
         if (source == null || !p.empty(source.index) || p.forbidden[source.index] || roots.containsKey(source.index)) return;
         int opponent = color == BLACK ? WHITE : BLACK;
-        Pattern own = analyzeMove(p, source.index, color), opp = analyzeMove(p, source.index, opponent);
-        if (!(own.tactical() || opp.tactical())) return;
-        roots.put(source.index, new Candidate(source.index, own, opp, true,
-                Double.isFinite(source.score) ? source.score : moveOrderingScore(own, opp)));
+        int ownPattern = analyzeMove(p, source.index, color), opponentPattern = analyzeMove(p, source.index, opponent);
+        if (!(patternTactical(ownPattern) || patternTactical(opponentPattern))) return;
+        roots.put(source.index, new Candidate(source.index, ownPattern, opponentPattern, true,
+                Double.isFinite(source.score) ? source.score : moveOrderingScore(ownPattern, opponentPattern)));
     }
 
     private static List<Candidate> forcingCandidates(Position p, int color) {
@@ -583,8 +578,8 @@ final class NativeGomokuAI {
         return new Candidate(index, analyzeMove(p, index, color), analyzeMove(p, index, color == BLACK ? WHITE : BLACK), true, 0);
     }
 
-    private static Pattern analyzeMove(Position p, int index, int color) {
-        if (index < 0 || index >= p.board.length || !p.empty(index)) return new Pattern(0, 0, 0, 0, 0, 0, Double.NEGATIVE_INFINITY);
+    private static int analyzeMove(Position p, int index, int color) {
+        if (index < 0 || index >= p.board.length || !p.empty(index)) return INVALID_PATTERN;
         int five = 0, openFour = 0, four = 0, openThree = 0, brokenThree = 0, openTwo = 0;
         int opponent = color == BLACK ? WHITE : BLACK;
         int base = index * 4 * LOCAL_LENGTH;
@@ -602,24 +597,50 @@ final class NativeGomokuAI {
             five += stats.five[code]; openFour += stats.openFour[code]; four += stats.four[code];
             openThree += stats.openThree[code]; brokenThree += stats.brokenThree[code]; openTwo += stats.openTwo[code];
         }
-        double score = five > 0 ? WIN : openFour > 0 ? OPEN_FOUR : four >= 2 ? FOUR * 7.0 :
-                four > 0 && openThree > 0 ? FOUR * 5.0 : openThree >= 2 ? DOUBLE_THREE :
-                        four > 0 ? FOUR : openThree > 0 ? OPEN_THREE : brokenThree > 0 ? BROKEN_THREE : openTwo > 0 ? OPEN_TWO : ONE;
-        return new Pattern(five, openFour, four, openThree, brokenThree, openTwo, score);
+        return packPattern(five, openFour, four, openThree, brokenThree, openTwo);
     }
 
-    private static double moveOrderingScore(Pattern own, Pattern opp) {
-        if (own.five > 0) return WIN;
-        if (opp.five > 0) return WIN * 0.92;
-        if (own.openFour > 0) return OPEN_FOUR;
-        if (opp.openFour > 0) return OPEN_FOUR * 0.9;
-        if (own.four >= 2) return FOUR * 7.0;
-        if (opp.four >= 2) return FOUR * 6.5;
-        if (own.four > 0 && own.openThree > 0) return FOUR * 5.0;
-        if (opp.four > 0 && opp.openThree > 0) return FOUR * 4.5;
-        if (own.openThree >= 2) return DOUBLE_THREE;
-        if (opp.openThree >= 2) return DOUBLE_THREE * 0.92;
-        return own.score * 1.18 + opp.score * 1.08;
+    private static int packPattern(int five, int openFour, int four, int openThree, int brokenThree, int openTwo) {
+        // Candidate generation touches many cells at every node; packing avoids two temporary Pattern objects per cell.
+        return five | (openFour << 5) | (four << 10) | (openThree << 15) | (brokenThree << 20) | (openTwo << 25);
+    }
+
+    private static int patternCount(int pattern, int shift) {
+        return pattern < 0 || pattern == INVALID_PATTERN ? 0 : (pattern >>> shift) & PATTERN_MASK;
+    }
+
+    private static boolean patternTactical(int pattern) {
+        return patternCount(pattern, 0) > 0 || patternCount(pattern, 5) > 0 ||
+                patternCount(pattern, 10) > 0 || patternCount(pattern, 15) > 0 ||
+                patternCount(pattern, 20) > 0;
+    }
+
+    private static double patternScore(int pattern) {
+        if (pattern == INVALID_PATTERN) return Double.NEGATIVE_INFINITY;
+        int five = patternCount(pattern, 0), openFour = patternCount(pattern, 5);
+        int four = patternCount(pattern, 10), openThree = patternCount(pattern, 15);
+        int brokenThree = patternCount(pattern, 20), openTwo = patternCount(pattern, 25);
+        return five > 0 ? WIN : openFour > 0 ? OPEN_FOUR : four >= 2 ? FOUR * 7.0 :
+                four > 0 && openThree > 0 ? FOUR * 5.0 : openThree >= 2 ? DOUBLE_THREE :
+                        four > 0 ? FOUR : openThree > 0 ? OPEN_THREE : brokenThree > 0 ? BROKEN_THREE : openTwo > 0 ? OPEN_TWO : ONE;
+    }
+
+    private static double moveOrderingScore(int own, int opponent) {
+        int ownFive = patternCount(own, 0), opponentFive = patternCount(opponent, 0);
+        int ownOpenFour = patternCount(own, 5), opponentOpenFour = patternCount(opponent, 5);
+        int ownFour = patternCount(own, 10), opponentFour = patternCount(opponent, 10);
+        int ownOpenThree = patternCount(own, 15), opponentOpenThree = patternCount(opponent, 15);
+        if (ownFive > 0) return WIN;
+        if (opponentFive > 0) return WIN * 0.92;
+        if (ownOpenFour > 0) return OPEN_FOUR;
+        if (opponentOpenFour > 0) return OPEN_FOUR * 0.9;
+        if (ownFour >= 2) return FOUR * 7.0;
+        if (opponentFour >= 2) return FOUR * 6.5;
+        if (ownFour > 0 && ownOpenThree > 0) return FOUR * 5.0;
+        if (opponentFour > 0 && opponentOpenThree > 0) return FOUR * 4.5;
+        if (ownOpenThree >= 2) return DOUBLE_THREE;
+        if (opponentOpenThree >= 2) return DOUBLE_THREE * 0.92;
+        return patternScore(own) * 1.18 + patternScore(opponent) * 1.08;
     }
 
     private static boolean hasFive(Position p, int index, int color) {
@@ -666,8 +687,8 @@ final class NativeGomokuAI {
         if (m.index == killer0) value += OPEN_FOUR;
         else if (m.index == killer1) value += FOUR;
         value += context.history[m.index];
-        if (m.own != null && m.own.five > 0) value += WIN;
-        if (m.opp != null && m.opp.five > 0) value += WIN * 0.96;
+        if (m.ownPattern != NO_PATTERN && patternCount(m.ownPattern, 0) > 0) value += WIN;
+        if (m.opponentPattern != NO_PATTERN && patternCount(m.opponentPattern, 0) > 0) value += WIN * 0.96;
         if (m.index == preferred) value += WIN * 2.0;
         return value;
     }
@@ -727,9 +748,8 @@ final class NativeGomokuAI {
             double score;
             if (hasFive(p, move.index, context.aiColor)) score = WIN - MATE_DISTANCE;
             else {
-                SearchResult child = search(p, depth - 1, alpha, Double.POSITIVE_INFINITY, context.opponent, context, 1);
-                if (child.aborted) { p.remove(move.index, context.aiColor); return child; }
-                score = child.score;
+                score = search(p, depth - 1, alpha, Double.POSITIVE_INFINITY, context.opponent, context, 1);
+                if (context.aborted) { p.remove(move.index, context.aiColor); return new SearchResult(0, null, true); }
             }
             p.remove(move.index, context.aiColor);
             if (score > bestScore) { bestScore = score; bestMove = move; }
@@ -738,38 +758,37 @@ final class NativeGomokuAI {
         return new SearchResult(bestScore, bestMove, false);
     }
 
-    private static SearchResult search(Position p, int depth, double alpha, double beta, int turn, Context context, int ply) {
+    private static double search(Position p, int depth, double alpha, double beta, int turn, Context context, int ply) {
         context.nodes++;
-        if (System.nanoTime() >= context.deadline) return new SearchResult(0, null, true);
-        if (depth <= 0) return new SearchResult(evaluateLeaf(p, turn, context, ply), null, false);
+        if (System.nanoTime() >= context.deadline) { context.aborted = true; return 0; }
+        if (depth <= 0) return evaluateLeaf(p, turn, context, ply);
         double alphaStart = alpha, betaStart = beta;
         int key = context.table.key(p.hashA, p.hashB, turn);
         TTEntry cached = context.ttScratch;
         boolean hasCached = context.table.get(key, p.hashA, p.hashB, turn, cached);
         int ttMove = hasCached ? cached.move : -1;
         if (hasCached && cached.depth >= depth) {
-            if (cached.bound == 0) return new SearchResult(cached.score, cached.move < 0 ? null : candidateForIndex(p, cached.move, turn), false);
+            if (cached.bound == 0) return cached.score;
             if (cached.bound == 1) alpha = Math.max(alpha, cached.score);
             else if (cached.bound == 2) beta = Math.min(beta, cached.score);
-            if (alpha >= beta) return new SearchResult(cached.score, cached.move < 0 ? null : candidateForIndex(p, cached.move, turn), false);
+            if (alpha >= beta) return cached.score;
         }
         boolean maximizing = turn == context.aiColor;
         int limit = depth >= 4 ? 12 : depth >= 2 ? 18 : 24;
         List<Candidate> moves = candidates(p, turn, limit);
         sortMoves(moves, context, ply, -1, ttMove);
-        if (moves.isEmpty()) return new SearchResult(0, null, false);
+        if (moves.isEmpty()) return 0;
         double best = maximizing ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
         Candidate bestMove = null; boolean cutoff = false;
         int next = turn == BLACK ? WHITE : BLACK;
         for (Candidate move : moves) {
-            if (System.nanoTime() >= context.deadline) return new SearchResult(0, null, true);
+            if (System.nanoTime() >= context.deadline) { context.aborted = true; return 0; }
             if (!p.put(move.index, turn)) continue;
             double score;
             if (hasFive(p, move.index, turn)) score = maximizing ? WIN - ply * MATE_DISTANCE : -WIN + ply * MATE_DISTANCE;
             else {
-                SearchResult child = search(p, depth - 1, alpha, beta, next, context, ply + 1);
-                if (child.aborted) { p.remove(move.index, turn); return child; }
-                score = child.score;
+                score = search(p, depth - 1, alpha, beta, next, context, ply + 1);
+                if (context.aborted) { p.remove(move.index, turn); return 0; }
             }
             p.remove(move.index, turn);
             if (maximizing) { if (score > best) { best = score; bestMove = move; } alpha = Math.max(alpha, best); }
@@ -784,7 +803,7 @@ final class NativeGomokuAI {
             long value = (long) context.history[bestMove.index] + (long) depth * depth * 64;
             context.history[bestMove.index] = (int) Math.min(1_000_000L, value);
         }
-        return new SearchResult(best, bestMove, false);
+        return best;
     }
 
     private static double evaluateLeaf(Position p, int turnColor, Context context, int ply) {
