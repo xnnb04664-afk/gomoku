@@ -2697,8 +2697,8 @@
       onlineTransportGeneration++;
       clearOnlineReliableOutbox();
       onlineRoundId = '';
-      pendingOnlineUndoId = '';
-      activeOnlineUndoId = '';
+      clearPendingOnlineUndo();
+      clearActiveOnlineUndo();
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
       if (typeof closeUndoModal === 'function') closeUndoModal();
@@ -3029,6 +3029,7 @@
         if (data.by !== remoteColor || board[data.r][data.c] !== EMPTY) return false;
       } else if (data.type === "skill_remove_stone") {
         if (board[data.r][data.c] !== localColor) return false;
+        if (data.source !== undefined && data.source !== 'void_meteor' && data.source !== 'destiny_remove') return false;
       } else if (data.type === "skill_shift_stone") {
         if (data.p !== remoteColor || board[data.fromR][data.fromC] !== remoteColor || board[data.toR][data.toC] !== EMPTY) return false;
         if (Math.abs(data.fromR - data.toR) > 1 || Math.abs(data.fromC - data.toC) > 1) return false;
@@ -3118,7 +3119,7 @@
       if (data.currentDrawnCards !== undefined &&
           (!Array.isArray(data.currentDrawnCards) || data.currentDrawnCards.length !== 3 ||
            data.currentDrawnCards.some(card => !card || typeof card.id !== 'string' ||
-             !SKILL_CARD_POOL.some(localCard => localCard.id === card.id)))) return false;
+             (card.id !== 'shift_stone' && !SKILL_CARD_POOL.some(localCard => localCard.id === card.id))))) return false;
       for (const value of [data.p1Name, data.p2Name]) {
         if (value !== undefined && (typeof value !== 'string' || value.length > MAX_NETWORK_PROFILE_NAME_CHARS)) return false;
       }
@@ -3247,6 +3248,12 @@
           requestOnlineResync();
         } else if (message && message.type === 'chat') {
           showGameNotice("⚠️ 这条聊天暂未确认送达，请稍后重试", true);
+        } else if (message && message.type === 'undo_req' && message.requestId === pendingOnlineUndoId) {
+          clearPendingOnlineUndo(message.requestId);
+          showGameNotice("⚠️ 悔棋申请未送达好友，请检查网络后重试。", true);
+        } else if (message && message.type === 'undo_res') {
+          showGameNotice("⚠️ 悔棋结果暂未送达好友，正在重新对齐棋局…", true);
+          requestOnlineResync('悔棋结果未确认送达');
         }
       });
 
@@ -3310,8 +3317,8 @@
           onlineTransportGeneration++;
           clearOnlineReliableOutbox();
           onlineRoundId = '';
-          pendingOnlineUndoId = '';
-          activeOnlineUndoId = '';
+          clearPendingOnlineUndo();
+          clearActiveOnlineUndo();
           pendingOnlineRestartId = '';
           activeOnlineRestartId = '';
           if (typeof closeUndoModal === 'function') closeUndoModal();
@@ -3484,6 +3491,13 @@
           const incomingUndoId = typeof data.requestId === 'string' && data.requestId ? data.requestId : generateSecureId(10, 'undo_');
           if (activeOnlineUndoId) return;
           activeOnlineUndoId = incomingUndoId;
+          activeOnlineUndoTimer = setTimeout(() => {
+            if (activeOnlineUndoId !== incomingUndoId) return;
+            clearActiveOnlineUndo(incomingUndoId);
+            if (conn && conn.open) conn.send({ type: 'undo_res', agree: false, requestId: incomingUndoId });
+            if (typeof closeUndoModal === 'function') closeUndoModal();
+            showGameNotice("⏳ 悔棋申请已超时，对局保持不变。", true);
+          }, 25000);
           if (isOver || data.wasOver) {
             undoDescText.textContent = "对方发起了终局悔棋申请，是否同意撤回决胜落子继续对战？";
           } else {
@@ -3492,11 +3506,11 @@
           document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
           document.getElementById('btnUndoRefuse').style.display = "block";
           if (typeof closeGameResultModal === 'function') closeGameResultModal();
-          undoModal.classList.add('show');
+          showUndoModal();
         } else if (data.type === 'undo_res') {
           if (!pendingOnlineUndoId) return;
           if (pendingOnlineUndoId && data.requestId && data.requestId !== pendingOnlineUndoId) return;
-          pendingOnlineUndoId = '';
+          clearPendingOnlineUndo(data.requestId || pendingOnlineUndoId);
           if (!validateIncomingUndoState(data)) {
             console.warn('[undo_res] 拦截结构非法的悔棋响应');
             return;
@@ -3647,6 +3661,8 @@
           showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
         } else if (data.type === 'skill_remove_stone') {
           const removedP = board[data.r][data.c];
+          const isDestinyRemove = data.source === 'destiny_remove';
+          const isVoidMeteor = data.source === 'void_meteor';
           board[data.r][data.c] = EMPTY;
           history.push({
             action: 'remove_stone',
@@ -3655,12 +3671,13 @@
             c: data.c,
             p: removedP !== EMPTY ? removedP : myOnlineColor,
             by: (myOnlineColor === BLACK ? WHITE : BLACK),
-            desc: '虚空陨石'
+            desc: isDestinyRemove ? '精准爆破' : '虚空陨石'
           });
+          if (isVoidMeteor) playSkillSound('meteor');
           draw();
           updateUI();
           persistGameState();
-          alert(`💥 对方发动了【虚空陨石】！抹除了您在 (${data.r+1}, ${data.c+1}) 的棋子！`);
+          alert(`💥 对方发动了【${isDestinyRemove ? '精准爆破' : '虚空陨石'}】！抹除了您在 (${data.r+1}, ${data.c+1}) 的棋子！`);
         } else if (data.type === 'skill_shift_stone') {
           board[data.fromR][data.fromC] = EMPTY;
           board[data.toR][data.toC] = data.p;

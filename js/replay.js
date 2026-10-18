@@ -465,17 +465,35 @@
     window.openCurrentGameReplay = openCurrentGameReplay;
     window.openFriendMatchReplay = openFriendMatchReplay;
 
+    function replaceLocalHistoryFromCloud(uid, remoteRecords) {
+      if (!hasRegisteredAccountSession() || String(currentUserUid || '') !== String(uid || '')) return false;
+      const key = getHistoryStorageKey();
+      if (typeof window.mergePendingGomokuHistoryRecords === 'function') {
+        window.mergePendingGomokuHistoryRecords(uid, remoteRecords);
+      } else {
+        let localRecords = [];
+        try {
+          const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+          if (Array.isArray(parsed)) localRecords = parsed;
+        } catch (_) {}
+        const pending = localRecords.filter(item => item && item.cloudSyncStatus === 'pending' && item.clientRecordId);
+        const pendingIds = new Set(pending.map(item => String(item.clientRecordId)));
+        localStorage.setItem(key, JSON.stringify([...pending, ...remoteRecords.filter(item => !pendingIds.has(String(item?.clientRecordId || '')))]));
+      }
+      renderHistoryUI();
+      updateHistoryCountUI();
+      return true;
+    }
+
     // 云端战绩以 ECS 主库为准 (登录即拉取、换手机找回，仅限正式账号)
     async function syncCloudHistory() {
       if (!hasRegisteredAccountSession()) return;
+      const requestedUid = String(currentUserUid);
       try {
-        const res = await safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`, { primaryOnly: true });
+        const res = await safeApiFetch(`/api/history/list?uid=${encodeURIComponent(requestedUid)}`, { primaryOnly: true });
         const json = await res.json();
         if (json.code === 0 && Array.isArray(json.data)) {
-          const key = getHistoryStorageKey();
-          localStorage.setItem(key, JSON.stringify(json.data));
-          renderHistoryUI();
-          updateHistoryCountUI();
+          replaceLocalHistoryFromCloud(requestedUid, json.data);
         }
       } catch(e) {}
     }
@@ -489,15 +507,11 @@
 
       // 每次打开历史弹窗时从 ECS 主库拉取最新战报（仅限正式账号）
       if (hasRegisteredAccountSession()) {
-        safeApiFetch(`/api/history/list?uid=${encodeURIComponent(currentUserUid)}`, { primaryOnly: true })
+        const requestedUid = String(currentUserUid);
+        safeApiFetch(`/api/history/list?uid=${encodeURIComponent(requestedUid)}`, { primaryOnly: true })
           .then(res => res.json())
           .then(json => {
-            if (json.code === 0 && Array.isArray(json.data) && json.data.length > 0) {
-              const key = getHistoryStorageKey();
-              localStorage.setItem(key, JSON.stringify(json.data));
-              renderHistoryUI();
-              updateHistoryCountUI();
-            }
+            if (json.code === 0 && Array.isArray(json.data)) replaceLocalHistoryFromCloud(requestedUid, json.data);
           }).catch(() => {});
       }
     }
@@ -509,22 +523,34 @@
 
     function clearGameHistory() {
       showCustomConfirm("确定要清空历史对局记录吗？\n（本地与云端数据库将彻底双向同步清空）", async () => {
-        const key = getHistoryStorageKey();
-        localStorage.removeItem(key);
-        renderHistoryUI();
-        updateHistoryCountUI();
+        const pauseUploads = window.pauseGomokuHistoryUploads;
+        const resumeUploads = window.resumeGomokuHistoryUploads;
+        if (typeof pauseUploads === 'function') await pauseUploads();
+        try {
+          const key = getHistoryStorageKey();
+          localStorage.removeItem(key);
+          renderHistoryUI();
+          updateHistoryCountUI();
 
-        // ☁️ 云端数据库同步清空（确保下次打开绝不会从云端复活）
-        if (hasRegisteredAccountSession()) {
-          try {
-            await safeApiFetch("/api/history/clear", {
+          // 等待在途上传结束后再清云端，防止旧 pending 重试把已清除记录写回来。
+          if (hasRegisteredAccountSession()) {
+            const response = await safeApiFetch("/api/history/clear", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ uid: currentUserUid })
+              body: JSON.stringify({ uid: currentUserUid }),
+              primaryOnly: true
             });
-          } catch(e) {}
+            const result = await response.json().catch(() => null);
+            if (!response.ok || !result || result.code !== 0) {
+              throw new Error(result?.msg || `HTTP ${response.status}`);
+            }
+          }
+          showGameNotice("🗑️ 历史对局记录已在本地与云端彻底同步清空！");
+        } catch (error) {
+          showGameNotice(`本地记录已清除，但云端同步失败：${error.message || '请检查网络后重试'}`, true);
+        } finally {
+          if (typeof resumeUploads === 'function') resumeUploads();
         }
-        showGameNotice("🗑️ 历史对局记录已在本地与云端彻底同步清空！");
       }, null, { title: '清空战绩 (双向同步)', icon: '🗑️', okText: '确认彻底清空', cancelText: '取消' });
     }
 

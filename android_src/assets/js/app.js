@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.144';
+    const CURRENT_VERSION_TAG = 'v1.0.145';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -162,7 +162,9 @@
     let onlineHeartbeatTimer = null;
     const pendingOnlinePings = new Map();
     let pendingOnlineUndoId = '';
+    let pendingOnlineUndoTimer = null;
     let activeOnlineUndoId = '';
+    let activeOnlineUndoTimer = null;
     let pendingOnlineRestartId = '';
     let activeOnlineRestartId = '';
 
@@ -210,17 +212,6 @@
         sweetDesc: '请喝奶茶！拿掉宝贝一颗孤子~',
         needTarget: true,
         targetType: 'enemy_stone'
-      },
-      {
-        id: 'shift_stone',
-        name: '移星换斗',
-        sweetName: '偷心盗贼 💘',
-        icon: '🌟',
-        sweetIcon: '💘',
-        desc: '将己方一子平移到相邻空格',
-        sweetDesc: '把己方一子平移到相邻空格~',
-        needTarget: true,
-        targetType: 'shift'
       },
       {
         id: 'prophecy_block',
@@ -293,6 +284,34 @@
     function cloneSkillCardState(cards) {
       if (!Array.isArray(cards)) return [];
       return cards.map(card => (card && typeof card === 'object') ? { ...card } : card);
+    }
+
+    // 旧版存档可能仍带有已退役卡牌。替换成已用状态的普通牌，保留三槽存档结构且不额外赠送可用技能。
+    function normalizeSkillCardState(cards, usedStatus) {
+      const statuses = Array.isArray(usedStatus) && usedStatus.length === 3
+        ? usedStatus.map(value => value === true)
+        : [false, false, false];
+      if (!Array.isArray(cards) || cards.length !== 3) {
+        return { cards: cloneSkillCardState(cards), usedStatus: statuses };
+      }
+
+      const restoredCards = new Array(3);
+      const assignedIds = new Set();
+      for (let i = 0; i < 3; i++) {
+        const savedId = cards[i] && typeof cards[i].id === 'string' ? cards[i].id : '';
+        const localCard = SKILL_CARD_POOL.find(card => card.id === savedId);
+        if (localCard && !assignedIds.has(localCard.id)) {
+          restoredCards[i] = localCard;
+          assignedIds.add(localCard.id);
+          continue;
+        }
+
+        const replacement = SKILL_CARD_POOL.find(card => !assignedIds.has(card.id)) || SKILL_CARD_POOL[i % SKILL_CARD_POOL.length];
+        restoredCards[i] = replacement;
+        if (replacement) assignedIds.add(replacement.id);
+        statuses[i] = true;
+      }
+      return { cards: restoredCards, usedStatus: statuses };
     }
 
     function saveUndoSnapshot(type, metadata = {}) {
@@ -2270,9 +2289,6 @@
       } else if (card.id === 'remove_stone') {
         text.textContent = `💥 请在棋盘上点击要抹除的对方孤子`;
         showSkillBanner('💥', '【虚空陨石】使用说明', '点击对方场上任意 1 颗孤子！将其从棋盘上彻底抹除蒸发！');
-      } else if (card.id === 'shift_stone') {
-        text.textContent = `🌟 第1步：点击己方一颗要平移的棋子`;
-        showSkillBanner('🌟', '【移星换斗】使用说明', '第1步选择己方1颗棋子，第2步点击相邻8方向空格即可平移！');
       } else if (card.id === 'swap_color') {
         text.textContent = `🎭 请在棋盘上点击要策反的对方棋子`;
         showSkillBanner('🎭', '【偷天换日】使用说明', '点击对方场上任意 1 颗棋子！直接策反翻成你的颜色！');
@@ -2358,57 +2374,10 @@
         markCardUsed(slotIdx);
         triggerSkillVFX('remove_stone', row, col);
         triggerBoardShake();
-        playSkillSound('boom');
+        playSkillSound('meteor');
         showSkillBanner('💥', `【${skillName}】发动！`, `成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
         if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_remove_stone', r: row, c: col });
-        }
-      } else if (skill.id === 'shift_stone') {
-        if (activeSkill.step === 1) {
-          if (board[row][col] !== myColor) {
-            return invalidAction("🌟 请选择己方的棋子进行平移！", row, col);
-          }
-          activeSkill.step = 2;
-          activeSkill.srcR = row;
-          activeSkill.srcC = col;
-          const text = document.getElementById('skillPromptText');
-          if (text) text.textContent = `🌟 第2步：请点击相邻的空白位置 (八方向距离1)`;
-          draw();
-        } else if (activeSkill.step === 2) {
-          if (board[row][col] !== EMPTY) {
-            return invalidAction("🌟 目标点必须是空白位置！", row, col);
-          }
-          const dr = Math.abs(row - activeSkill.srcR);
-          const dc = Math.abs(col - activeSkill.srcC);
-          if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) {
-            return invalidAction("🌟 只能平移到相邻的 8 个方向空格之一！", row, col);
-          }
-          saveUndoSnapshot('skill', { slotIdx, skillId: 'shift_stone', player: myColor });
-          const sR = activeSkill.srcR, sC = activeSkill.srcC;
-          board[sR][sC] = EMPTY;
-          board[row][col] = myColor;
-          history.push({
-            action: 'shift_stone',
-            type: 'skill_shift_stone',
-            fromR: sR,
-            fromC: sC,
-            toR: row,
-            toC: col,
-            r: row,
-            c: col,
-            p: myColor,
-            desc: '移星换斗'
-          });
-          markCardUsed(slotIdx);
-          triggerSkillVFX('shift_stone', row, col, sR, sC);
-          playSkillSound('magic');
-          showSkillBanner('🌟', `【${skillName}】发动！`, `棋子平移至 (${row+1}, ${col+1})！`);
-          if (gameMode === 'online' && conn && conn.open) {
-            conn.send({ type: 'skill_shift_stone', fromR: sR, fromC: sC, toR: row, toC: col, p: myColor });
-          }
-          if (checkWin(row, col, myColor)) {
-            triggerGameEnd(myColor);
-          }
+          conn.send({ type: 'skill_remove_stone', r: row, c: col, source: 'void_meteor' });
         }
       } else if (skill.id === 'swap_color') {
         if (board[row][col] !== enemyColor) {
@@ -2500,7 +2469,7 @@
         showSkillBanner('💥', '【精准爆破】发动！', `成功抹除对方位于 (${row+1}, ${col+1}) 的棋子！`);
         draw(); updateUI(); persistGameState();
         if (gameMode === 'online' && conn && conn.open) {
-          conn.send({ type: 'skill_remove_stone', r: row, c: col });
+          conn.send({ type: 'skill_remove_stone', r: row, c: col, source: 'destiny_remove' });
         }
       } else if (skill.id === 'destiny_convert') {
         if (board[row][col] !== enemyColor) {
@@ -3372,8 +3341,60 @@
           burst.connect(bGain); bGain.connect(getGameSoundOutput());
           burst.start(t + 0.18); burst.stop(t + 0.46);
 
+        } else if (type === 'meteor') {
+          // 💥 虚空陨石：星尘下坠的气流、柔和低频撞击和清亮碎光尾音。
+          const sweepLength = 0.38;
+          const sweepBuffer = actx.createBuffer(1, Math.floor(actx.sampleRate * sweepLength), actx.sampleRate);
+          const sweepData = sweepBuffer.getChannelData(0);
+          for (let i = 0; i < sweepData.length; i++) sweepData[i] = Math.random() * 2 - 1;
+          const sweep = actx.createBufferSource();
+          sweep.buffer = sweepBuffer;
+          const sweepFilter = actx.createBiquadFilter();
+          sweepFilter.type = 'bandpass';
+          sweepFilter.Q.setValueAtTime(0.8, t);
+          sweepFilter.frequency.setValueAtTime(1800, t);
+          sweepFilter.frequency.exponentialRampToValueAtTime(420, t + sweepLength);
+          const sweepGain = actx.createGain();
+          sweepGain.gain.setValueAtTime(0.001, t);
+          sweepGain.gain.linearRampToValueAtTime(0.18, t + 0.045);
+          sweepGain.gain.exponentialRampToValueAtTime(0.001, t + sweepLength);
+          sweep.connect(sweepFilter);
+          sweepFilter.connect(sweepGain);
+          sweepGain.connect(getGameSoundOutput());
+          sweep.start(t);
+          sweep.stop(t + sweepLength + 0.01);
+
+          const impact = actx.createOscillator();
+          const impactGain = actx.createGain();
+          impact.type = 'sine';
+          impact.frequency.setValueAtTime(210, t + 0.055);
+          impact.frequency.exponentialRampToValueAtTime(58, t + 0.34);
+          impactGain.gain.setValueAtTime(0.32, t + 0.055);
+          impactGain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+          impact.connect(impactGain);
+          impactGain.connect(getGameSoundOutput());
+          impact.start(t + 0.055);
+          impact.stop(t + 0.39);
+
+          [
+            { frequency: 1174.66, offset: 0.19 },
+            { frequency: 783.99, offset: 0.27 }
+          ].forEach(({ frequency, offset }) => {
+            const glint = actx.createOscillator();
+            const glintGain = actx.createGain();
+            glint.type = 'sine';
+            glint.frequency.setValueAtTime(frequency, t + offset);
+            glint.frequency.exponentialRampToValueAtTime(frequency * 0.72, t + offset + 0.28);
+            glintGain.gain.setValueAtTime(0.13, t + offset);
+            glintGain.gain.exponentialRampToValueAtTime(0.001, t + offset + 0.3);
+            glint.connect(glintGain);
+            glintGain.connect(getGameSoundOutput());
+            glint.start(t + offset);
+            glint.stop(t + offset + 0.31);
+          });
+
         } else if (type === 'boom') {
-          // 💥 虚空陨石：重低音撞击+噪声冲击波，模拟陨石砸落
+          // 💥 命运骰爆炸效果：重低音撞击加噪声冲击波。
           // 撞击低频
           const osc = actx.createOscillator(); const gain = actx.createGain();
           osc.type = 'sawtooth';
@@ -3396,7 +3417,7 @@
           noise.start(t); noise.stop(t + 0.26);
 
         } else if (type === 'magic') {
-          // ✨ 移星换斗 / 迷雾遮天 / 偷天换日：魔法闪烁感
+          // ✨ 迷雾遮天 / 偷天换日：魔法闪烁感
           // 三颗星星依次闪烁（不同频率的短促正弦音）
           [880, 1108, 1320].forEach((freq, i) => {
             const osc = actx.createOscillator(); const gain = actx.createGain();
@@ -4219,7 +4240,15 @@
       updatePlayerHeaderUI();
       updateAccountUI();
       updateHistoryCountUI();
-      syncCloudHistory();
+      const historySyncUid = hasRegisteredAccountSession() ? String(currentUserUid) : '';
+      const historySyncTask = syncCloudHistory();
+      if (historySyncUid) {
+        Promise.resolve(historySyncTask).finally(() => {
+          if (hasRegisteredAccountSession() && String(currentUserUid) === historySyncUid) {
+            scheduleHistoryUploadRetry(0, true);
+          }
+        });
+      }
 
       // 双保险：写入 Android 原生持久化存储（不怕清缓存、不怕杀后台）
       if (currentUsername && typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveUserLogin) {
@@ -4920,6 +4949,301 @@
       return (typeof currentUserUid !== "undefined" && currentUserUid) ? `gomoku_history_${currentUserUid}` : "gomoku_game_history_guest";
     }
 
+    const HISTORY_RECORD_LOCAL_LIMIT = 30;
+    const HISTORY_UPLOAD_RECOVERY_MIN_INTERVAL_MS = 10000;
+    const HISTORY_UPLOAD_BACKOFF_MS = Object.freeze([15000, 30000, 60000, 120000, 300000, 900000, 1800000]);
+    let historyRecordIdCounter = 0;
+    let historyUploadRetryTimer = null;
+    let historyUploadRetryDueAt = 0;
+    let historyUploadDrainPromise = null;
+    let historyUploadForceWake = false;
+    let historyUploadPaused = false;
+
+    function createClientHistoryRecordId() {
+      const cryptoApi = typeof globalThis !== 'undefined' ? globalThis.crypto : null;
+      if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+        try { return `rec_${cryptoApi.randomUUID()}`; } catch (_) {}
+      }
+      let randomPart = '';
+      if (cryptoApi && typeof cryptoApi.getRandomValues === 'function') {
+        try {
+          const values = new Uint32Array(3);
+          cryptoApi.getRandomValues(values);
+          randomPart = Array.from(values, value => value.toString(36)).join('');
+        } catch (_) {}
+      }
+      if (!randomPart) randomPart = `${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+      historyRecordIdCounter = (historyRecordIdCounter + 1) % 0x7fffffff;
+      return `rec_${Date.now().toString(36)}_${historyRecordIdCounter.toString(36)}_${randomPart}`;
+    }
+
+    function getAccountHistoryStorageKey(uid) {
+      const cleanUid = String(uid || '').trim();
+      return cleanUid && !cleanUid.startsWith('guest_') ? `gomoku_history_${cleanUid}` : '';
+    }
+
+    function readHistoryListByKey(key) {
+      if (!key) return [];
+      try {
+        const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+        return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function readHistoryListForUid(uid) {
+      return readHistoryListByKey(getAccountHistoryStorageKey(uid));
+    }
+
+    // Pending 项是本地 outbox，不能被数量上限裁掉；只从最旧端裁剪已同步/旧格式记录。
+    function trimHistoryList(list) {
+      const result = Array.isArray(list) ? list.slice() : [];
+      while (result.length > HISTORY_RECORD_LOCAL_LIMIT) {
+        let removableIndex = -1;
+        for (let i = result.length - 1; i >= 0; i--) {
+          if (result[i]?.cloudSyncStatus !== 'pending') {
+            removableIndex = i;
+            break;
+          }
+        }
+        if (removableIndex < 0) break;
+        result.splice(removableIndex, 1);
+      }
+      return result;
+    }
+
+    function writeHistoryListByKey(key, list) {
+      if (!key) return false;
+      try {
+        localStorage.setItem(key, JSON.stringify(trimHistoryList(list)));
+        return true;
+      } catch (error) {
+        console.warn('本地对局记录保存失败，未提交云端上传:', error);
+        return false;
+      }
+    }
+
+    function updateHistoryRecordById(uid, clientRecordId, updateRecord) {
+      const key = getAccountHistoryStorageKey(uid);
+      if (!key || typeof updateRecord !== 'function') return false;
+      const list = readHistoryListByKey(key);
+      const index = list.findIndex(item => String(item.clientRecordId || '') === String(clientRecordId));
+      if (index < 0) return false;
+      list[index] = updateRecord(list[index]);
+      const saved = writeHistoryListByKey(key, list);
+      if (saved && String(currentUserUid || '') === String(uid || '')) updateHistoryCountUI();
+      return saved;
+    }
+
+    function getPendingHistoryRecords(uid) {
+      return readHistoryListForUid(uid).filter(item => item.cloudSyncStatus === 'pending' && item.clientRecordId);
+    }
+
+    // 供延迟加载的棋谱模块在云端刷新后合并本地 outbox，确保 pending 项不会被 ECS 列表覆盖。
+    function mergePendingHistoryRecords(uid, remoteRecords, preservedPending = []) {
+      const cleanUid = String(uid || '');
+      const key = getAccountHistoryStorageKey(cleanUid);
+      if (!key) return [];
+      const currentRecords = readHistoryListByKey(key);
+      // A history-clear request pauses writes; ignore any cloud list response
+      // that was already in flight so it cannot repopulate the cleared view.
+      if (historyUploadPaused) return currentRecords;
+      const remoteList = Array.isArray(remoteRecords)
+        ? remoteRecords.filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        : [];
+      const preservedById = new Map();
+      const currentById = new Map(currentRecords.map(item => [String(item?.clientRecordId || ''), item]));
+      for (const item of currentRecords) {
+        const id = String(item?.clientRecordId || '');
+        if (id && item.cloudSyncStatus === 'pending') preservedById.set(id, item);
+      }
+      // Preserve pending rows captured before the cloud request. If one finished uploading
+      // while that request was in flight, keep its current synced copy for this refresh.
+      for (const item of Array.isArray(preservedPending) ? preservedPending : []) {
+        const id = String(item?.clientRecordId || '');
+        if (!id || item.cloudSyncStatus !== 'pending') continue;
+        const current = currentById.get(id);
+        if (current?.cloudSyncStatus === 'synced' || current?.cloudSyncStatus === 'pending') {
+          preservedById.set(id, current);
+        } else {
+          preservedById.set(id, item);
+        }
+      }
+      const preserved = Array.from(preservedById.values());
+      const preservedIds = new Set(preserved.map(item => String(item.clientRecordId || '')));
+      const remoteIds = new Set();
+      const uniqueRemote = remoteList.filter(item => {
+        const id = String(item?.clientRecordId || '');
+        if (!id) return true;
+        if (preservedIds.has(id) || remoteIds.has(id)) return false;
+        remoteIds.add(id);
+        return true;
+      });
+      const merged = [...preserved, ...uniqueRemote];
+      if (writeHistoryListByKey(key, merged) && String(currentUserUid || '') === cleanUid) updateHistoryCountUI();
+      return merged;
+    }
+
+    window.mergePendingGomokuHistoryRecords = mergePendingHistoryRecords;
+
+    window.pauseGomokuHistoryUploads = async function pauseGomokuHistoryUploads() {
+      historyUploadPaused = true;
+      if (historyUploadDrainPromise) {
+        try { await historyUploadDrainPromise; } catch (_) {}
+      }
+    };
+    window.resumeGomokuHistoryUploads = function resumeGomokuHistoryUploads() {
+      historyUploadPaused = false;
+      scheduleHistoryUploadRetry(0, true);
+    };
+
+    function historyUploadDelayForAttempt(attemptCount) {
+      return HISTORY_UPLOAD_BACKOFF_MS[Math.max(0, Math.min(HISTORY_UPLOAD_BACKOFF_MS.length - 1, attemptCount - 1))];
+    }
+
+    function scheduleHistoryUploadRetry(delayMs = 0, allowEarlyRetry = false) {
+      historyUploadForceWake = historyUploadForceWake || allowEarlyRetry;
+      const delay = Math.max(0, Math.min(2147480000, Number(delayMs) || 0));
+      if (historyUploadRetryTimer !== null) {
+        const requestedDueAt = Date.now() + delay;
+        if (requestedDueAt >= historyUploadRetryDueAt) return;
+        clearTimeout(historyUploadRetryTimer);
+      }
+      historyUploadRetryDueAt = Date.now() + delay;
+      historyUploadRetryTimer = setTimeout(() => {
+        historyUploadRetryTimer = null;
+        historyUploadRetryDueAt = 0;
+        const force = historyUploadForceWake;
+        historyUploadForceWake = false;
+        flushPendingHistoryUploads(force).catch(error => console.warn('对局记录上传队列处理失败:', error));
+      }, delay);
+    }
+
+    function scheduleNextHistoryUploadRetry(uid) {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const pending = getPendingHistoryRecords(uid);
+      if (!pending.length) return;
+      const now = Date.now();
+      const nextAt = pending.reduce((earliest, item) => {
+        const retryAt = Math.max(0, Number(item.cloudSyncNextAttemptAt) || 0);
+        return Math.min(earliest, retryAt || now);
+      }, Number.POSITIVE_INFINITY);
+      scheduleHistoryUploadRetry(Math.max(1000, nextAt - now));
+    }
+
+    async function postHistoryRecord(uid, clientRecordId) {
+      const key = getAccountHistoryStorageKey(uid);
+      const list = readHistoryListByKey(key);
+      const recordIndex = list.findIndex(item => String(item.clientRecordId || '') === String(clientRecordId));
+      if (recordIndex < 0 || list[recordIndex].cloudSyncStatus !== 'pending') return false;
+
+      const record = list[recordIndex];
+      const now = Date.now();
+      const attempts = Math.max(0, Number(record.cloudSyncAttempts) || 0) + 1;
+      const nextAttemptAt = now + historyUploadDelayForAttempt(attempts);
+      list[recordIndex] = {
+        ...record,
+        cloudSyncAttempts: attempts,
+        cloudSyncLastAttemptAt: now,
+        cloudSyncNextAttemptAt: nextAttemptAt
+      };
+      // 先持久化尝试时间，再发请求；进程被杀时也会按退避时间恢复。
+      if (!writeHistoryListByKey(key, list)) return null;
+
+      if (!hasRegisteredAccountSession() || String(currentUserUid || '') !== String(uid || '')) return false;
+      const body = {
+        uid: String(uid),
+        clientRecordId: String(clientRecordId),
+        mode: record.mode,
+        isWin: record.isWin,
+        isDraw: record.isDraw,
+        winnerColor: record.winnerColor,
+        myColor: record.myColor,
+        oppName: record.oppName,
+        oppAvatar: record.oppAvatar,
+        moves: record.moves,
+        movesData: record.movesData,
+        boardData: record.boardData,
+        time: record.time,
+        date: record.date
+      };
+
+      try {
+        const response = await safeApiFetch('/api/history/record', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          primaryOnly: true,
+          timeoutMs: 10000
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result || result.code !== 0) return false;
+        return updateHistoryRecordById(uid, clientRecordId, latest => {
+          const synced = { ...latest, cloudSyncStatus: 'synced', cloudSyncAt: Date.now() };
+          delete synced.cloudSyncNextAttemptAt;
+          return synced;
+        });
+      } catch (_) {
+        // 保持 pending；下次 online/前台恢复或退避计时器会使用同一个 clientRecordId 重试。
+        return false;
+      }
+    }
+
+    async function flushPendingHistoryUploads(allowEarlyRetry = false) {
+      if (historyUploadDrainPromise) {
+        historyUploadForceWake = historyUploadForceWake || allowEarlyRetry;
+        return historyUploadDrainPromise;
+      }
+      historyUploadDrainPromise = (async () => {
+        if (historyUploadPaused) return;
+        if (!hasRegisteredAccountSession()) return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+        const uid = String(currentUserUid || '');
+        if (!getAccountHistoryStorageKey(uid)) return;
+        const pending = getPendingHistoryRecords(uid);
+        for (const item of pending) {
+          if (historyUploadPaused) break;
+          if (!hasRegisteredAccountSession() || String(currentUserUid || '') !== uid) break;
+          if (typeof document !== 'undefined' && document.hidden) break;
+          if (typeof navigator !== 'undefined' && navigator.onLine === false) break;
+          const now = Date.now();
+          const lastAttemptAt = Math.max(0, Number(item.cloudSyncLastAttemptAt) || 0);
+          const nextAttemptAt = Math.max(0, Number(item.cloudSyncNextAttemptAt) || 0);
+          const isDue = !nextAttemptAt || nextAttemptAt <= now;
+          const recovered = allowEarlyRetry && (!lastAttemptAt || now - lastAttemptAt >= HISTORY_UPLOAD_RECOVERY_MIN_INTERVAL_MS);
+          if (!isDue && !recovered) continue;
+          const posted = await postHistoryRecord(uid, item.clientRecordId);
+          if (posted === null) {
+            // 本地存储故障时不继续高频轮询；之后仍可由计时器或前台恢复事件重试。
+            scheduleHistoryUploadRetry(30000);
+            return;
+          }
+        }
+        scheduleNextHistoryUploadRetry(uid);
+      })();
+      try {
+        await historyUploadDrainPromise;
+      } finally {
+        historyUploadDrainPromise = null;
+        if (historyUploadForceWake) {
+          historyUploadForceWake = false;
+          scheduleHistoryUploadRetry(0, true);
+        }
+      }
+    }
+
+    if (typeof window !== 'undefined' && !window.__gomokuHistoryOutboxListenersBound) {
+      window.__gomokuHistoryOutboxListenersBound = true;
+      window.addEventListener('online', () => scheduleHistoryUploadRetry(1000, true));
+      window.addEventListener('pageshow', () => scheduleHistoryUploadRetry(1500, true));
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) scheduleHistoryUploadRetry(500, true);
+      });
+    }
+
     // 🏆 终局战报待确认缓存机制 (确认结果后才真正落库保存，悔棋继续对弈则作废不计入战绩)
     let pendingMatchRecord = null;
     let pendingRecordCommitted = false;
@@ -4952,24 +5276,28 @@
 
     function recordGameHistory(item) {
       try {
-        const key = getHistoryStorageKey();
-        let list = JSON.parse(localStorage.getItem(key) || "[]");
-        list.unshift(item);
-        if (list.length > 30) list = list.slice(0, 30);
-        localStorage.setItem(key, JSON.stringify(list));
-        updateHistoryCountUI();
-
-        // 实时异步备份到 ECS 主数据库（仅限正式账号）
-        if (hasRegisteredAccountSession()) {
-          safeApiFetch('/api/history/record', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: currentUserUid,
-              ...item
-            })
-          }).catch(() => {});
+        const accountUid = getAccountHistoryStorageKey(currentUserUid) ? String(currentUserUid) : '';
+        const key = accountUid ? getAccountHistoryStorageKey(accountUid) : getHistoryStorageKey();
+        const list = readHistoryListByKey(key);
+        const record = {
+          ...item,
+          clientRecordId: item?.clientRecordId || createClientHistoryRecordId()
+        };
+        if (accountUid) {
+          record.cloudSyncStatus = 'pending';
+          record.cloudSyncAttempts = 0;
+          record.cloudSyncLastAttemptAt = 0;
+          record.cloudSyncNextAttemptAt = 0;
         }
+        if (list.some(existing => String(existing.clientRecordId || '') === String(record.clientRecordId))) {
+          if (accountUid) scheduleHistoryUploadRetry(0, true);
+          return;
+        }
+        list.unshift(record);
+        // 本地写入成功才允许请求 ECS，确保进程退出后仍可从账号专属记录恢复。
+        if (!writeHistoryListByKey(key, list)) return;
+        updateHistoryCountUI();
+        if (accountUid) scheduleHistoryUploadRetry(0, true);
       } catch(e) {}
     }
 
@@ -5269,10 +5597,18 @@
     }
     function syncCloudHistory() {
       const proxy = syncCloudHistory;
+      const uid = hasRegisteredAccountSession() ? String(currentUserUid) : '';
+      const pendingSnapshot = uid ? getPendingHistoryRecords(uid) : [];
       return ensureReplayFeature().then(() => {
         if (window.syncCloudHistory === proxy) return false;
-        return window.syncCloudHistory();
-      }).catch(() => false);
+        return Promise.resolve(window.syncCloudHistory()).then(result => {
+          if (uid) mergePendingHistoryRecords(uid, readHistoryListForUid(uid), pendingSnapshot);
+          return result;
+        });
+      }).catch(() => {
+        if (uid) mergePendingHistoryRecords(uid, readHistoryListForUid(uid), pendingSnapshot);
+        return false;
+      });
     }
 
     function triggerGameDraw(customDrawReason = '') {
@@ -6841,13 +7177,13 @@
         }
       }
 
-      // 4. 绘制【移星换斗】与【移形换影】选中的己方棋子高亮光环
-      if (activeSkill && (activeSkill.skill.id === 'shift_stone' || activeSkill.skill.id === 'swap_positions') && activeSkill.step === 2) {
+      // 4. 绘制【移形换影】选中的己方棋子高亮光环
+      if (activeSkill && activeSkill.skill.id === 'swap_positions' && activeSkill.step === 2) {
         const sx = paddingX + (activeSkill.srcC + 0.5) * gridX;
         const sy = paddingY + (activeSkill.srcR + 0.5) * gridY;
         ctx.save();
         ctx.beginPath(); ctx.arc(sx, sy, radius * 1.38, 0, Math.PI * 2);
-        ctx.strokeStyle = activeSkill.skill.id === 'swap_positions' ? '#d946ef' : '#facc15';
+        ctx.strokeStyle = '#d946ef';
         ctx.lineWidth = 3.5;
         ctx.setLineDash([5, 3]);
         ctx.stroke();
@@ -7269,8 +7605,8 @@
       onlineTransportGeneration++;
       clearOnlineReliableOutbox();
       onlineRoundId = '';
-      pendingOnlineUndoId = '';
-      activeOnlineUndoId = '';
+      clearPendingOnlineUndo();
+      clearActiveOnlineUndo();
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
       activeOnlineGuestUid = '';
@@ -7383,8 +7719,8 @@
       opponentReforgeUsed = false;
       board = Array.from({length: 15}, () => Array(15).fill(0));
       turn = BLACK; history = []; isOver = false; gameWinnerColor = 0; winningLine = null; gameResultIsDraw = false;
-      pendingOnlineUndoId = '';
-      activeOnlineUndoId = '';
+      clearPendingOnlineUndo();
+      clearActiveOnlineUndo();
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
       activeVFX = [];
@@ -7444,15 +7780,9 @@
       board = snap.board.map(r => [...r]);
       history = snap.history.map(h => ({ ...h }));
       turn = snap.turn;
-      currentDrawnCards = cloneSkillCardState(snap.currentDrawnCards).map(card =>
-        card && typeof card.id === 'string'
-          ? (SKILL_CARD_POOL.find(localCard => localCard.id === card.id) || card)
-          : card
-      );
-      if (currentDrawnCards.length !== 3) currentDrawnCards = cloneSkillCardState(currentDrawnCards);
-      cardUsedStatus = Array.isArray(snap.cardUsedStatus) && snap.cardUsedStatus.length === 3
-        ? snap.cardUsedStatus.map(value => value === true)
-        : [false, false, false];
+      const restoredSkillState = normalizeSkillCardState(snap.currentDrawnCards, snap.cardUsedStatus);
+      currentDrawnCards = restoredSkillState.cards;
+      cardUsedStatus = restoredSkillState.usedStatus;
       prophecyPoint = snap.prophecyPoint ? { ...snap.prophecyPoint } : null;
       hasExtraMove = snap.hasExtraMove || false;
       consecutiveMovesLeft = snap.consecutiveMovesLeft || 0;
@@ -7710,6 +8040,30 @@
     const undoModal = document.getElementById('undoModal');
     const undoDescText = document.getElementById('undoDescText');
 
+    function showUndoModal() {
+      if (!undoModal) return;
+      // closeUndoModal may have been called by the previous online room. Clear
+      // any legacy inline display:none before relying on the .show class.
+      undoModal.style.display = '';
+      undoModal.classList.add('show');
+    }
+
+    function clearPendingOnlineUndo(expectedRequestId = '') {
+      if (expectedRequestId && pendingOnlineUndoId && pendingOnlineUndoId !== expectedRequestId) return false;
+      if (pendingOnlineUndoTimer !== null) clearTimeout(pendingOnlineUndoTimer);
+      pendingOnlineUndoTimer = null;
+      pendingOnlineUndoId = '';
+      return true;
+    }
+
+    function clearActiveOnlineUndo(expectedRequestId = '') {
+      if (expectedRequestId && activeOnlineUndoId && activeOnlineUndoId !== expectedRequestId) return false;
+      if (activeOnlineUndoTimer !== null) clearTimeout(activeOnlineUndoTimer);
+      activeOnlineUndoTimer = null;
+      activeOnlineUndoId = '';
+      return true;
+    }
+
     document.getElementById('btnUndo').onclick = () => {
       if (history.length === 0 && undoStack.length === 0) {
         showGameNotice("棋盘上还没有棋子，无需悔棋~", false);
@@ -7734,7 +8088,7 @@
         } else {
           undoDescText.textContent = "正在向大师AI申请悔棋一步...";
         }
-        undoModal.classList.add('show');
+        showUndoModal();
         document.getElementById('btnUndoAgree').textContent = "确认悔棋";
         document.getElementById('btnUndoRefuse').style.display = "none";
       } else if (gameMode === 'online') {
@@ -7746,12 +8100,17 @@
           showGameNotice("⏳ 悔棋申请正在等待对方回应中，请稍候...", false);
           return;
         }
-        pendingOnlineUndoId = generateSecureId(10, 'undo_');
-        if (!conn.send({ type: 'undo_req', requestId: pendingOnlineUndoId, wasOver: isOver })) {
-          pendingOnlineUndoId = '';
+        const requestId = generateSecureId(10, 'undo_');
+        pendingOnlineUndoId = requestId;
+        if (!conn.send({ type: 'undo_req', requestId, wasOver: isOver })) {
+          clearPendingOnlineUndo(requestId);
           showGameNotice("⚠️ 悔棋申请发送失败，请检查联机状态后重试", true);
           return;
         }
+        pendingOnlineUndoTimer = setTimeout(() => {
+          if (!clearPendingOnlineUndo(requestId)) return;
+          showGameNotice("⏳ 等待好友回应悔棋申请超时，可以重新申请。", true);
+        }, 35000);
         showGameNotice(isOver ? "📡 已向联机好友发送终局悔棋申请，等待对方同意..." : "📡 已向联机好友发送悔棋申请，等待对方同意...", false);
       } else {
         const applicant = turn === BLACK ? `${p2Name} (白方)` : `${p1Name} (黑方)`;
@@ -7762,14 +8121,14 @@
         }
         document.getElementById('btnUndoAgree').textContent = "✅ 同意悔棋";
         document.getElementById('btnUndoRefuse').style.display = "block";
-        undoModal.classList.add('show');
+        showUndoModal();
       }
     };
 
     document.getElementById('btnUndoAgree').onclick = () => {
       undoModal.classList.remove('show');
       const acceptedUndoId = activeOnlineUndoId;
-      activeOnlineUndoId = '';
+      clearActiveOnlineUndo(acceptedUndoId);
       const undoApplied = doUndo();
       if (gameMode === 'online' && conn && conn.open) {
         if (!undoApplied) {
@@ -7792,7 +8151,7 @@
     document.getElementById('btnUndoRefuse').onclick = () => {
       undoModal.classList.remove('show');
       const refusedUndoId = activeOnlineUndoId;
-      activeOnlineUndoId = '';
+      clearActiveOnlineUndo(refusedUndoId);
       if (gameMode === 'online' && conn && conn.open) {
         conn.send({ type: 'undo_res', agree: false, requestId: refusedUndoId });
       } else {
@@ -7803,7 +8162,7 @@
     function closeUndoModal() {
       if (undoModal) {
         undoModal.classList.remove('show');
-        undoModal.style.display = 'none';
+        undoModal.style.display = '';
       }
     }
 
@@ -8032,13 +8391,12 @@
       turn = session.turn;
       restoreGameSkillState(session);
       if (Array.isArray(session.currentDrawnCards)) {
-        const restoredCards = session.currentDrawnCards
-          .map(saved => SKILL_CARD_POOL.find(card => card.id === saved?.id))
-          .filter(Boolean)
-          .slice(0, 3);
-        if (restoredCards.length === 3) currentDrawnCards = restoredCards;
-      }
-      if (Array.isArray(session.cardUsedStatus) && session.cardUsedStatus.length === 3) {
+        const restoredSkillState = normalizeSkillCardState(session.currentDrawnCards, session.cardUsedStatus);
+        if (restoredSkillState.cards.length === 3) {
+          currentDrawnCards = restoredSkillState.cards;
+          cardUsedStatus = restoredSkillState.usedStatus;
+        }
+      } else if (Array.isArray(session.cardUsedStatus) && session.cardUsedStatus.length === 3) {
         cardUsedStatus = session.cardUsedStatus.map(value => value === true);
       }
       gameResultIsDraw = session.isDraw === true;
@@ -8186,13 +8544,12 @@
       );
       if (gameMode === 'ai' && savedAiOpponent) aiOpponentProfile = savedAiOpponent;
       if (Array.isArray(snapshot.currentDrawnCards)) {
-        const restoredCards = snapshot.currentDrawnCards
-          .map(saved => SKILL_CARD_POOL.find(card => card.id === saved?.id))
-          .filter(Boolean)
-          .slice(0, 3);
-        if (restoredCards.length === 3) currentDrawnCards = restoredCards;
-      }
-      if (Array.isArray(snapshot.cardUsedStatus) && snapshot.cardUsedStatus.length === 3) {
+        const restoredSkillState = normalizeSkillCardState(snapshot.currentDrawnCards, snapshot.cardUsedStatus);
+        if (restoredSkillState.cards.length === 3) {
+          currentDrawnCards = restoredSkillState.cards;
+          cardUsedStatus = restoredSkillState.usedStatus;
+        }
+      } else if (Array.isArray(snapshot.cardUsedStatus) && snapshot.cardUsedStatus.length === 3) {
         cardUsedStatus = snapshot.cardUsedStatus.map(value => value === true);
       }
       opponentSkillsUsedCount = Number.isInteger(snapshot.opponentSkillsUsedCount) ? snapshot.opponentSkillsUsedCount : 0;
@@ -8267,8 +8624,13 @@
             const fixedAvatarKind = getFixedPrivateAvatarKind();
             if (fixedAvatarKind) p1Avatar = getFixedPrivateAvatarValue(fixedAvatarKind);
             if (typeof s.p2Avatar === 'string' && s.p2Avatar) p2Avatar = s.p2Avatar;
-            if (s.currentDrawnCards) currentDrawnCards = s.currentDrawnCards;
-            if (s.cardUsedStatus) cardUsedStatus = s.cardUsedStatus;
+            if (Array.isArray(s.currentDrawnCards)) {
+              const restoredSkillState = normalizeSkillCardState(s.currentDrawnCards, s.cardUsedStatus);
+              currentDrawnCards = restoredSkillState.cards;
+              cardUsedStatus = restoredSkillState.usedStatus;
+            } else if (s.cardUsedStatus) {
+              cardUsedStatus = s.cardUsedStatus;
+            }
             if (Array.isArray(s.undoStack)) undoStack = s.undoStack;
             gameMode = s.gameMode;
             const savedAiOpponent = AI_OPPONENT_PROFILES.find(profile =>

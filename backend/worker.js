@@ -778,6 +778,7 @@ export default {
           CREATE TABLE IF NOT EXISTS game_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             uid TEXT NOT NULL,
+            client_record_id TEXT,
             mode TEXT NOT NULL,
             is_win INTEGER NOT NULL,
             is_draw INTEGER NOT NULL DEFAULT 0,
@@ -795,9 +796,48 @@ export default {
         `).run();
         // 兼容已存在的 D1：为旧版 game_history 增加和棋标记，不影响历史记录。
         try { await env.DB.prepare(`ALTER TABLE game_history ADD COLUMN is_draw INTEGER NOT NULL DEFAULT 0`).run(); } catch(e) {}
+        // client_record_id 用于让客户端在网络超时后安全重试。先用只读查询探测列，
+        // 避免依赖 SQLite/D1 不支持的 ADD COLUMN IF NOT EXISTS；多实例同时升级时，
+        // 若另一实例抢先补列，再次查询确认即可。
+        try {
+          await env.DB.prepare(`SELECT client_record_id FROM game_history LIMIT 0`).all();
+        } catch (_) {
+          try {
+            await env.DB.prepare(`ALTER TABLE game_history ADD COLUMN client_record_id TEXT`).run();
+          } catch (alterError) {
+            try {
+              await env.DB.prepare(`SELECT client_record_id FROM game_history LIMIT 0`).all();
+            } catch (_) {
+              throw alterError;
+            }
+          }
+        }
         try {
           await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_game_history_uid_id ON game_history(uid, id DESC)`).run();
         } catch(e) {}
+        await env.DB.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_game_history_uid_client_record_id ON game_history(uid, client_record_id)`).run();
+        await env.DB.prepare(`
+          CREATE TABLE IF NOT EXISTS game_history_upload_receipts (
+            uid TEXT NOT NULL,
+            client_record_id TEXT NOT NULL,
+            history_id INTEGER NOT NULL,
+            PRIMARY KEY(uid, client_record_id)
+          )
+        `).run();
+        await env.DB.prepare(`
+          INSERT OR IGNORE INTO game_history_upload_receipts (uid, client_record_id, history_id)
+          SELECT uid, client_record_id, id FROM game_history
+          WHERE client_record_id IS NOT NULL AND client_record_id <> ''
+        `).run();
+        await env.DB.prepare(`
+          CREATE TRIGGER IF NOT EXISTS trg_game_history_upload_receipt_insert
+          AFTER INSERT ON game_history
+          WHEN NEW.client_record_id IS NOT NULL AND NEW.client_record_id <> ''
+          BEGIN
+            INSERT OR IGNORE INTO game_history_upload_receipts (uid, client_record_id, history_id)
+            VALUES (NEW.uid, NEW.client_record_id, NEW.id);
+          END
+        `).run();
         await env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS friend_match_history (
             history_id INTEGER PRIMARY KEY,
@@ -4221,11 +4261,39 @@ async function allocateNextAvailableUid(env) {
         const { uid, mode, isWin, isDraw, winnerColor, myColor, oppName, oppAvatar, moves, movesData, boardData, time, date } = body;
         if (!uid) return json({ code: 1, msg: '缺少用户 UID' });
 
+        let cleanClientRecordId = null;
+        if (body.clientRecordId !== undefined && body.clientRecordId !== null) {
+          if (typeof body.clientRecordId !== 'string') {
+            return json({ code: 1, msg: 'clientRecordId 必须是字符串' }, 400);
+          }
+          cleanClientRecordId = body.clientRecordId.trim();
+          if (!cleanClientRecordId || cleanClientRecordId.length > 128) {
+            return json({ code: 1, msg: 'clientRecordId 不能为空且不能超过 128 个字符' }, 400);
+          }
+        }
+
         const auth = await requireUser(uid, getRequestToken(request, body));
         if (auth.response) return auth.response;
         const cleanUid = auth.user.uid;
         if (!consumeSocialRequestRate(cleanUid, 'history-record', 60, 60000, 120)) {
           return json({ code: 429, msg: '对局保存过于频繁，请稍后重试' }, 429);
+        }
+        if (cleanClientRecordId) {
+          const receipt = await env.DB.prepare(`
+            SELECT history_id FROM game_history_upload_receipts
+            WHERE uid = ? AND client_record_id = ? LIMIT 1
+          `).bind(cleanUid, cleanClientRecordId).first();
+          if (receipt) {
+            return json({
+              code: 0,
+              msg: '这局对局此前已同步，重试记录已确认',
+              data: {
+                historyId: Number(receipt.history_id) || null,
+                duplicate: true,
+                clientRecordId: cleanClientRecordId
+              }
+            });
+          }
         }
         const movesJson = typeof movesData === 'string' ? movesData : JSON.stringify(movesData || []);
         const boardJson = typeof boardData === 'string' ? boardData : JSON.stringify(boardData || []);
@@ -4234,12 +4302,14 @@ async function allocateNextAvailableUid(env) {
         }
         const cleanWinnerColor = winnerColor === 0 ? 0 : (Number(winnerColor) === 2 ? 2 : 1);
 
-        await env.DB.prepare(`
+        const insertResult = await env.DB.prepare(`
           INSERT INTO game_history (
-            uid, mode, is_win, is_draw, winner_color, my_color, opp_name, opp_avatar, moves_count, moves_data, board_data, time, date
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            uid, client_record_id, mode, is_win, is_draw, winner_color, my_color, opp_name, opp_avatar, moves_count, moves_data, board_data, time, date
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(uid, client_record_id) DO NOTHING
         `).bind(
           cleanUid,
+          cleanClientRecordId,
           ['ai', 'online', 'pvp'].includes(String(mode || '')) ? String(mode) : 'other',
           isWin ? 1 : 0,
           isDraw === true ? 1 : 0,
@@ -4254,17 +4324,33 @@ async function allocateNextAvailableUid(env) {
           String(date || '').slice(0, 20)
         ).run();
 
-        // 个人完整棋谱仍只保留最近 30 局；SQLite 触发器已将摘要存入好友资料归档。
-        try {
-          await env.DB.prepare(`
-            DELETE FROM game_history
-            WHERE uid = ? AND id NOT IN (
-              SELECT id FROM game_history WHERE uid = ? ORDER BY id DESC LIMIT 30
-            )
-          `).bind(cleanUid, cleanUid).run();
-        } catch(_) {}
+        const inserted = Number(insertResult?.meta?.changes || 0) > 0;
+        let historyId = Number(insertResult?.meta?.last_row_id || 0) || null;
+        if (cleanClientRecordId) {
+          const saved = await env.DB.prepare(`
+            SELECT history_id FROM game_history_upload_receipts WHERE uid = ? AND client_record_id = ? LIMIT 1
+          `).bind(cleanUid, cleanClientRecordId).first();
+          if (!saved) throw new Error('保存对局后未能读取对应记录');
+          historyId = Number(saved.history_id) || null;
+        }
 
-        return json({ code: 0, msg: '对局历史战报与棋局谱已成功同步至云端！' });
+        // 个人完整棋谱仍只保留最近 30 局；SQLite 触发器已将摘要存入好友资料归档。
+        if (inserted) {
+          try {
+            await env.DB.prepare(`
+              DELETE FROM game_history
+              WHERE uid = ? AND id NOT IN (
+                SELECT id FROM game_history WHERE uid = ? ORDER BY id DESC LIMIT 30
+              )
+            `).bind(cleanUid, cleanUid).run();
+          } catch(_) {}
+        }
+
+        return json({
+          code: 0,
+          msg: inserted ? '对局历史战报与棋局谱已成功同步至云端！' : '这局对局此前已同步，重试记录已确认',
+          data: { historyId, duplicate: !inserted, clientRecordId: cleanClientRecordId }
+        });
       } catch (err) {
         return publicServerError('云端同步战绩异常', err);
       }
@@ -4281,7 +4367,7 @@ async function allocateNextAvailableUid(env) {
         if (auth.response) return auth.response;
 
         const rows = await env.DB.prepare(`
-          SELECT id, uid, mode, is_win as isWin, is_draw as isDraw, winner_color as winnerColor, my_color as myColor,
+          SELECT id, uid, client_record_id as clientRecordId, mode, is_win as isWin, is_draw as isDraw, winner_color as winnerColor, my_color as myColor,
                  opp_name as oppName, opp_avatar as oppAvatar, moves_count as moves,
                  moves_data as movesData, board_data as boardData, time, date, created_at
           FROM game_history

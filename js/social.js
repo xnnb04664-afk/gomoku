@@ -296,7 +296,7 @@
       const action = event.target.closest('[data-profile-action]');
       if (!action || !modal.dataset.uid) return;
       const uid = modal.dataset.uid;
-      if (action.dataset.profileAction === 'retry-matches') {
+      if (action.dataset.profileAction === 'retry-matches' || action.dataset.profileAction === 'refresh-matches') {
         void loadFriendProfileMatches(uid);
         return;
       }
@@ -340,6 +340,32 @@
 
   let friendProfileReturnFocus = null;
   let friendProfileMatchesGeneration = 0;
+  let friendProfileMatchesRefreshTimer = null;
+  const FRIEND_PROFILE_MATCH_REFRESH_INTERVAL_MS = 15000;
+
+  function stopFriendProfileMatchesRefresh() {
+    if (friendProfileMatchesRefreshTimer) clearInterval(friendProfileMatchesRefreshTimer);
+    friendProfileMatchesRefreshTimer = null;
+  }
+
+  function refreshOpenFriendProfileMatches(options) {
+    const modal = document.getElementById('socialFriendProfileModal');
+    const uid = String(modal?.dataset.uid || '');
+    if (!state.started || !isRegistered() || document.hidden || !uid || !modal?.classList.contains('show') || modal.dataset.matchesExpanded === '1') return;
+    void loadFriendProfileMatches(uid, { silent: options?.silent !== false });
+  }
+
+  function startFriendProfileMatchesRefresh(uid) {
+    stopFriendProfileMatchesRefresh();
+    const key = String(uid || '');
+    if (!key) return;
+    friendProfileMatchesRefreshTimer = setInterval(() => {
+      const modal = document.getElementById('socialFriendProfileModal');
+      if (!state.started || !isRegistered() || document.hidden || !modal?.classList.contains('show') ||
+          modal.dataset.uid !== key || modal.dataset.matchesExpanded === '1') return;
+      void loadFriendProfileMatches(key, { silent: true });
+    }, FRIEND_PROFILE_MATCH_REFRESH_INTERVAL_MS);
+  }
 
   async function loadFriendProfileMatches(uid, options) {
     const modal = document.getElementById('socialFriendProfileModal');
@@ -347,20 +373,34 @@
     if (!modal || !list || !modal.classList.contains('show')) return;
     const key = String(uid || '');
     const append = options?.append === true;
+    const silent = options?.silent === true;
     const cursor = append ? String(modal.dataset.nextMatchCursor || '') : '';
     if (append && !cursor) return;
+    if (modal.dataset.matchesLoading === '1') return;
     const generation = ++friendProfileMatchesGeneration;
     modal.dataset.matchesGeneration = String(generation);
+    modal.dataset.matchesLoading = '1';
+    const status = modal.querySelector('#skyFriendProfileMatchesStatus');
+    const refreshButton = modal.querySelector('[data-profile-action="refresh-matches"]');
+    const hadVisibleMatches = Boolean(list.querySelector('.sky-friend-profile-match-list'));
     if (append) {
       const moreButton = list.querySelector('[data-profile-action="load-more-matches"]');
       if (moreButton) {
         moreButton.disabled = true;
         moreButton.textContent = '正在读取…';
       }
+      if (status) status.textContent = '读取更早记录…';
     } else {
       delete modal.dataset.nextMatchCursor;
-      list.innerHTML = '<div class="sky-friend-profile-record-empty">正在读取好友保存的对局记录…</div>';
+      delete modal.dataset.matchesExpanded;
+      if (!silent) {
+        list.innerHTML = '<div class="sky-friend-profile-record-empty">正在读取好友保存的对局记录…</div>';
+        if (status) status.textContent = '正在同步…';
+      } else if (status) {
+        status.textContent = '正在更新…';
+      }
     }
+    if (refreshButton) refreshButton.disabled = true;
     try {
       const query = new URLSearchParams({ friendUid: key });
       if (cursor) query.set('before', cursor);
@@ -369,6 +409,7 @@
       const matches = Array.isArray(result.data?.matches) ? result.data.matches : [];
       if (!matches.length && !append) {
         list.innerHTML = '<div class="sky-friend-profile-record-empty">暂时还没有已保存的对局记录</div>';
+        if (status) status.textContent = `已更新 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
         return;
       }
       const modeLabels = { ai: '人机对局', online: '联机对局', pvp: '双人同屏', other: '其他模式' };
@@ -400,6 +441,7 @@
         list.querySelector('[data-profile-action="load-more-matches"]')?.remove();
         const matchList = list.querySelector('.sky-friend-profile-match-list');
         if (matchList && markup) matchList.insertAdjacentHTML('beforeend', markup);
+        modal.dataset.matchesExpanded = '1';
       } else {
         list.innerHTML = `<div class="sky-friend-profile-match-list">${markup}</div>`;
       }
@@ -411,14 +453,25 @@
       } else {
         delete modal.dataset.nextMatchCursor;
       }
+      if (status) status.textContent = `已更新 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
     } catch (error) {
       if (!modal.isConnected || !modal.classList.contains('show') || modal.dataset.uid !== key || modal.dataset.matchesGeneration !== String(generation)) return;
+      if (silent && hadVisibleMatches) {
+        if (status) status.textContent = '暂时离线 · 保留上次记录';
+        return;
+      }
       const message = `<div class="sky-friend-profile-record-error">${escapeHtml(error.message || '对局记录暂时无法读取')} <button type="button" data-profile-action="retry-matches">重试</button></div>`;
       if (append) {
         list.querySelector('[data-profile-action="load-more-matches"]')?.remove();
         list.insertAdjacentHTML('beforeend', message);
       } else {
         list.innerHTML = message;
+      }
+      if (status) status.textContent = '同步失败';
+    } finally {
+      if (modal.dataset.matchesGeneration === String(generation)) {
+        delete modal.dataset.matchesLoading;
+        if (refreshButton?.isConnected) refreshButton.disabled = false;
       }
     }
   }
@@ -501,8 +554,11 @@
     const affinityMarkup = affinity
       ? `<div class="sky-friend-profile-stat"><span>亲密等级</span><strong>Lv.${Number(affinity.level) || 1}</strong></div><div class="sky-friend-profile-stat"><span>亲密度</span><strong>${Math.max(0, Number(affinity.points) || 0).toLocaleString()}</strong></div>`
       : '';
-    content.innerHTML = `<div class="sky-friend-profile-hero"><div class="sky-friend-profile-avatar">${avatarMarkup(record, 78)}</div><div class="sky-friend-profile-identity"><span class="sky-friend-profile-status ${record.online === true && !record.presenceHidden ? 'is-online' : ''}"><i></i>${escapeHtml(status)}</span><strong>${escapeHtml(displayName(record))}</strong><div class="sky-friend-profile-tags"><span>${escapeHtml(relationship)}</span>${publicUid ? `<span>棋友 ID · ${escapeHtml(publicUid)}</span>` : ''}</div></div></div><section class="sky-friend-profile-section"><h3>正式天梯战绩</h3><div class="sky-friend-profile-stats"><div class="sky-friend-profile-stat"><span>天梯积分</span><strong>${score.toLocaleString()}</strong></div>${statsMarkup}${affinityMarkup}</div></section>${isFriend ? '<section class="sky-friend-profile-section"><div class="sky-friend-profile-record-heading"><h3>对局记录</h3><span>玩家保存 · 含人机</span></div><div id="skyFriendProfileMatches" class="sky-friend-profile-records"></div><p class="sky-friend-profile-record-note">个人保存记录，不作为天梯结算凭证</p></section><div class="sky-friend-profile-actions"><button type="button" data-profile-action="chat">💬 私聊</button><button type="button" data-profile-action="invite">⚔️ 邀战</button></div>' : '<p class="sky-friend-profile-note">成为好友后可查看关系信息并发起私聊或邀战。</p>'}`;
+    content.innerHTML = `<div class="sky-friend-profile-hero"><div class="sky-friend-profile-avatar">${avatarMarkup(record, 78)}</div><div class="sky-friend-profile-identity"><span class="sky-friend-profile-status ${record.online === true && !record.presenceHidden ? 'is-online' : ''}"><i></i>${escapeHtml(status)}</span><strong>${escapeHtml(displayName(record))}</strong><div class="sky-friend-profile-tags"><span>${escapeHtml(relationship)}</span>${publicUid ? `<span>棋友 ID · ${escapeHtml(publicUid)}</span>` : ''}</div></div></div><section class="sky-friend-profile-section"><h3>正式天梯战绩</h3><div class="sky-friend-profile-stats"><div class="sky-friend-profile-stat"><span>天梯积分</span><strong>${score.toLocaleString()}</strong></div>${statsMarkup}${affinityMarkup}</div></section>${isFriend ? '<section class="sky-friend-profile-section"><div class="sky-friend-profile-record-heading"><h3>对局记录</h3><div class="sky-friend-profile-record-tools"><span id="skyFriendProfileMatchesStatus" aria-live="polite">前台每15秒更新 · 含人机</span><button type="button" class="sky-friend-profile-record-refresh" data-profile-action="refresh-matches" aria-label="刷新好友对局记录" title="刷新好友对局记录">↻</button></div></div><div id="skyFriendProfileMatches" class="sky-friend-profile-records"></div><p class="sky-friend-profile-record-note">玩家保存记录 · 页面前台每15秒同步，不作为天梯结算凭证</p></section><div class="sky-friend-profile-actions"><button type="button" data-profile-action="chat">💬 私聊</button><button type="button" data-profile-action="invite">⚔️ 邀战</button></div>' : '<p class="sky-friend-profile-note">成为好友后可查看关系信息并发起私聊或邀战。</p>'}`;
     modal.dataset.uid = friendUid;
+    delete modal.dataset.matchesLoading;
+    delete modal.dataset.matchesExpanded;
+    delete modal.dataset.nextMatchCursor;
     if (!modal.classList.contains('show')) {
       friendProfileReturnFocus = opener && typeof opener.focus === 'function'
         ? opener
@@ -519,17 +575,25 @@
         }
       });
     }
-    if (isFriend) void loadFriendProfileMatches(friendUid);
+    if (isFriend) {
+      void loadFriendProfileMatches(friendUid);
+      startFriendProfileMatchesRefresh(friendUid);
+    } else {
+      stopFriendProfileMatchesRefresh();
+    }
     return true;
   }
 
   function closeFriendProfile(restoreFocus) {
+    stopFriendProfileMatchesRefresh();
     const modal = document.getElementById('socialFriendProfileModal');
     if (modal) {
       modal.classList.remove('show');
       modal.setAttribute('aria-hidden', 'true');
       delete modal.dataset.uid;
       delete modal.dataset.matchesGeneration;
+      delete modal.dataset.matchesLoading;
+      delete modal.dataset.matchesExpanded;
       delete modal.dataset.nextMatchCursor;
     }
     friendProfileMatchesGeneration += 1;
@@ -1788,6 +1852,15 @@
     if (!state.started || document.hidden) return;
     refresh({ quiet: true });
     if (state.currentChat) loadChat({ incremental: true, quiet: true });
+    refreshOpenFriendProfileMatches({ silent: true });
+    connectSocket();
+  }
+
+  function onNetworkOnline() {
+    if (!state.started || !isRegistered()) return;
+    refresh({ quiet: true });
+    if (state.currentChat) loadChat({ incremental: true, quiet: true });
+    refreshOpenFriendProfileMatches({ silent: true });
     connectSocket();
   }
 
@@ -1801,6 +1874,7 @@
     state.started = true;
     state.stopping = false;
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('online', onNetworkOnline);
     state.refreshTimer = setInterval(() => {
       if (!isRegistered()) {
         stop();
@@ -1832,6 +1906,7 @@
     if (state.refreshTimer) clearInterval(state.refreshTimer);
     state.refreshTimer = null;
     document.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('online', onNetworkOnline);
     if (state.socket) {
       try { state.socket.close(1000, 'client-stop'); } catch (_) {}
     }

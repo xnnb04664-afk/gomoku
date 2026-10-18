@@ -314,8 +314,11 @@ const previousReleaseHighlights = (() => {
   }
 })();
 const releaseHighlights = [
-  `🔇 【后台音频修复】切到后台立即静音并暂停音乐、音效和爆炸音频；回到前台后按原设置恢复`,
-  `⚡ 【AI 搜索优化】减少 Android 原生大师 AI 搜索过程中的临时对象分配，保持搜索规则与时限`,
+  `🗂️ 【对局记录可靠性】离线记录进入本地待上传队列，使用稳定编号去重并自动重试，好友资料中的对局记录可及时刷新`,
+  `↩️ 【悔棋修复】修复人机与好友对局的悔棋状态同步，并在请求未送达或等待超时时给出反馈`,
+  `🃏 【技能卡调整】移除“移星换斗”卡，旧存档会安全兼容`,
+  `💫 【虚空陨石音效】更换为星尘下坠与清亮尾音；命运骰爆炸音效保持原样`,
+  `🔴 【好友消息提醒】调整未读数字的位置，使其在红点中居中显示`,
   ...previousReleaseHighlights
 ];
 const releaseUpdateLog = [
@@ -453,6 +456,7 @@ try {
     'js/voice.js',
     'migrations/0005_auth_sessions.sql',
     'migrations/0006_friend_match_history.sql',
+    'migrations/0007_game_history_client_record_id.sql',
     'official-site/index.html',
     'official-site/favicon.png',
     'official-site/privacy/index.html',
