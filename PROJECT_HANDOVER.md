@@ -288,3 +288,10 @@ adb install .\五子棋.apk
 
 - 页面进入后台时立即静音 Web Audio 输出和独立爆炸音频，并暂停 AudioContext；返回前台时恢复音效与音乐。Android 等网页完成生命周期处理回调后再暂停 WebView 和定时器，并保留有界兜底。
 - 需要构建并安装新 APK 才能验证 Android 原生生命周期路径；发布构建本身不代表已在 MuMu 或真机完成后台/前台验收。
+
+## 2026-10-18 v1.0.145 好友悔棋与对局记录修复发布
+
+- 修复人机和好友对局的悔棋同步、离线棋谱待上传队列幂等重试、好友对局记录读取，并移除“移星换斗”卡及更换虚空陨石音效。另包含好友消息红点居中、切后台停止音频、退出匹配清理等本轮已合并改动。
+- GitHub [Release v1.0.145](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.145) 指向提交 `7074af79688cf489204ea25121c003bd0b73177d`，版本为 `versionName=1.0.145` / `versionCode=146`。Release 含 APK（3,436,650 bytes）、单文件 HTML（13,058,865 bytes）和 183,576-byte HTML 增量包。APK SHA-256：`0b88298ca41ef43a81a2f4ae26512f3505cc2e2f114329d7602799fd554591dc`；HTML SHA-256：`fa50f4c68ae256bd70170eb48f26113d923e11fa21d0488d784974eb2835def5`。本地 APK、HTML 摘要与 Release 附件一致。
+- ECS 已部署到 `/opt/gomoku/releases/20261018-v1.0.145-7074af7`。部署前备份 SQLite 数据库、运行配置和旧 Worker；旧版 `/opt/gomoku/releases/20261018-v1.0.144-friend-history-404` 保留用于回滚。服务重启后 `/healthz` 返回 `200`、`/api/version` 返回 `v1.0.145`；对局记录接口初始化新增的幂等字段、回执表和触发器，SQLite `quick_check=ok`。部署前无活动房间连接。
+- Cloudflare 未部署或读写，继续保留为 ECS 故障时的备用环境。当前记录仅确认发布和 ECS 健康状态，不代表本次重新完成 MuMu 或真机安装验收。
