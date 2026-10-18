@@ -1081,6 +1081,19 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public int getAppVersionCode() {
+                try {
+                    android.content.pm.PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+                    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                        ? (int) packageInfo.getLongVersionCode()
+                        : packageInfo.versionCode;
+                } catch (Exception e) {
+                    android.util.Log.w("MainActivity", "Unable to read app version code", e);
+                    return 0;
+                }
+            }
+
+            @android.webkit.JavascriptInterface
             public boolean requestNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
                 return MainActivity.this.enqueueNativeAiMove(requestId, boardJson, aiColor, forbiddenJson);
             }
