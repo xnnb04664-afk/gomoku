@@ -295,3 +295,11 @@ adb install .\五子棋.apk
 - GitHub [Release v1.0.145](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.145) 指向提交 `7074af79688cf489204ea25121c003bd0b73177d`，版本为 `versionName=1.0.145` / `versionCode=146`。Release 含 APK（3,436,650 bytes）、单文件 HTML（13,058,865 bytes）和 183,576-byte HTML 增量包。APK SHA-256：`0b88298ca41ef43a81a2f4ae26512f3505cc2e2f114329d7602799fd554591dc`；HTML SHA-256：`fa50f4c68ae256bd70170eb48f26113d923e11fa21d0488d784974eb2835def5`。本地 APK、HTML 摘要与 Release 附件一致。
 - ECS 已部署到 `/opt/gomoku/releases/20261018-v1.0.145-7074af7`。部署前备份 SQLite 数据库、运行配置和旧 Worker；旧版 `/opt/gomoku/releases/20261018-v1.0.144-friend-history-404` 保留用于回滚。服务重启后 `/healthz` 返回 `200`、`/api/version` 返回 `v1.0.145`；对局记录接口初始化新增的幂等字段、回执表和触发器，SQLite `quick_check=ok`。部署前无活动房间连接。
 - Cloudflare 未部署或读写，继续保留为 ECS 故障时的备用环境。当前记录仅确认发布和 ECS 健康状态，不代表本次重新完成 MuMu 或真机安装验收。
+
+## 2026-10-18 v1.0.146 品牌统一与官网发布
+
+- 产品显示名统一为“五子棋云屿晴光”，覆盖 Android 桌面名与启动页、游戏大厅、好友通知、离线单文件版、README 和官网首页/帮助/隐私/好友页。官网首页加入对应的 WebSite 结构化数据；canonical、OG URL、robots 与 sitemap 仍指向当前可访问的 `gomoku-home.pages.dev`。
+- GitHub [Release v1.0.146](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.146) 指向提交 `86983e8cc78623ba45d993491c2680dbeac5b629`，APK 为 `versionName=1.0.146` / `versionCode=147`。Release 含 APK（3,436,650 bytes）、单文件 HTML（13,059,577 bytes）和 166,343-byte HTML 增量包。APK SHA-256：`11aa313370a23cf4004724ecc5213ee6009cc0916cf00df193e680ca17a545a9`；HTML SHA-256：`0f7e9723909e6eedf3aea7773560a16bdd8c830291361c29e6b2194fd09338d5`。APK 正式签名证书 SHA-256 仍为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
+- 官方站 Pages 已部署到 `gomoku-home` 的 `master` Production，部署提交为 `86983e8`。首页、帮助、好友、游戏页、robots、sitemap 与 `/api/site-version` 实际访问均返回 HTTP 200；版本接口返回 `v1.0.146` / Build 147。Wrangler 打印部署完成，但本机命令最后返回非零退出码；Cloudflare 部署记录和生产站点请求均确认发布已生效。
+- ECS `/api/version` 已动态返回 `v1.0.146`，APK 与 HTML SHA-256 均匹配 Release；因此无需重启 ECS、改数据库或部署游戏 Worker。本轮只部署官方站 Pages，不部署 Cloudflare 游戏 API/中继 Worker。
+- 当前本机检查中，备案域名 `xnxy99.cn` 尚未通过 HTTPS 验证，因此官网 canonical 继续使用 `gomoku-home.pages.dev`；域名 DNS 与证书稳定后再切换。APK 完成签名与包版本核验，但本轮未安装到 MuMu 或真机。
