@@ -1,4 +1,4 @@
-# 五子棋大师 · 晴空浮岛（Sky Island Gomoku）
+# 五子棋云屿晴光（Sky Island Gomoku）
 
 [English README](README.en.md)
 

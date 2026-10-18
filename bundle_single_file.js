@@ -261,7 +261,7 @@ if (fs.existsSync(girlImgPath)) {
 }
 
 // 更新页面标题为单文件全功能旗舰版
-html = html.replace(/<title>.*?<\/title>/i, '<title>五子棋大师 · 单文件全功能旗舰版 🌐🎴💬🌿</title>');
+html = html.replace(/<title>.*?<\/title>/i, '<title>五子棋云屿晴光 · 单文件版</title>');
 
 const updateCompatibilityTags = [
   '<meta name="gomoku-startup-splash-bootstrap" content="dom-ready-v1">',
@@ -277,4 +277,4 @@ fs.writeFileSync(OUTPUT_FILE, html.replace(/[ \t]+$/gm, ''), 'utf8');
 const stat = fs.statSync(OUTPUT_FILE);
 console.log(`✅ 单文件全功能版打包成功！`);
 console.log(`📦 文件路径: ${OUTPUT_FILE}`);
-console.log(`📏 文件大小: ${(stat.size / 1024).toFixed(2)} KB (包含晴空棋岛UI、AI、联机社交与离线资源)`);
+console.log(`📏 文件大小: ${(stat.size / 1024).toFixed(2)} KB (包含五子棋云屿晴光、AI、联机社交与离线资源)`);

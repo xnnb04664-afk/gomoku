@@ -63,7 +63,9 @@ function copyTree(source, destination) {
   }
 }
 
-fs.rmSync(playDir, { recursive: true, force: true });
+// Overwrite generated files in place instead of recursively deleting this
+// ignored build tree; Node's Windows recursive removal can fail on fresh and
+// populated output directories, and this task does not remove any source assets.
 fs.mkdirSync(playDir, { recursive: true });
 fs.copyFileSync(path.join(root, 'index.html'), path.join(playDir, 'index.html'));
 fs.copyFileSync(path.join(root, 'favicon.png'), path.join(playDir, 'favicon.png'));
@@ -113,7 +115,7 @@ function injectOfficialSiteReturnLink(filePath) {
       outline-offset: 2px;
     }
   </style>`;
-  const link = `${marker}\n  <div class="official-return-strip"><a href="/" aria-label="返回五子棋官方站">← 官网</a><a href="/social/" aria-label="打开独立好友中心">👥 好友</a></div>`;
+  const link = `${marker}\n  <div class="official-return-strip"><a href="/" aria-label="返回五子棋云屿晴光">← 首页</a><a href="/social/" aria-label="打开独立好友中心">👥 好友</a></div>`;
   source = source.replace('</head>', `${style}\n</head>`).replace('<body>', `<body>\n  ${link}`);
   fs.writeFileSync(filePath, source);
 }

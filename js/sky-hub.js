@@ -150,7 +150,7 @@
     return `
       <header class="sky-lobby-top">
         <div class="sky-brand">
-          <span><strong>天空棋岛</strong><small>云上活棋谱</small></span>
+          <span><strong>五子棋云屿晴光</strong><small>云上活棋谱</small></span>
         </div>
       </header>
       <div class="sky-lobby-pages" id="skyLobbyPages">
@@ -261,7 +261,7 @@
     lobby = document.createElement('section');
     lobby.id = 'skyLobby';
     lobby.className = 'sky-lobby';
-    lobby.setAttribute('aria-label', '天空棋岛大厅');
+    lobby.setAttribute('aria-label', '五子棋云屿晴光大厅');
     lobby.innerHTML = lobbyMarkup();
     document.body.appendChild(lobby);
 
@@ -297,7 +297,7 @@
     topbar.innerHTML = `
       <button type="button" data-game-action="lobby">← 棋岛</button>
       <div class="sky-game-title">
-        <strong>晴空主棋台</strong>
+        <strong>五子棋云屿晴光</strong>
         <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:3px">
           <small style="margin:0">云海对局</small>
           <button type="button" data-game-action="history" aria-label="打开棋谱" style="min-height:22px;padding:3px 7px;border-radius:8px;font-size:9px">📜 棋谱</button>

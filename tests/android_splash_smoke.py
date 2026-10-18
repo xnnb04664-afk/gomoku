@@ -28,13 +28,14 @@ def main():
     assert "onTouchEvent" in splash and "performClick" in splash
     assert 'img/startup/sky-cloudsea-v2.webp' in splash
     assert 'img/game/sky-board-cloudstone.webp' in splash
-    assert "drawGridAndStones" in splash and "RadialGradient" in splash
+    assert "drawGrid(canvas, boardRect, density)" in splash and "drawHeartStones(canvas, progress)" in splash
+    assert "RadialGradient" in splash
     assert "loadArtworkAsync" in splash and "inJustDecodeBounds" in splash
     assert "inSampleSize" in splash and "animationRequested" in splash
     assert "private boolean paused" in splash and "if (!artworkReady || stopped || paused || animationStarted) return;" in splash
     assert "if (finalSky == null || finalBoard == null || finalBlack == null || finalWhite == null)" in splash
     assert "requestedWidth * 1.5f" in splash
-    assert "float gridReveal = 1f;" in splash
+    assert "private void drawGrid(" in splash and "private void drawHeartStones(" in splash
     assert "STONES[index][1] < 7" in splash  # black on the left, white on the right
     assert "setBackgroundResource(R.drawable.splash_opening_poster)" in splash
     assert "splash_ink" in colors and "splash_stone_dark" in colors

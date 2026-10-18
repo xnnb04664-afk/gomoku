@@ -5079,7 +5079,7 @@
       if (!['match', 'create', 'join'].includes(tab)) tab = 'match';
       if (activeRoomJoinAttempt && tab !== 'join') cancelRoomJoin({ silent: true });
       if (onlineModal) onlineModal.dataset.onlineView = tab;
-      if (hallEyebrow) hallEyebrow.textContent = tab === 'create' || tab === 'join' ? '晴空棋岛 · 棋友专房' : '晴空棋岛 · 在线对局';
+      if (hallEyebrow) hallEyebrow.textContent = tab === 'create' || tab === 'join' ? '五子棋云屿晴光 · 棋友专房' : '五子棋云屿晴光 · 在线对局';
       if (hallTitle) hallTitle.textContent = tab === 'create' ? '创建好友房间' : tab === 'join' ? '加入好友房间' : '🌐 联机对战 · 房间大厅';
 
       if (tabMatch) tabMatch.classList.toggle('active', tab === 'match');

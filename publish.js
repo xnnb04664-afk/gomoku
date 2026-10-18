@@ -314,15 +314,13 @@ const previousReleaseHighlights = (() => {
   }
 })();
 const releaseHighlights = [
-  `🗂️ 【对局记录可靠性】离线记录进入本地待上传队列，使用稳定编号去重并自动重试，好友资料中的对局记录可及时刷新`,
-  `↩️ 【悔棋修复】修复人机与好友对局的悔棋状态同步，并在请求未送达或等待超时时给出反馈`,
-  `🃏 【技能卡调整】移除“移星换斗”卡，旧存档会安全兼容`,
-  `💫 【虚空陨石音效】更换为星尘下坠与清亮尾音；命运骰爆炸音效保持原样`,
-  `🔴 【好友消息提醒】调整未读数字的位置，使其在红点中居中显示`,
+  `🏷️ 【品牌统一】应用名称、启动页、游戏大厅和离线版统一为“五子棋云屿晴光”`,
+  `🔎 【官网搜索信息】统一官网标题、站点名称和结构化数据，保留当前可用的官方域名`,
+  `🔔 【通知标题】好友消息与邀战通知显示“五子棋云屿晴光”品牌名`,
   ...previousReleaseHighlights
 ];
 const releaseUpdateLog = [
-  `五子棋 v${newName} 官方正式版更新说明：`,
+  `五子棋云屿晴光 v${newName} 官方正式版更新说明：`,
   ...releaseHighlights
 ].join('\n\n');
 const vJson = {
@@ -395,6 +393,7 @@ try {
   const explicitFiles = [
     'MOBILE_ICON_PROMPT.md',
     'PROJECT_HANDOVER.md',
+    'README.md',
     'favicon.png',
     'design_assets/gomoku-app-icon-master.png',
     'android_src/AndroidManifest.xml',
@@ -458,8 +457,10 @@ try {
     'migrations/0006_friend_match_history.sql',
     'migrations/0007_game_history_client_record_id.sql',
     'official-site/index.html',
+    'official-site/help/index.html',
     'official-site/favicon.png',
     'official-site/privacy/index.html',
+    'official-site/social/index.html',
     'official-site/site.js',
     'official-site/styles.css',
     'official-site/_worker.js',

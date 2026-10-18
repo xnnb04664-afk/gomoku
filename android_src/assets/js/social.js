@@ -287,7 +287,7 @@
     modal.id = 'socialFriendProfileModal';
     modal.className = 'sky-friend-profile-backdrop';
     modal.setAttribute('aria-hidden', 'true');
-    modal.innerHTML = '<section class="sky-friend-profile-card" role="dialog" aria-modal="true" aria-labelledby="skyFriendProfileTitle" tabindex="-1"><header class="sky-friend-profile-head"><div><span>晴空棋岛 · 棋友档案</span><h2 id="skyFriendProfileTitle">个人资料</h2></div><button type="button" class="sky-friend-profile-close" data-profile-close aria-label="关闭个人资料">×</button></header><div class="sky-friend-profile-content" id="skyFriendProfileContent"></div></section>';
+    modal.innerHTML = '<section class="sky-friend-profile-card" role="dialog" aria-modal="true" aria-labelledby="skyFriendProfileTitle" tabindex="-1"><header class="sky-friend-profile-head"><div><span>五子棋云屿晴光 · 棋友档案</span><h2 id="skyFriendProfileTitle">个人资料</h2></div><button type="button" class="sky-friend-profile-close" data-profile-close aria-label="关闭个人资料">×</button></header><div class="sky-friend-profile-content" id="skyFriendProfileContent"></div></section>';
     modal.addEventListener('click', event => {
       if (event.target === modal || event.target.closest('[data-profile-close]')) {
         closeFriendProfile();
@@ -780,7 +780,7 @@
     const extra = `data-invite-id="${attr(inviteId)}" data-room-code="${attr(roomCode)}"`;
     content.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
-        <div><div style="color:#54715b;font-size:12px;font-weight:900;letter-spacing:.08em;">晴空棋岛 · 好友邀战</div><h2 id="socialInviteTitle" style="margin:5px 0 0;color:#1d3543;font-size:24px;line-height:1.2;">来下一局吗？</h2></div>
+        <div><div style="color:#54715b;font-size:12px;font-weight:900;letter-spacing:.08em;">五子棋云屿晴光 · 好友邀战</div><h2 id="socialInviteTitle" style="margin:5px 0 0;color:#1d3543;font-size:24px;line-height:1.2;">来下一局吗？</h2></div>
         <button type="button" data-social-action="invite-dismiss" aria-label="稍后处理" style="width:34px;height:34px;flex:none;border:1px solid #d7e0db;border-radius:50%;background:#fff;color:#405b4c;font-size:19px;font-weight:900;">×</button>
       </div>
       <div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px;padding:12px;border:1px solid #d5e2d9;border-radius:16px;background:linear-gradient(135deg,#f8fbf8,#edf5f0);">
@@ -930,7 +930,7 @@
       playSocialSound('message');
       state.lastMessageSoundAt = now;
     }
-    const title = '五子棋 · 好友消息';
+    const title = '五子棋云屿晴光 · 好友消息';
     const body = '你有新的好友消息，打开游戏查看';
     try {
       if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.showSocialNotification === 'function') {
@@ -1671,7 +1671,7 @@
   function notifyIncomingInvite(invite) {
     const inviteId = String(invite?.inviteId || '');
     const friend = state.friends.find(item => String(item.uid) === String(invite?.fromUid)) || invite;
-    const title = '五子棋 · 收到好友邀战';
+    const title = '五子棋云屿晴光 · 收到好友邀战';
     const body = `${displayName(friend)} 邀请你加入房间 ${String(invite?.roomCode || '')}`;
     try {
       if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.showSocialNotification === 'function') {

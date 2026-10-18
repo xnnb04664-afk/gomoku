@@ -426,7 +426,7 @@ public class MainActivity extends Activity {
                 "好友消息",
                 NotificationManager.IMPORTANCE_DEFAULT
         );
-        channel.setDescription("五子棋好友申请、私聊和邀战提醒");
+        channel.setDescription("五子棋云屿晴光好友申请、私聊和邀战提醒");
         channel.setShowBadge(true);
         manager.createNotificationChannel(channel);
     }
@@ -482,7 +482,7 @@ public class MainActivity extends Activity {
                 : new Notification.Builder(this);
         Notification notification = builder
                 .setSmallIcon(R.drawable.ic_stat_gomoku)
-                .setContentTitle("五子棋 · 好友消息")
+                .setContentTitle("五子棋云屿晴光 · 好友消息")
                 .setContentText("你有新的好友动态，打开游戏查看")
                 .setCategory(Notification.CATEGORY_MESSAGE)
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
@@ -1869,7 +1869,7 @@ public class MainActivity extends Activity {
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!getPackageManager().canRequestPackageInstalls()) {
-                    Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋安装应用，以完成全自动更新", Toast.LENGTH_LONG).show();
+                    Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋云屿晴光安装应用，以完成自动更新", Toast.LENGTH_LONG).show();
                     sLastDownloadedFile = apkFile;
                     Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
                     startActivity(permIntent);
@@ -1903,7 +1903,7 @@ public class MainActivity extends Activity {
                 req.addRequestHeader(UPDATE_CLIENT_HEADER, UPDATE_CLIENT_HEADER_VALUE);
                 req.addRequestHeader(UPDATE_TICKET_HEADER, updateTicket.trim());
                 req.setMimeType("application/vnd.android.package-archive");
-                req.setTitle("五子棋 最新版全自动更新");
+                req.setTitle("五子棋云屿晴光 最新版自动更新");
                 req.setDescription("正在极速下载安装包...");
                 req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
 
