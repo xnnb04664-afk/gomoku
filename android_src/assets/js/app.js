@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.141';
+    const CURRENT_VERSION_TAG = 'v1.0.142';
     // 完整 APK 才能更新 Android 启动器图标和原生桥。Build 142 首次提供原生版本查询；
     // 图标资源首次随 Build 140 发布。图标重绘时只需提高图标最低版本，不影响普通网页热更新。
     const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;
