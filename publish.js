@@ -485,6 +485,7 @@ try {
     'tests/android_notification_icon_smoke.py',
     'tests/api_failover_policy_regression.js',
     'tests/apk_asset_manifest_smoke.py',
+    'tests/auth_refresh_unit.js',
     'tests/card_touch_safety_browser_smoke.py',
     'tests/game_checkpoint_skills_browser_smoke.py',
     'tests/game_feature_panel_inspect.py',
