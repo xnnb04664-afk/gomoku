@@ -334,3 +334,11 @@ adb install .\五子棋.apk
 - 主机 `-O3` 固定工作量对照为约 1.98 倍计算速度，22 个局面/526 个状态快照及固定深度结果一致；这不是手机端落子延迟或全局棋力保证。验证细节、复现方法和最新本地产物摘要以 `AI_PERFORMANCE_20261019.md` 为准，`REVIEW_20261019.md` 的产物摘要属于性能优化前候选。
 - 新桥回传引擎标记 `cpp`/`java`，网页统计另含 `worker`/`js-fallback`/`native-unknown`，可读取 `window.gomokuLastAiStats` 的 `engine`、`searchMs`、`queueMs` 和 `roundTripMs` 区分实际搜索路径和等待。旧桥仍兼容。
 - 已重新生成正式签名本地 APK（仍为 Build 148）、单文件和官网副本；没有安装设备或发布线上。需要完整 APK 才能交付原生优化，不能只做网页热更新。
+
+## 2026-10-19 恢复 Android 原生底包版本校验与完整 APK 更新引导
+
+- 修复了在网页热更新检查中未核验 Android 原生底包版本（`MainActivity.getAppVersionCode()`）导致原生 C++ AI 引擎与启动纹理无法自动提示覆盖安装的问题。
+- 设定原生底包门槛 `MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 148`；当 Android 原生底包 Build < 148 时：
+  - 检查更新弹窗与角标明确提示“需要安装完整 APK”（📦），并详细说明数据与存档会完整保留。
+  - “小流量免安装更新”自动切换为直接下载并调用系统安装器覆盖安装完整 APK，避免在底层缺失 C++ 原生库的情况下重复应用网页热更新。
+- 新增单元回归测试 `tests/apk_version_check_regression.js`，已注册到 `publish.js`。
