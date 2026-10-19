@@ -148,12 +148,26 @@ function roomRelaySafeId(value, maxLength = 96) {
   return text.length > 0 && text.length <= maxLength && /^[A-Za-z0-9_-]+$/.test(text) ? text : '';
 }
 
+const ROOM_RELAY_DIAGNOSTIC_TYPES = new Set([
+  'join_request', 'join_ready', 'join_accepted', 'join_confirmed', 'room_full',
+  'reconnect_handshake', 'state_snapshot', 'restart_req', 'restart_res',
+  'restart_commit', 'restart_commit_ack', 'leave_room'
+]);
+const ROOM_RELAY_TRAFFIC_TYPES = new Set(['ping', 'pong', 'move', 'chat']);
+const ROOM_RELAY_DIAGNOSTIC_SAMPLE_MS = 15000;
+
+function roomRelayConnectionId() {
+  try { return crypto.randomUUID().replace(/-/g, '').slice(0, 12); } catch (_) {}
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
 // 自有房间中继：只承担可靠信令/兜底转发，棋局仍由双方 P2P 优先传输，
 // 房主作为当前回合状态的权威端。Durable Object 让同一房间的两条 WebSocket
 // 始终落到同一个有序实例，避免公共 MQTT 节点不可用或跨节点串房。
 export class GomokuRoom {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
     this.roomCode = '';
     this.roomSessionId = '';
     this.joinTicket = '';
@@ -161,6 +175,61 @@ export class GomokuRoom {
     this.host = null;
     this.client = null;
     this.pendingBootstrap = [];
+  }
+
+  _log(event, connection = null, fields = {}, throttleMs = 0) {
+    const logger = this.env?.GOMOKU_DIAGNOSTICS?.logRoomEvent;
+    if (typeof logger !== 'function') return;
+    if (throttleMs > 0 && connection) {
+      if (!connection.diagnosticLogTimes) connection.diagnosticLogTimes = new Map();
+      const key = `${event}:${fields.reasonCode || fields.messageType || ''}`;
+      const now = Date.now();
+      if (now - (connection.diagnosticLogTimes.get(key) || 0) < throttleMs) return;
+      connection.diagnosticLogTimes.set(key, now);
+    }
+    try {
+      logger({
+        event,
+        roomCode: this.roomCode,
+        roomSessionId: this.roomSessionId,
+        sessionId: connection?.sessionId || '',
+        requestedSessionId: connection?.requestedSessionId || '',
+        connectionId: connection?.diagnosticId || '',
+        role: connection?.role || '',
+        ...fields
+      });
+    } catch (_) {}
+  }
+
+  _recordTraffic(connection, message, forwarded, payloadBytes) {
+    const messageType = typeof message?.type === 'string' && /^[a-z][a-z0-9_]{0,48}$/.test(message.type)
+      ? message.type : 'unknown';
+    const isControl = ROOM_RELAY_DIAGNOSTIC_TYPES.has(messageType);
+    if (isControl) {
+      this._log('message.relay', connection, {
+        messageType,
+        direction: connection.role === 'host' ? 'host_to_client' : 'client_to_host',
+        forwarded: Boolean(forwarded),
+        peerPresent: Boolean(connection.role === 'host' ? this.client && !this.client.closed : this.host && !this.host.closed),
+        payloadBytes,
+        roundId: message.roundId || '',
+        nextRoundId: message.nextRoundId || '',
+        requestId: message.requestId || '',
+        stepCount: message.type === 'state_snapshot' && Array.isArray(message.history) ? message.history.length : undefined,
+        isOver: message.type === 'state_snapshot' && typeof message.isOver === 'boolean' ? message.isOver : undefined
+      }, 1200);
+      return;
+    }
+    if (!ROOM_RELAY_TRAFFIC_TYPES.has(messageType)) return;
+    if (!connection.diagnosticTrafficCounts) connection.diagnosticTrafficCounts = Object.create(null);
+    const countKey = `${messageType}_${forwarded ? 'forwarded' : 'no_peer'}`;
+    connection.diagnosticTrafficCounts[countKey] = (connection.diagnosticTrafficCounts[countKey] || 0) + 1;
+    const now = Date.now();
+    if (now - (connection.diagnosticTrafficAt || 0) < ROOM_RELAY_DIAGNOSTIC_SAMPLE_MS) return;
+    connection.diagnosticTrafficAt = now;
+    const counts = connection.diagnosticTrafficCounts;
+    connection.diagnosticTrafficCounts = Object.create(null);
+    this._log('message.traffic_summary', connection, { counts }, ROOM_RELAY_DIAGNOSTIC_SAMPLE_MS);
   }
 
   async fetch(request) {
@@ -171,24 +240,35 @@ export class GomokuRoom {
     const requestedJoinTicket = String(url.searchParams.get('ticket') || '');
     const authenticatedUid = roomRelaySafeId(request.headers.get('X-Gomoku-Room-Uid'), 128);
     if (!/^\d{6}$/.test(roomCode) || !['host', 'client'].includes(role)) {
+      this._log('socket.rejected', null, { roomCode: roomCode.slice(0, 32), requestedSessionId, role, reasonCode: 'invalid_parameters' });
       return new Response('Invalid room relay parameters', { status: 400 });
     }
-    if (!authenticatedUid) return new Response('Authenticated room identity required', { status: 401 });
+    if (!authenticatedUid) {
+      this._log('socket.rejected', null, { roomCode, requestedSessionId, role, reasonCode: 'missing_identity' });
+      return new Response('Authenticated room identity required', { status: 401 });
+    }
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      this._log('socket.rejected', null, { roomCode, requestedSessionId, role, reasonCode: 'upgrade_required' });
       return new Response('WebSocket upgrade required', { status: 426 });
     }
     if (role === 'host' && (!roomRelaySafeId(requestedSessionId) || !roomRelaySafeId(requestedJoinTicket))) {
+      this._log('socket.rejected', null, { roomCode, requestedSessionId, role, reasonCode: 'missing_host_session' });
       return new Response('Host session credentials required', { status: 401 });
     }
     if (role === 'host' && this.hostUid && this.hostUid !== authenticatedUid) {
+      this._log('socket.rejected', null, { roomCode, requestedSessionId, role, reasonCode: 'host_identity_mismatch' });
       return new Response('Room host identity mismatch', { status: 403 });
     }
     if (requestedSessionId && !roomRelaySafeId(requestedSessionId)) {
+      this._log('socket.rejected', null, { roomCode, requestedSessionId, role, reasonCode: 'invalid_session' });
       return new Response('Invalid room session', { status: 400 });
     }
 
     if (!this.roomCode) this.roomCode = roomCode;
-    if (this.roomCode !== roomCode) return new Response('Room mismatch', { status: 409 });
+    if (this.roomCode !== roomCode) {
+      this._log('socket.rejected', null, { roomCode, requestedSessionId, role, reasonCode: 'room_mismatch' });
+      return new Response('Room mismatch', { status: 409 });
+    }
 
     const pair = new WebSocketPair();
     const clientSocket = pair[0];
@@ -200,6 +280,9 @@ export class GomokuRoom {
       role,
       uid: authenticatedUid,
       sessionId: requestedSessionId,
+      requestedSessionId,
+      diagnosticId: roomRelayConnectionId(),
+      openedAt: Date.now(),
       joinTicket: requestedJoinTicket,
       messageCount: 0,
       messageWindowAt: Date.now(),
@@ -210,14 +293,20 @@ export class GomokuRoom {
       const sameHost = this.host && this.host.sessionId === requestedSessionId && this.joinTicket === requestedJoinTicket;
       const sessionChanged = Boolean(this.roomSessionId && this.roomSessionId !== requestedSessionId);
       if (sessionChanged || (this.host && !sameHost)) {
+        this._log('room.session_replaced', connection, {
+          previousSessionId: this.roomSessionId,
+          nextSessionId: requestedSessionId,
+          peerPresent: Boolean(this.client && !this.client.closed),
+          reasonCode: sessionChanged ? 'host_session_changed' : 'host_reconnected'
+        });
         // 同一短房间码重新开局时，旧房间的客方也必须一起失效，防止旧局报文串入。
-        this._closeConnection(this.host, false);
-        this._closeConnection(this.client, true);
+        this._closeConnection(this.host, false, 'host_session_replaced');
+        this._closeConnection(this.client, true, 'host_session_replaced');
         this.host = null;
         this.client = null;
         this.pendingBootstrap = [];
       } else if (this.host) {
-        this._closeConnection(this.host, false);
+        this._closeConnection(this.host, false, 'host_reconnected');
         this.host = null;
       }
       this.roomSessionId = requestedSessionId;
@@ -239,17 +328,25 @@ export class GomokuRoom {
     } else {
       if (this.client) {
         const sameClientSession = !requestedSessionId || !this.client.sessionId || this.client.sessionId === requestedSessionId;
-        this._closeConnection(this.client, false);
+        this._closeConnection(this.client, false, 'client_reconnected');
         this.client = null;
         if (!sameClientSession) this.pendingBootstrap = [];
       }
+      const sessionMismatch = Boolean(this.roomSessionId && requestedSessionId && requestedSessionId !== this.roomSessionId);
       connection.sessionId = this.roomSessionId || requestedSessionId;
       this.client = connection;
+      if (sessionMismatch) {
+        this._log('socket.session_mismatch', connection, {
+          expectedSessionId: this.roomSessionId,
+          requestedSessionId,
+          reasonCode: 'client_requested_stale_session'
+        });
+      }
     }
 
     const onMessage = event => this._onMessage(connection, event.data);
-    const onClose = () => this._onClose(connection);
-    const onError = () => this._onClose(connection);
+    const onClose = event => this._onClose(connection, event, 'websocket_closed');
+    const onError = event => this._onClose(connection, event, 'websocket_error');
     serverSocket.addEventListener('message', onMessage);
     serverSocket.addEventListener('close', onClose);
     serverSocket.addEventListener('error', onError);
@@ -258,6 +355,11 @@ export class GomokuRoom {
       try { serverSocket.removeEventListener('close', onClose); } catch (_) {}
       try { serverSocket.removeEventListener('error', onError); } catch (_) {}
     };
+
+    this._log('socket.open', connection, {
+      peerPresent: Boolean(role === 'host' ? this.client && !this.client.closed : this.host && !this.host.closed),
+      requestedSessionMismatch: Boolean(requestedSessionId && this.roomSessionId && requestedSessionId !== this.roomSessionId)
+    });
 
     this._send(connection, {
       type: 'relay_ready',
@@ -275,13 +377,22 @@ export class GomokuRoom {
       connection.socket.send(JSON.stringify(payload));
       return true;
     } catch (_) {
+      this._log('relay.send_failed', connection, {
+        messageType: typeof payload?.type === 'string' ? payload.type : 'internal',
+        reasonCode: 'socket_send_failed'
+      }, 5000);
       this._onClose(connection);
       return false;
     }
   }
 
-  _closeConnection(connection, notifyPeer = true) {
+  _closeConnection(connection, notifyPeer = true, reasonCode = 'replaced') {
     if (!connection || connection.closed) return;
+    this._log('socket.replaced', connection, {
+      peerPresent: Boolean(connection.role === 'host' ? this.client && !this.client.closed : this.host && !this.host.closed),
+      reasonCode,
+      connectionAgeMs: Math.max(0, Date.now() - (connection.openedAt || Date.now()))
+    });
     connection.closed = true;
     if (typeof connection.cleanup === 'function') connection.cleanup();
     if (notifyPeer) {
@@ -291,8 +402,14 @@ export class GomokuRoom {
     try { connection.socket.close(1000, 'room connection replaced'); } catch (_) {}
   }
 
-  _onClose(connection) {
+  _onClose(connection, event = null, reasonCode = 'websocket_closed') {
     if (!connection || connection.closed) return;
+    const peerBeforeClose = connection.role === 'host' ? this.client : this.host;
+    this._log(reasonCode === 'websocket_error' ? 'socket.error' : 'socket.close', connection, {
+      peerPresent: Boolean(peerBeforeClose && !peerBeforeClose.closed),
+      closeCode: Number.isInteger(event?.code) ? event.code : undefined,
+      connectionAgeMs: Math.max(0, Date.now() - (connection.openedAt || Date.now()))
+    });
     connection.closed = true;
     if (typeof connection.cleanup === 'function') connection.cleanup();
     if (this.host === connection) this.host = null;
@@ -314,13 +431,14 @@ export class GomokuRoom {
     }
     connection.messageCount += 1;
     if (connection.messageCount > ROOM_RELAY_MAX_MESSAGES_PER_SECOND) {
-      this._closeConnection(connection, true);
+      this._log('message.rate_limited', connection, { reasonCode: 'per_second_limit' });
+      this._closeConnection(connection, true, 'rate_limited');
       return false;
     }
     return true;
   }
 
-  _topicDirectionAllowed(connection, topic, payloadObject) {
+  _topicDirectionRejectionReason(connection, topic, payloadObject) {
     const v3Root = `gomoku/v3/${this.roomCode}/`;
     const v4Root = this.roomSessionId ? `gomoku/v4/${this.roomCode}/${this.roomSessionId}/` : '';
     const outboundTopic = connection.role === 'host' ? `${v3Root}h2c` : `${v3Root}c2h`;
@@ -329,35 +447,34 @@ export class GomokuRoom {
     const isBootstrap = topic === outboundTopic;
     const isSecureData = topic === secureOutboundTopic;
     const isSecureSignal = topic === signalTopic;
-    if (!isBootstrap && !isSecureData && !isSecureSignal) return false;
+    if (!isBootstrap && !isSecureData && !isSecureSignal) return 'topic_direction';
 
     if (isBootstrap) {
       const allowedBootstrapTypes = connection.role === 'client'
         ? new Set(['join_request', 'join_ready', 'reconnect_handshake'])
         : new Set(['join_accepted', 'join_confirmed', 'room_full']);
-      if (!allowedBootstrapTypes.has(payloadObject?.type)) return false;
-      if (payloadObject.sessionId && payloadObject.sessionId !== this.roomSessionId) return false;
-      if (payloadObject.joinTicket && payloadObject.joinTicket !== this.joinTicket) return false;
-      return true;
+      if (!allowedBootstrapTypes.has(payloadObject?.type)) return 'bootstrap_type';
+      if (payloadObject.sessionId && payloadObject.sessionId !== this.roomSessionId) return 'bootstrap_session_mismatch';
+      if (payloadObject.joinTicket && payloadObject.joinTicket !== this.joinTicket) return 'bootstrap_ticket_mismatch';
+      return '';
     }
 
     if (isSecureSignal) {
       // P2P 信令里的 sessionId 是 WebRTC offer/answer 的 p2p 会话 ID，
       // 与房间业务 envelope 的 room sessionId 不同；hello 初始包可以没有它。
       return payloadObject.sender === connection.role &&
-        (!payloadObject.sessionId || roomRelaySafeId(payloadObject.sessionId));
+        (!payloadObject.sessionId || roomRelaySafeId(payloadObject.sessionId)) ? '' : 'signal_sender_mismatch';
     }
-    if (payloadObject.sessionId !== this.roomSessionId) return false;
+    if (payloadObject.sessionId !== this.roomSessionId) return 'session_mismatch';
     // v4 业务通道只服务新客户端，必须由服务端确认发送角色；缺少角色的
     // 旧格式只能留在 v3 bootstrap 兼容通道，不能直接注入正式对局消息。
-    return payloadObject.senderRole === connection.role;
+    return payloadObject.senderRole === connection.role ? '' : 'sender_role_mismatch';
   }
 
   _forward(connection, topic, payload) {
     const peer = connection.role === 'host' ? this.client : this.host;
     if (peer && !peer.closed) {
-      this._send(peer, { type: 'message', topic, payload });
-      return true;
+      return this._send(peer, { type: 'message', topic, payload });
     }
     return false;
   }
@@ -365,28 +482,73 @@ export class GomokuRoom {
   _flushBootstrapQueue() {
     if (!this.host || this.host.closed || !this.pendingBootstrap.length) return;
     const pending = this.pendingBootstrap.splice(0, ROOM_RELAY_BOOTSTRAP_QUEUE_LIMIT);
-    for (const item of pending) this._send(this.host, { type: 'message', topic: item.topic, payload: item.payload });
+    for (const item of pending) {
+      let queuedMessage = null;
+      try { queuedMessage = JSON.parse(item.payload); } catch (_) {}
+      const forwarded = this._send(this.host, { type: 'message', topic: item.topic, payload: item.payload });
+      this._log('bootstrap.flushed', this.client, {
+        messageType: typeof queuedMessage?.type === 'string' ? queuedMessage.type : 'unknown',
+        direction: 'client_to_host',
+        forwarded,
+        peerPresent: Boolean(this.host && !this.host.closed),
+        payloadBytes: roomRelayByteLength(item.payload),
+        queueLength: pending.length
+      }, 1200);
+    }
   }
 
   _onMessage(connection, rawMessage) {
     if (!connection || connection.closed ||
         (connection.role === 'host' ? this.host !== connection || connection.sessionId !== this.roomSessionId
-          : this.client !== connection || (this.roomSessionId && connection.sessionId !== this.roomSessionId))) return;
+          : this.client !== connection || (this.roomSessionId && connection.sessionId !== this.roomSessionId))) {
+      this._log('message.rejected', connection, { reasonCode: 'stale_connection' }, 10000);
+      return;
+    }
     if (!this._consumeBudget(connection)) return;
     const raw = typeof rawMessage === 'string' ? rawMessage : '';
-    if (!raw || roomRelayByteLength(raw) > ROOM_RELAY_MAX_PAYLOAD_BYTES) return;
+    if (!raw || roomRelayByteLength(raw) > ROOM_RELAY_MAX_PAYLOAD_BYTES) {
+      this._log('message.rejected', connection, { reasonCode: !raw ? 'empty_payload' : 'payload_too_large' }, 10000);
+      return;
+    }
     let message;
-    try { message = JSON.parse(raw); } catch (_) { return; }
-    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    try { message = JSON.parse(raw); } catch (_) {
+      this._log('message.rejected', connection, { reasonCode: 'invalid_json' }, 10000);
+      return;
+    }
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      this._log('message.rejected', connection, { reasonCode: 'invalid_envelope' }, 10000);
+      return;
+    }
     if (message.type === 'subscribe') return;
-    if (message.type !== 'publish' || typeof message.topic !== 'string' || message.topic.length > 256) return;
+    if (message.type !== 'publish' || typeof message.topic !== 'string' || message.topic.length > 256) {
+      this._log('message.rejected', connection, { reasonCode: 'invalid_publish_envelope' }, 10000);
+      return;
+    }
     const topic = message.topic;
     const payload = typeof message.payload === 'string' ? message.payload : JSON.stringify(message.payload ?? '');
-    if (roomRelayByteLength(payload) > ROOM_RELAY_MAX_PAYLOAD_BYTES) return;
+    const payloadBytes = roomRelayByteLength(payload);
+    if (payloadBytes > ROOM_RELAY_MAX_PAYLOAD_BYTES) {
+      this._log('message.rejected', connection, { reasonCode: 'payload_too_large', payloadBytes }, 10000);
+      return;
+    }
     let payloadObject;
-    try { payloadObject = JSON.parse(payload); } catch (_) { return; }
-    if (!payloadObject || typeof payloadObject !== 'object' || Array.isArray(payloadObject)) return;
-    if (!this._topicDirectionAllowed(connection, topic, payloadObject)) return;
+    try { payloadObject = JSON.parse(payload); } catch (_) {
+      this._log('message.rejected', connection, { reasonCode: 'invalid_inner_json' }, 10000);
+      return;
+    }
+    if (!payloadObject || typeof payloadObject !== 'object' || Array.isArray(payloadObject)) {
+      this._log('message.rejected', connection, { reasonCode: 'invalid_inner_envelope' }, 10000);
+      return;
+    }
+    const rejectionReason = this._topicDirectionRejectionReason(connection, topic, payloadObject);
+    if (rejectionReason) {
+      this._log('message.rejected', connection, {
+        messageType: typeof payloadObject.type === 'string' ? payloadObject.type : 'unknown',
+        reasonCode: rejectionReason,
+        roundId: payloadObject.roundId || ''
+      }, 3000);
+      return;
+    }
 
     const forwarded = this._forward(connection, topic, payload);
     if (forwarded && payloadObject.type === 'leave_room') {
@@ -398,7 +560,13 @@ export class GomokuRoom {
         payloadObject.type === 'join_request') {
       this.pendingBootstrap.push({ topic, payload });
       while (this.pendingBootstrap.length > ROOM_RELAY_BOOTSTRAP_QUEUE_LIMIT) this.pendingBootstrap.shift();
+      this._log('bootstrap.queued', connection, {
+        messageType: payloadObject.type,
+        queueLength: this.pendingBootstrap.length,
+        payloadBytes
+      }, 1200);
     }
+    this._recordTraffic(connection, payloadObject, forwarded, payloadBytes);
   }
 }
 
@@ -1892,6 +2060,39 @@ export default {
       `).bind(cleanUid, accessTokenHash).first();
     }
 
+    async function migrateLegacyAuthSession(uid, accessToken) {
+      const cleanUid = String(uid || '').trim();
+      const cleanToken = String(accessToken || '').trim();
+      if (!cleanUid || !cleanToken) return null;
+      const now = Date.now();
+      const accessHash = await hashWithSalt(cleanToken, `${cleanUid}:access`);
+      // INSERT reads the live legacy row inside the same D1 transaction that
+      // consumes it. A request holding an older users snapshot cannot recreate
+      // the old access token after another request has rotated the session.
+      await env.DB.batch([
+        env.DB.prepare(`
+          INSERT OR IGNORE INTO auth_sessions (
+            session_id, uid, access_token_hash, access_expires_at,
+            refresh_token_hash, refresh_expires_at, created_at, last_used_at, revoked_at
+          )
+          SELECT ?, uid, ?, CASE WHEN token_expires_at IS NULL OR token_expires_at = 0 THEN ? ELSE token_expires_at END,
+                 refresh_token_hash, COALESCE(refresh_token_expires_at, 0), ?, ?, NULL
+          FROM users WHERE uid = ? AND token = ? AND username IS NOT NULL AND username != ''
+            AND (token_expires_at IS NULL OR token_expires_at = 0 OR token_expires_at > ?)
+        `).bind(generateSecureHex(16), accessHash, now + AUTH_SESSION_TTL_MS, now, now, cleanUid, cleanToken, now),
+        env.DB.prepare(`
+          UPDATE users SET token = NULL, token_expires_at = 0,
+            refresh_token_hash = NULL, refresh_token_expires_at = 0
+          WHERE uid = ? AND token = ? AND EXISTS (
+            SELECT 1 FROM auth_sessions WHERE uid = ? AND access_token_hash = ?
+              AND revoked_at IS NULL
+              AND (access_expires_at = 0 OR access_expires_at > ? OR refresh_expires_at > ?)
+          )
+        `).bind(cleanUid, cleanToken, cleanUid, accessHash, now, now)
+      ]);
+      return findAuthSessionByAccess(cleanUid, cleanToken);
+    }
+
     async function requireUser(uid, token) {
       const cleanUid = String(uid || '').trim();
       const cleanToken = String(token || '').trim();
@@ -1913,23 +2114,23 @@ export default {
           return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
         }
       } else {
-        // 首次升级时，按需把尚有效的旧版单设备令牌迁入会话表；保留旧字段供回滚兼容。
+        // 首次升级时原子迁移并消费旧字段，防止轮换后旧凭据再次迁入。
         user = await env.DB.prepare(`
           SELECT uid, username, nickname, avatar, score, wins, total_games,
                  token_expires_at, refresh_token_hash, refresh_token_expires_at, token
           FROM users WHERE uid = ? AND token = ?
         `).bind(cleanUid, cleanToken).first();
         if (!user) return { response: json({ code: 403, msg: '未授权：Token 无效' }, 403) };
+        if (!isAllowedPrivateGameUser(user)) return { response: privateGameDenied() };
         if (user.token_expires_at && Number(user.token_expires_at) <= Date.now()) {
           return { response: json({ code: 401, msg: '登录凭证已过期，请重新登录' }, 401) };
         }
         if (user.username) {
-          await storeAuthSession(
-            cleanUid, cleanToken, null,
-            Number(user.token_expires_at) || Date.now() + AUTH_SESSION_TTL_MS,
-            Number(user.refresh_token_expires_at) || 0,
-            { refreshTokenHash: user.refresh_token_hash || null }
-          );
+          session = await migrateLegacyAuthSession(cleanUid, cleanToken);
+          if (!session || session.revoked_at ||
+              (session.access_expires_at && Number(session.access_expires_at) <= Date.now())) {
+            return { response: json({ code: 401, msg: '登录凭证已失效，请重新登录' }, 401) };
+          }
         }
       }
       if (!user) return { response: json({ code: 403, msg: '未授权：账号不存在' }, 403) };
@@ -3769,7 +3970,10 @@ async function allocateNextAvailableUid(env) {
 
         // 如果用户已绑定了正式账号名
         if (user.username) {
-          const session = token ? await findAuthSessionByAccess(user.uid, token) : null;
+          let session = token ? await findAuthSessionByAccess(user.uid, token) : null;
+          if (token && token === user.token) {
+            session = await migrateLegacyAuthSession(user.uid, token);
+          }
           if (session) {
             if (session.revoked_at || (session.access_expires_at && Number(session.access_expires_at) <= now)) {
               return json({ code: 2, msg: "登录凭证已失效，需输入密码登录" }, 401);
@@ -3794,30 +3998,7 @@ async function allocateNextAvailableUid(env) {
               // Several tabs can verify one access token at the same time. Only
               // one may rotate the refresh token; a loser must never return a
               // token that another request has already replaced.
-              const current = await env.DB.prepare(`
-                SELECT uid, username, nickname, avatar, score, wins, total_games, token, token_expires_at
-                FROM users WHERE uid = ?
-              `).bind(user.uid).first();
-              if (!current || current.token !== user.token ||
-                  (current.token_expires_at && Number(current.token_expires_at) <= now)) {
-                return json({ code: 2, msg: "登录状态已更新，请重新验证" }, 401);
-              }
-              return json({
-                code: 0,
-                msg: "正式账号凭证有效",
-                data: {
-                  uid: current.uid,
-                  username: current.username,
-                  nickname: current.nickname,
-                  publicUid: publicUidForAccount(current.username),
-                  avatar: avatarForAccount(current.username, current.avatar),
-                  score: current.score,
-                  wins: current.wins,
-                  total_games: current.total_games,
-                  security_q: user.security_q,
-                  token: current.token
-                }
-              });
+              return json({ code: 2, retryable: true, msg: "登录状态已更新，请重新验证" }, 401);
             }
 
             return json({
@@ -3893,12 +4074,23 @@ async function allocateNextAvailableUid(env) {
           SELECT session_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, revoked_at
           FROM auth_sessions WHERE uid = ? AND refresh_token_hash = ?
         `).bind(user.uid, calculatedHash).first();
-        const isLegacySession = !session && calculatedHash === user.refresh_token_hash &&
-          Number(user.refresh_token_expires_at) > now;
+        if (!session && calculatedHash === user.refresh_token_hash &&
+            Number(user.refresh_token_expires_at) > now && user.token) {
+          await migrateLegacyAuthSession(user.uid, user.token);
+          session = await env.DB.prepare(`
+            SELECT session_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, revoked_at
+            FROM auth_sessions WHERE uid = ? AND refresh_token_hash = ?
+          `).bind(user.uid, calculatedHash).first();
+        } else if (session && user.token &&
+            await hashWithSalt(String(user.token), `${user.uid}:access`) === session.access_token_hash) {
+          // Sessions migrated by older versions may still have a legacy alias.
+          // Consume it before changing the access hash so it cannot be revived.
+          await migrateLegacyAuthSession(user.uid, user.token);
+        }
         if (session && (session.revoked_at || !session.refresh_expires_at || Number(session.refresh_expires_at) <= now)) {
           return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
         }
-        if (!session && !isLegacySession) {
+        if (!session) {
           // A parallel request may already have rotated this device's token.
           return json({ code: 2, retryable: true, msg: "登录凭证已在其他请求中更新，请重试" }, 401);
         }
@@ -3908,33 +4100,16 @@ async function allocateNextAvailableUid(env) {
         const freshAccessTokenHash = await hashWithSalt(freshToken, `${user.uid}:access`);
         const freshRefreshTokenHash = await hashWithSalt(freshRefreshToken, String(user.uid));
         const expiresAt = now + AUTH_SESSION_TTL_MS;
-        let refreshed;
-        if (session) {
-          refreshed = await env.DB.prepare(`
-            UPDATE auth_sessions
-            SET access_token_hash = ?, access_expires_at = ?, refresh_token_hash = ?,
-                refresh_expires_at = ?, last_used_at = ?
-            WHERE session_id = ? AND uid = ? AND refresh_token_hash = ?
-              AND revoked_at IS NULL AND refresh_expires_at > ?
-          `).bind(
-            freshAccessTokenHash, expiresAt, freshRefreshTokenHash, expiresAt, now,
-            session.session_id, user.uid, calculatedHash, now
-          ).run();
-        } else {
-          const legacyAccessToken = String(user.token || '');
-          if (!legacyAccessToken || (user.token_expires_at && Number(user.token_expires_at) <= now)) {
-            return json({ code: 2, msg: "登录凭证已失效，请重新登录" }, 401);
-          }
-          const created = await storeAuthSession(user.uid, freshToken, freshRefreshToken, expiresAt, expiresAt);
-          refreshed = await env.DB.prepare(`
-            UPDATE users SET refresh_token_hash = ?, refresh_token_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE uid = ? AND refresh_token_hash = ? AND refresh_token_expires_at > ?
-          `).bind(freshRefreshTokenHash, expiresAt, user.uid, calculatedHash, now).run();
-          if (Number(refreshed?.meta?.changes) !== 1) {
-            await env.DB.prepare(`UPDATE auth_sessions SET revoked_at = ? WHERE session_id = ? AND uid = ?`)
-              .bind(now, created.sessionId, user.uid).run();
-          }
-        }
+        const refreshed = await env.DB.prepare(`
+          UPDATE auth_sessions
+          SET access_token_hash = ?, access_expires_at = ?, refresh_token_hash = ?,
+              refresh_expires_at = ?, last_used_at = ?
+          WHERE session_id = ? AND uid = ? AND refresh_token_hash = ?
+            AND revoked_at IS NULL AND refresh_expires_at > ?
+        `).bind(
+          freshAccessTokenHash, expiresAt, freshRefreshTokenHash, expiresAt, now,
+          session.session_id, user.uid, calculatedHash, now
+        ).run();
         if (Number(refreshed?.meta?.changes) !== 1) {
           return json({ code: 2, retryable: true, msg: "登录凭证已在其他请求中更新，请重试" }, 401);
         }

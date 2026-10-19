@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { STATUS_CODES } from 'node:http';
 import { Readable } from 'node:stream';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { D1Database } from './d1.mjs';
 import { makeRuntimeEnv } from './runtime-env.mjs';
@@ -26,6 +26,91 @@ const HOP_BY_HOP_HEADERS = new Set([
 function safeErrorName(error) {
   const name = String(error?.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
   return name || 'Error';
+}
+
+const roomDiagnosticsEnabled = String(process.env.GOMOKU_ROOM_DIAGNOSTICS || '1').trim() !== '0';
+// Tags let operators correlate a room/session during this process lifetime without
+// putting joinable room codes, tickets, account IDs, or user content in journald.
+const roomDiagnosticsKey = randomBytes(32);
+const roomDiagnosticRateBuckets = new Map();
+const ROOM_DIAGNOSTIC_WINDOW_MS = 60_000;
+const ROOM_DIAGNOSTIC_MAX_PER_EVENT = 1200;
+
+function privateDiagnosticTag(value) {
+  const text = String(value || '').slice(0, 160);
+  if (!text) return '';
+  return createHmac('sha256', roomDiagnosticsKey).update(text).digest('hex').slice(0, 12);
+}
+
+function emitDiagnosticRecord(record) {
+  const rateKey = `${record.component}:${record.event}:${record.reasonCode || ''}`;
+  const now = Date.now();
+  let bucket = roomDiagnosticRateBuckets.get(rateKey);
+  if (!bucket || now - bucket.startedAt >= ROOM_DIAGNOSTIC_WINDOW_MS) {
+    if (bucket?.suppressed) {
+      console.info(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        component: record.component,
+        event: 'events.suppressed',
+        sourceEvent: record.event,
+        reasonCode: record.reasonCode || '',
+        suppressed: bucket.suppressed
+      }));
+    }
+    bucket = { startedAt: now, count: 0, suppressed: 0 };
+    roomDiagnosticRateBuckets.set(rateKey, bucket);
+  }
+  if (bucket.count >= ROOM_DIAGNOSTIC_MAX_PER_EVENT) {
+    bucket.suppressed += 1;
+    return;
+  }
+  bucket.count += 1;
+  console.info(JSON.stringify(record));
+}
+
+function writeRoomDiagnostic(event = {}) {
+  if (!roomDiagnosticsEnabled || !event || typeof event !== 'object') return;
+  const record = {
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    component: 'room-relay',
+    event: String(event.event || 'unknown').replace(/[^a-z0-9_.-]/gi, '').slice(0, 64) || 'unknown'
+  };
+  const tagFields = [
+    ['roomCode', 'roomTag'], ['roomSessionId', 'roomSessionTag'],
+    ['sessionId', 'connectionSessionTag'], ['requestedSessionId', 'requestedSessionTag'],
+    ['expectedSessionId', 'expectedSessionTag'], ['previousSessionId', 'previousSessionTag'],
+    ['nextSessionId', 'nextSessionTag'], ['roundId', 'roundTag'],
+    ['nextRoundId', 'nextRoundTag'], ['requestId', 'requestTag']
+  ];
+  for (const [source, target] of tagFields) {
+    const tag = privateDiagnosticTag(event[source]);
+    if (tag) record[target] = tag;
+  }
+  if (/^[A-Za-z0-9_-]{1,40}$/.test(String(event.connectionId || ''))) record.connectionId = event.connectionId;
+  if (event.role === 'host' || event.role === 'client') record.role = event.role;
+  if (typeof event.messageType === 'string') {
+    record.messageType = event.messageType.replace(/[^a-z0-9_]/gi, '').slice(0, 48) || 'unknown';
+  }
+  if (typeof event.direction === 'string' && /^(host_to_client|client_to_host)$/.test(event.direction)) record.direction = event.direction;
+  if (typeof event.reasonCode === 'string') record.reasonCode = event.reasonCode.replace(/[^a-z0-9_]/gi, '').slice(0, 48);
+  for (const key of ['peerPresent', 'requestedSessionMismatch', 'forwarded', 'isOver']) {
+    if (typeof event[key] === 'boolean') record[key] = event[key];
+  }
+  for (const key of ['payloadBytes', 'closeCode', 'connectionAgeMs', 'queueLength', 'stepCount', 'statusCode']) {
+    if (Number.isSafeInteger(event[key]) && event[key] >= 0) record[key] = Math.min(event[key], 10_000_000);
+  }
+  if (event.counts && typeof event.counts === 'object') {
+    const counts = Object.create(null);
+    for (const [key, value] of Object.entries(event.counts)) {
+      if (/^(ping|pong|move|chat)_(forwarded|no_peer)$/.test(key) && Number.isSafeInteger(value) && value > 0) {
+        counts[key] = Math.min(value, 1_000_000);
+      }
+    }
+    if (Object.keys(counts).length) record.counts = counts;
+  }
+  emitDiagnosticRecord(record);
 }
 
 function parsePort(value) {
@@ -274,6 +359,7 @@ const reportBackgroundError = error => {
   console.error(`[gomoku-ecs] background task failed (${safeErrorName(error)})`);
 };
 const env = makeRuntimeEnv(database, null, null);
+env.GOMOKU_DIAGNOSTICS = { logRoomEvent: writeRoomDiagnostic };
 const rooms = new MemoryDurableObjectNamespace(workerModule.GomokuRoom, env, { onBackgroundError: reportBackgroundError });
 const social = new MemoryDurableObjectNamespace(workerModule.SocialHub, env, { onBackgroundError: reportBackgroundError });
 env.GOMOKU_ROOMS = rooms;
@@ -319,9 +405,19 @@ const server = createServer(async (request, response) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
+  const requestId = randomUUID().replace(/-/g, '').slice(0, 12);
+  const startedAt = Date.now();
+  const logUpgrade = fields => emitDiagnosticRecord({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    component: 'websocket-transport',
+    requestId,
+    ...fields
+  });
   pendingUpgradeSockets.add(socket);
   socket.once('close', () => pendingUpgradeSockets.delete(socket));
   if (shuttingDown) {
+    logUpgrade({ event: 'upgrade.rejected', reasonCode: 'server_shutting_down', statusCode: 503 });
     socket.destroy();
     return;
   }
@@ -337,6 +433,12 @@ server.on('upgrade', (request, socket, head) => {
         return;
       }
       if (workerResponse.status !== 101 || !workerResponse.webSocket) {
+        logUpgrade({
+          event: 'upgrade.rejected',
+          reasonCode: 'worker_rejected',
+          statusCode: Number(workerResponse.status) || 502,
+          durationMs: Math.max(0, Date.now() - startedAt)
+        });
         await sendWebSocketUpgradeError(socket, workerResponse, context);
         return;
       }
@@ -344,15 +446,41 @@ server.on('upgrade', (request, socket, head) => {
       wsServer.handleUpgrade(request, socket, head, networkSocket => {
         try {
           bridgePairToNetwork(workerResponse.webSocket, networkSocket);
+          const openedAt = Date.now();
+          const connectionId = requestId;
+          logUpgrade({
+            event: 'upgrade.accepted',
+            statusCode: 101,
+            durationMs: Math.max(0, openedAt - startedAt)
+          });
+          networkSocket.once('close', code => logUpgrade({
+            event: 'connection.closed',
+            connectionId,
+            closeCode: Number.isInteger(code) ? code : 1006,
+            connectionAgeMs: Math.max(0, Date.now() - openedAt)
+          }));
+          networkSocket.once('error', error => logUpgrade({
+            event: 'connection.error',
+            connectionId,
+            errorType: safeErrorName(error)
+          }));
           wsServer.emit('connection', networkSocket, request);
           pendingUpgradeSockets.delete(socket);
-        } catch (_) {
+        } catch (error) {
+          logUpgrade({ event: 'upgrade.bridge_failed', errorType: safeErrorName(error) });
           try { networkSocket.close(1011, 'WebSocket bridge failed'); } catch (_) {}
           pendingUpgradeSockets.delete(socket);
         }
       });
     } catch (error) {
       const status = Number(error?.statusCode) || 500;
+      logUpgrade({
+        event: 'upgrade.error',
+        reasonCode: 'worker_exception',
+        statusCode: status,
+        errorType: safeErrorName(error),
+        durationMs: Math.max(0, Date.now() - startedAt)
+      });
       if (status >= 500) console.error(`[gomoku-ecs] WebSocket ${pathname} failed (${safeErrorName(error)})`);
       if (!socket.destroyed) {
         const body = Buffer.from(status === 400 ? 'Bad Request' : status === 413 ? 'Payload Too Large' : 'Service Unavailable');

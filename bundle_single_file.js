@@ -270,9 +270,38 @@ const updateCompatibilityTags = [
 ].join('\n  ');
 html = html.replace(/<\/head>/i, `  ${updateCompatibilityTags}\n</head>`);
 
-console.log('>>> [3/3] 写入生成单文件版: ' + OUTPUT_FILE);
+function safeWriteFile(targetPath, content) {
+  const cleanContent = content.replace(/[ \t]+$/gm, '');
+  const tempPath = `${targetPath}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, cleanContent, 'utf8');
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      if (fs.existsSync(targetPath)) {
+        try { fs.unlinkSync(targetPath); } catch (_) {}
+      }
+      fs.renameSync(tempPath, targetPath);
+      return;
+    } catch (e) {
+      retries--;
+      if (retries === 0) {
+        try {
+          fs.writeFileSync(targetPath, cleanContent, 'utf8');
+          try { fs.unlinkSync(tempPath); } catch (_) {}
+          return;
+        } catch (finalErr) {
+          try { fs.unlinkSync(tempPath); } catch (_) {}
+          throw finalErr;
+        }
+      }
+      const end = Date.now() + 250;
+      while (Date.now() < end) {}
+    }
+  }
+}
+
 // 生成包统一去除行尾空格，避免单文件构建造成无意义的 diff 噪声。
-fs.writeFileSync(OUTPUT_FILE, html.replace(/[ \t]+$/gm, ''), 'utf8');
+safeWriteFile(OUTPUT_FILE, html);
 
 const stat = fs.statSync(OUTPUT_FILE);
 console.log(`✅ 单文件全功能版打包成功！`);

@@ -11,16 +11,17 @@
   const lowPower = Number(navigator.hardwareConcurrency || 8) <= 4 || Number(navigator.deviceMemory || 8) <= 3;
   const duration = lowPower ? 3000 : 3600;
   // Keep the center empty: the stones draw only the heart's outline.
-  // Black occupies the left half; white occupies the right half.
+  // Black occupies the left half; white occupies the right half. The two
+  // centerline stones split the colors evenly: 13 black and 13 white.
   const stones = Object.freeze([
-    [2, 4], [2, 10], [2, 5], [2, 9],
-    [3, 3], [3, 11], [3, 6], [3, 8],
-    [4, 2], [4, 12], [4, 7],
-    [5, 1], [5, 13], [6, 1], [6, 13],
-    [7, 2], [7, 12], [8, 3], [8, 11],
-    [9, 4], [9, 10], [10, 5], [10, 9],
-    [11, 6], [11, 8], [12, 7]
-  ].map(([row, col]) => Object.freeze([row, col, col < 7 ? 0 : 1])));
+    [2, 4, 0], [2, 10, 1], [2, 5, 0], [2, 9, 1],
+    [3, 3, 0], [3, 11, 1], [3, 6, 0], [3, 8, 1],
+    [4, 2, 0], [4, 12, 1], [4, 7, 0],
+    [5, 1, 0], [5, 13, 1], [6, 1, 0], [6, 13, 1],
+    [7, 2, 0], [7, 12, 1], [8, 3, 0], [8, 11, 1],
+    [9, 4, 0], [9, 10, 1], [10, 5, 0], [10, 9, 1],
+    [11, 6, 0], [11, 8, 1], [12, 7, 1]
+  ].map(stone => Object.freeze(stone)));
   window.GOMOKU_HEART_STONES = stones;
   window.dispatchEvent(new Event('gomoku-heart-stones-ready'));
   let finished = false;
@@ -33,6 +34,11 @@
   let canvasHeight = 0;
   let canvasDpr = 1;
   const stoneSprites = [null, null];
+  let boardLayerCanvas = null;
+  let boardLayerContext = null;
+  let boardLayerWidth = 0;
+  let boardLayerHeight = 0;
+  let boardLayerDpr = 0;
 
   function hasNativeBridge() {
     try {
@@ -56,11 +62,17 @@
     finished = true;
     window.clearTimeout(finishTimer);
     window.cancelAnimationFrame(animationFrame);
+    window.removeEventListener('resize', resizeBoard);
     document.documentElement.classList.remove('startup-splash-active');
     root.classList.add('is-dismissing');
     root.setAttribute('aria-hidden', 'true');
     window.setTimeout(() => {
       root.hidden = true;
+      // The opening is one-shot. Drop its offscreen buffers after the fade,
+      // rather than retaining them throughout the game via event closures.
+      if (boardLayerCanvas) boardLayerCanvas.width = boardLayerCanvas.height = 0;
+      boardLayerCanvas = boardLayerContext = null;
+      stoneSprites[0] = stoneSprites[1] = null;
       root.classList.remove('is-dismissing');
       root.dataset.dismissReason = reason || 'complete';
       try {
@@ -116,6 +128,9 @@
     context.fill();
     const centerY = y + drop;
     const sprite = stoneSprites[color];
+    // Animate position and size, keeping each stone's color visible from the
+    // first frame rather than fading it in over its dark contact shadow.
+    context.globalAlpha = 1;
     if (sprite) context.drawImage(sprite, x - drawRadius, centerY - drawRadius, drawRadius * 2, drawRadius * 2);
     context.restore();
   }
@@ -155,6 +170,69 @@
     return sprite;
   }
 
+  function drawBoardGrid(target, firstX, firstY, lastX, lastY, step, centerX, centerY) {
+    target.lineCap = 'round';
+    // Begin with a complete empty board; the animation focuses on forming the heart.
+    const reveal = 1;
+    if (reveal > 0) {
+      for (let index = 0; index < 15; index++) {
+        const distance = Math.abs(index - 7) / 7;
+        const span = easeOut((reveal - distance * .11) / .9);
+        if (span <= 0) continue;
+        const halfHeight = (lastY - firstY) * .5 * span;
+        const halfWidth = (lastX - firstX) * .5 * span;
+        target.strokeStyle = 'rgba(53, 76, 48, ' + (.32 + .34 * reveal) + ')';
+        target.lineWidth = Math.max(.7, step * .032);
+        target.beginPath();
+        target.moveTo(firstX + index * step, centerY - halfHeight);
+        target.lineTo(firstX + index * step, centerY + halfHeight);
+        target.moveTo(centerX - halfWidth, firstY + index * step);
+        target.lineTo(centerX + halfWidth, firstY + index * step);
+        target.stroke();
+      }
+      const starReveal = 1;
+      if (starReveal > 0) {
+        target.fillStyle = 'rgba(52, 75, 46, ' + (.42 * starReveal) + ')';
+        for (let rowIndex = 0; rowIndex < 3; rowIndex++) {
+          const row = 3 + rowIndex * 4;
+          for (let colIndex = 0; colIndex < 3; colIndex++) {
+            const col = 3 + colIndex * 4;
+            target.beginPath();
+            target.arc(firstX + col * step, firstY + row * step, Math.max(1.4, step * .055), 0, Math.PI * 2);
+            target.fill();
+          }
+        }
+      }
+    }
+  }
+
+  function ensureBoardLayer(width, height, firstX, firstY, lastX, lastY, step, centerX, centerY) {
+    if (!boardLayerCanvas) {
+      try {
+        boardLayerCanvas = document.createElement('canvas');
+      } catch (_) {
+        return false;
+      }
+    }
+    const pixelWidth = Math.round(width * canvasDpr);
+    const pixelHeight = Math.round(height * canvasDpr);
+    if (boardLayerContext && boardLayerWidth === width && boardLayerHeight === height
+        && boardLayerDpr === canvasDpr && boardLayerCanvas.width === pixelWidth
+        && boardLayerCanvas.height === pixelHeight) return true;
+
+    boardLayerCanvas.width = pixelWidth;
+    boardLayerCanvas.height = pixelHeight;
+    boardLayerContext = boardLayerCanvas.getContext ? boardLayerCanvas.getContext('2d') : null;
+    if (!boardLayerContext) return false;
+    boardLayerWidth = width;
+    boardLayerHeight = height;
+    boardLayerDpr = canvasDpr;
+    boardLayerContext.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
+    boardLayerContext.clearRect(0, 0, width, height);
+    drawBoardGrid(boardLayerContext, firstX, firstY, lastX, lastY, step, centerX, centerY);
+    return true;
+  }
+
   function drawBoard(progress) {
     if (!context || !canvasWidth || !canvasHeight) return;
     const width = canvasWidth;
@@ -172,41 +250,14 @@
     const centerX = (firstX + lastX) * .5;
     const centerY = (firstY + lastY) * .5;
 
+    const hasCachedBoard = ensureBoardLayer(width, height, firstX, firstY, lastX, lastY, step, centerX, centerY);
     context.setTransform(canvasDpr, 0, 0, canvasDpr, 0, 0);
     context.clearRect(0, 0, width, height);
-    context.lineCap = 'round';
-    // Begin with a complete empty board; the animation focuses on forming the heart.
-    const reveal = 1;
-    if (reveal > 0) {
-      for (let index = 0; index < 15; index++) {
-        const distance = Math.abs(index - 7) / 7;
-        const span = easeOut((reveal - distance * .11) / .9);
-        if (span <= 0) continue;
-        const halfHeight = (lastY - firstY) * .5 * span;
-        const halfWidth = (lastX - firstX) * .5 * span;
-        context.strokeStyle = 'rgba(53, 76, 48, ' + (.32 + .34 * reveal) + ')';
-        context.lineWidth = Math.max(.7, step * .032);
-        context.beginPath();
-        context.moveTo(firstX + index * step, centerY - halfHeight);
-        context.lineTo(firstX + index * step, centerY + halfHeight);
-        context.moveTo(centerX - halfWidth, firstY + index * step);
-        context.lineTo(centerX + halfWidth, firstY + index * step);
-        context.stroke();
-      }
-      const starReveal = 1;
-      if (starReveal > 0) {
-        context.fillStyle = 'rgba(52, 75, 46, ' + (.42 * starReveal) + ')';
-        for (const row of [3, 7, 11]) {
-          for (const col of [3, 7, 11]) {
-            context.beginPath();
-            context.arc(firstX + col * step, firstY + row * step, Math.max(1.4, step * .055), 0, Math.PI * 2);
-            context.fill();
-          }
-        }
-      }
-    }
+    if (hasCachedBoard) context.drawImage(boardLayerCanvas, 0, 0, width, height);
+    else drawBoardGrid(context, firstX, firstY, lastX, lastY, step, centerX, centerY);
 
-    stones.forEach((stone, index) => {
+    for (let index = 0; index < stones.length; index++) {
+      const stone = stones[index];
       const start = .22 + index * .027;
       const stoneProgress = clamp((progress - start) / .09);
       drawStone(
@@ -216,7 +267,7 @@
         stone[2],
         stoneProgress
       );
-    });
+    }
   }
 
   function createStoneSprites() {

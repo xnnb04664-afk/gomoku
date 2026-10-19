@@ -1,6 +1,10 @@
 # 五子棋项目交接手册：从零启动
 
-更新日期：2026-10-18
+更新日期：2026-10-19
+
+最新本地候选：棋盘边框与首页预览、预言命中回合、人机随机黑白已调整；卡牌按用户最后确认保持默认展开。手机对局按参考图放大，保留上下金边；启动棋子取消贴图淡入，首页/网页启动/原生启动统一为 13 黑、13 白。行为、验证边界及当前交付摘要见 `BOARD_TURN_FIXES_20261019.md`；此前性能报告内摘要是更早候选。尚未安装真机或发布线上。
+
+启动流畅度后续优化：网页缓存静态网格，退出后释放缓存；Android 后台准备纹理，首页衔接改为 180 ms 淡出并延后释放图片。已新增缓存与原生淡出生命周期测试；实际设备帧率尚未验证，细节同上。
 项目目录：D:\小游戏\五子棋
 本手册替代旧版按日期堆叠的长交接日志。历史记录与当前代码不一致时，以当前代码、测试和重新核验的线上状态为准。
 
@@ -14,7 +18,7 @@
 
 ## 项目概况
 
-产品显示名为“五子棋云屿晴光”的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 和房间中继默认只连接 ECS；Cloudflare 游戏 API/中继应急开关默认关闭，更新下载仍保留 Cloudflare 最后应急出口。仓库里的本地 Node 服务仍只托管静态文件。
+中文优先的标准五子棋游戏，游戏首页直接提供 AI 对战、在线匹配、跟好友玩三个入口；好友、棋谱、我的仍是独立页面。项目还提供账号与社交、官网、Android APK 和离线单文件版。游戏 API 和房间中继默认只连接 ECS；Cloudflare 游戏 API/中继应急开关默认关闭，更新下载仍保留 Cloudflare 最后应急出口。仓库里的本地 Node 服务仍只托管静态文件。
 
 - 源码仓库：https://github.com/xnnb04664-afk/gomoku
 - 官网：https://gomoku-home.pages.dev/
@@ -47,8 +51,8 @@ node server.js
 | backend/ecs-host/ | 在 Node ECS 上运行同一 Worker 的 SQLite、WebSocket 与内存 Durable Object 适配层 |
 | js/ecs-config.js | ECS 公共 API 地址；需随网页、单文件和 Android 构建同步 |
 | migrations/ | D1 SQL 迁移；Worker 也有幂等建表逻辑，改表前需检查两处 |
-| android_src/ | Android WebView 容器、Java 源码、Manifest 和资源镜像 |
-| build_apk.js | 按 APK 运行资源清单同步资源、构建并使用正式签名密钥签 APK；Android 图片资源有独立的 WebP 优化副本 |
+| android_src/ | Android WebView 容器、Java 桥接、`cpp/gomoku_ai.cpp` NDK 搜索引擎、Manifest 和资源镜像 |
+| build_apk.js | 按 APK 运行资源清单同步资源，使用 NDK 编译并打包 Android 原生 AI，再用正式签名密钥签 APK；Android 图片资源有独立的 WebP 优化副本 |
 | bundle_single_file.js | 生成根目录离线单文件 HTML |
 | build_official_site.js | 同步官网游戏资源并更新版本信息 |
 | official-site/ | 官网首页、帮助、隐私、独立社交页和 Pages Worker |
@@ -150,7 +154,7 @@ npm run build:official-site
 - build:app 使用 Terser 生成压缩 JS；build_apk.js 自身也会执行 build:app 并同步 android_src/assets。
 - node build_apk.js --sync-only 只同步资源，不会生成 APK。
 - 单文件版和 Android 入口共用“晴空棋岛”开场：云海晨光底图、实战同款云石棋台、15×15 对齐网格先以空棋盘展示，再由黑白棋子逐步摆成中空爱心。网页尊重减少动态效果设置并可轻触继续；Android 12+ 系统启动主题先显示空棋台，WebView 完成一次性初始化后再启动约 3.6 秒的原生落子动画。Android 把静态云海/标题/棋台网格与动态棋子拆成独立图层，动画期间只刷新棋子层，避免反复重绘整屏；图片仍在后台解码，失败时保留空棋台预览；切到后台会暂停动画，恢复时接续播放。慢启动时保留画面并显示等待提示，不按固定计时器露出灰底。
-- APK 构建机需要 JDK（当前已验证 JDK 17）、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。
+- APK 构建机需要 JDK 17、Android SDK Platform 35、Build Tools 35.0.0、Platform Tools/adb 和 Android NDK r27c；NDK 默认从 `ANDROID_SDK_ROOT/ndk` 自动发现，也可用 `ANDROID_NDK_HOME` 指定。构建脚本用 NDK Clang 编译 `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64` 四种 ABI，并打包 16 KB ELF 页面兼容的 `libgomoku_ai.so`。优先使用 ASCII SDK 路径 D:\Android\Sdk，避开 AAPT2 的中文路径兼容问题。网页热更新不会替换 Android 原生库，AI 原生代码改动必须完整重建 APK。
 - 更新游戏版号时同步 version.json、AndroidManifest.xml 和 JS 当前版本。node publish.js --help 会显示说明；该脚本会构建、改版本、提交并推送，还会创建或上传 GitHub Release。只有用户明确要求正式发版时才运行。
 - official-site/play/ 是忽略的构建产物，不要手改或强行纳入 Git。构建后再部署。
 
@@ -201,7 +205,7 @@ adb install .\五子棋.apk
 线上服务状态会随部署和配置变化。每次更新都要从服务器读取当前服务与反向代理配置、先完成受限备份，再用健康检查和 SQLite 完整性检查验收。数据库内容、账号统计、主机地址、备份路径和密钥不应复制到公开文档或 GitHub。源码或构建成功不等于 ECS 已更新，也不等于真实客户端验收通过。
 ## Git 与提交边界
 
-当前已发布业务基线是 master 上的 `89323163`（v1.0.137 / Android Build 138）。交接文档修订应单独提交；生产私有配置和账号数据不得进入仓库。
+本地版本、Git 提交与线上发布状态应分别核对。2026-10-19 本地 HEAD 对齐至 `e59b4a9`，`version.json` 为 `1.0.147` / Android Build 148，包含棋盘放大、预言换手、人机随机黑白与 C++ NDK 原生搜索等优化；正式发版通过 publish.js 发布 GitHub Release。交接文档修订应单独提交；生产私有配置和账号数据不得进入仓库。
 
 提交前运行 git diff --check、git status --short、git diff -- PROJECT_HANDOVER.md。只按文件名暂存，例如 git add -- PROJECT_HANDOVER.md。需要推送或部署时先核实目标分支和项目；正式发版、Cloudflare Worker/Pages 或生产 D1 的改动应处于用户明确授权范围内。
 
@@ -303,3 +307,30 @@ adb install .\五子棋.apk
 - 官方站 Pages 已部署到 `gomoku-home` 的 `master` Production，部署提交为 `86983e8`。首页、帮助、好友、游戏页、robots、sitemap 与 `/api/site-version` 实际访问均返回 HTTP 200；版本接口返回 `v1.0.146` / Build 147。Wrangler 打印部署完成，但本机命令最后返回非零退出码；Cloudflare 部署记录和生产站点请求均确认发布已生效。
 - ECS `/api/version` 已动态返回 `v1.0.146`，APK 与 HTML SHA-256 均匹配 Release；因此无需重启 ECS、改数据库或部署游戏 Worker。本轮只部署官方站 Pages，不部署 Cloudflare 游戏 API/中继 Worker。
 - 当前本机检查中，备案域名 `xnxy99.cn` 尚未通过 HTTPS 验证，因此官网 canonical 继续使用 `gomoku-home.pages.dev`；域名 DNS 与证书稳定后再切换。APK 完成签名与包版本核验，但本轮未安装到 MuMu 或真机。
+
+## 2026-10-19 Android 人机搜索迁移到 C++ NDK
+
+- `android_src/cpp/gomoku_ai.cpp` 是 Android 人机搜索的 C++ NDK 主实现。Java `NativeGomokuAI` 每次决策通过单次 JNI 调用传棋盘和禁点，返回落点、评分、完成深度与节点数；原 Java 搜索保留为本机库加载或调用失败时的兼容回退，网页 Worker 仍是上层回退。棋盘状态、技能处理、落子动画和棋谱仍由网页逻辑负责。
+- C++ 实现沿用现有大师搜索策略：3^11 局部棋型统计、战术和开局候选、10 ply 强制威胁证明、最多 12 层迭代加深、Alpha-Beta、双 Zobrist 校验置换表、killer/history 着法排序、战术叶评估与 1.1 秒搜索预算。预算是搜索上限，不代表所有设备的实际响应时长；JNI 返回完成深度和节点数，Java 桥接另外记录本次决策总耗时，供后续实机测量。
+- `build_apk.js` 在完整 APK 构建时调用 SDK 内的 NDK Clang 编译四种 ABI，将 `.so` 加入 APK；`--sync-only` 不编译原生库。用户收到新 C++ 引擎必须安装完整 APK，更新网页文件或单文件版不会更新 JNI/C++ 实现。
+- 2026-10-19 本地完整 APK 构建成功，当前 `五子棋.apk` 已包含四种 ABI 的 `libgomoku_ai.so`（arm64-v8a、armeabi-v7a、x86、x86_64）。这证明原生库已进入本地 APK；尚未在 MuMu/真机确认实际决策走 C++ 路径，也未测量设备落子耗时或做棋力对照。Java 和网页 Worker 回退仍然存在。
+
+## 2026-10-19 手机棋台放大与 v1.0.147 本地构建
+
+- 当前 `version.json` 为 `1.0.147` / `versionCode=148`。手机对局画布占满可用屏幕宽度，仍使用原有云石棋台素材并整体放大（`PHONE_BOARD_ZOOM=1.51`，垂直偏移 `0.063`）；外围素材随画布裁切。手机网格在画布内缩进 `3.5%`，网格、星位、棋子和触摸命中共用棋盘坐标。桌面网页使用较大的对局画布；Android 保留触控优先的手机布局。实现位置：`js/app.js`、`js/sky-island.css`。
+- 本地构建产物：根目录 APK `五子棋.apk`（4,194,703 bytes，SHA-256 `F79FC0166EFE89D7CC7B352A844B3577ECE64B867E725F30F6A46DC54980F9B5`），单文件版 `五子棋大师_单文件版.html`（13,069,341 bytes，SHA-256 `C29BEA7A9D7A5DC8B964F41A528B97593C5E32F9A6C24B6777DED7BDD5E3D62E`）；`official-site/play/index.html` 已由构建脚本生成。APK 静态检查确认四种 ABI 原生库均在包内。
+- 本地构建不等于设备验收：当前没有 MuMu/真机安装和界面实测，也没有双端联网验收。此工作区快照未执行 GitHub 发布或 ECS 部署；不要把本地版本号或 APK 当作线上已更新。
+- **交接时工作区快照（2026-10-19）：**分支 `master`，HEAD `6b4db60`，相对 `origin/master` 落后 2 个提交；存在多处既有未提交源码、Android、后端、官网和生成物改动，`PROJECT_HANDOVER.md` 在本次更新前也已处于修改状态。接手先重新运行 `git status --short --branch` 和 `git diff`，逐项识别来源；不要 `git clean`、整批暂存或直接覆盖/重建用户产物。官网 `official-site/play/` 是构建产物，不要手改。只有确认文件无用时才按项目要求移入 `D:\回收站`。
+
+## 2026-10-19 本地审查修复候选
+
+- 后续审查修复了旧登录凭据迁移/轮换、并发验证返回旧令牌、终局房间重连、退出后的异步重连接管、半开中继失效、重开事务防重入，以及 Android 启动图片失败时无法自动退出等问题；细节和验证边界见 `REVIEW_20261019.md`。
+- 登录回归现在用内存 SQLite 执行真实 SQL，覆盖并发、撤销、跨设备和旧凭据不可复活。新增终局重连与半开连接回归；Android 启动与 AI 路由测试已适配当前实现。
+- 本轮保留 `1.0.147 / Build 148` 版号，重新同步本地 APK、单文件 HTML 和官网游戏副本，因此上节记录的构建摘要属于修复前产物。当前摘要以审查记录为准；没有执行设备安装、GitHub 发布或 ECS/Cloudflare 部署。
+
+## 2026-10-19 人机计算效率优化候选
+
+- 后续已优化 C++ 增量棋型、棋线评分缓存和候选容器，加入进入人机后的串行预热、Java 回退大表惰性初始化，并移除普通人机回合固定 80 ms 等待。搜索预算、评分、候选范围和深度保留。
+- 主机 `-O3` 固定工作量对照为约 1.98 倍计算速度，22 个局面/526 个状态快照及固定深度结果一致；这不是手机端落子延迟或全局棋力保证。验证细节、复现方法和最新本地产物摘要以 `AI_PERFORMANCE_20261019.md` 为准，`REVIEW_20261019.md` 的产物摘要属于性能优化前候选。
+- 新桥回传引擎标记 `cpp`/`java`，网页统计另含 `worker`/`js-fallback`/`native-unknown`，可读取 `window.gomokuLastAiStats` 的 `engine`、`searchMs`、`queueMs` 和 `roundTripMs` 区分实际搜索路径和等待。旧桥仍兼容。
+- 已重新生成正式签名本地 APK（仍为 Build 148）、单文件和官网副本；没有安装设备或发布线上。需要完整 APK 才能交付原生优化，不能只做网页热更新。

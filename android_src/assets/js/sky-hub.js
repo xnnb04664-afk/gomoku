@@ -1,6 +1,11 @@
 (() => {
   'use strict';
 
+  const nativeAndroid = Boolean(window.AndroidNativeApp &&
+    (typeof window.AndroidNativeApp.isNativeApp !== 'function' || window.AndroidNativeApp.isNativeApp()));
+  document.documentElement.classList.toggle('gomoku-native-app', nativeAndroid);
+  document.documentElement.classList.toggle('gomoku-web-app', !nativeAndroid);
+
   const THEME_KEYS = [
     'theme-zen-dark', 'theme-sweet-romance', 'theme-neo-trad',
     'theme-luxury-glass', 'theme-clean-ios'
@@ -8,6 +13,7 @@
   let lobby = null;
   let sheetBackdrop = null;
   let topbar = null;
+  let touchCardGesture = null;
 
   function safeCall(name, ...args) {
     const fn = window[name];
@@ -229,18 +235,18 @@
           <header class="sky-page-heading">
             <small class="sky-page-eyebrow">我的棋岛 <span>／</span> ACCOUNT</small>
             <h1>把棋岛，调成自己的样子。</h1>
-            <p>账号、显示、活动、反馈与版本更新，分别在这里管理。</p>
+            <p>账号、显示、活动与反馈，集中在这里管理。</p>
           </header>
           <article class="sky-profile-card">
             <div class="sky-profile-avatar" id="skyProfileAvatar" aria-hidden="true">棋</div>
             <div class="sky-profile-copy"><small>当前棋手</small><strong id="skyProfileName">游客棋手</strong><span id="skyProfileDetail">对局记录保存在本机</span></div>
             <button type="button" data-sky-action="login">登录账号 <span>→</span></button>
           </article>
-          <article class="sky-me-update">
+          ${nativeAndroid ? `<article class="sky-me-update">
             <div class="sky-update-mark" aria-hidden="true">↻</div>
             <div class="sky-update-copy"><small>应用版本</small><strong id="appVersionDisplay">检查更新</strong><span>点此连接官方版本服务</span></div>
             <button type="button" data-sky-action="update" aria-label="检查更新">检查更新 <b>→</b></button>
-          </article>
+          </article>` : ''}
           <div class="sky-page-grid sky-me-actions">
             <button class="sky-entry-card" type="button" data-sky-action="account"><span class="sky-entry-icon">○</span><span><b>个人资料与账号</b><small>昵称、头像、登录与战绩绑定</small></span><i>↗</i></button>
             <button class="sky-entry-card" type="button" data-sky-action="settings"><span class="sky-entry-icon">⚙</span><span><b>设置</b><small>背景音乐、对局音效与棋盘画质</small></span><i>↗</i></button>
@@ -329,12 +335,49 @@
     }
     const cardArea = document.querySelector('.card-area-wrapper');
     if (!cardArea) return;
+    cardArea.setAttribute('aria-hidden', String(!next));
+    cardArea.toggleAttribute('inert', !next);
     // Keep the legacy card renderer intact while making the new bottom drawer
     // deterministic even during CSS hot reloads or WebView stylesheet races.
     cardArea.style.opacity = next ? '1' : '0';
     cardArea.style.visibility = next ? 'visible' : 'hidden';
     cardArea.style.pointerEvents = next ? 'auto' : 'none';
     cardArea.style.transform = next ? 'translate(-50%, 0)' : 'translate(-50%, 20px)';
+  }
+
+  function bindCardTouchGuard() {
+    // A finger that starts on the lower board and drifts into an open card slot
+    // must not cast that card. A deliberate tap that starts on the slot remains
+    // unchanged, as do keyboard and mouse activation.
+    document.addEventListener('pointerdown', event => {
+      if (event.pointerType !== 'touch') {
+        touchCardGesture = null;
+        return;
+      }
+      touchCardGesture = {
+        slot: event.target?.closest?.('.card-slot') || null,
+        pointerId: event.pointerId,
+        at: Date.now()
+      };
+    }, true);
+
+    document.addEventListener('pointercancel', event => {
+      if (touchCardGesture?.pointerId === event.pointerId) touchCardGesture = null;
+    }, true);
+
+    document.addEventListener('click', event => {
+      const slot = event.target?.closest?.('.card-slot');
+      if (!slot || event.detail === 0) return;
+      const gesture = touchCardGesture;
+      const isTouchClick = event.pointerType === 'touch' ||
+        (!event.pointerType && gesture && Date.now() - gesture.at < 900);
+      if (!isTouchClick || !gesture) return;
+      touchCardGesture = null;
+      if (gesture.slot !== slot) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
   }
 
   function buildSheet() {
@@ -385,6 +428,7 @@
     lobby.hidden = true;
     document.body.classList.remove('sky-lobby-open');
     document.body.classList.add('sky-game-open');
+    window.__gomokuWarmUpAi?.();
     setCardsOpen(true);
     window.setTimeout(() => window.dispatchEvent(new Event('resize')), 40);
   }
@@ -481,7 +525,7 @@
     else if (action === 'activity') runSheetAction('activity');
     else if (action === 'settings') runSheetAction('settings');
     else if (action === 'feedback') runSheetAction('feedback');
-    else if (action === 'update') safeCall('checkAppUpdate', true);
+    else if (action === 'update' && nativeAndroid) safeCall('checkAppUpdate', true);
   }
 
   function runNav(nav) {
@@ -595,6 +639,8 @@
     clearLegacyThemeState();
     simplifySettings();
     buildTopbar();
+    bindCardTouchGuard();
+    setCardsOpen(false);
     buildLobby();
     bindHomeBoardPreview();
     buildSheet();

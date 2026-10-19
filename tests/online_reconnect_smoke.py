@@ -226,6 +226,70 @@ def main():
             if reloaded["guest"]["round"] != round_before:
                 raise AssertionError(f"round changed during page reload: {round_before} -> {reloaded['guest']['round']}")
 
+            # Complete a genuine winning line, then lose the transport while the
+            # finished room is retained for a rematch.
+            for index in range(4):
+                row = 8 + index
+                host.evaluate("row => window.makeMove(row, 7, BLACK)", row)
+                guest.wait_for_function("row => board[row][7] === BLACK", arg=row, timeout=5_000)
+                if index < 3:
+                    guest.evaluate("row => window.makeMove(row, 8, WHITE)", row)
+                    host.wait_for_function("row => board[row][8] === WHITE", arg=row, timeout=5_000)
+            for page in (host, guest):
+                page.wait_for_function("isOver && gameWinnerColor === BLACK && history.length === 9", timeout=5_000)
+            finished_boards = [page.evaluate("JSON.stringify(board)") for page in (host, guest)]
+            previous_connections = guest.evaluate("window.__gomokuMockRelayStats.connections")
+            guest.evaluate("conn.client.ws.close(1001, 'smoke finished-room transport loss')")
+            try:
+                guest.wait_for_function(
+                    "previous => window.__gomokuMockRelayStats.connections > previous && conn?.open && conn?.ready",
+                    arg=previous_connections, timeout=20_000,
+                )
+            except PlaywrightTimeoutError:
+                raise AssertionError(json.dumps({
+                    "phase": "finished_room_transport_reconnect", "host": state(host), "guest": state(guest),
+                    "previousConnections": previous_connections,
+                    "guestMockStats": guest.evaluate("window.__gomokuMockRelayStats"), "logs": logs, "errors": errors,
+                }, ensure_ascii=False))
+            host.wait_for_function("conn?.open && conn?.ready", timeout=20_000)
+            for index, page in enumerate((host, guest)):
+                finished = page.evaluate("({over:isOver,winner:gameWinnerColor,round:onlineRoundId,steps:history.length,board:JSON.stringify(board)})")
+                if (not finished["over"] or finished["winner"] != 1 or finished["steps"] != 9
+                        or finished["round"] != round_before or finished["board"] != finished_boards[index]):
+                    raise AssertionError(json.dumps({"phase": "finished_room_reconnect", "state": finished}, ensure_ascii=False))
+
+            # Hold the final commit acknowledgment to prove that neither board
+            # clears merely because the responder clicked Agree.
+            host.evaluate("""() => {
+              window.__rematchOriginalTransmit = conn._transmitMessage;
+              conn._transmitMessage = function(message, ...args) {
+                if (message.type === 'restart_commit_ack') {
+                  window.__heldRematchCommitAck = message;
+                  return true;
+                }
+                return window.__rematchOriginalTransmit.call(this, message, ...args);
+              };
+            }""")
+            guest.evaluate("document.getElementById('btnRestart').onclick()")
+            host.wait_for_function("document.getElementById('customConfirmModal').classList.contains('show')", timeout=5_000)
+            host.evaluate("closeCustomConfirm(true)")
+            host.wait_for_function("Boolean(window.__heldRematchCommitAck)", timeout=5_000)
+            for page in (host, guest):
+                retained = page.evaluate("({over:isOver,steps:history.length,round:onlineRoundId})")
+                if not retained["over"] or retained["steps"] != 9 or retained["round"] != round_before:
+                    raise AssertionError(json.dumps({"phase": "rematch_before_commit", "state": retained}, ensure_ascii=False))
+            host.evaluate("""() => {
+              conn._transmitMessage = window.__rematchOriginalTransmit;
+              conn._transmitMessage(window.__heldRematchCommitAck);
+            }""")
+            for page in (host, guest):
+                page.wait_for_function("!isOver && history.length === 0 && !pendingOnlineRestartState && !activeOnlineRestartState", timeout=5_000)
+            rematch_rounds = [page.evaluate("onlineRoundId") for page in (host, guest)]
+            if not rematch_rounds[0] or rematch_rounds[0] == round_before or rematch_rounds[0] != rematch_rounds[1]:
+                raise AssertionError(f"rematch rounds did not agree: {rematch_rounds}")
+            host.evaluate("window.makeMove(7, 7, BLACK)")
+            guest.wait_for_function("board[7][7] === BLACK", timeout=5_000)
+
             if any(errors.values()):
                 raise AssertionError(json.dumps({"phase": "browser_errors", "errors": errors, "logs": logs}, ensure_ascii=False))
 
@@ -239,6 +303,10 @@ def main():
                 "roomIdentityPersisted": True,
                 "postReconnectMove": True,
                 "postReconnectChatExactlyOnce": chat_count == 1,
+                "finishedRoomReconnectedWithoutClearingResult": True,
+                "rematchRetainsBoardUntilCommit": True,
+                "rematchRoundAgreed": True,
+                "postRematchMove": True,
                 "transport": "local WebSocket relay mock",
                 "mqttCompatibilityAdapterUsed": False,
                 "pageErrors": errors

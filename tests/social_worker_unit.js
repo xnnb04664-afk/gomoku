@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
+const { DatabaseSync } = require('node:sqlite');
 
 const workerSource = fs.readFileSync('backend/worker.js', 'utf8')
   .replace('export class GomokuRoom', 'class GomokuRoom')
@@ -95,6 +96,13 @@ class MemoryStatement {
     const q = this.normalized;
     const a = this.args;
 
+    if (q.includes('from auth_sessions where')) {
+      return this.db.authSqlite.prepare(this.sql).get(...a) || null;
+    }
+    if (q.startsWith('select uid, username, nickname, avatar, score, wins, total_games from users where uid = ?')) {
+      const user = this.db.users.get(String(a[0]));
+      return user ? { ...user } : null;
+    }
     if (q.includes('from users where uid = ? and token = ?')) {
       const user = this.db.users.get(String(a[0]));
       return user && user.token === a[1] ? { ...user } : null;
@@ -278,6 +286,22 @@ class MemoryStatement {
   async run() {
     const q = this.normalized;
     const a = this.args;
+
+    if (q.startsWith('insert or ignore into auth_sessions') || q.startsWith('update auth_sessions') ||
+        q.startsWith('update users set token = null')) {
+      // Execute auth SQL literally; in particular, do not silently accept the
+      // migration's INSERT SELECT or ignore its CAS/expiry/revocation guards.
+      this.db.syncAuthUsers();
+      const result = this.db.authSqlite.prepare(this.sql).run(...a);
+      if (q.startsWith('update users set token = null')) {
+        for (const row of this.db.authSqlite.prepare('SELECT * FROM users').all()) {
+          const user = this.db.users.get(row.uid);
+          Object.assign(user, { token: row.token, token_expires_at: row.token_expires_at,
+            refresh_token_hash: row.refresh_token_hash, refresh_token_expires_at: row.refresh_token_expires_at });
+        }
+      }
+      return { meta: { changes: Number(result.changes) } };
+    }
 
     // Schema initialization is deliberately a no-op in the in-memory mock.
     if (q.startsWith('create ') || q.startsWith('alter ') ||
@@ -589,6 +613,23 @@ class MemoryDB {
     this.premiumOrdersByClient = new Map();
     this.gameLayouts = new Map();
     this.nextMessageId = 1;
+    this.authSqlite = new DatabaseSync(':memory:');
+    this.authSqlite.exec(`
+      CREATE TABLE users (uid TEXT PRIMARY KEY, username TEXT, token TEXT, token_expires_at INTEGER,
+        refresh_token_hash TEXT, refresh_token_expires_at INTEGER);
+      CREATE TABLE auth_sessions (session_id TEXT PRIMARY KEY, uid TEXT NOT NULL,
+        access_token_hash TEXT NOT NULL UNIQUE, access_expires_at INTEGER NOT NULL DEFAULT 0,
+        refresh_token_hash TEXT UNIQUE, refresh_expires_at INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, revoked_at INTEGER);
+    `);
+  }
+
+  syncAuthUsers() {
+    const statement = this.authSqlite.prepare('INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?, ?, ?)');
+    for (const user of this.users.values()) {
+      statement.run(user.uid, user.username ?? null, user.token ?? null, user.token_expires_at ?? 0,
+        user.refresh_token_hash ?? null, user.refresh_token_expires_at ?? 0);
+    }
   }
 
   prepare(sql) {
@@ -596,7 +637,17 @@ class MemoryDB {
   }
 
   async batch(statements) {
-    return Promise.all(statements.map(statement => statement.run()));
+    this.authSqlite.exec('BEGIN');
+    const usersBefore = structuredClone(this.users);
+    try {
+      const results = await Promise.all(statements.map(statement => statement.run()));
+      this.authSqlite.exec('COMMIT');
+      return results;
+    } catch (error) {
+      this.authSqlite.exec('ROLLBACK');
+      this.users = usersBefore;
+      throw error;
+    }
   }
 
   publicMessage(row) {

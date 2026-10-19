@@ -63,9 +63,7 @@ function copyTree(source, destination) {
   }
 }
 
-// Overwrite generated files in place instead of recursively deleting this
-// ignored build tree; Node's Windows recursive removal can fail on fresh and
-// populated output directories, and this task does not remove any source assets.
+fs.rmSync(playDir, { recursive: true, force: true });
 fs.mkdirSync(playDir, { recursive: true });
 fs.copyFileSync(path.join(root, 'index.html'), path.join(playDir, 'index.html'));
 fs.copyFileSync(path.join(root, 'favicon.png'), path.join(playDir, 'favicon.png'));

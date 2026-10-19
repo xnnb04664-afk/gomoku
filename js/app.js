@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.146';
+    const CURRENT_VERSION_TAG = 'v1.0.147';
     // 仅用于界面显示：内部补丁号按十位折叠到界面中间段。
     // 例如内部版本 v1.0.118 显示为 v1.1.8、v1.0.125 显示为 v1.2.5；
     // 更新比较仍使用 CURRENT_VERSION_TAG。
@@ -146,6 +146,11 @@
     // 默认初始模式: 'ai' (人机对弈)
     let gameMode = 'ai';
     let myOnlineColor = BLACK;
+    let aiPlayerColor = BLACK;
+    function getAiColor() { return aiPlayerColor === BLACK ? WHITE : BLACK; }
+    function getLocalPlayerColor() {
+      return gameMode === 'online' ? myOnlineColor : (gameMode === 'ai' ? aiPlayerColor : BLACK);
+    }
     let peer = null;
     let conn = null;
     let myRoomId = '';
@@ -167,6 +172,8 @@
     let activeOnlineUndoTimer = null;
     let pendingOnlineRestartId = '';
     let activeOnlineRestartId = '';
+    let pendingOnlineRestartState = null;
+    let activeOnlineRestartState = null;
 
     // ==========================================
     // 🃏 干扰牌技能卡池系统 (每次随机抽取3张)
@@ -219,7 +226,7 @@
         sweetName: '我猜我猜猜猜 🔮',
         icon: '🔮',
         sweetIcon: '🔮',
-        desc: '预言对手下一步落点，命中则撤销该落子并返还对手回合',
+        desc: '预言对手下一步落点，命中则取消对手这次落子机会',
         sweetDesc: '宝贝，我早就猜到啦！命中就帮你悔一步哦~',
         needTarget: true,
         targetType: 'empty'
@@ -343,6 +350,9 @@
     const islandWrapper = document.getElementById('islandWrapper');
 
     let cWidth = 380, cHeight = 380, paddingX = 16, paddingY = 16, gridX = 23, gridY = 23, radius = 10;
+    const PHONE_BOARD_ZOOM = 1.49;
+    const PHONE_BOARD_Y_SHIFT = 0.035;
+    const PHONE_BOARD_ASPECT = 1.22;
     let graphicsQuality = (() => {
       try {
         const saved = localStorage.getItem('gomoku_graphics_quality_v1');
@@ -531,8 +541,8 @@
       }
 
       if (gameMode === 'ai') {
-        p1ColorTag = isNarrow ? ' (●黑)' : ' (●黑子)';
-        p2ColorTag = isNarrow ? ' (○白)' : ' (○白子)';
+        p1ColorTag = aiPlayerColor === BLACK ? (isNarrow ? ' (●黑)' : ' (●黑子)') : (isNarrow ? ' (○白)' : ' (○白子)');
+        p2ColorTag = aiPlayerColor === BLACK ? (isNarrow ? ' (○白)' : ' (○白子)') : (isNarrow ? ' (●黑)' : ' (●黑子)');
         p2DisplayName = aiOpponentProfile.name;
         document.getElementById('p2AvatarIcon').innerHTML = renderAvatarElement(aiOpponentProfile.avatar);
       } else if (gameMode === 'online') {
@@ -561,14 +571,14 @@
       const p1Label = document.getElementById('p1NameLabel');
       if (p1Label) {
         p1Label.textContent = fullP1Text;
-        p1Label.title = p1Name + (myOnlineColor === WHITE ? ' (○白子)' : ' (●黑子)') + (hasRegisteredAccountSession() ? ` · ${currentUserScore}分` : '');
+        p1Label.title = p1Name + (getLocalPlayerColor() === WHITE ? ' (○白子)' : ' (●黑子)') + (hasRegisteredAccountSession() ? ` · ${currentUserScore}分` : '');
       }
       document.getElementById('p1AvatarIcon').innerHTML = renderAvatarElement(p1Avatar);
       const p2Label = document.getElementById('p2NameLabel');
       if (p2Label) {
         const fullP2Text = p2DisplayName + p2ColorTag;
         p2Label.textContent = fullP2Text;
-        p2Label.title = p2DisplayName + (myOnlineColor === WHITE ? ' (●黑子)' : ' (○白子)');
+        p2Label.title = p2DisplayName + (getLocalPlayerColor() === WHITE ? ' (●黑子)' : ' (○白子)');
       }
     }
 
@@ -590,7 +600,7 @@
           return (p2Name && p2Name.trim()) ? p2Name : '好友';
         }
       } else if (gameMode === 'ai') {
-        return color === BLACK ? (p1Name || '玩家') : aiOpponentProfile.name;
+        return color === aiPlayerColor ? (p1Name || '玩家') : aiOpponentProfile.name;
       } else {
         // 双人同屏 pvp
         return color === BLACK ? (p1Name || '黑方') : (p2Name || '白方');
@@ -1530,6 +1540,38 @@
     let aiWorkerPending = new Map();
     const nativeAiPending = new Map();
     let aiThinking = false;
+    let nativeAiWarmUpRequested = false;
+
+    function warmUpAiForGame() {
+      if (nativeAiWarmUpRequested || gameMode !== 'ai' || isReplayMode) return;
+      const bridge = window.AndroidNativeApp;
+      if (!bridge || typeof bridge.warmUpNativeAi !== 'function') return;
+      try {
+        nativeAiWarmUpRequested = bridge.warmUpNativeAi() === true;
+      } catch (_) { /* Older Android bridges can safely continue without warmup. */ }
+    }
+    window.__gomokuWarmUpAi = warmUpAiForGame;
+
+    function scheduleAiMoveAfterPaint() {
+      const turnId = aiTurnSeq;
+      let submitted = false;
+      const submit = () => {
+        if (submitted) return;
+        submitted = true;
+        if (turnId === aiTurnSeq) smartAiMove();
+      };
+      // RAF yields to the board paint. A bounded fallback also works if a page
+      // becomes hidden before its RAF runs; only one path can submit the turn.
+      if (document.hidden || typeof window.requestAnimationFrame !== 'function') {
+        setTimeout(submit, 0);
+        return;
+      }
+      const fallback = setTimeout(submit, 50);
+      window.requestAnimationFrame(() => {
+        clearTimeout(fallback);
+        setTimeout(submit, 0);
+      });
+    }
 
     function disposeAiWorker(reason = 'AI Worker 已停止') {
       for (const pending of aiWorkerPending.values()) {
@@ -1567,6 +1609,7 @@
           clearTimeout(pending.timeoutId);
           if (data.ok && data.move && Number.isInteger(data.move.r) && Number.isInteger(data.move.c)) {
             window.gomokuLastAiStats = {
+              engine: 'worker',
               elapsedMs: Number(data.elapsedMs) || 0,
               nodes: Number(data.nodes) || 0,
               depth: Number(data.depth) || 0
@@ -1636,7 +1679,12 @@
             result.r >= 0 && result.r < 15 && result.c >= 0 && result.c < 15) {
           window.gomokuLastAiStats = {
             native: true,
+            engine: result.engine === 'cpp' || result.engine === 'java' ? result.engine : 'native-unknown',
             elapsedMs: Math.max(0, Number(result.elapsedMs) || 0),
+            searchMs: Math.max(0, Number(result.searchMs ?? result.elapsedMs) || 0),
+            queueMs: Math.max(0, Number(result.queueMs) || 0),
+            totalMs: Math.max(0, Number(result.totalMs ?? result.elapsedMs) || 0),
+            roundTripMs: Math.max(0, Date.now() - pending.startedAt),
             nodes: Math.max(0, Number(result.nodes) || 0),
             depth: Math.max(0, Number(result.depth) || 0),
             score: Number.isFinite(Number(result.score)) ? Number(result.score) : 0
@@ -1665,13 +1713,13 @@
           nativeAiPending.delete(requestId);
           reject(new Error('Android 原生 AI 响应超时'));
         }, 2000);
-        nativeAiPending.set(requestId, { resolve, reject, timeoutId });
+        nativeAiPending.set(requestId, { resolve, reject, timeoutId, startedAt: Date.now() });
 
         try {
           const accepted = bridge.requestNativeAiMove(
             requestId,
             JSON.stringify(board),
-            WHITE,
+            getAiColor(),
             JSON.stringify(forbidden)
           );
           if (!accepted && nativeAiPending.has(requestId)) {
@@ -1725,7 +1773,7 @@
             requestId,
             size: 15,
             board: flat,
-            aiColor: WHITE,
+            aiColor: getAiColor(),
             difficulty: 'master',
             enableFoul: false,
             forbiddenPoints: Array.isArray(forbiddenPoints) ? forbiddenPoints.slice(0, 64) : [],
@@ -1754,7 +1802,7 @@
       const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
       return window.GomokuFastAI.getBestMove(
         boardState,
-        WHITE,
+        getAiColor(),
         'master',
         false,
         Array.isArray(forbiddenPoints) ? forbiddenPoints : [],
@@ -1771,7 +1819,7 @@
 
     // 🚀 最强大师人机主落子决策函数
     async function smartAiMove(forbiddenPoints = []) {
-      if (isOver || isReplayMode || gameMode !== 'ai' || turn !== WHITE || aiThinking) return;
+      if (isOver || isReplayMode || gameMode !== 'ai' || turn !== getAiColor() || aiThinking) return;
       const turnId = ++aiTurnSeq;
       aiThinking = true;
       updateUI();
@@ -1780,6 +1828,7 @@
       try {
         bestMove = await requestBestAiMove(boardSnapshot, forbiddenPoints);
       } catch (workerError) {
+        window.gomokuLastAiStats = { engine: 'js-fallback' };
         console.warn('[AI] 使用快速 JavaScript 回退:', workerError && workerError.message ? workerError.message : workerError);
         try {
           bestMove = await getFastAiFallback(boardSnapshot, forbiddenPoints);
@@ -1788,7 +1837,7 @@
             try { await window.ensureGomokuResource('aiCore'); } catch (_) {}
           }
           if (!bestMove && window.GomokuAI && window.GomokuAI.getBestMove) {
-            bestMove = window.GomokuAI.getBestMove(boardSnapshot, WHITE, 'master', false, forbiddenPoints);
+            bestMove = window.GomokuAI.getBestMove(boardSnapshot, getAiColor(), 'master', false, forbiddenPoints);
           }
           if (!isLegalAiMove(bestMove, boardSnapshot, forbiddenPoints)) {
             bestMove = findFirstLegalAiMove(boardSnapshot, forbiddenPoints);
@@ -1804,12 +1853,12 @@
         }
       }
 
-      if (turnId !== aiTurnSeq || isOver || isReplayMode || gameMode !== 'ai' || turn !== WHITE) return;
+      if (turnId !== aiTurnSeq || isOver || isReplayMode || gameMode !== 'ai' || turn !== getAiColor()) return;
       const boardStillMatches = board.every((row, r) =>
         Array.isArray(row) && row.every((cell, c) => cell === boardSnapshot[r][c])
       );
       if (!boardStillMatches) {
-        if (!isOver && !isReplayMode && gameMode === 'ai' && turn === WHITE) setTimeout(() => smartAiMove(forbiddenPoints), 0);
+        if (!isOver && !isReplayMode && gameMode === 'ai' && turn === getAiColor()) setTimeout(() => smartAiMove(forbiddenPoints), 0);
         return;
       }
       if (!isLegalAiMove(bestMove, board, forbiddenPoints)) {
@@ -1817,7 +1866,7 @@
         bestMove = findFirstLegalAiMove(board, forbiddenPoints);
       }
       if (bestMove) {
-        makeMove(bestMove.r, bestMove.c, WHITE);
+        makeMove(bestMove.r, bestMove.c, getAiColor());
       }
     }
 
@@ -1921,29 +1970,11 @@
         playSkillSound('boom');
 
         if (gameMode === 'ai') {
-          // 电脑白子立刻免费补下一子并接管正常回合
-          setTimeout(() => {
-            const empties = [];
-            for (let i = 0; i < 15; i++) for (let j = 0; j < 15; j++) if (board[i][j] === EMPTY) empties.push({ r: i, c: j });
-            if (empties.length > 0) {
-              // 优先选中央或靠近已有棋子的空位
-              const pick = empties[Math.floor(Math.random() * empties.length)];
-              board[pick.r][pick.c] = WHITE;
-              history.push({ r: pick.r, c: pick.c, p: WHITE });
-              triggerStoneDropVFX(pick.r, pick.c, WHITE);
-              playPopSound();
-              draw();
-              showGameNotice("🤖 大师AI 免费补子成功！继续执行正常回合！", true);
-              if (checkWin(pick.r, pick.c, WHITE)) {
-                triggerGameEnd(WHITE, '大师AI 免费补下 1 子，达成五子连珠绝杀！');
-                return;
-              }
-              turn = WHITE;
-              updateUI();
-              persistGameState();
-              setTimeout(smartAiMove, 650);
-            }
-          }, 850);
+          opponentFreeMove = true;
+          turn = enemyColor;
+          updateUI();
+          persistGameState();
+          scheduleAiMoveAfterPaint();
         } else if (gameMode === 'pvp') {
           opponentFreeMove = true;
           turn = enemyColor;
@@ -2108,7 +2139,7 @@
           return showGameNotice("⚠️ 联机连接未就绪或已中断，无法使用干扰牌！", true);
         }
       }
-      if (gameMode === 'ai' && turn !== BLACK) {
+      if (gameMode === 'ai' && turn !== aiPlayerColor) {
         return showGameNotice("⏳ AI 正在思考中，请在自己的回合施展技能！", false);
       }
 
@@ -2285,7 +2316,7 @@
       bar.style.display = 'flex';
       if (card.id === 'prophecy_block') {
         text.textContent = `🔮 请在棋盘上点击一个空位，预言对手下一步将在此落子`;
-        showSkillBanner('🔮', '【预言封锁】使用说明', '点击棋盘任意空格预言对手落点！若对手下一步落在该格，落子将被撤销且回合返还！');
+        showSkillBanner('🔮', '【预言封锁】使用说明', '点击棋盘任意空格预言对手落点！若对手下一步落在该格，将取消对手这次落子机会！');
       } else if (card.id === 'remove_stone') {
         text.textContent = `💥 请在棋盘上点击要抹除的对方孤子`;
         showSkillBanner('💥', '【虚空陨石】使用说明', '点击对方场上任意 1 颗孤子！将其从棋盘上彻底抹除蒸发！');
@@ -2574,37 +2605,63 @@
     // ==========================================
     // 🟩 15x15 方格中央落子 渲染与几何计算
     // ==========================================
-    function configureBoardGeometry() {
-      // 按云石棋台底图的草坪内沿布网格，并在四周留出边缘棋子的半径。
-      // 让网格、星位、棋子、首页预览和触摸判定共用同一组等距坐标。
+    // Keep these normalized bounds aligned with the startup canvas' inset grass bounds.
+    const BOARD_GRASS_BOUNDS = Object.freeze({ left: 0.130, right: 0.869, top: 0.132, bottom: 0.785 });
+
+    function getBoardGeometry(preview = false) {
+      const phoneMatch = !preview && window.innerWidth <= 600;
       const boardSide = Math.min(cWidth, cHeight);
-      const artworkX = (cWidth - boardSide) / 2;
-      const artworkY = (cHeight - boardSide) / 2;
-      const edgeInset = boardSide * 0.004;
-      const grassLeft = artworkX + boardSide * 0.126 + edgeInset;
-      const grassRight = artworkX + boardSide * 0.873 - edgeInset;
-      const grassTop = artworkY + boardSide * 0.128 + edgeInset;
-      const grassBottom = artworkY + boardSide * 0.789 - edgeInset;
+      const artworkSide = boardSide * (phoneMatch ? PHONE_BOARD_ZOOM : 1);
+      const artworkX = (cWidth - artworkSide) / 2;
+      const artworkY = (cHeight - artworkSide) / 2 + (phoneMatch ? boardSide * PHONE_BOARD_Y_SHIFT : 0);
+      const artwork = { x: artworkX, y: artworkY, width: artworkSide, height: artworkSide };
+      const grassLeft = artwork.x + artwork.width * BOARD_GRASS_BOUNDS.left;
+      const grassRight = artwork.x + artwork.width * BOARD_GRASS_BOUNDS.right;
+      const grassTop = artwork.y + artwork.height * BOARD_GRASS_BOUNDS.top;
+      const grassBottom = artwork.y + artwork.height * BOARD_GRASS_BOUNDS.bottom;
       const gridStep = Math.min((grassRight - grassLeft) / 15, (grassBottom - grassTop) / 15);
-      gridX = gridStep;
-      gridY = gridStep;
       const firstX = (grassLeft + grassRight) / 2 - 7 * gridStep;
       const firstY = grassTop + 0.5 * gridStep;
-      paddingX = firstX - gridX * 0.5;
-      paddingY = firstY - gridY * 0.5;
-      radius = gridX * 0.44;
+      return {
+        artwork,
+        paddingX: firstX - gridStep * 0.5,
+        paddingY: firstY - gridStep * 0.5,
+        gridX: gridStep,
+        gridY: gridStep,
+        radius: gridStep * 0.44
+      };
+    }
+
+    function configureBoardGeometry(options = {}) {
+      const geometry = getBoardGeometry(options.preview === true);
+      paddingX = geometry.paddingX;
+      paddingY = geometry.paddingY;
+      gridX = geometry.gridX;
+      gridY = geometry.gridY;
+      radius = geometry.radius;
+      return geometry;
     }
 
     function resizeBoard() {
       const isMobile = window.innerWidth <= 600;
-      const screenW = window.innerWidth;
-      // 手机端直接占满全屏宽度（保留极细 2px 边缘缓冲）
-      const availW = isMobile ? (screenW - 2) : Math.min(islandWrapper.clientWidth || screenW, 580);
-      const availH = islandWrapper.clientHeight || (window.innerHeight - 150);
+      const screenW = document.documentElement.clientWidth || window.innerWidth;
+      const nativeAndroid = Boolean(window.AndroidNativeApp);
+      const wideBrowser = !nativeAndroid && screenW >= 900;
+      const wrapperW = islandWrapper.clientWidth || screenW;
+      // 手机画布占满屏幕宽；桌面网页可用更大的画布，原生 APK 继续保持手机尺寸上限。
+      const availW = isMobile
+        ? Math.min(Math.max(1, screenW), wrapperW)
+        : wideBrowser
+          ? Math.min(wrapperW, Math.max(1, screenW - 64), Math.min(1120, screenW * 0.74))
+          : Math.min(wrapperW, screenW, 580);
+      const visualHeight = window.visualViewport?.height || window.innerHeight;
+      const availH = islandWrapper.clientHeight || (visualHeight - 150);
 
-      const maxSide = Math.min(availW, availH);
+      // The enlarged phone board crops its side ornaments while retaining both
+      // horizontal gold rails; the taller canvas keeps the playable rows inside.
+      const maxSide = Math.min(availW, isMobile ? availH / PHONE_BOARD_ASPECT : availH);
       cWidth = Math.floor(maxSide);
-      cHeight = Math.floor(maxSide);
+      cHeight = isMobile ? Math.floor(cWidth * PHONE_BOARD_ASPECT) : cWidth;
 
       dpr = getEffectiveCanvasDpr();
       cvs.width = Math.round(cWidth * dpr);
@@ -5553,6 +5610,7 @@
         moves: Array.isArray(moves) ? moves.map(move => ({ ...move })) : [],
         currentStep: isActiveReplay ? replayStepIndex : (Array.isArray(moves) ? moves.length : 0),
         isReplay: isActiveReplay,
+        myColor: getLocalPlayerColor(),
         winnerColor: isActiveReplay ? (replayContext.winnerColor || 0) : gameWinnerColor,
         isDraw: isActiveReplay ? replayContext.isDraw === true : gameResultIsDraw === true,
         winningLine: isActiveReplay
@@ -5639,7 +5697,7 @@
         isWin: false,
         isDraw: true,
         winnerColor: 0,
-        myColor: (gameMode === 'online' ? myOnlineColor : BLACK),
+        myColor: getLocalPlayerColor(),
         oppName: (gameMode === 'ai' ? aiOpponentProfile.name : (p2Name || '棋友')),
         oppAvatar: (gameMode === 'ai' ? aiOpponentProfile.avatar : (p2Avatar || 'anime_girl')),
         moves: history ? history.filter(h => h && h.r >= 0 && !h.action).length : 0,
@@ -5673,7 +5731,7 @@
       if (gameMode === 'online') {
         isPlayerWin = (winnerColor === myOnlineColor);
       } else if (gameMode === 'ai') {
-        isPlayerWin = (winnerColor === BLACK);
+        isPlayerWin = (winnerColor === aiPlayerColor);
       } else {
         // 双人同屏 pvp
         isPlayerWin = (winnerColor === BLACK);
@@ -5708,7 +5766,7 @@
         isWin: (gameMode === 'pvp' ? true : isPlayerWin),
         isDraw: false,
         winnerColor: winnerColor,
-        myColor: (gameMode === "online" ? myOnlineColor : BLACK),
+        myColor: getLocalPlayerColor(),
         oppName: (gameMode === "ai" ? aiOpponentProfile.name : (p2Name || "棋友")),
         oppAvatar: (gameMode === "ai" ? aiOpponentProfile.avatar : (p2Avatar || "anime_girl")),
         moves: history ? history.filter(h => h && h.r >= 0 && !h.action).length : 0,
@@ -6190,9 +6248,7 @@
       }
 
       // 判断当前是否属于左侧 p1 (本地玩家/黑方) 的回合
-      const isP1Turn = (gameMode === 'online')
-        ? (turn === myOnlineColor)
-        : (turn === BLACK);
+      const isP1Turn = turn === getLocalPlayerColor();
 
       if (isP1Turn) {
         if (p1Status) p1Status.textContent = '落子中';
@@ -6246,13 +6302,15 @@
     };
     skyBoardArtwork.src = 'img/game/sky-board-cloudstone.webp';
 
-    function drawHandmadeGrassBoard() {
+    function drawHandmadeGrassBoard(options = {}) {
       const scale = Math.max(0.72, Math.min(1.5, Math.min(cWidth, cHeight) / 380));
       const fieldX = paddingX, fieldY = paddingY;
       const fieldW = gridX * 15, fieldH = gridY * 15;
+      const geometry = options.geometry || getBoardGeometry(options.preview === true);
+      const artwork = geometry.artwork;
 
       if (skyBoardArtwork.complete && skyBoardArtwork.naturalWidth > 0) {
-        ctx.drawImage(skyBoardArtwork, 0, 0, cWidth, cHeight);
+        ctx.drawImage(skyBoardArtwork, artwork.x, artwork.y, artwork.width, artwork.height);
 
         const firstX = fieldX + 0.5 * gridX;
         const firstY = fieldY + 0.5 * gridY;
@@ -6400,21 +6458,21 @@
         cWidth = size;
         cHeight = size;
         dpr = previewDpr;
-        configureBoardGeometry();
+        const previewGeometry = configureBoardGeometry({ preview: true });
 
         if (ctx.resetTransform) ctx.resetTransform(); else ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(previewDpr, previewDpr);
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.clearRect(0, 0, cWidth, cHeight);
-        drawHandmadeGrassBoard();
+        drawHandmadeGrassBoard({ preview: true, geometry: previewGeometry });
 
         const heartStones = window.GOMOKU_HEART_STONES || [];
         heartStones.forEach(([row, col, color]) => {
           drawThemedStone(
-            paddingX + (col + 0.5) * gridX,
-            paddingY + (row + 0.5) * gridY,
-            radius,
+            previewGeometry.paddingX + (col + 0.5) * previewGeometry.gridX,
+            previewGeometry.paddingY + (row + 0.5) * previewGeometry.gridY,
+            previewGeometry.radius,
             color === 0 ? BLACK : WHITE,
             activeThemeKey
           );
@@ -7355,46 +7413,38 @@
       if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= 15 || c < 0 || c >= 15 || (p !== BLACK && p !== WHITE)) return;
       if (board[r][c] !== EMPTY || isOver) return;
 
-      // 检查是否命中对手布下的预言封锁
-      if (isProphecied(r, c, p)) {
+      const blockedByProphecy = isProphecied(r, c, p);
+      // 命中也算一次行动；快照必须保留被消耗的预言和原回合。
+      saveUndoSnapshot('move', { r, c, p, turn });
+      if (blockedByProphecy) {
         const victimR = r, victimC = c;
         prophecyPoint = null; // 预言成功阻断命中，消耗掉
         triggerSkillVFX('freeze', victimR, victimC);
         playSkillSound('ice');
         triggerBoardShake();
         showSkillBanner('🔮', '【预言封锁】神威生效！', `天机显现！试图在 (${victimR+1}, ${victimC+1}) 的绝杀落子已被天命强行撤销！`);
-        showGameNotice(`🔮 预言封锁命中！撤销 (${victimR+1}, ${victimC+1}) 处的落子！`, true);
-        draw();
-
-        // 若是 AI 试图落子被预言拦截，AI 重新寻找其他落子点，绝不卡死
-        if (gameMode === 'ai' && p === WHITE) {
-          setTimeout(() => smartAiMove([{ r: victimR, c: victimC }]), 700);
-        }
-        return; // 不落子，不切回合，对手必须另选位置落子！
+        showGameNotice(`🔮 预言封锁命中！取消 (${victimR+1}, ${victimC+1}) 处的落子机会！`, true);
+        history.push({ action: 'prophecy_blocked', r: -1, c: -1, p, targetR: r, targetC: c });
+      } else {
+        // 施法者自己的落子不会消耗预言。
+        if (prophecyPoint && p !== prophecyPoint.by) prophecyPoint = null;
+        board[r][c] = p;
+        history.push({r, c, p});
+        playMoveSound(p);
+        triggerStoneDropVFX(r, c, p);
       }
-
-      // 如果对手落在了其他位置，则预言落空失效；若是施法者本人落子，预言保留等待对手落子！
-      if (prophecyPoint && p !== prophecyPoint.by) {
-        prophecyPoint = null;
-      }
-
-      saveUndoSnapshot('move', { r, c, p, turn });
-      board[r][c] = p;
-      history.push({r, c, p});
-      playMoveSound(p);
-      triggerStoneDropVFX(r, c, p); // 💫 落子波纹与微光微粒反馈
       draw();
 
       if (gameMode === 'online' && !fromRemote && conn && conn.open) {
         conn.send({ type: 'move', r, c, p, step: history.length });
       }
 
-      if (checkWin(r, c, p)) {
+      if (!blockedByProphecy && checkWin(r, c, p)) {
         triggerGameEnd(p);
         return;
       }
 
-      if (isBoardFull()) {
+      if (!blockedByProphecy && isBoardFull()) {
         triggerGameDraw();
         return;
       }
@@ -7419,8 +7469,8 @@
       updateUI();
       persistGameState();
 
-      if (gameMode === 'ai' && turn === WHITE && !isOver) {
-        setTimeout(smartAiMove, 80);
+      if (gameMode === 'ai' && turn === getAiColor() && !isOver) {
+        scheduleAiMoveAfterPaint();
       }
     }
 
@@ -7435,7 +7485,7 @@
 
     function canPreviewLocalMove() {
       if (isReplayMode || isOver) return false;
-      if (gameMode === 'ai' && turn !== BLACK) return false;
+      if (gameMode === 'ai' && turn !== aiPlayerColor) return false;
       if (gameMode === 'online' && (turn !== myOnlineColor || !conn || !conn.open)) return false;
       return true;
     }
@@ -7609,6 +7659,8 @@
       clearActiveOnlineUndo();
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
+      pendingOnlineRestartState = null;
+      activeOnlineRestartState = null;
       activeOnlineGuestUid = '';
       activeOnlineOpponentUid = '';
       if (typeof closeUndoModal === 'function') closeUndoModal();
@@ -7701,6 +7753,7 @@
         }
       }
       if (gameMode === 'ai') {
+        aiPlayerColor = Math.random() < 0.5 ? BLACK : WHITE;
         assignRandomAiOpponent();
         updatePlayerHeaderUI();
       }
@@ -7723,6 +7776,8 @@
       clearActiveOnlineUndo();
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
+      pendingOnlineRestartState = null;
+      activeOnlineRestartState = null;
       activeVFX = [];
       undoStack = [];
       if (typeof vfxRAF !== 'undefined' && vfxRAF) { cancelCanvasFrame(vfxRAF); vfxRAF = null; }
@@ -7732,28 +7787,50 @@
       draw();
       updateUI();
       persistGameState();
+      if (gameMode === 'ai' && turn === getAiColor()) scheduleAiMoveAfterPaint();
     }
 
     document.getElementById('btnRestart').onclick = (e) => {
       if (e && e.currentTarget) e.currentTarget.blur();
 
       if (gameMode === 'online') {
-        if (pendingOnlineRestartId) {
-          showGameNotice("⏳ 重新开局申请已发送，正在等待对方回应中...", false);
+        if (pendingOnlineRestartId || pendingOnlineRestartState || activeOnlineRestartId || activeOnlineRestartState) {
+          showGameNotice("⏳ 正在确认重新开局，请等待本次申请完成...", false);
           return;
         }
-        if (!conn || !conn.open) {
-          showGameNotice("⚠️ 当前联机已中断，直接重置棋盘", true);
-          resetBoardOnly();
+        if (!conn || !conn.open || !conn.ready) {
+          showGameNotice("⚠️ 联机已中断，棋盘未重置。请先重连或退出房间后再开新局。", true);
           return;
         }
-        // 🚀 联机模式：点击重开直接向对手发送申请，必须经过对方同意才能重开
+        if (!onlineRoundId) {
+          showGameNotice("⚠️ 当前棋局编号尚未就绪，请重新连接后再申请重开。", true);
+          return;
+        }
+        // 联机重开由双方确认同一个新轮次；任何一端都不能在确认送达前先清盘。
         pendingOnlineRestartId = generateSecureId(10, 'restart_');
-        if (!conn.send({ type: 'restart_req', name: p1Name, requestId: pendingOnlineRestartId })) {
+        pendingOnlineRestartState = {
+          side: 'initiator',
+          phase: 'awaiting_response',
+          requestId: pendingOnlineRestartId,
+          oldRoundId: onlineRoundId,
+          nextRoundId: generateSecureId(12, 'round_'),
+          requestMid: generateSecureId(10, 'restart_req_'),
+          commitMid: generateSecureId(10, 'restart_commit_')
+        };
+        const sent = conn.send({
+          type: 'restart_req',
+          name: p1Name,
+          requestId: pendingOnlineRestartId,
+          nextRoundId: pendingOnlineRestartState.nextRoundId,
+          _mid: pendingOnlineRestartState.requestMid
+        });
+        if (!sent) {
           pendingOnlineRestartId = '';
+          pendingOnlineRestartState = null;
           showGameNotice("⚠️ 重开申请发送失败，请检查联机状态后重试", true);
           return;
         }
+        persistGameState();
         showGameNotice("📡 已向对手发送重新开局申请，等待对方同意...", false);
       } else if (gameMode === 'ai') {
         if (history.length > 0 && !isOver) {
@@ -7863,16 +7940,17 @@
           undoSuccess = restoreSnapshot(targetSnap);
         } else if (gameMode === 'ai') {
           // 🤖 人机模式：撤销一整轮（包括：AI的一手落子 + 玩家的一手落子 + 玩家本回合使用的所有干扰牌）
-          while (undoStack.length > 0 && (undoStack[undoStack.length - 1].turn === WHITE || undoStack[undoStack.length - 1].p === WHITE)) {
-            undoStack.pop();
+          let index = undoStack.length - 1;
+          while (index >= 0 && undoStack[index].turn === getAiColor()) index--;
+          // AI 先手尚未轮到玩家落子时，不删除唯一的开局快照。
+          if (index >= 0) {
+            while (index > 0 && undoStack[index - 1].turn === aiPlayerColor) index--;
+            targetSnap = undoStack[index];
+            undoStack.splice(index);
+            undoSuccess = restoreSnapshot(targetSnap);
+          } else {
+            return false;
           }
-          while (undoStack.length > 0) {
-            targetSnap = undoStack.pop();
-            const next = undoStack[undoStack.length - 1];
-            if (!next) break;
-            if (next.turn === WHITE || next.p === WHITE) break;
-          }
-          if (targetSnap) undoSuccess = restoreSnapshot(targetSnap);
         } else {
           // 👥 双人同屏或联机模式：撤销最后这一手（含伴随发动的技能牌）
           if (undoStack.length > 0) {
@@ -7894,7 +7972,12 @@
         cancelPendingGameResultModal();
         if (typeof closeGameResultModal === 'function') closeGameResultModal();
         const last = history[history.length - 1];
-        if (last && last.action === 'identity_swap') {
+        if (last && last.action === 'prophecy_blocked') {
+          history.pop();
+          prophecyPoint = { r: last.targetR, c: last.targetC, by: last.p === BLACK ? WHITE : BLACK };
+          turn = last.p;
+          undoSuccess = true;
+        } else if (last && last.action === 'identity_swap') {
           history.pop();
           for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
             if (board[r][c] === BLACK) board[r][c] = WHITE;
@@ -7974,7 +8057,7 @@
           if (a && a.r >= 0 && a.c >= 0) { board[a.r][a.c] = EMPTY; triggerUndoVFX(a.r, a.c); }
           if (b && b.r >= 0 && b.c >= 0) { board[b.r][b.c] = EMPTY; triggerUndoVFX(b.r, b.c); }
           playSkillSound('rewind');
-          turn = BLACK;
+          turn = aiPlayerColor;
           undoSuccess = true;
         } else {
           const lastMove = history.pop();
@@ -8030,7 +8113,7 @@
         draw(); updateUI(); persistGameState();
       }
 
-      if (undoSuccess && !isOver && !isReplayMode && gameMode === 'ai' && turn === WHITE) {
+      if (undoSuccess && !isOver && !isReplayMode && gameMode === 'ai' && turn === getAiColor()) {
         setTimeout(() => smartAiMove(), 80);
       }
 
@@ -8078,7 +8161,7 @@
               hasCardToRestore = true;
               break;
             }
-            if (undoStack[i].turn === BLACK) break;
+            if (undoStack[i].turn === aiPlayerColor) break;
           }
         }
         if (isOver) {
@@ -8273,6 +8356,33 @@
       if (activeOnlineRoomOwnerUid === ownerUid) activeOnlineRoomOwnerUid = null;
     }
 
+    function readOnlineRestartTransaction(value, currentRoundId) {
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+          typeof currentRoundId !== 'string' || !currentRoundId || value.oldRoundId !== currentRoundId ||
+          typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value.requestId) ||
+          typeof value.nextRoundId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value.nextRoundId) ||
+          value.nextRoundId === currentRoundId) return null;
+      const phases = value.side === 'initiator'
+        ? new Set(['awaiting_response', 'awaiting_commit_ack'])
+        : value.side === 'responder'
+          ? new Set(['awaiting_commit', 'awaiting_commit_ack_delivery'])
+          : null;
+      if (!phases || !phases.has(value.phase)) return null;
+      const safeMid = candidate => typeof candidate === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(candidate)
+        ? candidate : '';
+      return {
+        side: value.side,
+        phase: value.phase,
+        requestId: value.requestId,
+        oldRoundId: value.oldRoundId,
+        nextRoundId: value.nextRoundId,
+        requestMid: safeMid(value.requestMid),
+        responseMid: safeMid(value.responseMid),
+        commitMid: safeMid(value.commitMid),
+        commitAckMid: safeMid(value.commitAckMid)
+      };
+    }
+
     function isValidCurrentGameCheckpoint(snapshot, expectedOwnerUid = getCurrentGameOwnerUid()) {
       return Boolean(
         snapshot && typeof snapshot === 'object'
@@ -8380,6 +8490,18 @@
       activeOnlineGuestUid = typeof session.activeGuestUid === 'string' && session.activeGuestUid.length <= 128
         ? session.activeGuestUid : '';
       onlineRoundId = typeof session.roundId === 'string' ? session.roundId : onlineRoundId;
+      pendingOnlineRestartState = null;
+      activeOnlineRestartState = null;
+      pendingOnlineRestartId = '';
+      activeOnlineRestartId = '';
+      const restartTransaction = readOnlineRestartTransaction(session.restartTransaction, onlineRoundId);
+      if (restartTransaction?.side === 'initiator') {
+        pendingOnlineRestartState = restartTransaction;
+        pendingOnlineRestartId = restartTransaction.requestId;
+      } else if (restartTransaction?.side === 'responder') {
+        activeOnlineRestartState = restartTransaction;
+        activeOnlineRestartId = restartTransaction.requestId;
+      }
       p1Name = typeof session.p1Name === 'string' && session.p1Name ? session.p1Name : p1Name;
       p1Avatar = typeof session.p1Avatar === 'string' && session.p1Avatar ? session.p1Avatar : p1Avatar;
       const fixedAvatarKind = getFixedPrivateAvatarKind();
@@ -8401,7 +8523,7 @@
       }
       gameResultIsDraw = session.isDraw === true;
       gameWinnerColor = session.winnerColor === BLACK || session.winnerColor === WHITE ? session.winnerColor : 0;
-      isOver = false;
+      isOver = session.isOver === true;
       opponentSkillsUsedCount = Number.isInteger(session.opponentSkillsUsedCount) ? session.opponentSkillsUsedCount : 0;
       opponentReforgeUsed = session.opponentReforgeUsed === true;
       undoStack = Array.isArray(session.undoStack) ? session.undoStack.slice(-30) : [];
@@ -8434,6 +8556,7 @@
       const state = {
         board, history, turn, stepCount: history.length, isOver, winnerColor: gameWinnerColor, isDraw: gameResultIsDraw, gameMode,
         p1Name, p2Name, p1Avatar: String(p1Avatar || '').length <= 4096 ? p1Avatar : '', p2Avatar, ownerUid,
+        aiPlayerColor,
         aiOpponentProfile: gameMode === 'ai' ? { ...aiOpponentProfile } : null,
         currentDrawnCards, cardUsedStatus,
         opponentSkillsUsedCount, opponentReforgeUsed, hasExtraMove,
@@ -8447,7 +8570,8 @@
 
       // Preserve the last online room board per UID until explicit exit/game end.
       try {
-        if (gameMode === 'online' && !isOver && currentRoomCode) {
+        const onlineRestartTransaction = pendingOnlineRestartState || activeOnlineRestartState;
+        if (gameMode === 'online' && currentRoomCode && (!isOver || onlineRestartTransaction)) {
           if (!activeOnlineRoomOwnerUid) activeOnlineRoomOwnerUid = getCurrentGameOwnerUid();
           const session = {
             roomCode: currentRoomCode,
@@ -8459,6 +8583,8 @@
             joinTicket: onlineJoinTicket,
             activeGuestUid: activeOnlineGuestUid,
             roundId: onlineRoundId,
+            isOver: isOver === true,
+            restartTransaction: onlineRestartTransaction ? { ...onlineRestartTransaction } : null,
             ownerUid: activeOnlineRoomOwnerUid,
             p1Name, p1Avatar, p2Name, p2Avatar,
             board, history, turn, winnerColor: gameWinnerColor,
@@ -8533,6 +8659,7 @@
       gameWinnerColor = 0;
       gameResultIsDraw = false;
       gameMode = snapshot.gameMode;
+      aiPlayerColor = snapshot.aiPlayerColor === WHITE ? WHITE : BLACK;
       p1Name = typeof snapshot.p1Name === 'string' && snapshot.p1Name ? snapshot.p1Name : p1Name;
       p2Name = typeof snapshot.p2Name === 'string' && snapshot.p2Name ? snapshot.p2Name : p2Name;
       p1Avatar = typeof snapshot.p1Avatar === 'string' && snapshot.p1Avatar ? snapshot.p1Avatar : p1Avatar;
@@ -8569,7 +8696,7 @@
       draw();
       updateUI();
       window.SkyIslandUI?.showGame();
-      if (gameMode === 'ai' && turn === WHITE) setTimeout(smartAiMove, 300);
+      if (gameMode === 'ai' && turn === getAiColor()) setTimeout(smartAiMove, 300);
       showGameNotice('已恢复这局对弈，可以继续落子', false);
       return true;
     }
@@ -8633,12 +8760,13 @@
             }
             if (Array.isArray(s.undoStack)) undoStack = s.undoStack;
             gameMode = s.gameMode;
+            aiPlayerColor = s.aiPlayerColor === WHITE ? WHITE : BLACK;
             const savedAiOpponent = AI_OPPONENT_PROFILES.find(profile =>
               profile.name === s.aiOpponentProfile?.name && profile.avatar === s.aiOpponentProfile?.avatar
             );
             if (gameMode === 'ai' && savedAiOpponent) aiOpponentProfile = savedAiOpponent;
             activeGameCheckpointOwner = currentOwnerUid;
-            if (gameMode === 'ai' && turn === WHITE && !isOver) {
+            if (gameMode === 'ai' && turn === getAiColor() && !isOver) {
               setTimeout(smartAiMove, 300);
             }
           }
@@ -9457,6 +9585,8 @@
     };
 
     async function checkAppUpdate(isManual = false) {
+      // 网页版不再运行客户端更新器；Android APK 仍由原生桥完成差分与安装。
+      if (!window.AndroidNativeApp) return false;
       if (isAppDownloading) {
         if (isManual) showGameNotice('🚀 正在全自动下载最新安装包中，请稍候...');
         return;
@@ -9833,12 +9963,14 @@
       }
     }
 
-    // 仅在进入游戏 2.5 秒后静默全自动检查一次（杜绝频繁切后台反复触发重复下载）
-    const scheduleAutomaticUpdateCheck = () => checkAppUpdate(false);
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(scheduleAutomaticUpdateCheck, { timeout: 8000 });
-    } else {
-      setTimeout(scheduleAutomaticUpdateCheck, 5000);
+    // 只让 Android APK 静默检查更新；普通网页不请求应用版本服务。
+    if (window.AndroidNativeApp) {
+      const scheduleAutomaticUpdateCheck = () => checkAppUpdate(false);
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(scheduleAutomaticUpdateCheck, { timeout: 8000 });
+      } else {
+        setTimeout(scheduleAutomaticUpdateCheck, 5000);
+      }
     }
 
     // 首帧优先：头像、账号同步和历史统计不阻塞棋盘首次绘制。

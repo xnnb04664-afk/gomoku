@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { GomokuFastAI } = require('../js/ai_fast');
+require('./ai_latency_smoke');
 
 const SIZE = 15;
 
@@ -172,17 +174,72 @@ const tests = [];
   const start = source.indexOf('async function smartAiMove');
   const end = source.indexOf('// 显式挂到 window', start);
   const body = start >= 0 && end > start ? source.slice(start, end) : '';
+  const routingStart = source.indexOf('async function requestBestAiMove(');
+  const routingEnd = source.indexOf('function requestFastAiMove(', routingStart);
+  const routingBody = routingStart >= 0 && routingEnd > routingStart ? source.slice(routingStart, routingEnd) : '';
   const forbiddenCalls = /handleCardClick|cardUsedStatus|currentDrawnCards|undoStack|skill_|destiny_|conn\.send/;
   tests.push({
     name: 'smart AI has no card side effects',
-    ok: Boolean(body) && body.includes('requestFastAiMove') && body.includes('makeMove') && !forbiddenCalls.test(body),
+    ok: Boolean(body) && body.includes('requestBestAiMove') && body.includes('makeMove') &&
+      routingBody.includes('requestNativeAiMove') && routingBody.includes('requestFastAiMove') &&
+      !forbiddenCalls.test(body + routingBody),
     bodyLength: body.length
   });
 }
 
-for (const test of tests) {
-  console.log(JSON.stringify(test));
-  assert.equal(test.ok, true, `${test.name} failed: ${JSON.stringify(test)}`);
+async function checkNativeRouting() {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+  const start = source.indexOf('async function requestBestAiMove(');
+  const end = source.indexOf('function requestFastAiMove(', start);
+  assert.ok(start >= 0 && end > start, 'AI routing function must be present');
+  const routingBody = source.slice(start, end);
+  const board = makeBoard([[7, 7, 1]]);
+  const forbidden = [{ r: 7, c: 8 }];
+  const nativeMove = { r: 6, c: 7 };
+  const workerMove = { r: 8, c: 7 };
+  const scenarios = [
+    { name: 'native legal move avoids Worker', native: nativeMove, worker: workerMove, nativeCalls: 1, workerCalls: 0, expected: nativeMove },
+    { name: 'native rejection falls back to Worker', nativeError: true, worker: workerMove, nativeCalls: 1, workerCalls: 1, expected: workerMove },
+    { name: 'native forbidden move falls back to Worker', native: forbidden[0], worker: workerMove, nativeCalls: 1, workerCalls: 1, expected: workerMove },
+    { name: 'browser without native bridge uses Worker', noBridge: true, worker: workerMove, nativeCalls: 0, workerCalls: 1, expected: workerMove },
+    { name: 'illegal Worker move is rejected', noBridge: true, worker: { r: 7, c: 7 }, nativeCalls: 0, workerCalls: 1, rejects: true }
+  ];
+  for (const scenario of scenarios) {
+    let nativeCalls = 0, workerCalls = 0;
+    const route = vm.runInNewContext(`(${routingBody})`, {
+      window: scenario.noBridge ? {} : { AndroidNativeApp: { requestNativeAiMove() {} } },
+      console: { warn() {} },
+      requestNativeAiMove: async (receivedBoard, receivedForbidden) => {
+        nativeCalls++;
+        assert.equal(receivedBoard, board);
+        assert.equal(receivedForbidden, forbidden);
+        if (scenario.nativeError) throw new Error('native unavailable');
+        return scenario.native;
+      },
+      requestFastAiMove: async (receivedBoard, receivedForbidden) => {
+        workerCalls++;
+        assert.equal(receivedBoard, board);
+        assert.equal(receivedForbidden, forbidden);
+        return scenario.worker;
+      },
+      isLegalAiMove: (move, receivedBoard, receivedForbidden) => move &&
+        Number.isInteger(move.r) && Number.isInteger(move.c) && isValid(move.r, move.c) &&
+        receivedBoard[move.r][move.c] === 0 &&
+        !receivedForbidden.some(point => point.r === move.r && point.c === move.c)
+    });
+    if (scenario.rejects) await assert.rejects(route(board, forbidden), /Worker/);
+    else assert.equal(await route(board, forbidden), scenario.expected);
+    tests.push({ name: scenario.name, ok: nativeCalls === scenario.nativeCalls && workerCalls === scenario.workerCalls, nativeCalls, workerCalls });
+  }
 }
 
-console.log(`AI strength smoke passed: ${tests.length} tactical/search cases`);
+checkNativeRouting().then(() => {
+  for (const test of tests) {
+    console.log(JSON.stringify(test));
+    assert.equal(test.ok, true, `${test.name} failed: ${JSON.stringify(test)}`);
+  }
+  console.log(`AI strength smoke passed: ${tests.length} tactical/search/routing cases`);
+}).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

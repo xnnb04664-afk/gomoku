@@ -48,13 +48,13 @@ public final class GomokuSplashView extends FrameLayout {
     private static final Typeface TYPEFACE_MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
     private static final Typeface TYPEFACE_BOLD = Typeface.create("sans-serif", Typeface.BOLD);
     private static final int[][] STONES = {
-            {2, 4}, {2, 10}, {2, 5}, {2, 9},
-            {3, 3}, {3, 11}, {3, 6}, {3, 8},
-            {4, 2}, {4, 12}, {4, 7},
-            {5, 1}, {5, 13}, {6, 1}, {6, 13},
-            {7, 2}, {7, 12}, {8, 3}, {8, 11},
-            {9, 4}, {9, 10}, {10, 5}, {10, 9},
-            {11, 6}, {11, 8}, {12, 7}
+            {2, 4, 0}, {2, 10, 1}, {2, 5, 0}, {2, 9, 1},
+            {3, 3, 0}, {3, 11, 1}, {3, 6, 0}, {3, 8, 1},
+            {4, 2, 0}, {4, 12, 1}, {4, 7, 0},
+            {5, 1, 0}, {5, 13, 1}, {6, 1, 0}, {6, 13, 1},
+            {7, 2, 0}, {7, 12, 1}, {8, 3, 0}, {8, 11, 1},
+            {9, 4, 0}, {9, 10, 1}, {10, 5, 0}, {10, 9, 1},
+            {11, 6, 0}, {11, 8, 1}, {12, 7, 1}
     };
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -85,6 +85,7 @@ public final class GomokuSplashView extends FrameLayout {
     private float progress;
     private boolean showLoadingHint;
     private boolean artworkReady;
+    private boolean artworkFailed;
     private boolean animationRequested;
     private boolean animationStarted;
     private boolean paused;
@@ -137,6 +138,10 @@ public final class GomokuSplashView extends FrameLayout {
         return reducedMotion ? 850L : ANIMATION_DURATION_MS;
     }
 
+    public long getDismissDurationMs() {
+        return reducedMotion ? 0L : 180L;
+    }
+
     public void showLoadingHint() {
         if (showLoadingHint) return;
         showLoadingHint = true;
@@ -145,17 +150,20 @@ public final class GomokuSplashView extends FrameLayout {
 
     public void startAnimation() {
         animationRequested = true;
-        if (!artworkReady) return;
+        if (!artworkReady && !artworkFailed) return;
         beginAnimation();
     }
 
     private void beginAnimation() {
-        if (!artworkReady || stopped || paused || animationStarted) return;
+        if ((!artworkReady && !artworkFailed) || stopped || paused || animationStarted) return;
         animationStarted = true;
         animationStartedAtUptimeMs = SystemClock.uptimeMillis();
         if (animationStartedListener != null) {
             animationStartedListener.onAnimationStarted(animationStartedAtUptimeMs);
         }
+        // A decode failure still presents the opening poster. Start its display
+        // timer so committed web content can dismiss it without requiring a tap.
+        if (artworkFailed) return;
         if (reducedMotion) {
             progress = 1f;
             heartLayer.invalidate();
@@ -193,7 +201,7 @@ public final class GomokuSplashView extends FrameLayout {
         paused = false;
         if (animator != null && animator.isPaused() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             animator.resume();
-        } else if (animationRequested && artworkReady && !animationStarted) {
+        } else if (animationRequested && (artworkReady || artworkFailed) && !animationStarted) {
             beginAnimation();
         }
     }
@@ -389,7 +397,7 @@ public final class GomokuSplashView extends FrameLayout {
                     firstX + STONES[index][1] * step,
                     firstY + STONES[index][0] * step,
                     step * 0.43f,
-                    STONES[index][1] < 7,
+                    STONES[index][2] == 0,
                     stoneProgress
             );
         }
@@ -421,11 +429,14 @@ public final class GomokuSplashView extends FrameLayout {
         paint.setStyle(Paint.Style.FILL);
         paint.setAlpha(255);
         paint.setColor(0x55344843);
+        paint.setAlpha((int) (0x55 * Math.min(1f, stoneProgress * 1.4f)));
         canvas.drawOval(x - stoneRadius, y + radius * 0.16f, x + stoneRadius, y + radius * 0.88f, paint);
         Bitmap stoneBitmap = black ? blackStoneBitmap : whiteStoneBitmap;
         if (stoneBitmap == null || stoneBitmap.isRecycled()) return;
         stoneRect.set(x - stoneRadius, centerY - stoneRadius, x + stoneRadius, centerY + stoneRadius);
-        stoneBitmapPaint.setAlpha((int) (255f * Math.min(1f, stoneProgress * 1.4f)));
+        // Preserve the actual black/white color from the first visible frame.
+        // Motion comes from scale and drop, not fading over a dark shadow.
+        stoneBitmapPaint.setAlpha(255);
         canvas.drawBitmap(stoneBitmap, null, stoneRect, stoneBitmapPaint);
         stoneBitmapPaint.setAlpha(255);
     }
@@ -494,6 +505,7 @@ public final class GomokuSplashView extends FrameLayout {
                 Math.min(screenWidth * 0.82f, screenHeight * 0.41f), 480f * density)));
         final int spriteSize = Math.max(96, Math.round(64f * density));
         Thread loader = new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
             Bitmap loadedSky = null;
             Bitmap loadedBoard = null;
             Bitmap loadedBlack = null;
@@ -505,6 +517,14 @@ public final class GomokuSplashView extends FrameLayout {
                         boardSide, boardSide);
                 loadedBlack = createStoneBitmap(spriteSize, true, stoneLightColor, stoneDarkColor);
                 loadedWhite = createStoneBitmap(spriteSize, false, stoneLightColor, stoneDarkColor);
+                // Prepare textures on the decoder thread before the first
+                // animated frame needs them. This is an upload hint, not a wait.
+                if (!stopped) {
+                    prepareBitmapForDrawing(loadedSky);
+                    prepareBitmapForDrawing(loadedBoard);
+                    prepareBitmapForDrawing(loadedBlack);
+                    prepareBitmapForDrawing(loadedWhite);
+                }
             } catch (OutOfMemoryError error) {
                 android.util.Log.e("GomokuSplash", "Not enough memory to decode splash artwork", error);
             } catch (RuntimeException error) {
@@ -528,8 +548,10 @@ public final class GomokuSplashView extends FrameLayout {
                     recycle(finalBlack);
                     recycle(finalWhite);
                     android.util.Log.e("GomokuSplash", "Splash assets unavailable; keeping opening poster fallback");
+                    artworkFailed = true;
                     showLoadingHint = true;
                     sceneLayer.invalidate();
+                    if (animationRequested && !paused) beginAnimation();
                     return;
                 }
                 skyBitmap = finalSky;
@@ -550,6 +572,16 @@ public final class GomokuSplashView extends FrameLayout {
         }, "gomoku-splash-assets");
         loader.setDaemon(true);
         loader.start();
+    }
+
+    private static void prepareBitmapForDrawing(Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled()) return;
+        try {
+            bitmap.prepareToDraw();
+        } catch (RuntimeException error) {
+            // Upload preparation is optional; a valid bitmap can still draw.
+            android.util.Log.w("GomokuSplash", "Could not pre-upload splash texture", error);
+        }
     }
 
     private final class SceneLayer extends View {

@@ -224,6 +224,60 @@ const D8 = path.join(BUILD_TOOLS, 'd8.bat');
 const ZIPALIGN = path.join(BUILD_TOOLS, 'zipalign.exe');
 const APKSIGNER = path.join(BUILD_TOOLS, 'apksigner.bat');
 
+function resolveAndroidNdk() {
+  const candidates = [process.env.ANDROID_NDK_HOME, process.env.ANDROID_NDK_ROOT]
+    .filter(Boolean)
+    .map(value => path.resolve(value));
+  const ndkRoot = path.join(SDK_DIR, 'ndk');
+  if (fs.existsSync(ndkRoot)) {
+    const installed = fs.readdirSync(ndkRoot)
+      .map(name => path.join(ndkRoot, name))
+      .filter(candidate => fs.existsSync(path.join(candidate, 'toolchains', 'llvm', 'prebuilt')))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    candidates.push(...installed);
+  }
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'toolchains', 'llvm', 'prebuilt'))) return candidate;
+  }
+  throw new Error('未找到 Android NDK。请安装 NDK r27c，或设置 ANDROID_NDK_HOME 指向 NDK 目录。');
+}
+
+function compileNativeAi() {
+  const ndkDir = resolveAndroidNdk();
+  const hostTag = process.platform === 'win32'
+    ? 'windows-x86_64'
+    : process.platform === 'darwin'
+      ? (process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x86_64')
+      : 'linux-x86_64';
+  const compilerDir = path.join(ndkDir, 'toolchains', 'llvm', 'prebuilt', hostTag, 'bin');
+  const source = path.join(SRC_DIR, 'cpp', 'gomoku_ai.cpp');
+  if (!fs.existsSync(source)) throw new Error(`Android C++ AI 源文件缺失：${source}`);
+
+  const targets = [
+    ['arm64-v8a', 'aarch64-linux-android21-clang++'],
+    ['armeabi-v7a', 'armv7a-linux-androideabi21-clang++'],
+    ['x86', 'i686-linux-android21-clang++'],
+    ['x86_64', 'x86_64-linux-android21-clang++']
+  ];
+  const outputs = [];
+  for (const [abi, compilerName] of targets) {
+    const suffix = process.platform === 'win32' ? '.cmd' : '';
+    const compiler = path.join(compilerDir, compilerName + suffix);
+    if (!fs.existsSync(compiler)) throw new Error(`NDK 缺少 ${abi} 编译器：${compiler}`);
+    const outputDir = path.join(TEMP_BUILD, 'lib', abi);
+    const output = path.join(outputDir, 'libgomoku_ai.so');
+    fs.mkdirSync(outputDir, { recursive: true });
+    run(compiler, [
+      '-std=c++17', '-O3', '-fPIC', '-shared', '-fvisibility=hidden',
+      '-Wl,-z,max-page-size=16384', '-Wl,-soname,libgomoku_ai.so',
+      '-Wl,--no-undefined', '-static-libstdc++', '-o', output, source
+    ], { cwd: ROOT_DIR });
+    outputs.push({ abi, output, apkPath: `lib/${abi}/libgomoku_ai.so` });
+  }
+  console.log(`>>> [NDK] 已为 ${outputs.map(item => item.abi).join(', ')} 编译 C++ AI`);
+  return outputs;
+}
+
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:app'], { cwd: ROOT_DIR });
 const SRC_DIR = path.join(ROOT_DIR, 'android_src');
 const OUTPUT_APK = path.join(ROOT_DIR, '五子棋.apk');
@@ -273,7 +327,7 @@ const signingEnv = SYNC_ONLY ? null : {
 // 使用纯 ASCII 临时目录以避免 aapt2 对中文字符路径的兼容性问题
 const TEMP_BUILD = path.join(os.tmpdir(), 'gomoku_apk_build');
 
-console.log('>>> [1/7] 初始化纯英文环境临时构建目录: ' + TEMP_BUILD);
+console.log('>>> [1/8] 初始化纯英文环境临时构建目录: ' + TEMP_BUILD);
 if (fs.existsSync(TEMP_BUILD)) {
   fs.rmSync(TEMP_BUILD, { recursive: true, force: true });
 }
@@ -284,7 +338,7 @@ fs.mkdirSync(path.join(TEMP_BUILD, 'res'), { recursive: true });
 fs.mkdirSync(path.join(TEMP_BUILD, 'assets'), { recursive: true });
 fs.mkdirSync(path.join(TEMP_BUILD, 'src'), { recursive: true });
 
-console.log('>>> [2/7] 准备与同步源码和 Web 资源...');
+console.log('>>> [2/8] 准备与同步源码和 Web 资源...');
 const resourceManifest = getApkResourceManifest();
 if (resourceManifest.missing.length) {
   throw new Error(`APK 资源清单缺少文件：${resourceManifest.missing.join(', ')}`);
@@ -292,7 +346,15 @@ if (resourceManifest.missing.length) {
 console.log(`>>> [资源裁剪] 模式=${resourceManifest.mode}，入口=${resourceManifest.entry}，清单文件=${resourceManifest.files.length}，源文件合计=${resourceManifest.sourceBytes} bytes`);
 copyRecursiveSync(path.join(SRC_DIR, 'res'), path.join(TEMP_BUILD, 'res'));
 copyRecursiveSync(path.join(SRC_DIR, 'src'), path.join(TEMP_BUILD, 'src'));
-fs.copyFileSync(path.join(SRC_DIR, 'AndroidManifest.xml'), path.join(TEMP_BUILD, 'AndroidManifest.xml'));
+const stagedManifestPath = path.join(TEMP_BUILD, 'AndroidManifest.xml');
+let stagedManifest = fs.readFileSync(path.join(SRC_DIR, 'AndroidManifest.xml'), 'utf8');
+if (!/\bandroid:extractNativeLibs\s*=/.test(stagedManifest)) {
+  stagedManifest = stagedManifest.replace(/<application\b/, '<application android:extractNativeLibs="true"');
+}
+if (!/\bandroid:extractNativeLibs\s*=/.test(stagedManifest)) {
+  throw new Error('APK Manifest 中未能启用 Android NDK 动态库提取');
+}
+fs.writeFileSync(stagedManifestPath, stagedManifest, 'utf8');
 
 // ⚡ 极速离线秒开关键优化：将内联完整的单文件版置入 assets/index.html，彻底解除一切外部网络依赖与 document.write 阻塞
 // 保持主 index.html 与当前仍在使用的 assets (js, img) 完整协同
@@ -324,7 +386,7 @@ if (SYNC_ONLY) {
   process.exit(0);
 }
 
-console.log('>>> [3/7] 编译 Android 资源 (aapt2 compile & link)...');
+console.log('>>> [3/8] 编译 Android 资源 (aapt2 compile & link)...');
 const resZip = path.join(TEMP_BUILD, 'resources.zip');
 run(AAPT2, ['compile', '--dir', path.join(TEMP_BUILD, 'res'), '-o', resZip]);
 
@@ -340,7 +402,10 @@ run(AAPT2, [
   '--auto-add-overlay'
 ]);
 
-console.log('>>> [4/7] 编译 Java 源代码 (javac)...');
+console.log('>>> [4/8] 使用 Android NDK 编译原生 AI...');
+const nativeLibraries = compileNativeAi();
+
+console.log('>>> [5/8] 编译 Java 源代码 (javac)...');
 function getFiles(dir, ext) {
   let results = [];
   const list = fs.readdirSync(dir);
@@ -370,7 +435,7 @@ run('javac', [
   ...javaFiles
 ]);
 
-console.log('>>> [5/7] 生成 Dalvik Executable (d8)...');
+console.log('>>> [6/8] 生成 Dalvik Executable (d8)...');
 const classFiles = getFiles(path.join(TEMP_BUILD, 'classes'), '.class');
 run('cmd.exe', [
   '/c',
@@ -381,11 +446,12 @@ run('cmd.exe', [
   '--min-api', '21'
 ]);
 
-console.log('>>> [6/7] 合并 Dex 并 4 字节对齐 (zipalign)...');
+console.log('>>> [7/8] 合并 Dex 和 NDK 库并对齐 (zipalign)...');
 const withDexApk = path.join(TEMP_BUILD, 'with_dex.apk');
 fs.copyFileSync(unalignedApk, withDexApk);
 
 run(AAPT, ['add', withDexApk, 'classes.dex'], { cwd: path.join(TEMP_BUILD, 'dex') });
+run(AAPT, ['add', withDexApk, ...nativeLibraries.map(item => item.apkPath)], { cwd: TEMP_BUILD });
 
 // 🌟 核心跨平台兼容修复：规范化 APK 内部 assets 的 Windows 反斜杠为标准 Linux 正斜杠
 function normalizeApkZipEntrySlashes(apkPath) {
@@ -421,9 +487,9 @@ function normalizeApkZipEntrySlashes(apkPath) {
 normalizeApkZipEntrySlashes(withDexApk);
 
 const alignedApk = path.join(TEMP_BUILD, 'aligned.apk');
-run(ZIPALIGN, ['-f', '-p', '4', withDexApk, alignedApk]);
+run(ZIPALIGN, ['-f', '-P', '16', '4', withDexApk, alignedApk]);
 
-console.log('>>> [7/7] 对 APK 进行数字签名 (apksigner)...');
+console.log('>>> [8/8] 对 APK 进行数字签名 (apksigner)...');
 const keystorePath = KEYSTORE;
 console.log('>>> [持久签名] 复用仓库外安全目录中的正式签名密钥 (保证手机可无缝覆盖安装更新): ' + keystorePath);
 

@@ -68,6 +68,28 @@ the browser. Do not add an origin unless it is controlled by the operator.
   supplies D1-shaped SQLite calls, the two DO namespaces, Fetch request/response
   bridging, and HTTP/WebSocket transport only.
 
+## Room diagnostics
+
+Room-relay and WebSocket transport diagnostics are emitted as JSON to stdout,
+which the `gomoku-ecs` systemd unit captures in journald. Follow recent events
+with:
+
+```sh
+sudo journalctl -u gomoku-ecs --since "30 minutes ago" -o cat \
+  | grep -E '"component":"(room-relay|websocket-transport)"'
+```
+
+Events include socket open/close/reconnect, peer presence, session mismatch,
+relay accept/reject reason, restart handshake forwarding, and sampled traffic
+counts. Room/session/round identifiers are process-keyed tags so events can be
+correlated during one process lifetime. Chat content, move coordinates, board
+state, account IDs, room tickets, and WebSocket query strings are not logged.
+The exact Nginx WebSocket route disables access logging because its query string
+contains a short-lived ticket. Diagnostics are enabled by default; setting
+`GOMOKU_ROOM_DIAGNOSTICS=0` in the ECS environment disables room-relay records.
+The journal is the only log sink configured here; retention follows the host's
+systemd-journald policy.
+
 ## Production deployment notes
 
 - ECS is the authoritative service. Cloudflare is a standby for read-only

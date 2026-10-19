@@ -930,7 +930,7 @@
       playSocialSound('message');
       state.lastMessageSoundAt = now;
     }
-    const title = '五子棋云屿晴光 · 好友消息';
+    const title = '五子棋 · 好友消息';
     const body = '你有新的好友消息，打开游戏查看';
     try {
       if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.showSocialNotification === 'function') {
@@ -1671,7 +1671,7 @@
   function notifyIncomingInvite(invite) {
     const inviteId = String(invite?.inviteId || '');
     const friend = state.friends.find(item => String(item.uid) === String(invite?.fromUid)) || invite;
-    const title = '五子棋云屿晴光 · 收到好友邀战';
+    const title = '五子棋 · 收到好友邀战';
     const body = `${displayName(friend)} 邀请你加入房间 ${String(invite?.roomCode || '')}`;
     try {
       if (typeof AndroidNativeApp !== 'undefined' && typeof AndroidNativeApp.showSocialNotification === 'function') {

@@ -3201,3 +3201,55 @@ body.sky-lobby-open .chat-backdrop.show {
   #onlineModal .online-tab-btn,
   #onlineModal .online-mode-button { transition:none; }
 }
+
+/* On phones the original board art is zoomed behind the edge-to-edge canvas. */
+@media (max-width:600px) {
+  body.sky-game-open { padding-right:0 !important; padding-left:0 !important; }
+  body.sky-game-open .island-wrapper {
+    width:100vw !important;
+    max-width:100vw !important;
+    flex:1 1 0 !important;
+    margin:0 auto !important;
+  }
+  body.sky-game-open .sky-game-topbar,
+  body.sky-game-open .header-area { width:calc(100vw - 12px) !important; }
+}
+
+/* The browser gets a real desktop scale; Android keeps the compact, touch-first layout. */
+@media (min-width:900px) {
+  html.gomoku-web-app .sky-lobby-top { width:min(1480px,calc(100% - 80px)); }
+  html.gomoku-web-app .sky-lobby-main {
+    width:min(1480px,calc(100% - 80px));
+    grid-template-columns:minmax(0,.82fr) minmax(0,1.18fr);
+    column-gap:clamp(54px,6vw,120px);
+  }
+  html.gomoku-web-app .sky-lobby-copy { max-width:600px; }
+  html.gomoku-web-app .sky-lobby-copy h1 { font-size:clamp(66px,5vw,98px); }
+  html.gomoku-web-app .sky-board-bay { width:min(100%,920px); min-height:clamp(500px,64vh,780px); }
+  html.gomoku-web-app .sky-preview-board { width:min(64vh,48vw,720px); }
+  html.gomoku-web-app .sky-tab-page { width:min(1280px,calc(100% - 96px)); }
+  html.gomoku-web-app .sky-page-grid { gap:16px; }
+  html.gomoku-web-app .sky-lobby-nav { width:min(1080px,calc(100% - 80px)); }
+
+  html.gomoku-web-app body.sky-game-open .sky-game-topbar,
+  html.gomoku-web-app body.sky-game-open .header-area {
+    width:min(1260px,calc(100% - 80px)) !important;
+    max-width:1260px !important;
+  }
+  html.gomoku-web-app body.sky-game-open .island-wrapper {
+    width:min(92vh,1120px,calc(100vw - 80px)) !important;
+    max-width:1120px !important;
+  }
+  html.gomoku-web-app body.sky-game-open .bottom-controls {
+    width:min(1040px,calc(100% - 80px)) !important;
+    max-width:1040px !important;
+    gap:12px !important;
+  }
+  html.gomoku-web-app body.sky-game-open .bottom-controls .btn-ctrl {
+    min-height:48px !important;
+    font-size:13px !important;
+  }
+  html.gomoku-web-app body.sky-game-open .card-area-wrapper { width:min(760px,calc(100% - 96px)) !important; }
+}
+
+html.gomoku-web-app #appUpdateModal { display:none !important; }

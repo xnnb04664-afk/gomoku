@@ -48,11 +48,12 @@ def main():
         page.route("https://mcp.figma.com/**", lambda route: route.abort())
         page.goto(URL, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_function("typeof window.getReplayInsightSnapshot === 'function'", timeout=30000)
+        page.evaluate("window.SkyIslandUI.showGame()")
 
         prepare_finished_game(page)
-        result = page.locator("#gameResultModal .sky-replay-insights-event").filter(has_text="获胜").last
-        result.wait_for(state="visible", timeout=10000)
-        result.click()
+        # The current page exposes step replay through the core API; the old
+        # sky-replay-insights-event component has been removed from this UI.
+        page.evaluate("openCurrentGameReplayAtStep(5)")
         page.wait_for_function("typeof window.openCurrentGameReplay === 'function'", timeout=10000)
         assert_replay_started(page, 5)
         assert page.locator("#p2AvatarIcon [aria-label='AI 棋手头像']").count() == 1

@@ -217,6 +217,7 @@ public class MainActivity extends Activity {
                 thread.setDaemon(true);
                 return thread;
             }, new ThreadPoolExecutor.AbortPolicy());
+    private boolean mNativeAiWarmUpWanted, mNativeAiWarmUpQueued, mNativeAiWarmUpFinished;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final Runnable mInitializeWebViewTask = this::initializeWebView;
     private final Runnable mSplashLoadWarning = () -> {
@@ -226,6 +227,7 @@ public class MainActivity extends Activity {
     };
     private final Runnable mSplashContentDismiss = this::dismissNativeSplash;
     private long mNativeSplashStartedAt = 0L;
+    private boolean mNativeSplashDismissing;
     private boolean mHasVisibleWebContent;
     private LocalWebServer mLocalServer;
     private long          mLastBackPressTime = 0;
@@ -257,7 +259,42 @@ public class MainActivity extends Activity {
         );
     };
 
+    private synchronized boolean requestNativeAiWarmUp() {
+        if (mDestroyed) return false;
+        mNativeAiWarmUpWanted = true;
+        scheduleNativeAiWarmUp();
+        return true;
+    }
+
+    private synchronized void scheduleNativeAiWarmUp() {
+        if (mDestroyed || !mActivityResumed || !mNativeAiWarmUpWanted
+                || mNativeAiWarmUpQueued || mNativeAiWarmUpFinished) return;
+        mNativeAiWarmUpQueued = true;
+        try {
+            mNativeAiExecutor.execute(() -> {
+                boolean attempted = false;
+                try {
+                    synchronized (MainActivity.this) {
+                        if (mDestroyed || !mActivityResumed) return;
+                        attempted = true;
+                    }
+                    NativeGomokuAI.warmUp();
+                } finally {
+                    synchronized (MainActivity.this) {
+                        mNativeAiWarmUpQueued = false;
+                        mNativeAiWarmUpFinished |= attempted;
+                        if (!attempted) scheduleNativeAiWarmUp();
+                    }
+                }
+            });
+        } catch (RejectedExecutionException overloaded) {
+            // A full queue is retried after a move completes, or on resume.
+            mNativeAiWarmUpQueued = false;
+        }
+    }
+
     private boolean enqueueNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
+        final long requestedAt = System.nanoTime();
         if (mDestroyed || requestId == null
                 || !requestId.matches("[A-Za-z0-9_-]{1,80}")
                 || (aiColor != 1 && aiColor != 2)
@@ -303,19 +340,26 @@ public class MainActivity extends Activity {
         }
 
         if (mPendingNativeAiRequests.putIfAbsent(requestId, Boolean.TRUE) != null) return false;
+        final long enqueuedAt = System.nanoTime();
         try {
             mNativeAiExecutor.execute(() -> {
                 long startedAt = System.nanoTime();
                 try {
                     NativeGomokuAI.Move move = NativeGomokuAI.chooseMove(board, aiColor, forbidden);
                     long elapsedMs = Math.max(0L, (System.nanoTime() - startedAt) / 1000000L);
-                    postNativeAiResult(requestId, move, elapsedMs, move == null ? "no_legal_move" : null);
+                    postNativeAiResult(requestId, move, elapsedMs,
+                            Math.max(0L, (startedAt - enqueuedAt) / 1000000L),
+                            Math.max(0L, (System.nanoTime() - requestedAt) / 1000000L),
+                            move == null ? "no_legal_move" : null);
                 } catch (RuntimeException error) {
                     android.util.Log.w("NativeGomokuAI", "Native move selection failed", error);
                     long elapsedMs = Math.max(0L, (System.nanoTime() - startedAt) / 1000000L);
-                    postNativeAiResult(requestId, null, elapsedMs, "calculation_failed");
+                    postNativeAiResult(requestId, null, elapsedMs,
+                            Math.max(0L, (startedAt - enqueuedAt) / 1000000L),
+                            Math.max(0L, (System.nanoTime() - requestedAt) / 1000000L), "calculation_failed");
                 } finally {
                     mPendingNativeAiRequests.remove(requestId);
+                    scheduleNativeAiWarmUp();
                 }
             });
             return true;
@@ -325,13 +369,18 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void postNativeAiResult(String requestId, NativeGomokuAI.Move move, long elapsedMs, String error) {
+    private void postNativeAiResult(String requestId, NativeGomokuAI.Move move, long elapsedMs,
+                                    long queueMs, long totalMs, String error) {
         org.json.JSONObject result = new org.json.JSONObject();
         String resultJson;
         try {
             result.put("ok", move != null);
             result.put("elapsedMs", elapsedMs);
+            result.put("searchMs", elapsedMs);
+            result.put("queueMs", queueMs);
+            result.put("totalMs", totalMs);
             if (move != null) {
+                result.put("engine", move.engine);
                 result.put("r", move.r);
                 result.put("c", move.c);
                 result.put("depth", move.depth);
@@ -353,9 +402,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    // 只在主线程递增；原生网络回调可能来自 ConnectivityService 的 Binder 线程。
-    private long mNetworkEventSequence = 0L;
-
     /**
      * Installs the native splash over the WebView without putting WebView
      * startup behind an animation.  The user can dismiss it at any time;
@@ -366,6 +412,7 @@ public class MainActivity extends Activity {
         if (mRootLayout == null || mSplashView != null) return;
         mSplashView = new GomokuSplashView(this);
         mNativeSplashStartedAt = 0L;
+        mNativeSplashDismissing = false;
         mSplashView.setDismissListener(this::dismissNativeSplash);
         mSplashView.setAnimationStartedListener(startedAt -> {
             mNativeSplashStartedAt = startedAt;
@@ -381,23 +428,29 @@ public class MainActivity extends Activity {
     }
 
     private void dismissNativeSplash() {
-        if (mSplashView == null) return;
+        if (mSplashView == null || mNativeSplashDismissing) return;
         // Never let an early tap uncover the empty WebView surface.
         if (!mHasVisibleWebContent) return;
         mMainHandler.removeCallbacks(mSplashLoadWarning);
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         GomokuSplashView splash = mSplashView;
-        mSplashView = null;
-        mNativeSplashStartedAt = 0L;
-        splash.stopAnimation();
-        if (mRootLayout != null) {
-            mRootLayout.removeView(splash);
-        }
-        splash.setVisibility(View.GONE);
+        mNativeSplashDismissing = true;
+        // Keep textures alive throughout the short crossfade. Releasing them
+        // before the last rendered frame can turn the overlay blank mid-fade.
+        splash.animate().alpha(0f).setDuration(splash.getDismissDurationMs())
+                .withEndAction(() -> {
+                    if (mSplashView != splash || mDestroyed) return;
+                    mSplashView = null;
+                    mNativeSplashStartedAt = 0L;
+                    mNativeSplashDismissing = false;
+                    splash.stopAnimation();
+                    if (mRootLayout != null) mRootLayout.removeView(splash);
+                    splash.setVisibility(View.GONE);
+                }).start();
     }
 
     private void requestNativeSplashDismiss() {
-        if (mSplashView == null) return;
+        if (mSplashView == null || mNativeSplashDismissing) return;
         // The animation starts after WebView construction so its main-thread
         // startup work cannot interrupt the visible stone-by-stone sequence.
         if (mNativeSplashStartedAt <= 0L) return;
@@ -426,7 +479,7 @@ public class MainActivity extends Activity {
                 "好友消息",
                 NotificationManager.IMPORTANCE_DEFAULT
         );
-        channel.setDescription("五子棋云屿晴光好友申请、私聊和邀战提醒");
+        channel.setDescription("五子棋好友申请、私聊和邀战提醒");
         channel.setShowBadge(true);
         manager.createNotificationChannel(channel);
     }
@@ -482,7 +535,7 @@ public class MainActivity extends Activity {
                 : new Notification.Builder(this);
         Notification notification = builder
                 .setSmallIcon(R.drawable.ic_stat_gomoku)
-                .setContentTitle("五子棋云屿晴光 · 好友消息")
+                .setContentTitle("五子棋 · 好友消息")
                 .setContentText("你有新的好友动态，打开游戏查看")
                 .setCategory(Notification.CATEGORY_MESSAGE)
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
@@ -569,10 +622,6 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
-    private void notifyWebNetworkChanged(final String reason) {
-        scheduleWebNetworkChanged(reason);
-    }
-
     private boolean isRelevantNetwork(Network network) {
         if (mDestroyed || network == null || mUsingDefaultNetworkCallback) return !mDestroyed;
         // API 23 起可以精确识别当前活动网络。API 21-22 没有对应的
@@ -582,6 +631,22 @@ public class MainActivity extends Activity {
             return active == null || active.equals(network);
         }
         return true;
+    }
+
+    private String getActiveNetworkSignature() {
+        ConnectivityManager manager = mConnectivityManager;
+        if (manager == null) return "android-network-unknown";
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network active = manager.getActiveNetwork();
+                return active == null ? "android-network-offline" : "android-network:" + active;
+            }
+            android.net.NetworkInfo active = manager.getActiveNetworkInfo();
+            if (active == null || !active.isConnected()) return "android-network-offline";
+            return "android-network:" + active.getType() + ":" + active.getSubtype();
+        } catch (Exception ignored) {
+            return "android-network-unknown";
+        }
     }
 
     private void notifyWebNetworkChanged(final String reason, Network network) {
@@ -607,12 +672,11 @@ public class MainActivity extends Activity {
         String reason = mPendingNetworkReason;
         mPendingNetworkReason = null;
         if (reason == null) return;
-        long sequence = ++mNetworkEventSequence;
         String safeReason = org.json.JSONObject.quote(reason);
-        String safeSequence = org.json.JSONObject.quote("android-network-" + sequence);
+        String safeSignature = org.json.JSONObject.quote(getActiveNetworkSignature());
         mWebView.evaluateJavascript(
                 "if (window.__gomokuNativeNetworkChanged) window.__gomokuNativeNetworkChanged(" +
-                        safeReason + "," + safeSequence + ");", null);
+                        safeReason + "," + safeSignature + ");", null);
     }
 
     @Override
@@ -1095,6 +1159,11 @@ public class MainActivity extends Activity {
             }
 
             @android.webkit.JavascriptInterface
+            public boolean warmUpNativeAi() {
+                return MainActivity.this.requestNativeAiWarmUp();
+            }
+
+            @android.webkit.JavascriptInterface
             public boolean requestNativeAiMove(String requestId, String boardJson, int aiColor, String forbiddenJson) {
                 return MainActivity.this.enqueueNativeAiMove(requestId, boardJson, aiColor, forbiddenJson);
             }
@@ -1440,6 +1509,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         mActivityResumed = true;
+        scheduleNativeAiWarmUp();
         mWebMusicLifecycleGeneration++;
         if (mSplashView != null) {
             mSplashView.resumeAnimation();
@@ -1451,7 +1521,6 @@ public class MainActivity extends Activity {
             if (!mNetworkMonitorRegistered || mNetworkCallback == null) {
                 registerNetworkMonitor();
             }
-            notifyWebNetworkChanged("android_resume");
         }
         // 如果是从系统授权页面返回且已获得安装权限，立即呼起安装已下载好的安装包
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sLastDownloadedFile != null && sLastDownloadedFile.exists()) {
@@ -1500,7 +1569,7 @@ public class MainActivity extends Activity {
             pauseWebViewAfterBackgroundMusic(mWebView, generation, true);
         }
         // 页面进入后台后不需要继续接收多网络能力变化；恢复时重新注册默认
-        // 网络回调并主动同步一次，避免后台回调堆积和回前台重复重连。
+        // 网络回调，系统会通过 onAvailable 报告当前网络，避免额外强制重连。
         unregisterNetworkMonitor();
     }
 
@@ -1869,7 +1938,7 @@ public class MainActivity extends Activity {
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!getPackageManager().canRequestPackageInstalls()) {
-                    Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋云屿晴光安装应用，以完成自动更新", Toast.LENGTH_LONG).show();
+                    Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋安装应用，以完成全自动更新", Toast.LENGTH_LONG).show();
                     sLastDownloadedFile = apkFile;
                     Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
                     startActivity(permIntent);
@@ -1903,7 +1972,7 @@ public class MainActivity extends Activity {
                 req.addRequestHeader(UPDATE_CLIENT_HEADER, UPDATE_CLIENT_HEADER_VALUE);
                 req.addRequestHeader(UPDATE_TICKET_HEADER, updateTicket.trim());
                 req.setMimeType("application/vnd.android.package-archive");
-                req.setTitle("五子棋云屿晴光 最新版自动更新");
+                req.setTitle("五子棋 最新版全自动更新");
                 req.setDescription("正在极速下载安装包...");
                 req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
 
@@ -1957,6 +2026,7 @@ public class MainActivity extends Activity {
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);
         if (mSplashView != null) {
+            mSplashView.animate().cancel();
             mSplashView.stopAnimation();
             mSplashView = null;
         }

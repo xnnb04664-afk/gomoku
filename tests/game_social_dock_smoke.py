@@ -93,9 +93,10 @@ def main():
         page.wait_for_selector("#skyLobby", state="hidden", timeout=15_000)
         page.wait_for_selector("#cvs", state="visible", timeout=15_000)
         page.wait_for_function("document.body.classList.contains('sky-cards-open')")
-        assert page.locator(".card-area-wrapper").is_visible()
+        assert page.locator('.card-area-wrapper').get_attribute('inert') is None
         page.locator(".sky-game-topbar [data-game-action='more']").click()
         page.wait_for_function("!document.body.classList.contains('sky-cards-open')")
+        assert page.locator('.card-area-wrapper').get_attribute('inert') is not None
         page.locator(".sky-game-topbar [data-game-action='more']").click()
         page.wait_for_function("document.body.classList.contains('sky-cards-open')")
         page.wait_for_function("getComputedStyle(document.querySelector('.card-area-wrapper')).visibility === 'visible'")

@@ -87,7 +87,7 @@
           replaySavedState = {
             board: board.map(row => [...row]),
             history: history.map(move => ({ ...move })),
-            turn, isOver, gameMode, gameWinnerColor, gameResultIsDraw,
+            turn, isOver, gameMode, aiPlayerColor, gameWinnerColor, gameResultIsDraw,
             winningLine: Array.isArray(winningLine) ? winningLine.map(point => ({ ...point })) : null,
             p1Name, p2Name, p1Avatar, p2Avatar
           };
@@ -96,6 +96,10 @@
         // 好友资料中的云端棋谱属于“好友本人”保存的记录；按其 myColor
         // 映射黑白双方身份，避免复盘时仍显示当前用户上一局的人机头像和名字。
         const profilePlayerName = String(item?.playerName || '').trim().slice(0, 32);
+        if (!profilePlayerName && gameMode === 'ai') {
+          aiPlayerColor = item.myColor === WHITE ? WHITE : BLACK;
+          updatePlayerHeaderUI();
+        }
         if (profilePlayerName) {
           const playerAvatar = item?.playerAvatar || '👤';
           const opponentName = String(item?.oppName || '对手').trim().slice(0, 32);
@@ -221,6 +225,7 @@
       const resultTitle = document.getElementById('resultModalTitle')?.textContent || '';
       return startMainBoardReplay({
         movesData: snapshot.moves,
+        myColor: snapshot.myColor,
         winnerColor: snapshot.winnerColor,
         winningLine: snapshot.winningLine,
         isDraw: snapshot.isDraw,
@@ -246,7 +251,9 @@
       for (let i = 0; i < replayStepIndex; i++) {
         const m = replayAllMoves[i];
         if (!m) continue;
-        if (m.action === 'identity_swap' || m.type === 'identity_swap' || m.type === 'skill_identity_swap') {
+        if (m.action === 'prophecy_blocked') {
+          history.push({ ...m });
+        } else if (m.action === 'identity_swap' || m.type === 'identity_swap' || m.type === 'skill_identity_swap') {
           // 🔄 在该步数发生身份互换：全盘已有棋子黑白颠倒！
           for (let r = 0; r < 15; r++) {
             for (let c = 0; c < 15; c++) {
@@ -335,6 +342,9 @@
           const lastM = replayAllMoves[replayStepIndex - 1];
           if (!lastM) {
             turnLabel.textContent = "";
+          } else if (lastM.action === 'prophecy_blocked') {
+            turnLabel.textContent = `第 ${replayStepIndex} 步: 🔮【预言封锁】取消${lastM.p === BLACK ? '黑方' : '白方'}在 (${lastM.targetR+1}, ${lastM.targetC+1}) 的落子机会`;
+            turnLabel.style.color = '#7c3aed';
           } else if (lastM.action === 'identity_swap' || lastM.type === 'identity_swap' || lastM.type === 'skill_identity_swap') {
             turnLabel.textContent = `第 ${replayStepIndex} 步: 🔄【身份互换】全盘黑白颠倒！`;
             turnLabel.style.color = "#d97706";
@@ -435,6 +445,7 @@
         turn = replaySavedState.turn;
         isOver = replaySavedState.isOver;
         gameMode = replaySavedState.gameMode;
+        aiPlayerColor = replaySavedState.aiPlayerColor === WHITE ? WHITE : BLACK;
         gameWinnerColor = replaySavedState.gameWinnerColor || 0;
         gameResultIsDraw = replaySavedState.gameResultIsDraw === true;
         winningLine = Array.isArray(replaySavedState.winningLine) ? replaySavedState.winningLine.map(point => ({ ...point })) : null;
@@ -450,7 +461,7 @@
 
       draw();
       updateUI();
-      if (!isOver && gameMode === 'ai' && turn === WHITE) setTimeout(() => smartAiMove(), 80);
+      if (!isOver && gameMode === 'ai' && turn === getAiColor()) setTimeout(() => smartAiMove(), 80);
       if (!silent) showGameNotice("已退出复盘模式");
     }
 

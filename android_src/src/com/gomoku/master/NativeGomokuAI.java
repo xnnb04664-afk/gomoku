@@ -17,6 +17,36 @@ import java.util.Map;
  */
 final class NativeGomokuAI {
     static final int SIZE = 15;
+    private static final boolean NATIVE_LIBRARY_LOADED;
+
+    static {
+        boolean loaded = false;
+        try {
+            System.loadLibrary("gomoku_ai");
+            loaded = true;
+        } catch (UnsatisfiedLinkError | SecurityException error) {
+            android.util.Log.w("NativeGomokuAI", "C++ search library unavailable; retaining the Java fallback", error);
+        }
+        NATIVE_LIBRARY_LOADED = loaded;
+    }
+
+    private static native double[] chooseMoveNative(int[] board, int aiColor, boolean[] forbidden);
+    private static native boolean warmUpNative();
+    private static boolean warmUpAttempted;
+
+    // Called only on the Activity's bounded AI executor, never on the UI thread.
+    static synchronized boolean warmUp() {
+        if (warmUpAttempted) return false;
+        warmUpAttempted = true;
+        if (!NATIVE_LIBRARY_LOADED) return false;
+        try {
+            return warmUpNative();
+        } catch (UnsatisfiedLinkError | RuntimeException error) {
+            android.util.Log.w("NativeGomokuAI", "C++ warmup unavailable; move selection remains available", error);
+            return false;
+        }
+    }
+
     private static final int EMPTY = 0, BLACK = 1, WHITE = 2;
     private static final int WIN = 100000000;
     private static final int OPEN_FOUR = 12000000;
@@ -54,31 +84,42 @@ final class NativeGomokuAI {
     };
     private static final int[] OPEN_FOUR_PATTERN = {0, 1, 1, 1, 1, 0};
     private static final int[] OPEN_TWO_PATTERN = {0, 1, 1, 0};
-    private static final Geometry GEOMETRY = new Geometry(SIZE);
     private static final class LineStatsHolder { static final LineStats INSTANCE = new LineStats(); }
-    private static final int[] ZOBRIST_A = new int[SIZE * SIZE * 3];
-    private static final int[] ZOBRIST_B = new int[SIZE * SIZE * 3];
 
-    static {
-        int state = 0x9e3779b9;
-        for (int i = 0; i < ZOBRIST_A.length; i++) {
-            state = nextRandom(state); ZOBRIST_A[i] = state;
-            state = nextRandom(state); ZOBRIST_B[i] = state;
+    // C++ success must not allocate the Java-only geometry or large TT.
+    private static final class FallbackHolder {
+        static final Geometry GEOMETRY = new Geometry(SIZE);
+        static final int[] ZOBRIST_A = new int[SIZE * SIZE * 3];
+        static final int[] ZOBRIST_B = new int[SIZE * SIZE * 3];
+        static final TranspositionTable TABLE = new TranspositionTable(1 << 17);
+        static {
+            int state = 0x9e3779b9;
+            for (int i = 0; i < ZOBRIST_A.length; i++) {
+                state = nextRandom(state); ZOBRIST_A[i] = state;
+                state = nextRandom(state); ZOBRIST_B[i] = state;
+            }
         }
+        static void ensureInitialized() {}
     }
 
     static final class Move {
         final int r, c, index;
         final double score;
         final int depth, nodes;
+        final String engine;
 
         Move(int index, double score, int depth, int nodes) {
+            this(index, score, depth, nodes, "java");
+        }
+
+        Move(int index, double score, int depth, int nodes, String engine) {
             this.index = index;
             this.r = index / SIZE;
             this.c = index % SIZE;
             this.score = score;
             this.depth = depth;
             this.nodes = nodes;
+            this.engine = engine;
         }
     }
 
@@ -97,8 +138,8 @@ final class NativeGomokuAI {
                 int color = board[i];
                 if (color == BLACK || color == WHITE) {
                     stones++;
-                    hashA ^= ZOBRIST_A[i * 3 + color];
-                    hashB ^= ZOBRIST_B[i * 3 + color];
+                    hashA ^= FallbackHolder.ZOBRIST_A[i * 3 + color];
+                    hashB ^= FallbackHolder.ZOBRIST_B[i * 3 + color];
                     updateNeighborhood(i, 1);
                 }
             }
@@ -109,8 +150,8 @@ final class NativeGomokuAI {
         boolean put(int index, int color) {
             if (index < 0 || index >= board.length || board[index] != EMPTY) return false;
             board[index] = color;
-            hashA ^= ZOBRIST_A[index * 3 + color];
-            hashB ^= ZOBRIST_B[index * 3 + color];
+            hashA ^= FallbackHolder.ZOBRIST_A[index * 3 + color];
+            hashB ^= FallbackHolder.ZOBRIST_B[index * 3 + color];
             stones++;
             updateNeighborhood(index, 1);
             return true;
@@ -120,8 +161,8 @@ final class NativeGomokuAI {
             if (board[index] != color) return;
             updateNeighborhood(index, -1);
             board[index] = EMPTY;
-            hashA ^= ZOBRIST_A[index * 3 + color];
-            hashB ^= ZOBRIST_B[index * 3 + color];
+            hashA ^= FallbackHolder.ZOBRIST_A[index * 3 + color];
+            hashB ^= FallbackHolder.ZOBRIST_B[index * 3 + color];
             stones--;
         }
 
@@ -229,7 +270,7 @@ final class NativeGomokuAI {
         final int aiColor, opponent;
         final Position position;
         final long deadline;
-        final TranspositionTable table = SHARED_TABLE;
+        final TranspositionTable table = FallbackHolder.TABLE;
         final TTEntry ttScratch = new TTEntry();
         final int[][] killers = new int[32][2];
         final int[] history = new int[SIZE * SIZE];
@@ -294,13 +335,37 @@ final class NativeGomokuAI {
         }
     }
     private static final int THREAT_FAIL = 0, THREAT_WIN = 1, THREAT_UNKNOWN = 2;
-    private static final TranspositionTable SHARED_TABLE = new TranspositionTable(1 << 17);
 
     private NativeGomokuAI() {}
 
     static synchronized Move chooseMove(int[] board, int aiColor, boolean[] forbidden) {
+        if (NATIVE_LIBRARY_LOADED && board != null && board.length == SIZE * SIZE
+                && (aiColor == BLACK || aiColor == WHITE)) {
+            try {
+                double[] result = chooseMoveNative(board, aiColor, forbidden);
+                if (result != null && result.length >= 4
+                        && Double.isFinite(result[0]) && Double.isFinite(result[1])
+                        && Double.isFinite(result[2]) && Double.isFinite(result[3])) {
+                    int index = (int) result[0];
+                    if (result[0] == index && index >= 0 && index < board.length
+                            && board[index] == EMPTY
+                            && (forbidden == null || forbidden.length != board.length || !forbidden[index])) {
+                        return new Move(index, result[1], Math.max(0, (int) result[2]),
+                                Math.max(0, (int) result[3]), "cpp");
+                    }
+                }
+                android.util.Log.w("NativeGomokuAI", "C++ search returned an invalid move; using Java fallback");
+            } catch (UnsatisfiedLinkError | RuntimeException error) {
+                android.util.Log.w("NativeGomokuAI", "C++ search failed; using Java fallback", error);
+            }
+        }
+        return chooseMoveJava(board, aiColor, forbidden);
+    }
+
+    private static Move chooseMoveJava(int[] board, int aiColor, boolean[] forbidden) {
         if (board == null || board.length != SIZE * SIZE || (aiColor != BLACK && aiColor != WHITE)) return null;
         for (int value : board) if (value < EMPTY || value > WHITE) return null;
+        FallbackHolder.ensureInitialized();
         long started = System.nanoTime();
         long deadline = started + SEARCH_BUDGET_NS;
         Position position = new Position(board, forbidden);
@@ -369,17 +434,17 @@ final class NativeGomokuAI {
         int radius = p.stones <= 12 ? 3 : 2;
         List<Candidate> raw = new ArrayList<>(160);
         for (int index = 0; index < p.board.length; index++) {
-            int r = GEOMETRY.rows[index], c = GEOMETRY.cols[index];
+            int r = FallbackHolder.GEOMETRY.rows[index], c = FallbackHolder.GEOMETRY.cols[index];
             boolean openingAnchor = p.stones <= 4 && Math.abs(r - 7) <= 3 && Math.abs(c - 7) <= 3;
             if (!p.empty(index) || p.forbidden[index] || (!openingAnchor && !nearStone(p, index, radius))) continue;
             int ownPattern = analyzeMove(p, index, color), opponentPattern = analyzeMove(p, index, opponent);
             boolean tactical = patternTactical(ownPattern) || patternTactical(opponentPattern);
             raw.add(new Candidate(index, ownPattern, opponentPattern, tactical,
-                    moveOrderingScore(ownPattern, opponentPattern) + GEOMETRY.positionValues[index]));
+                    moveOrderingScore(ownPattern, opponentPattern) + FallbackHolder.GEOMETRY.positionValues[index]));
         }
         if (raw.isEmpty()) {
             for (int i = 0; i < p.board.length; i++) if (p.empty(i) && !p.forbidden[i]) {
-                raw.add(new Candidate(i, NO_PATTERN, NO_PATTERN, false, GEOMETRY.positionValues[i]));
+                raw.add(new Candidate(i, NO_PATTERN, NO_PATTERN, false, FallbackHolder.GEOMETRY.positionValues[i]));
             }
         }
         raw.sort(CANDIDATE_ORDER);
@@ -423,7 +488,7 @@ final class NativeGomokuAI {
         int step = Math.max(2, SIZE / 4);
         for (int r = 1; r < SIZE; r += step) for (int c = 1; c < SIZE; c += step) addAnchor(p, anchors, seen, r, c);
         anchors.sort((a, b) -> {
-            int order = Integer.compare(GEOMETRY.positionValues[b.index], GEOMETRY.positionValues[a.index]);
+            int order = Integer.compare(FallbackHolder.GEOMETRY.positionValues[b.index], FallbackHolder.GEOMETRY.positionValues[a.index]);
             if (order != 0) return order;
             order = Integer.compare(a.r, b.r);
             return order != 0 ? order : Integer.compare(a.c, b.c);
@@ -434,7 +499,7 @@ final class NativeGomokuAI {
             int ownPattern = analyzeMove(p, m.index, color), opponentPattern = analyzeMove(p, m.index, opponent);
             boolean tactical = patternTactical(ownPattern) || patternTactical(opponentPattern);
             result.add(new Candidate(m.index, ownPattern, opponentPattern, tactical,
-                    moveOrderingScore(ownPattern, opponentPattern) + GEOMETRY.positionValues[m.index]));
+                    moveOrderingScore(ownPattern, opponentPattern) + FallbackHolder.GEOMETRY.positionValues[m.index]));
         }
         return result;
     }
@@ -443,7 +508,7 @@ final class NativeGomokuAI {
         if (!valid(r, c)) return;
         int index = r * SIZE + c;
         if (!seen[index] && p.empty(index) && !p.forbidden[index]) {
-            seen[index] = true; list.add(new Candidate(index, NO_PATTERN, NO_PATTERN, false, GEOMETRY.positionValues[index]));
+            seen[index] = true; list.add(new Candidate(index, NO_PATTERN, NO_PATTERN, false, FallbackHolder.GEOMETRY.positionValues[index]));
         }
     }
 
@@ -468,7 +533,7 @@ final class NativeGomokuAI {
         int ownPattern = analyzeMove(p, index, color), opponentPattern = analyzeMove(p, index, opponent);
         boolean tactical = patternTactical(ownPattern) || patternTactical(opponentPattern);
         double score = Double.isFinite(source.score) ? source.score :
-                moveOrderingScore(ownPattern, opponentPattern) + GEOMETRY.positionValues[index];
+                moveOrderingScore(ownPattern, opponentPattern) + FallbackHolder.GEOMETRY.positionValues[index];
         out.add(new Candidate(index, ownPattern, opponentPattern, tactical, score)); seen[index] = true;
     }
 
@@ -587,7 +652,7 @@ final class NativeGomokuAI {
         for (int d = 0; d < 4; d++) {
             int code = 0, lineBase = base + d * LOCAL_LENGTH;
             for (int offset = 0; offset < LOCAL_LENGTH; offset++) {
-                int cellIndex = GEOMETRY.lineIndexes[lineBase + offset];
+                int cellIndex = FallbackHolder.GEOMETRY.lineIndexes[lineBase + offset];
                 int value;
                 if (offset == 5) value = 1;
                 else if (cellIndex < 0) value = 2;
@@ -695,10 +760,10 @@ final class NativeGomokuAI {
 
     private static double evaluateBoard(Position p, int aiColor, int opponent) {
         double ai = 0, other = 0;
-        for (int[] line : GEOMETRY.lines) { ai += evaluateLine(p, line, aiColor); other += evaluateLine(p, line, opponent); }
+        for (int[] line : FallbackHolder.GEOMETRY.lines) { ai += evaluateLine(p, line, aiColor); other += evaluateLine(p, line, opponent); }
         double positional = 0;
         for (int i = 0; i < p.board.length; i++) if (p.board[i] != EMPTY) {
-            positional += p.board[i] == aiColor ? GEOMETRY.positionValues[i] : -GEOMETRY.positionValues[i];
+            positional += p.board[i] == aiColor ? FallbackHolder.GEOMETRY.positionValues[i] : -FallbackHolder.GEOMETRY.positionValues[i];
         }
         return ai - other * 1.12 + positional;
     }

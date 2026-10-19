@@ -106,7 +106,7 @@
     // 收到端回 ACK；发送端在短时间内自动重发，接收端按 _mid 去重。
     const RELIABLE_ONLINE_MESSAGE_TYPES = new Set([
       'move', 'chat', 'sync_req', 'state_snapshot',
-      'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
+      'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart_commit', 'restart_commit_ack', 'restart',
       'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone',
       'skill_shift_stone', 'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
       'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2',
@@ -146,7 +146,7 @@
     const ONLINE_MESSAGE_TYPES = new Set([
       'chat', 'delivery_ack', 'profile_sync', 'ping', 'pong', 'sync_req', 'state_snapshot', 'reconnect_handshake',
       'join_ready', 'join_confirmed',
-      'move', 'leave_room', 'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart',
+      'move', 'leave_room', 'undo_req', 'undo_res', 'restart_req', 'restart_res', 'restart_commit', 'restart_commit_ack', 'restart',
       'skill_use', 'skill_identity_swap', 'skill_prophecy', 'skill_remove_stone', 'skill_shift_stone',
       'skill_swap_color', 'skill_swap_positions', 'skill_mega_bomb',
       'destiny_point_1', 'destiny_point_2', 'destiny_wipe_danger', 'destiny_place_2x2',
@@ -415,6 +415,22 @@
       publish(topic, payload, _options) {
         const text = payload && typeof payload.toString === 'function' ? payload.toString() : String(payload ?? '');
         return this._send({ type: 'publish', topic: String(topic || ''), payload: text });
+      }
+
+      invalidate(reason = '网络切换') {
+        if (this.closed) return;
+        // A half-open WebSocket may keep readyState=OPEN after a network handoff.
+        // Make it unusable before notifying listeners so reconnect cannot reuse it,
+        // even when the browser never dispatches the old socket's close event.
+        this.closed = true;
+        this.connected = false;
+        if (!this.readySettled) {
+          this.readySettled = true;
+          this._rejectReady(new Error(String(reason || '房间中继连接失效')));
+        }
+        this._closeSocket(true);
+        this._emit('offline');
+        this._emit('close');
       }
 
       end(force = true) {
@@ -1112,7 +1128,7 @@
         this.open = true;
         this.closed = false;
         this.ready = false;
-        this.listeners = { data: [], close: [], error: [], open: [] };
+        this.listeners = { data: [], close: [], error: [], open: [], delivery_ack: [] };
 
         // 会话 ID 进入 MQTT topic，避免同一 6 位房间码的旧局/撞码报文串入新局。
         // 没拿到会话 ID 时保留 v3 兼容路径，便于旧客户端完成升级过渡。
@@ -1484,19 +1500,6 @@
             ? iceServersOverride
             : getWebRtcIceServersForProbe();
           if (!isCurrent()) return;
-          const usingFallbackIce = iceServers === DEFAULT_WEBRTC_ICE_SERVERS;
-          if (usingFallbackIce) {
-            // TURN 配置到达后给首轮 STUN 一个短暂机会；若仍未直连，立即用缓存 TURN 重建，
-            // 避免在必须中继的网络环境里等待浏览器把整轮 ICE 超时耗尽。
-            getWebRtcIceServers().then((resolvedServers) => {
-              if (!isCurrent() || this.isP2pReady || resolvedServers === DEFAULT_WEBRTC_ICE_SERVERS) return;
-              setTimeout(() => {
-                if (!isCurrent() || this.isP2pReady) return;
-                this._scheduleP2PRecovery('TURN 凭据已就绪', 0);
-              }, 1200);
-            }).catch(() => {});
-          }
-
           const pc = new RTCPC({
             iceServers,
             iceCandidatePoolSize: 4
@@ -1754,29 +1757,25 @@
 
           let selectedPairId = '';
           let selectedPair = null;
-          const candidatePairs = [];
           report.forEach((stat) => {
             if (!stat || typeof stat !== 'object') return;
             if (stat.type === 'transport' && stat.selectedCandidatePairId) {
               selectedPairId = stat.selectedCandidatePairId;
             } else if (stat.type === 'candidate-pair') {
               if (stat.selected === true) selectedPair = stat;
-              if (stat.state === 'succeeded' && (stat.nominated === true || stat.writable === true)) {
-                candidatePairs.push(stat);
-              }
             }
           });
 
           if (!selectedPair && selectedPairId && typeof report.get === 'function') {
             selectedPair = report.get(selectedPairId) || null;
           }
-          if (!selectedPair) selectedPair = candidatePairs[0] || null;
 
           if (!selectedPair) {
-            this.p2pRoute = 'unknown';
             this.p2pStatsRttMs = null;
             this.p2pHighRttStreak = 0;
-            updateOnlineNetworkUI();
+            // WebView can omit the selected pair from a single getStats sample.
+            // Keep the last confirmed route instead of flashing back to detection.
+            if (this.p2pRoute === 'unknown') updateOnlineNetworkUI();
             return;
           }
 
@@ -1786,7 +1785,11 @@
           const localCandidateType = localCandidate?.candidateType;
           const remoteCandidateType = remoteCandidate?.candidateType;
           const usesRelay = localCandidateType === 'relay' || remoteCandidateType === 'relay';
-          const nextRoute = usesRelay ? 'relay' : (localCandidateType || remoteCandidateType) ? 'direct' : 'unknown';
+          const detectedRoute = usesRelay ? 'relay' : (localCandidateType || remoteCandidateType) ? 'direct' : 'unknown';
+          // Some WebViews return the selected pair but omit its candidate records
+          // for one poll. Treat that sample as incomplete instead of flapping the
+          // visible route between direct/relay and detection.
+          const nextRoute = detectedRoute === 'unknown' ? this.p2pRoute : detectedRoute;
           if (this.p2pRoute !== nextRoute) this.p2pHighRttStreak = 0;
           this.p2pRoute = nextRoute;
           const currentRoundTripTime = Number(selectedPair.currentRoundTripTime);
@@ -1796,7 +1799,7 @@
           updateOnlineNetworkUI();
           this._maybeReoptimizeP2P(this.p2pStatsRttMs);
         } catch (_) {
-          // 部分 WebView 不提供完整 RTCStats；不影响 P2P 业务，只保留“检测中”。
+          // 部分 WebView 不提供完整 RTCStats；不影响 P2P 业务，下一轮轮询继续判断线路。
         } finally {
           if (this.p2pGeneration === generation) this.p2pStatsInFlight = false;
         }
@@ -2001,6 +2004,7 @@
           if (this.reliableRetryTimer) clearTimeout(this.reliableRetryTimer);
           this.reliableRetryTimer = null;
         }
+        this.emit('delivery_ack', entry.message);
       }
 
       _releaseReliableOutboxOwner() {
@@ -2483,7 +2487,9 @@
     }
 
     function triggerOnlineReconnect(reason = '网络波动') {
-      if (gameMode !== 'online' || isOver) return;
+      // A finished board still belongs to the room: keep its transport alive so
+      // both players can negotiate the next round without leaving the room.
+      if (gameMode !== 'online') return;
       if (isReconnecting) return;
 
       if (!currentRoomCode && lastActiveRoomCode) {
@@ -2519,7 +2525,7 @@
     }
 
     async function doAutoReconnect() {
-      if (!isReconnecting || isOver || gameMode !== 'online') return;
+      if (!isReconnecting || gameMode !== 'online') return;
 
       reconnectAttempts++;
       // 连续多次尝试（>2次）才弹出全屏等待遮罩
@@ -2530,7 +2536,10 @@
 
       try {
         const roomCode = currentRoomCode;
+        const transportGeneration = onlineTransportGeneration;
         const client = await getOrCreateOnlineTransport(roomCode, myOnlineColor === WHITE ? 'client' : 'host', onlineSessionId);
+        if (!isReconnecting || gameMode !== 'online' || currentRoomCode !== roomCode ||
+            onlineTransportGeneration !== transportGeneration) return;
         if (conn && conn.open && conn.ready && isMqttPoolUsable(client)) {
           onReconnectSuccess();
           return;
@@ -2641,6 +2650,7 @@
       stopReconnectHandshakeLoop();
       showReconnectOverlay(false);
       setupConn();
+      sendPendingOnlineRestartTransaction(conn);
 
       if (wasReconnecting && myOnlineColor === BLACK) {
         sendFullStateSnapshot();
@@ -2679,6 +2689,132 @@
       });
     }
 
+    function sendPendingOnlineRestartTransaction(connection = conn) {
+      if (!connection || connection !== conn || !connection.open || !connection.ready) return false;
+      const transaction = pendingOnlineRestartState || activeOnlineRestartState;
+      if (!transaction) return false;
+      if (transaction.side === 'initiator') {
+        if (transaction.phase === 'awaiting_response') {
+          transaction.requestMid ||= generateSecureId(10, 'restart_req_');
+          return connection.send({
+            type: 'restart_req',
+            name: p1Name,
+            requestId: transaction.requestId,
+            nextRoundId: transaction.nextRoundId,
+            roundId: transaction.oldRoundId,
+            _mid: transaction.requestMid
+          });
+        }
+        if (transaction.phase === 'awaiting_commit_ack') {
+          transaction.commitMid ||= generateSecureId(10, 'restart_commit_');
+          return connection.send({
+            type: 'restart_commit',
+            requestId: transaction.requestId,
+            nextRoundId: transaction.nextRoundId,
+            roundId: transaction.oldRoundId,
+            _mid: transaction.commitMid
+          });
+        }
+      } else if (transaction.side === 'responder') {
+        if (transaction.phase === 'awaiting_commit') {
+          transaction.responseMid ||= generateSecureId(10, 'restart_res_');
+          return connection.send({
+            type: 'restart_res',
+            agree: true,
+            commitRequired: true,
+            requestId: transaction.requestId,
+            nextRoundId: transaction.nextRoundId,
+            roundId: transaction.oldRoundId,
+            _mid: transaction.responseMid
+          });
+        }
+        if (transaction.phase === 'awaiting_commit_ack_delivery') {
+          transaction.commitAckMid ||= generateSecureId(10, 'restart_commit_ack_');
+          return connection.send({
+            type: 'restart_commit_ack',
+            requestId: transaction.requestId,
+            nextRoundId: transaction.nextRoundId,
+            roundId: transaction.oldRoundId,
+            _mid: transaction.commitAckMid
+          });
+        }
+      }
+      return false;
+    }
+
+    function handleOnlineRestartRequest(data) {
+      const incomingRestartId = typeof data.requestId === 'string' && data.requestId
+        ? data.requestId : generateSecureId(10, 'restart_');
+      if (activeOnlineRestartState?.requestId === incomingRestartId) {
+        sendPendingOnlineRestartTransaction(conn);
+        return;
+      }
+      if (activeOnlineRestartId) return;
+      if (pendingOnlineRestartState?.side === 'initiator') {
+        const ownTransaction = pendingOnlineRestartState;
+        if (ownTransaction.phase !== 'awaiting_response' || incomingRestartId >= ownTransaction.requestId) return;
+        if (ownTransaction.requestMid) onlineReliableOutbox.delete(ownTransaction.requestMid);
+        pendingOnlineRestartState = null;
+        pendingOnlineRestartId = '';
+      }
+
+      const oldRoundId = onlineRoundId;
+      if (!oldRoundId || (data.roundId && data.roundId !== oldRoundId)) {
+        showGameNotice('⚠️ 当前联机棋局还未对齐，暂不能重开；请先重连同步棋局。', true);
+        return;
+      }
+      const proposedRoundId = typeof data.nextRoundId === 'string' &&
+        /^[A-Za-z0-9_-]{1,80}$/.test(data.nextRoundId) && data.nextRoundId !== oldRoundId
+        ? data.nextRoundId : '';
+      // 新协议由请求方提出轮次，并等待双方完成提交；旧客户端没有提案字段，
+      // 暂时沿用旧流程以兼容更新不同步的两台设备。
+      const requiresCommit = data.type === 'restart_req' && Boolean(proposedRoundId && oldRoundId);
+      activeOnlineRestartId = incomingRestartId;
+      showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
+        if (activeOnlineRestartId !== incomingRestartId) return;
+        if (!conn || !conn.open || !conn.ready || onlineRoundId !== oldRoundId) {
+          activeOnlineRestartId = '';
+          showGameNotice('⚠️ 联机已中断或棋局轮次已变化，本局未重置；请重连后重新申请。', true);
+          return;
+        }
+
+        if (requiresCommit) {
+          activeOnlineRestartState = {
+            side: 'responder',
+            phase: 'awaiting_commit',
+            requestId: incomingRestartId,
+            oldRoundId,
+            nextRoundId: proposedRoundId,
+            responseMid: generateSecureId(10, 'restart_res_'),
+            commitAckMid: generateSecureId(10, 'restart_commit_ack_')
+          };
+          persistGameState();
+          if (sendPendingOnlineRestartTransaction(conn)) {
+            showGameNotice('✅ 已同意重开，正在等对方收到确认；棋盘保持原样。', false);
+          } else {
+            showGameNotice('⚠️ 已保留当前棋局，连接恢复后会继续确认重开。', true);
+          }
+          return;
+        }
+
+        const nextRoundId = generateSecureId(12, 'round_');
+        const sent = conn.send({ type: 'restart_res', agree: true, requestId: incomingRestartId, nextRoundId });
+        if (!sent) {
+          activeOnlineRestartId = '';
+          showGameNotice('⚠️ 重开确认未送出，本局未重置。请重连后重试。', true);
+          return;
+        }
+        resetBoardOnly(nextRoundId);
+        showGameNotice('🔄 双方达成一致，已重新开启新的一局！', false);
+      }, () => {
+        if (activeOnlineRestartId === incomingRestartId) activeOnlineRestartId = '';
+        if (conn && conn.open && conn.ready) {
+          conn.send({ type: 'restart_res', agree: false, requestId: incomingRestartId });
+        }
+        showGameNotice('已拒绝对手的重开申请，继续本局', false);
+      }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
+    }
+
     function fallbackToAiGame() {
       isReconnecting = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -2701,16 +2837,19 @@
       clearActiveOnlineUndo();
       pendingOnlineRestartId = '';
       activeOnlineRestartId = '';
+      pendingOnlineRestartState = null;
+      activeOnlineRestartState = null;
       if (typeof closeUndoModal === 'function') closeUndoModal();
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
       
       gameMode = 'ai';
+      aiPlayerColor = myOnlineColor;
       const aiProfile = window.getRandomAiOpponentProfile?.() || { name: '云岫', avatar: 'ai_cloud_fox' };
       p2Name = aiProfile.name;
       p2Avatar = aiProfile.avatar;
       updatePlayerHeaderUI();
       showGameNotice("🤖 已成功转为单人人机对弈模式，局势已完整继承！", false);
-      if (turn === WHITE && !isOver) {
+      if (turn === getAiColor() && !isOver) {
         setTimeout(smartAiMove, 500);
       }
     }
@@ -2854,7 +2993,8 @@
     }
 
     let onlineNetworkChangeTimer = null;
-    let lastOnlineNetworkSignature = '';
+    let lastOnlineNetworkSignature = getBrowserNetworkSignature();
+    let lastNativeNetworkSignature = '';
     let lastOnlineNetworkResetAt = 0;
     let onlineNetworkChangeSequence = 0;
     const ONLINE_NETWORK_CHANGE_DEBOUNCE_MS = 650;
@@ -2864,25 +3004,34 @@
       try {
         const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
         const parts = [navigator.onLine === false ? 'offline' : 'online'];
-        if (connection) {
-          parts.push(connection.type || '');
-          parts.push(connection.effectiveType || '');
-          parts.push(Number.isFinite(connection.downlink) ? String(connection.downlink) : '');
-          parts.push(Number.isFinite(connection.rtt) ? String(connection.rtt) : '');
-          parts.push(connection.saveData ? 'save-data' : 'normal');
-        }
+        // Downlink, RTT, and effectiveType are quality estimates that fluctuate
+        // during an otherwise stable connection. Only use the interface type as
+        // a browser fallback; Android's native bridge supplies the active network ID.
+        if (connection && typeof connection.type === 'string' && connection.type) parts.push(connection.type);
         return parts.join('|');
       } catch (_) {
         return navigator.onLine === false ? 'offline' : 'online';
       }
     }
 
-    function handleOnlineNetworkChange(reason = '网络切换', signature = '', force = false) {
+    function handleOnlineNetworkChange(reason = '网络切换', signature = '', source = 'browser') {
       const nextSignature = String(signature || getBrowserNetworkSignature()).slice(0, 160);
-      if (!force && nextSignature && nextSignature === lastOnlineNetworkSignature) return;
-      lastOnlineNetworkSignature = nextSignature || `event-${Date.now()}`;
+      if (!nextSignature) return;
+      if (source === 'native') {
+        // Native network IDs are authoritative. Refresh the browser baseline so
+        // its later online/type event cannot trigger a second reset for the same handoff.
+        lastOnlineNetworkSignature = getBrowserNetworkSignature();
+        if (nextSignature === lastNativeNetworkSignature) return;
+        lastNativeNetworkSignature = nextSignature;
+      } else {
+        if (nextSignature === lastOnlineNetworkSignature) return;
+        lastOnlineNetworkSignature = nextSignature;
+      }
       updateOnlineNetworkUI();
-      if (gameMode !== 'online' || isOver) return;
+      if (gameMode !== 'online') return;
+      // A reconnect already probes the current route. Duplicate Android resume,
+      // capability, or browser events must not destroy that new attempt.
+      if (isReconnecting) return;
       const now = Date.now();
       if (now - lastOnlineNetworkResetAt < ONLINE_NETWORK_RESET_COOLDOWN_MS) return;
       lastOnlineNetworkResetAt = now;
@@ -2904,45 +3053,53 @@
       }
     }
 
-    function scheduleOnlineNetworkChange(reason = '网络变化', signature = '', force = false) {
+    function scheduleOnlineNetworkChange(reason = '网络变化', signature = '', source = 'browser') {
       if (onlineNetworkChangeTimer) clearTimeout(onlineNetworkChangeTimer);
       const sequence = ++onlineNetworkChangeSequence;
       onlineNetworkChangeTimer = setTimeout(() => {
         onlineNetworkChangeTimer = null;
         if (sequence !== onlineNetworkChangeSequence) return;
-        handleOnlineNetworkChange(reason, signature, force);
+        handleOnlineNetworkChange(reason, signature, source);
       }, ONLINE_NETWORK_CHANGE_DEBOUNCE_MS);
     }
 
     // Android 原生 ConnectivityManager、Chrome Network Information API 和普通 online/offline
     // 事件统一进入同一去抖入口；这样 WiFi→4G/5G 不依赖浏览器是否派发 offline 事件。
     window.__gomokuNativeNetworkChanged = (reason = 'Android网络变化', signature = '') => {
-      scheduleOnlineNetworkChange(reason, signature || `${reason}-${Date.now()}`, true);
+      const incoming = String(signature || '');
+      // v1.0.145 原生桥发送递增序号，不代表网络真的变更；兼容旧桥时用浏览器
+      // 可见的稳定状态去重。新原生桥发送 android-network:<active-network-id>。
+      const legacySequence = /^android-network-\d+$/.test(incoming);
+      scheduleOnlineNetworkChange(
+        reason,
+        legacySequence ? getBrowserNetworkSignature() : (incoming || getBrowserNetworkSignature()),
+        legacySequence ? 'browser' : 'native'
+      );
     };
 
     try {
       window.addEventListener('offline', () => {
-        scheduleOnlineNetworkChange('设备离线', 'offline', true);
-        if (gameMode === 'online' && !isOver) {
+        scheduleOnlineNetworkChange('设备离线', 'offline', 'browser');
+        if (gameMode === 'online') {
           showGameNotice('📴 当前设备已离线，网络恢复后将自动重连…', true);
         }
       });
       window.addEventListener('online', () => {
-        scheduleOnlineNetworkChange('网络已恢复', `online-${Date.now()}`, true);
+        scheduleOnlineNetworkChange('网络已恢复', getBrowserNetworkSignature(), 'browser');
       });
       const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
       if (connection && typeof connection.addEventListener === 'function') {
         connection.addEventListener('change', () => {
-          scheduleOnlineNetworkChange('网络接口变化', getBrowserNetworkSignature(), false);
+          scheduleOnlineNetworkChange('网络接口变化', getBrowserNetworkSignature(), 'browser');
         });
       }
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-          scheduleOnlineNetworkChange('页面恢复前台', getBrowserNetworkSignature(), true);
+          scheduleOnlineNetworkChange('页面恢复前台', getBrowserNetworkSignature(), 'browser');
         }
       });
       window.addEventListener('pageshow', () => {
-        scheduleOnlineNetworkChange('页面恢复', getBrowserNetworkSignature(), true);
+        scheduleOnlineNetworkChange('页面恢复', getBrowserNetworkSignature(), 'browser');
       });
     } catch (_) {}
 
@@ -3184,7 +3341,7 @@
       });
       const sendHeartbeat = (countMiss = true) => {
         if (conn !== connection) return;
-        if (conn && conn.open && gameMode === 'online' && !isOver) {
+        if (conn && conn.open && gameMode === 'online') {
           if (countMiss) missedPings++;
           // WebSocket 中继 close/offline 会立即触发重连；只有半开连接才走心跳兜底。
           if (countMiss && missedPings >= 3) {
@@ -3228,14 +3385,14 @@
       setTimeout(() => sendHeartbeat(false), 1600);
 
       conn.on('close', () => {
-        if (conn !== connection || gameMode !== 'online' || isOver) return;
+        if (conn !== connection || gameMode !== 'online') return;
         if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
         notifyGomokuOnlineConnection('close', connection);
         triggerOnlineReconnect("连接断开");
       });
 
       conn.on('error', (err) => {
-        if (conn !== connection || gameMode !== 'online' || isOver) return;
+        if (conn !== connection || gameMode !== 'online') return;
         console.warn('[conn error]', err);
         if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
         triggerOnlineReconnect("网络异常");
@@ -3254,7 +3411,22 @@
         } else if (message && message.type === 'undo_res') {
           showGameNotice("⚠️ 悔棋结果暂未送达好友，正在重新对齐棋局…", true);
           requestOnlineResync('悔棋结果未确认送达');
+        } else if (message && ['restart_req', 'restart_res', 'restart_commit', 'restart_commit_ack'].includes(message.type)) {
+          showGameNotice('⚠️ 重开同步暂未送达，对局棋盘保持不变；连接恢复后会继续同步。', true);
         }
+      });
+
+      connection.on('delivery_ack', (message) => {
+        if (conn !== connection || !message || message.type !== 'restart_commit_ack') return;
+        const transaction = activeOnlineRestartState;
+        if (!transaction || transaction.side !== 'responder' ||
+            transaction.phase !== 'awaiting_commit_ack_delivery' ||
+            message.requestId !== transaction.requestId || message.nextRoundId !== transaction.nextRoundId ||
+            message._mid !== transaction.commitAckMid) return;
+        activeOnlineRestartState = null;
+        activeOnlineRestartId = '';
+        resetBoardOnly(transaction.nextRoundId);
+        showGameNotice('🔄 双方已确认新局，棋盘已同步重开。', false);
       });
 
       conn.on('data', (data, receivedTransport = 'mqtt') => {
@@ -3286,8 +3458,17 @@
             (!Number.isFinite(data.peerLatencyMs) || data.peerLatencyMs < 0 || data.peerLatencyMs > 120000)) return;
         if (data.peerTransportRttMs !== undefined && data.peerTransportRttMs !== null &&
             (!Number.isFinite(data.peerTransportRttMs) || data.peerTransportRttMs < 0 || data.peerTransportRttMs > 120000)) return;
+        if (data.commitRequired !== undefined && typeof data.commitRequired !== 'boolean') return;
         // 新局轮次不一致的报文一律丢弃，防止旧中继/P2P 报文在重开后再次触发旧胜局。
-        if (data.roundId && onlineRoundId && data.roundId !== onlineRoundId) return;
+        const incomingRoundMismatch = Boolean(data.roundId && onlineRoundId && data.roundId !== onlineRoundId);
+        const restartTransaction = pendingOnlineRestartState || activeOnlineRestartState;
+        // 修复旧版“只有一端清盘”的残留房间：重连时仅允许客方接纳房主的权威新轮次快照，
+        // 且至少一边棋盘为空（或轮次正好是已确认提案）。普通旧轮次报文仍会被拦截。
+        const adoptingHostRound = incomingRoundMismatch && data.type === 'state_snapshot' &&
+          myOnlineColor === WHITE && data.senderRole === 'host' && isReconnecting &&
+          Array.isArray(data.history) &&
+          (history.length === 0 || data.history.length === 0 || restartTransaction?.nextRoundId === data.roundId);
+        if (incomingRoundMismatch && !adoptingHostRound) return;
         // 语音信令与棋局业务完全分流。voice.js 只在用户明确开启麦克风后
         // 处理这些短期 SDP/ICE 报文；未加载语音模块时直接忽略，不影响对弈。
         if (data.type.startsWith('voice_')) {
@@ -3321,6 +3502,8 @@
           clearActiveOnlineUndo();
           pendingOnlineRestartId = '';
           activeOnlineRestartId = '';
+          pendingOnlineRestartState = null;
+          activeOnlineRestartState = null;
           if (typeof closeUndoModal === 'function') closeUndoModal();
           if (typeof closeGameResultModal === 'function') closeGameResultModal();
           setMode("ai", false);
@@ -3402,8 +3585,8 @@
 
           // 1. 防倒退校验：如果发来的步数少于本地步数，说明对方因卡顿落后！
           // 客方绝不倒退；它只请求房主再次对账，避免双方互相覆盖。
-          if (data.history.length < history.length ||
-              (data.stateVersion !== undefined && data.stateVersion < history.length)) {
+          if (!adoptingHostRound && (data.history.length < history.length ||
+              (data.stateVersion !== undefined && data.stateVersion < history.length))) {
             console.warn('[state_snapshot] 房主快照落后于本地，等待下一次权威对账');
             requestOnlineResync('房主快照落后');
             return;
@@ -3424,13 +3607,21 @@
               break;
             }
           }
-          if (!isHistoryConsistent && history.length > 0) {
+          if (!adoptingHostRound && !isHistoryConsistent && history.length > 0) {
             console.error('[state_snapshot] 检测到棋局历史前缀冲突，已安全拦截异常快照！');
             showGameNotice("⚠️ 检测到异常棋局数据，已安全拦截并保持当前棋局！", true);
             return;
           }
 
           // 3. 安全核验通过，接纳恢复最新局势
+          if (adoptingHostRound) {
+            onlineRoundId = data.roundId;
+            clearOnlineReliableOutbox();
+            pendingOnlineRestartId = '';
+            activeOnlineRestartId = '';
+            pendingOnlineRestartState = null;
+            activeOnlineRestartState = null;
+          }
           board = data.board.map(row => [...row]);
           history = data.history.map(step => ({ ...step }));
           turn = data.turn;
@@ -3542,47 +3733,66 @@
             showGameNotice("❌ 对方拒绝了您的悔棋申请！落子无悔哦~", true);
           }
         } else if (data.type === 'restart_req') {
-          const incomingRestartId = typeof data.requestId === 'string' && data.requestId ? data.requestId : generateSecureId(10, 'restart_');
-          if (activeOnlineRestartId) return;
-          activeOnlineRestartId = incomingRestartId;
-          showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重置棋盘并开启新局？`, () => {
-            activeOnlineRestartId = '';
-            const nextRoundId = generateSecureId(12, 'round_');
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true, requestId: incomingRestartId, nextRoundId });
-            resetBoardOnly(nextRoundId);
-            showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
-          }, () => {
-            activeOnlineRestartId = '';
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false, requestId: incomingRestartId });
-            showGameNotice("已拒绝对手的重开申请，继续本局", false);
-          }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
+          handleOnlineRestartRequest(data);
         } else if (data.type === 'restart_res') {
           if (typeof data.agree !== 'boolean') return;
-          if (!pendingOnlineRestartId) return;
-          if (pendingOnlineRestartId && data.requestId && data.requestId !== pendingOnlineRestartId) return;
-          pendingOnlineRestartId = '';
-          if (data.agree) {
-            resetBoardOnly(data.nextRoundId || null);
-            showGameNotice("🎉 对手同意了您的重开申请，新对局已开启！", false);
-          } else {
+          const transaction = pendingOnlineRestartState;
+          if (!transaction || transaction.side !== 'initiator' ||
+              data.requestId !== transaction.requestId || onlineRoundId !== transaction.oldRoundId ||
+              (data.roundId && data.roundId !== transaction.oldRoundId)) return;
+          if (!data.agree) {
+            pendingOnlineRestartId = '';
+            pendingOnlineRestartState = null;
+            persistGameState();
             showGameNotice("❌ 对手拒绝了重开申请，继续当前对局！", true);
+            return;
           }
+          if (data.commitRequired === true) {
+            if (data.nextRoundId !== transaction.nextRoundId) return;
+            transaction.phase = 'awaiting_commit_ack';
+            transaction.commitMid ||= generateSecureId(10, 'restart_commit_');
+            persistGameState();
+            if (!sendPendingOnlineRestartTransaction(conn)) {
+              showGameNotice('⚠️ 已收到同意，正在等待连接恢复后提交新局；当前棋盘保持不变。', true);
+            } else {
+              showGameNotice('✅ 对方同意了，正在同步新局；当前棋盘保持不变。', false);
+            }
+            return;
+          }
+          const acceptedRoundId = typeof data.nextRoundId === 'string' &&
+            /^[A-Za-z0-9_-]{1,80}$/.test(data.nextRoundId) && data.nextRoundId !== transaction.oldRoundId
+            ? data.nextRoundId : '';
+          if (!acceptedRoundId) {
+            showGameNotice('⚠️ 重开确认缺少有效的新局编号，棋盘未重置；请重连后重试。', true);
+            return;
+          }
+          pendingOnlineRestartId = '';
+          pendingOnlineRestartState = null;
+          resetBoardOnly(acceptedRoundId);
+          showGameNotice("🎉 对手同意了您的重开申请，新对局已开启！", false);
+        } else if (data.type === 'restart_commit') {
+          const transaction = activeOnlineRestartState;
+          if (!transaction || transaction.side !== 'responder' ||
+              transaction.requestId !== data.requestId || transaction.nextRoundId !== data.nextRoundId ||
+              transaction.oldRoundId !== onlineRoundId ||
+              (data.roundId && data.roundId !== transaction.oldRoundId)) return;
+          transaction.phase = 'awaiting_commit_ack_delivery';
+          transaction.commitAckMid ||= generateSecureId(10, 'restart_commit_ack_');
+          persistGameState();
+          sendPendingOnlineRestartTransaction(conn);
+        } else if (data.type === 'restart_commit_ack') {
+          const transaction = pendingOnlineRestartState;
+          if (!transaction || transaction.side !== 'initiator' ||
+              transaction.phase !== 'awaiting_commit_ack' || transaction.requestId !== data.requestId ||
+              transaction.nextRoundId !== data.nextRoundId || transaction.oldRoundId !== onlineRoundId ||
+              (data.roundId && data.roundId !== transaction.oldRoundId)) return;
+          pendingOnlineRestartId = '';
+          pendingOnlineRestartState = null;
+          resetBoardOnly(transaction.nextRoundId);
+          showGameNotice('🔄 双方已确认新局，棋盘已同步重开。', false);
         } else if (data.type === 'restart') {
-          // 兼容旧版客户端指令：弹出协商弹窗，严禁单方面清空棋盘
-          const incomingRestartId = typeof data.requestId === 'string' && data.requestId ? data.requestId : generateSecureId(10, 'restart_');
-          if (activeOnlineRestartId) return;
-          activeOnlineRestartId = incomingRestartId;
-          showCustomConfirm(`【${normalizeNetworkName(data.name, p2Name)}】向您发起重新开局申请，是否同意重开？`, () => {
-            activeOnlineRestartId = '';
-            const nextRoundId = generateSecureId(12, 'round_');
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: true, requestId: incomingRestartId, nextRoundId });
-            resetBoardOnly(nextRoundId);
-            showGameNotice("🔄 双方达成一致，已重新开启新的一局！", false);
-          }, () => {
-            activeOnlineRestartId = '';
-            if (conn && conn.open) conn.send({ type: 'restart_res', agree: false, requestId: incomingRestartId });
-            showGameNotice("已拒绝对手的重开申请，继续本局", false);
-          }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
+          // 旧版只发送 restart：保留双边协商，并按旧协议兼容处理。
+          handleOnlineRestartRequest(data);
         } else if (data.type === "skill_use") {
           const quotaBefore = {
             opponentSkillsUsedCount,
@@ -3658,7 +3868,7 @@
           prophecyPoint = { r: data.r, c: data.c, by: data.by };
           draw();
           persistGameState();
-          showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将被强行抹杀撤销！`);
+          showSkillBanner('🔮', '对方发动【预言封锁】！', `对方预言了您下一步落点为 (${data.r+1}, ${data.c+1})，若落此处将取消这次落子机会！`);
         } else if (data.type === 'skill_remove_stone') {
           const removedP = board[data.r][data.c];
           const isDestinyRemove = data.source === 'destiny_remove';
@@ -3999,9 +4209,9 @@
         if (activeRoomJoinAttempt === attempt) activeRoomJoinAttempt = null;
         if (!attempt.completed) {
           myOnlineColor = attempt.originalOnlineColor;
-          if (attempt.aiWasThinking && gameMode === 'ai' && !isOver && turn === WHITE) {
+          if (attempt.aiWasThinking && gameMode === 'ai' && !isOver && turn === getAiColor()) {
             setTimeout(() => {
-              if (gameMode === 'ai' && !isOver && turn === WHITE && !aiThinking) void smartAiMove();
+              if (gameMode === 'ai' && !isOver && turn === getAiColor() && !aiThinking) void smartAiMove();
             }, 0);
           }
         }
@@ -5197,6 +5407,7 @@
 
       const previousMode = gameMode;
       gameMode = mode;
+      if (mode === 'ai' && document.body.classList.contains('sky-game-open')) window.__gomokuWarmUpAi?.();
       if (previousMode === 'online' && mode !== 'online') {
         // leaveOnlineRoom 在 app.js 中使用静默 close；语音必须在离开房间时清理。
         try { if (typeof conn !== 'undefined' && conn) notifyGomokuOnlineConnection('close', conn); } catch (_) {}
