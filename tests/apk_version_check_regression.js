@@ -6,6 +6,7 @@ const vm = require('node:vm');
 function runTest() {
   const root = path.resolve(__dirname, '..');
   const appJsSource = fs.readFileSync(path.join(root, 'js', 'app.js'), 'utf8');
+  const skyHubSource = fs.readFileSync(path.join(root, 'js', 'sky-hub.js'), 'utf8');
 
   // Verify functions and constants exist in source
   assert.ok(appJsSource.includes('function isAndroidApkUpdateRequired'), 'isAndroidApkUpdateRequired must be defined');
@@ -77,6 +78,9 @@ function runTest() {
   // Test 6: Verify checkAppUpdate UI & download routing
   assert.ok(appJsSource.includes('需要安装完整 APK'), 'Modal must guide user to full APK');
   assert.ok(appJsSource.includes('startNativeApkUpdateWithFallback(clickVersionData)'), 'Hot update button must route to native APK download');
+  assert.ok(appJsSource.includes('window.GOMOKU_UPDATE_BADGE_TEXT = badgeText;'), 'app.js must persist badge text');
+  assert.ok(skyHubSource.includes('window.GOMOKU_UPDATE_BADGE_TEXT'), 'sky-hub.js must respect persisted badge text');
+  assert.ok(skyHubSource.includes('<article class="sky-me-update" data-sky-action="update" style="cursor:pointer">'), 'entire update row must be clickable');
 
   console.log('✅ All APK version check regression tests passed successfully!');
 }

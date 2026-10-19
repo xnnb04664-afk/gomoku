@@ -60,7 +60,17 @@
     }
     if (next === 'me') {
       const version = document.getElementById('appVersionDisplay');
-      if (version && window.GOMOKU_VERSION_DISPLAY) version.textContent = window.GOMOKU_VERSION_DISPLAY;
+      if (version) {
+        if (window.GOMOKU_UPDATE_BADGE_TEXT) {
+          version.textContent = window.GOMOKU_UPDATE_BADGE_TEXT;
+          if (window.GOMOKU_UPDATE_BADGE_TITLE) version.title = window.GOMOKU_UPDATE_BADGE_TITLE;
+        } else if (typeof window.isAndroidApkUpdateRequired === 'function' && window.isAndroidApkUpdateRequired()) {
+          version.textContent = '需安装完整 APK';
+          version.title = '网页热更新不会替换 Android 原生引擎或桌面图标，点击检查更新安装完整 APK';
+        } else if (window.GOMOKU_VERSION_DISPLAY) {
+          version.textContent = window.GOMOKU_VERSION_DISPLAY;
+        }
+      }
       refreshProfileCard();
     }
     if (next === 'friends') {
@@ -242,7 +252,7 @@
             <div class="sky-profile-copy"><small>当前棋手</small><strong id="skyProfileName">游客棋手</strong><span id="skyProfileDetail">对局记录保存在本机</span></div>
             <button type="button" data-sky-action="login">登录账号 <span>→</span></button>
           </article>
-          ${nativeAndroid ? `<article class="sky-me-update">
+          ${nativeAndroid ? `<article class="sky-me-update" data-sky-action="update" style="cursor:pointer">
             <div class="sky-update-mark" aria-hidden="true">↻</div>
             <div class="sky-update-copy"><small>应用版本</small><strong id="appVersionDisplay">检查更新</strong><span>点此连接官方版本服务</span></div>
             <button type="button" data-sky-action="update" aria-label="检查更新">检查更新 <b>→</b></button>
