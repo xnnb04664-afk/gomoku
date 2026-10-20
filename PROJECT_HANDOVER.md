@@ -1,10 +1,10 @@
 # 五子棋项目交接手册：从零启动
 
-2026-10-20 当前正式发布：[v1.0.152 / Android Build 153](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.152)，发行提交 `c326c8a722e9decdb9588007ab98587637146f5a`。新增 Android 匹配通知桥接；`js/app.js` 以独立 `MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION = 153` 门槛确保旧 APK 先完整更新。Build 151 的原生 AI 门槛继续保留。APK 3,895,695 bytes，SHA-256 `afd4e2b327c112444dbc83086b2c9af91139939b043973e7d35a3f9cc9a939a0`；单文件 HTML 13,087,777 bytes，SHA-256 `84d6e55e92d8a246ae445e2345ead3147d719a3a5e16706cf829aa8ccce385dd`；官网游戏 JS SHA-256 `1a279ad22994c3db6bbc67bc4bcd4b0b48e932693f622f38b7dc2766f4e1a164`。GitHub Release、gomoku-home `master` Pages、官网版本接口/实际 APK/游戏 JS 与 ECS 匿名版本及摘要均核验一致。APK 正式签名证书 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`、v1/v2/v3 验签和 16 KiB 对齐通过；匹配状态回归、重连/relay 回归、通知 JVM 冒烟及 360/390 浏览器证据见 `.codex-diagnostics/online-activity-20261020/verification-report.md`。没有 ADB 设备，未做真机安装或系统通知栏验收；匹配 API 使用浏览器路由模拟，未验证 ECS 实际房间接口。
+2026-10-21 当前正式发布：[v1.0.153 / Android Build 154](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.153)，发行提交 `9bde541682a21a8a688cd44419a4778c759e55b9`。Android 检测到更新后自动获取并校验；对局、匹配或房间准备期间暂缓，空闲后继续，失败可手动重试；网页代理不可用时新版原生桥优先尝试代理 APK。安装权限和确认仍由 Android 系统处理。APK 3,895,695 bytes，SHA-256 `145ab2ffea852bf9f2589dc6ae5befabcc395d161a25447f910ab2ec6e84dbf1`；单文件 HTML 13,098,089 bytes，SHA-256 `e17c2b1d1b0e5d9428d48ee784f8cfd7abafb2cf895d43060f9f5e49315085d8`；官网游戏 JS SHA-256 `f963cd0fe9326b82167973b4248e2fc80d2e9ae9f97103654ac3bc1f914c874a`。GitHub Release、gomoku-home `master` Pages、官网版本接口/实际 APK/游戏 JS 与 ECS 匿名版本及摘要均一致。APK 正式签名证书 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，签名和 16 KiB 对齐通过；`MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION=153`、原生 AI 门槛 151 均未提高，因此 Build 153 可热更使用本次网页更新。浏览器场景、门槛和更新流程回归见 `.codex-diagnostics/auto-update-20261021/verification-report.md`；没有 ADB 设备，未验收真机 APK 下载/安装。忙时页面浏览器场景未覆盖，局部 VM 回归覆盖暂缓及空闲恢复；未连接生产 ECS 房间接口。
 
-**2026-10-20 本地匹配状态与 Android 通知候选（已发布）：**页面行为与浏览器证据见上方正式版说明和 `.codex-diagnostics/online-activity-20261020/verification-report.md`；该候选之后按 `1.0.152 / Build 153` 正式发版，候选阶段 APK 摘要 `214f778e381652f0c5c065ee7e02e1b0882baa21d4d0d1203d9dccc96849ca03` 属于未升版的旧构建，不是正式发行 APK。正式构建加入 Build 153 通知门槛，当前发版 APK 摘要见本手册顶部。
+**2026-10-20 匹配状态与 Android 通知候选（历史已发布）：**该候选随后以 `v1.0.152 / Build 153` 发布，候选构建 APK 摘要 `214f778e381652f0c5c065ee7e02e1b0882baa21d4d0d1203d9dccc96849ca03` 不属于正式发行 APK。历史浏览器/通知边界见 `.codex-diagnostics/online-activity-20261020/verification-report.md`。
 
-本次计时（UTC）：固定入口 `release_official.js` 从 10:03:25.504 到 10:08:46.950，共 321.446 秒（5 分 21.446 秒），含首次验收失败和恢复。内层 `publish.js` 阶段 84.037 秒：前端压缩 3.64 秒、单文件打包 0.27 秒、APK 构建签名 18.88 秒、显式暂存 0.77 秒、本地提交 0.45 秒、推送 10.02 秒、Release 附件准备/查找/下载/差分/上传合计约 47.77 秒；官网 Pages 部署 58.344 秒。首次线上检查 30.123 秒：GitHub API 请求以 EOF 失败，官网 APK 与 JS 请求超时。首次失败后到恢复检查开始间隔 142.012 秒，包含诊断、阶段播报、恢复命令准备等，未单独细分，不计入上传耗时。按原 run 恢复后的五项验收约 6.13 秒并全通过，未重复部署、提交、升版或发版。签名检查 0.60 秒；版本/指纹准备、入口完整性检查等见 run 记录。命令启动前的门槛测试、源码审阅和准备，以及文档收尾未单独计时。发布说明已单独更正；本次打包的 `version.json` 更新文案仍沿用 v1.0.151 代理优先说明，下一版应先修复 `publish.js` 中固定更新文案生成逻辑，不要为此改写本版 APK/HTML 已验收摘要。详细阶段和错误见 `.codex-diagnostics/official-release/2026-10-20T10-03-25-504Z-12864-7ff260/run.json` 与 `report.md`。无 ADB 设备，未实机安装；ECS 实际匹配房间及 Android 通知栏未验收。
+本次计时（UTC）：固定入口 `release_official.js` 从 2026-10-20 16:31:33.349 到 16:33:23.503，共 110.154 秒。内层 `publish.js` 为 73.105 秒：前端压缩 3.608 秒、官网资源同步 0.142 秒、单文件 HTML 0.263 秒、APK 构建签名 19.115 秒、显式暂存 0.738 秒、本地提交 0.397 秒、推送 8.817 秒；Release 附件查找 2.940 秒、下载上一版 HTML 14.729 秒、生成差分 0.211 秒、创建和上传 20.185 秒。Pages 部署 23.377 秒；签名/对齐复核 0.497 秒；五项线上检查约 8.126 秒，全部第一次尝试通过、没有 retry。整个入口耗时包含发布快照与阶段组织；发布前准备/回归测试和文档收尾未单独计时。压缩只执行一次，后续 HTML/APK 构建复用了指纹 `7c4923ef084b21df8aa9ea1c518b332115b1acb4d6f6787941338fc4f6295c2f`。Android manifest 发布日期按 `Asia/Shanghai` 生成，为 `2026-10-21`。阶段记录和线上证据见 `.codex-diagnostics/official-release/2026-10-20T16-31-33-349Z-36544-ec1482/run.json`、`report.md` 及 `.codex-diagnostics/publish-runs/2026-10-20T16-31-38-208Z-34220/timings.json`。
 
 历史本地候选（2026-10-20，现由上方 v1.0.152 正式版替代）：当时版本为 v1.0.150 / Android Build 151，候选 APK SHA-256 `0ae63d49ba5bc63da19f6c42a55d2eedf2f3da06361bc25142e9c91c8d609a52`，已包含版本查询代理优先修复，但此摘要未作为正式版本发布。
 
@@ -371,21 +371,21 @@ Pages 部署后，入口并行执行 GitHub Release 附件 digest、官网 `/api
 
 若 Pages 部署或线上验收失败，但 `publish.js` 已成功且快照已保存，可用 `node release_official.js --resume ".codex-diagnostics/official-release/<run-id>"` 恢复。恢复目录必须是该诊断目录的直接子目录，且 `version.json`、APK、单文件 HTML、整个 `official-site/` 目录指纹必须与成功 publish 时相同。恢复过程不会重复 build、publish 或 deploy：Pages 失败只补部署，Pages 成功而验收失败只重验收；验收缓存命中时跳过对应成功检查。已 `LIVE_VERIFIED` 的 run 明确拒绝 resume；publish 失败或快照保存失败也不可恢复，需先人工核对目录、Git 分支及 GitHub Release。`node release_official.js --help` 只显示用法，不触碰发布环境。
 
-## 2026-10-21 Android 更新回退顺序本地修复（未发布）
+## 2026-10-21 Android 更新回退顺序修复（随 v1.0.153 / Build 154 已发布）
 
 - GitHub HTML 代理全部失败后，旧流程先尝试服务端 HTML，服务端 HTML 也失败后才启动 GitHub 代理 APK。本地修复页面在原生 GitHub APK 桥可用时，改为先启动代理 APK；该下载失败后沿用 ECS/Cloudflare 票据 APK 回退。旧版原生桥缺少 GitHub APK 方法时，仍先尝试票据服务 HTML，之后沿用原有完整 APK 兜底。
 - 修改位于 `js/app.js`，回归扩展到 `tests/update_manifest_race_regression.js`，覆盖原生代理启动、桥接同步抛错、旧桥缺少方法、服务端 HTML 失败上抛，以及 APK 元数据校验失败时保留服务 HTML 回退。
-- 本地回归 `node tests/update_manifest_race_regression.js`、`node --check js/app.js` 和 `git diff --check` 通过。未在手机或模拟器复现用户现象；未更新生产页面、GitHub Release 或 ECS。当前公开版本仍为 v1.0.152 / Android Build 153；本地改动尚未构建或发布。
+- `node tests/update_manifest_race_regression.js`、APK 门槛回归、发布说明/环境 preflight 和发布流程检查通过；四种手机页面浏览器场景见 `.codex-diagnostics/auto-update-20261021/verification-report.md`。Build 153 原生门槛保持不变，因此已安装 Build 153 可热更本版网页逻辑。没有 ADB 设备，未验收真机 APK 下载/安装。
 
 
-## 2026-10-21 Android 检查到更新后自动更新（本地未发布）
+## 2026-10-21 Android 检查到更新后自动更新（随 v1.0.153 / Build 154 已发布）
 
 - Android 启动静默检查发现版本清单不早于当前页面，且有新页面版本或本机原生 APK 低于最低 Build 门槛时，直接启动共享更新入口；手动按钮也调用同一入口。完整 APK 的系统安装权限和确认仍由 Android 处理。
 - 自动更新会在未结束的本地 AI/PVP 棋局、联机对局、匹配或房间准备期间暂挂，检测到回到大厅且在线状态空闲后继续。使用 Sky Island body class 观察及 gomoku-online-activity-change 事件；没有常驻轮询，也不把保存的本地 AI 棋局快照视为正在对局。
 - 同一版本自动尝试在当前会话只启动一次；下载失败或用户关闭进度后不会自动风暴，更新按钮仍可手动重试。检查 Promise 和进行中的更新 action 都有并发去重。自动下载/安装进度文案没有在启动时误报“已下载”。
 - 版本清单早于当前页面时禁止自动或手动启动旧 APK。GitHub HTML 代理全部失败时，新桥优先启动 GitHub 反向代理 APK，再按现有回调切换 ECS/Cloudflare 票据 APK；旧桥缺少 GitHub APK 方法时仍先尝试服务 HTML，再沿用服务 APK 兜底。HTML 写入前的版本、摘要和启动脚本校验保持有效。
 - 回归扩展至 tests/update_manifest_race_regression.js，覆盖更新判定、APK 门槛、浏览器不自动下载、检查/action 去重、失败后的手动重试、忙时暂挂与 idle 恢复、保存 AI 快照不阻塞，以及生产 startAppUpdate 遇到过期清单不调用 APK/HTML 写入。
-- 本地验证：node tests/update_manifest_race_regression.js、node --check js/app.js、node --check tests/update_manifest_race_regression.js、git diff --check 通过。未构建 APK、未升级版本、未发布或推送；未在模拟器/真机验证，也未更新生产站点或 ECS。
+- 本地回归、版本门槛和发布 preflight 通过，并已随 v1.0.153 / Build 154 发布到 GitHub Release 与官网 Pages；ECS 公共版本接口摘要匹配。没有 ADB 设备，未做真机 APK 下载、安装或系统确认流程验收。
 
 - 手动检查发现新版本或发现当前 APK 低于门槛时，同样会在显示更新详情后自动启动共享更新流程，无需再点下载按钮；若仍在对局、匹配或准备房间，则按相同规则暂挂至大厅空闲。
-- Android 自动更新候选的四项手机尺寸浏览器场景记录于 `.codex-diagnostics/auto-update-20261021/verification-report.md`；忙时页面场景未覆盖，协调器局部 VM 回归覆盖了忙时到空闲恢复。候选未做真机、APK 下载/安装、APK 重建或发布。
+- Android 自动更新四项手机页面浏览器场景记录于 `.codex-diagnostics/auto-update-20261021/verification-report.md`；忙时页面场景未覆盖，协调器局部 VM 回归覆盖忙时到空闲恢复。更新业务未改原生最低 APK Build 门槛；本版未做真机 APK 下载/安装验收。
