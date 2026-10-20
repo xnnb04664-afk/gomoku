@@ -23,6 +23,11 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
   process.exit(0);
 }
 
+// Fail before timing files, version edits, builds, or any other publish writes.
+const releaseBody = require('./release_preflight').preflight({
+  allowSameNotes: String(process.env.GOMOKU_SKIP_VERSION_BUMP || '').trim() === '1'
+});
+
 const timingStartedAt = new Date();
 const timingStartedHr = process.hrtime.bigint();
 const timingRunId = `${timingStartedAt.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
@@ -380,14 +385,14 @@ finishTiming(versionSourcesTimer);
 
 // 同步更新 version.json（兼容旧客户端；新客户端依次尝试 GitHub 代理、ECS 与 Cloudflare 应急备用）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
-const todayStr = new Date().toISOString().split('T')[0];
-const releaseHighlights = [
-  `🚀 【更新查询代理优先】先并行查询两个 GitHub 反向代理，有效代理响应返回后不再请求直连；代理全部失败后才尝试 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。`,
-  `📦 【下载与安装】APK 文件继续优先使用反向代理，下载后校验摘要、官方签名与包名；保留棋盘边缘清理和 Android 12 及以上有条件免确认自更新。`
-];
+const todayParts = new Intl.DateTimeFormat('en', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+}).formatToParts(new Date());
+const todayValues = Object.fromEntries(todayParts.map(part => [part.type, part.value]));
+const todayStr = `${todayValues.year}-${todayValues.month}-${todayValues.day}`;
 const releaseUpdateLog = [
   `五子棋云屿晴光 v${newName} 官方正式版更新说明：`,
-  ...releaseHighlights
+  releaseBody
 ].join('\n\n');
 const vJson = {
   versionName: newName,
@@ -477,8 +482,11 @@ try {
     'BOARD_TURN_FIXES_20261019.md',
     'MOBILE_ICON_PROMPT.md',
     'PROJECT_HANDOVER.md',
+    'RELEASE_NOTES.md',
+    'release_preflight.js',
     'README.md',
     'tests/release_official.test.js',
+    'tests/release_preflight.test.js',
     'REVIEW_20261019.md',
     'favicon.png',
     'design_assets/gomoku-app-icon-master.png',

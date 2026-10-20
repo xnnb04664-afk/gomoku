@@ -9,6 +9,9 @@ const PROJECT_ROOT = __dirname;
 const REPOSITORY = 'xnnb04664-afk/gomoku';
 const SITE_ORIGIN = 'https://gomoku-home.pages.dev';
 const HTTP_TIMEOUT_MS = 30_000;
+const MAX_READ_ATTEMPTS = 3;
+const READ_RETRY_DELAYS_MS = [250, 750];
+const ACCEPTANCE_CACHE_TTL_MS = 10 * 60 * 1000;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 const EXPECTED_SIGNER_SHA256 = '9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e';
 const APK_NAME = '五子棋.apk';
@@ -47,10 +50,15 @@ function defaultRunner(command, args, options) {
     let stdout = '';
     let stderr = '';
     let completed = false;
+    let timeout = null;
+    let killGrace = null;
+    let timeoutError = null;
     const finish = result => {
       if (completed) return;
       completed = true;
-      resolve({ stdout, stderr, ...result });
+      if (timeout) clearTimeout(timeout);
+      if (killGrace) clearTimeout(killGrace);
+      resolve({ stdout, stderr, ...result, error: timeoutError || result.error || null });
     };
     let child;
     try {
@@ -68,8 +76,28 @@ function defaultRunner(command, args, options) {
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', chunk => { stdout += chunk; });
     child.stderr?.on('data', chunk => { stderr += chunk; });
-    child.once('error', error => finish({ status: 1, error }));
-    child.once('close', (code, signal) => finish({ status: Number.isInteger(code) ? code : 1, signal, error: null }));
+    child.once('error', error => finish({ status: timeoutError ? 124 : 1, error }));
+    child.once('close', (code, signal) => finish({ status: timeoutError ? 124 : Number.isInteger(code) ? code : 1, signal, error: null }));
+    if (Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        timeoutError = Object.assign(new Error(`命令超过 ${options.timeoutMs}ms 超时限制。`), {
+          name: 'TimeoutError',
+          code: 'ETIMEDOUT',
+          timedOut: true
+        });
+        child.kill();
+        killGrace = setTimeout(() => {
+          try {
+            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+          } catch (_) {
+            // Keep the timeout result even if the platform rejects the hard-kill signal.
+          }
+          finish({ status: 124, signal: null, error: timeoutError });
+        }, 1000);
+        if (typeof killGrace.unref === 'function') killGrace.unref();
+      }, options.timeoutMs);
+      if (typeof timeout.unref === 'function') timeout.unref();
+    }
   });
 }
 
@@ -290,6 +318,125 @@ function responseJson(response) {
   throw new Error('HTTP mock/response does not provide json().');
 }
 
+function httpStatusError(label, status) {
+  const error = new Error(`${label} 返回 HTTP ${status}。`);
+  error.httpStatus = Number(status);
+  return error;
+}
+
+function integrityError(message) {
+  const error = new Error(message);
+  error.integrityFailure = true;
+  return error;
+}
+
+const RETRYABLE_NETWORK_CODES = new Set([
+  'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'EAI_AGAIN',
+  'ENETUNREACH', 'ENOTFOUND', 'EPIPE', 'ETIMEDOUT', 'ERR_STREAM_PREMATURE_CLOSE',
+  'ESOCKETTIMEDOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET'
+]);
+
+const TLS_CERTIFICATE_CODES = new Set([
+  'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE'
+]);
+
+function errorChain(error) {
+  const chain = [];
+  const pending = [error];
+  const seen = new Set();
+  while (pending.length) {
+    const item = pending.shift();
+    if (!item || (typeof item !== 'object' && typeof item !== 'function') || seen.has(item)) continue;
+    seen.add(item);
+    chain.push(item);
+    if (item.cause) pending.push(item.cause);
+    if (item.errors && Array.isArray(item.errors)) pending.push(...item.errors);
+  }
+  return chain;
+}
+
+function preciseErrorMessage(error) {
+  const message = String(error && (error.message || error) || error);
+  const code = errorChain(error).map(item => String(item.code || '').toUpperCase()).find(Boolean);
+  return code && !message.toUpperCase().includes(code) ? `${message} [${code}]` : message;
+}
+
+function isTlsCertificateFailure(error) {
+  return errorChain(error).some(item => {
+    const code = String(item.code || '').toUpperCase();
+    const message = String(item.message || '');
+    return TLS_CERTIFICATE_CODES.has(code)
+      || /^(?:CERT_|ERR_CERT_|ERR_TLS_CERT_|UNABLE_TO_.*CERT|SELF_SIGNED)/.test(code)
+      || /\b(?:certificate|x509)\b/i.test(message)
+      || /\b(?:unable to get local issuer certificate|certificate verify failed|self[- ]signed)/i.test(message);
+  });
+}
+
+function isRetryableTransportText(value) {
+  const text = String(value || '');
+  return /\b(?:unexpected\s+)?EOF\b/i.test(text)
+    || /\bsocket hang up\b/i.test(text)
+    || /\bsocket (?:closed|error)\b/i.test(text)
+    || /\bconnection (?:reset|refused|aborted)\b/i.test(text)
+    || /\bconnection (?:timed out|timeout)\b/i.test(text)
+    || /\b(?:request|operation|fetch) (?:timed out|timeout)\b/i.test(text)
+    || /\b(?:i\/o|operation) timeout\b/i.test(text)
+    || /\bcontext deadline exceeded\b/i.test(text)
+    || /\btemporary failure in name resolution\b/i.test(text)
+    || /\bgetaddrinfo (?:EAI_AGAIN|ENOTFOUND)\b/i.test(text)
+    || /\bno such host\b/i.test(text)
+    || /\bnetwork is unreachable\b/i.test(text)
+    || /\bfailed to connect\b/i.test(text)
+    || /\bTLS handshake timeout\b/i.test(text)
+    || /\b(?:ECONNABORTED|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|EAI_AGAIN|ENETUNREACH|ENOTFOUND|EPIPE|ETIMEDOUT|ERR_STREAM_PREMATURE_CLOSE|ESOCKETTIMEDOUT|UND_ERR_(?:BODY|CONNECT|HEADERS)_TIMEOUT|UND_ERR_SOCKET)\b/i.test(text);
+}
+
+function retryableHttpStatus(value) {
+  return value === 408 || value === 429 || (value >= 500 && value <= 599);
+}
+
+function readErrorType(error) {
+  if (error && error.integrityFailure) return 'integrity';
+  if (errorChain(error).some(item => item.name === 'SyntaxError')) return 'invalid_json';
+  if (isTlsCertificateFailure(error)) return 'tls_certificate';
+  const status = Number(error && error.httpStatus);
+  if (Number.isInteger(status)) return `http_${status}`;
+  for (const item of errorChain(error)) {
+    const code = String(item.code || '').toUpperCase();
+    if (code) return `network_${code}`;
+    if (item.name === 'AbortError' || item.name === 'TimeoutError') return 'timeout';
+  }
+  if (error && isRetryableTransportText(error.transportText)) return 'network_transport';
+  if (errorChain(error).some(item => isRetryableTransportText(item.message))) return 'network_transport';
+  if (error && error.integrityFailure) return 'integrity';
+  return 'verification';
+}
+
+function isRetryableReadError(error) {
+  if (!error || error.integrityFailure) return false;
+  const chain = errorChain(error);
+  if (chain.some(item => item.name === 'SyntaxError')) return false;
+  if (isTlsCertificateFailure(error)) return false;
+  const status = Number(error.httpStatus);
+  if (Number.isInteger(status)) return retryableHttpStatus(status);
+  for (const item of chain) {
+    const code = String(item.code || '').toUpperCase();
+    if (RETRYABLE_NETWORK_CODES.has(code)) return true;
+    if (item.name === 'AbortError' || item.name === 'TimeoutError') return true;
+  }
+  return chain.some(item => isRetryableTransportText(item.message))
+    || isRetryableTransportText(error.transportText);
+}
+
+function ghHttpStatus(diagnostics) {
+  const match = String(diagnostics || '').match(/\bHTTP(?:\s+status)?\s*[:=]?\s*(\d{3})\b/i)
+    || String(diagnostics || '').match(/\bstatus\s+code\s+(\d{3})\b/i);
+  return match ? Number(match[1]) : null;
+}
+
 function createRuntime(options) {
   const rootDir = path.resolve(options.rootDir || PROJECT_ROOT);
   const env = { ...process.env, ...(options.env || {}) };
@@ -306,6 +453,7 @@ function createRuntime(options) {
     loadSecret: options.loadSecret || (() => require('./local_secret_store').loadSecretIntoEnv('CLOUDFLARE_API_TOKEN', 'cloudflare-api-token.dpapi')),
     now,
     monotonic,
+    wait: options.wait || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
     log: options.log || (line => console.log(line)),
     pid: options.pid || process.pid,
     siteOrigin: options.siteOrigin || SITE_ORIGIN,
@@ -353,7 +501,9 @@ function resumeRun(runtime, inputPath) {
   if (record.schemaVersion !== 1 || !record.runId || path.basename(directory) !== record.runId) {
     throw new Error('run 记录格式无效。');
   }
-  if (record.state === 'live_verified') throw new Error('该 run 已完成 LIVE_VERIFIED，无需恢复。');
+  if (record.state === 'live_verified') {
+    throw new Error('该 run 已完成 LIVE_VERIFIED；--resume 仅处理未完成 run，不会把历史线上验收当作当前状态。');
+  }
   if (!record.publishSucceeded || !record.snapshot) {
     throw new Error(`该 run 没有可恢复的成功 publish 快照（状态：${record.state}）。请先人工检查 Git 分支、version.json 和 GitHub Release，再决定下一步；不要对该 run 盲目重跑。`);
   }
@@ -406,6 +556,12 @@ async function checkedCommand(runtime, command, args, options, label) {
       : options.stdio === 'inherit' ? '子进程输出已通过终端显示。' : '子进程未返回 stdout/stderr。';
     const error = new Error(`${label}失败，exit=${code}。${detail}`);
     error.exitCode = code;
+    if (result.error) error.cause = result.error;
+    if (options.retryableNetworkDiagnostics) {
+      const status = ghHttpStatus(diagnostics);
+      if (status !== null) error.httpStatus = status;
+      else error.transportText = diagnostics;
+    }
     throw error;
   }
   return result;
@@ -515,24 +671,30 @@ async function verifyGithubRelease(run) {
   const { runtime } = run;
   const result = await checkedCommand(runtime, 'gh', [
     'api', `repos/${REPOSITORY}/releases/tags/${run.record.snapshot.tag}`
-  ], { cwd: runtime.rootDir, env: runtime.env, stdio: 'pipe' }, 'GitHub Release API');
+  ], {
+    cwd: runtime.rootDir,
+    env: runtime.env,
+    stdio: 'pipe',
+    timeoutMs: HTTP_TIMEOUT_MS,
+    retryableNetworkDiagnostics: true
+  }, 'GitHub Release API');
   let release;
   try {
     release = JSON.parse(String(result.stdout || ''));
   } catch (_) {
-    throw new Error('GitHub Release API 没有返回有效 JSON。');
+    throw new SyntaxError('GitHub Release API 没有返回有效 JSON。');
   }
-  if (release.tag_name !== run.record.snapshot.tag) throw new Error('GitHub Release tag 与本地版本不一致。');
-  if (release.draft === true) throw new Error('GitHub Release 仍是草稿，不能作为公开发布验收通过。');
+  if (release.tag_name !== run.record.snapshot.tag) throw integrityError('GitHub Release tag 与本地版本不一致。');
+  if (release.draft === true) throw integrityError('GitHub Release 仍是草稿，不能作为公开发布验收通过。');
   const checks = [
     { name: 'gomoku.apk', sha256: run.record.snapshot.apkSha256 },
     { name: 'gomoku.html', sha256: run.record.snapshot.htmlSha256 }
   ];
   for (const expected of checks) {
     const matches = (release.assets || []).filter(asset => asset.name === expected.name);
-    if (matches.length !== 1) throw new Error(`GitHub Release 缺少唯一附件 ${expected.name}。`);
+    if (matches.length !== 1) throw integrityError(`GitHub Release 缺少唯一附件 ${expected.name}。`);
     if (String(matches[0].digest || '').toLowerCase() !== `sha256:${expected.sha256}`) {
-      throw new Error(`GitHub Release 附件摘要不匹配：${expected.name}。`);
+      throw integrityError(`GitHub Release 附件摘要不匹配：${expected.name}。`);
     }
   }
   return {
@@ -544,10 +706,10 @@ async function verifyGithubRelease(run) {
 async function verifySiteVersion(run, siteOrigin) {
   const url = `${siteOrigin.replace(/\/+$/, '')}/api/site-version`;
   const response = await readHttpBody(run.runtime.fetch, url, 'application/json');
-  if (!response.ok) throw new Error(`/api/site-version 返回 HTTP ${response.status}。`);
+  if (!response.ok) throw httpStatusError('/api/site-version', response.status);
   const value = await responseJson(response);
   if (value.tag !== run.record.snapshot.tag || Number(value.build) !== run.record.snapshot.build) {
-    throw new Error(`/api/site-version 不匹配：期望 ${run.record.snapshot.tag}/Build ${run.record.snapshot.build}。`);
+    throw integrityError(`/api/site-version 不匹配：期望 ${run.record.snapshot.tag}/Build ${run.record.snapshot.build}。`);
   }
   return { status: response.status, tag: value.tag, build: Number(value.build) };
 }
@@ -555,10 +717,10 @@ async function verifySiteVersion(run, siteOrigin) {
 async function verifySiteApk(run, siteOrigin) {
   const url = `${siteOrigin.replace(/\/+$/, '')}/download/apk`;
   const response = await readHttpBody(run.runtime.fetch, url, 'application/vnd.android.package-archive, application/octet-stream');
-  if (!response.ok) throw new Error(`/download/apk 返回 HTTP ${response.status}。`);
+  if (!response.ok) throw httpStatusError('/download/apk', response.status);
   const bytes = await responseBytes(response);
   const actual = sha256(bytes);
-  if (actual !== run.record.snapshot.apkSha256) throw new Error('/download/apk 实际 SHA-256 与本地 APK 不一致。');
+  if (actual !== run.record.snapshot.apkSha256) throw integrityError('/download/apk 实际 SHA-256 与本地 APK 不一致。');
   return { status: response.status, bytes: bytes.length, sha256: actual };
 }
 
@@ -567,10 +729,29 @@ async function verifySiteJavascript(run, siteOrigin) {
   const local = fs.readFileSync(localPath);
   const url = `${siteOrigin.replace(/\/+$/, '')}/play/js/app.min.js`;
   const response = await readHttpBody(run.runtime.fetch, url, 'application/javascript, text/javascript, */*');
-  if (!response.ok) throw new Error(`/play/js/app.min.js 返回 HTTP ${response.status}。`);
+  if (!response.ok) throw httpStatusError('/play/js/app.min.js', response.status);
   const remote = await responseBytes(response);
-  if (!remote.equals(local)) throw new Error('/play/js/app.min.js 字节内容与本地官网副本不一致。');
+  if (!remote.equals(local)) throw integrityError('/play/js/app.min.js 字节内容与本地官网副本不一致。');
   return { status: response.status, bytes: remote.length, sha256: sha256(remote) };
+}
+
+function resolveEcsEndpoint(rootDir, env) {
+  let value;
+  try {
+    value = defaultEcsVersionUrl(rootDir, env);
+  } catch (_) {
+    return `unresolved:${String(env.GOMOKU_ECS_VERSION_URL || '').trim()}`;
+  }
+  if (!value) return '';
+  try {
+    return validateHttpsUrl(value);
+  } catch (_) {
+    return `invalid:${String(value).trim()}`;
+  }
+}
+
+function uncheckedEcs(reason) {
+  return { checked: false, reason };
 }
 
 async function verifyEcs(run) {
@@ -578,29 +759,176 @@ async function verifyEcs(run) {
   try {
     url = validateHttpsUrl(defaultEcsVersionUrl(run.runtime.rootDir, run.runtime.env));
   } catch (_) {
-    return { checked: false, reason: '没有配置可使用标准 HTTPS TLS 校验的 ECS 版本地址。' };
+    return uncheckedEcs('没有配置可使用标准 HTTPS TLS 校验的 ECS 版本地址。');
   }
-  if (!url) return { checked: false, reason: '没有配置可使用标准 HTTPS TLS 校验的 ECS 版本地址。' };
+  if (!url) return uncheckedEcs('没有配置可使用标准 HTTPS TLS 校验的 ECS 版本地址。');
   let response;
   try {
     response = await readHttpBody(run.runtime.fetch, url, 'application/json');
-  } catch (_) {
-    return { checked: false, reason: 'ECS 请求或 TLS 校验未完成；未放宽证书校验。' };
+  } catch (error) {
+    if (isRetryableReadError(error)) throw error;
+    return uncheckedEcs('ECS 请求或 TLS 校验未完成；未放宽证书校验。');
   }
-  if (!response.ok) return { checked: false, reason: `ECS 版本接口返回 HTTP ${response.status}，未纳入验收。` };
+  if (!response.ok) {
+    const error = httpStatusError('ECS 版本接口', response.status);
+    if (isRetryableReadError(error)) throw error;
+    return uncheckedEcs(`ECS 版本接口返回 HTTP ${response.status}，未纳入验收。`);
+  }
   let value;
   try {
     value = await responseJson(response);
-  } catch (_) {
-    return { checked: false, reason: 'ECS 版本接口不是有效 JSON，未纳入验收。' };
+  } catch (error) {
+    if (isRetryableReadError(error)) throw error;
+    return uncheckedEcs('ECS 版本接口不是有效 JSON，未纳入验收。');
   }
   const snapshot = run.record.snapshot;
   if (value.tag !== snapshot.tag
       || String(value.apkSha256 || '').toLowerCase() !== snapshot.apkSha256
       || String(value.htmlSha256 || '').toLowerCase() !== snapshot.htmlSha256) {
-    throw new Error('ECS 版本接口返回了可读取但与本地发布快照不一致的数据。');
+    throw integrityError('ECS 版本接口返回了可读取但与本地发布快照不一致的数据。');
   }
   return { checked: true, status: response.status, tag: value.tag, apkSha256: value.apkSha256, htmlSha256: value.htmlSha256 };
+}
+
+function acceptanceContext(run) {
+  return {
+    snapshotSha256: sha256(JSON.stringify(run.record.snapshot)),
+    siteOrigin: String(run.runtime.siteOrigin || '').replace(/\/+$/, ''),
+    ecsEndpoint: resolveEcsEndpoint(run.runtime.rootDir, run.runtime.env)
+  };
+}
+
+function canReuseAcceptanceCheck(run, name, binding) {
+  const entry = run.record.acceptanceChecks && run.record.acceptanceChecks[name];
+  if (!entry || !entry.result || !entry.binding || !entry.checkedAt) return null;
+  if (JSON.stringify(entry.binding) !== JSON.stringify(binding)) return null;
+  if (name === 'ecs_optional' && entry.result.checked !== true) return null;
+  const ageMs = asDate(run.runtime.now()).getTime() - Date.parse(entry.checkedAt);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > ACCEPTANCE_CACHE_TTL_MS) return null;
+  return entry.result;
+}
+
+function appendAcceptanceAttempt(run, name, attempt) {
+  if (!run.record.acceptanceAttempts || typeof run.record.acceptanceAttempts !== 'object') {
+    run.record.acceptanceAttempts = {};
+  }
+  if (!Array.isArray(run.record.acceptanceAttempts[name])) run.record.acceptanceAttempts[name] = [];
+  run.record.acceptanceAttempts[name].push(attempt);
+}
+
+function recoveryCommand(run) {
+  const runDirectory = path.relative(run.runtime.rootDir, run.directory);
+  return `node release_official.js --resume ${runDirectory}`;
+}
+
+function setAcceptanceFailure(run, name, error, attempt) {
+  const failures = Array.isArray(run.record.acceptanceFailures) ? run.record.acceptanceFailures : [];
+  run.record.acceptanceFailures = failures.filter(item => item.name !== name);
+  run.record.acceptanceFailures.push({
+    name,
+    error: preciseErrorMessage(error).slice(0, 1200),
+    attempt
+  });
+}
+
+async function runAcceptanceCheck(run, name, action, options = {}) {
+  const { runtime } = run;
+  const binding = acceptanceContext(run);
+  const cached = canReuseAcceptanceCheck(run, name, binding);
+  if (cached) {
+    if (!run.record.acceptance || typeof run.record.acceptance !== 'object') run.record.acceptance = {};
+    run.record.acceptance[name] = cached;
+    run.record.events.push({ at: asDate(runtime.now()).toISOString(), type: 'acceptance_cache_reused', name });
+    persistRun(run);
+    runtime.log(`复用验收 ${name}：快照、站点和 ECS 地址一致，成功证据未超过 10 分钟。`);
+    return cached;
+  }
+
+  if (!run.record.acceptanceChecks || typeof run.record.acceptanceChecks !== 'object') run.record.acceptanceChecks = {};
+  if (!run.record.acceptance || typeof run.record.acceptance !== 'object') run.record.acceptance = {};
+  delete run.record.acceptance[name];
+  delete run.record.acceptanceChecks[name];
+  persistRun(run);
+
+  for (let attempt = 1; attempt <= MAX_READ_ATTEMPTS; attempt += 1) {
+    const startedAt = asDate(runtime.now()).toISOString();
+    const startTick = runtime.monotonic();
+    const stageName = attempt === 1 ? `verify.${name}` : `verify.${name}.attempt_${attempt}`;
+    try {
+      const result = await runStage(run, stageName, action);
+      const durationMs = Math.max(0, runtime.monotonic() - startTick);
+      const checkedAt = asDate(runtime.now()).toISOString();
+      appendAcceptanceAttempt(run, name, {
+        attempt,
+        status: result && result.checked === false ? 'unchecked' : 'passed',
+        startedAt,
+        endedAt: checkedAt,
+        durationMs,
+        delayMs: 0,
+        reason: result && result.checked === false ? result.reason : null
+      });
+      if (!run.record.acceptance || typeof run.record.acceptance !== 'object') run.record.acceptance = {};
+      run.record.acceptance[name] = result;
+      run.record.acceptanceFailures = (run.record.acceptanceFailures || []).filter(item => item.name !== name);
+      if (!(name === 'ecs_optional' && result && result.checked === false)) {
+        run.record.acceptanceChecks[name] = { binding, checkedAt, result };
+      } else {
+        delete run.record.acceptanceChecks[name];
+      }
+      persistRun(run);
+      if (result && result.checked === false) runtime.log(`可选验收项 ${name} 未纳入通过缓存：${result.reason}`);
+      else runtime.log(`验收项 ${name} 通过（attempt=${attempt}/${MAX_READ_ATTEMPTS}）。`);
+      return result;
+    } catch (error) {
+      const durationMs = Math.max(0, runtime.monotonic() - startTick);
+      const retryable = isRetryableReadError(error);
+      const delayMs = retryable && attempt < MAX_READ_ATTEMPTS ? READ_RETRY_DELAYS_MS[attempt - 1] : 0;
+      const reason = preciseErrorMessage(error).slice(0, 1200);
+      const endedAt = asDate(runtime.now()).toISOString();
+      appendAcceptanceAttempt(run, name, {
+        attempt,
+        status: 'failed',
+        startedAt,
+        endedAt,
+        durationMs,
+        delayMs,
+        reason,
+        failureType: readErrorType(error),
+        retryable
+      });
+      setAcceptanceFailure(run, name, error, attempt);
+      run.record.events.push({
+        at: endedAt,
+        type: 'acceptance_attempt_failed',
+        name,
+        attempt,
+        retryable,
+        delayMs,
+        durationMs,
+        failureType: readErrorType(error),
+        error: reason
+      });
+      persistRun(run);
+      runtime.log(`验收项 ${name} 第 ${attempt}/${MAX_READ_ATTEMPTS} 次失败：${reason}`);
+      if (delayMs > 0) {
+        runtime.log(`重试验收项 ${name}：原因=${reason}，等待 ${delayMs}ms 后进行第 ${attempt + 1}/${MAX_READ_ATTEMPTS} 次。`);
+        await runtime.wait(delayMs);
+        continue;
+      }
+      if (options.optional && retryable) {
+        const result = uncheckedEcs(`临时请求故障，已尝试 ${attempt} 次；最后错误：${reason}`);
+        if (!run.record.acceptance || typeof run.record.acceptance !== 'object') run.record.acceptance = {};
+        run.record.acceptance[name] = result;
+        delete run.record.acceptanceChecks[name];
+        persistRun(run);
+        runtime.log(`可选验收项 ${name} 未完成且不阻断发布：${result.reason}`);
+        return result;
+      }
+      runtime.log(`验收失败 ${name}：${reason}；可恢复命令：${recoveryCommand(run)}`);
+      throw error;
+    }
+  }
+  throw new Error(`验收项 ${name} 未产生结果。`);
 }
 
 async function runConcurrentVerification(run) {
@@ -610,21 +938,23 @@ async function runConcurrentVerification(run) {
     ['pages_site_version', () => verifySiteVersion(run, siteOrigin)],
     ['pages_download_apk', () => verifySiteApk(run, siteOrigin)],
     ['pages_app_js', () => verifySiteJavascript(run, siteOrigin)],
-    ['ecs_optional', () => verifyEcs(run)]
+    ['ecs_optional', () => verifyEcs(run), { optional: true }]
   ];
-  const settled = await Promise.allSettled(checks.map(([name, action]) => runStage(run, `verify.${name}`, action)));
+  run.record.acceptanceFailures = [];
+  persistRun(run);
+  const settled = await Promise.allSettled(checks.map(([name, action, options]) => runAcceptanceCheck(run, name, action, options)));
   const evidence = {};
   const failures = [];
   settled.forEach((item, index) => {
     const name = checks[index][0];
     if (item.status === 'fulfilled') evidence[name] = item.value;
-    else failures.push({ name, error: String(item.reason && item.reason.message || item.reason) });
+    else failures.push({ name, error: preciseErrorMessage(item.reason).slice(0, 1200) });
   });
   run.record.acceptance = evidence;
   run.record.acceptanceFailures = failures;
   persistRun(run);
   if (failures.length) {
-    throw new Error(`线上验收失败：${failures.map(item => item.name).join(', ')}。未输出 LIVE_VERIFIED。`);
+    throw new Error(`线上验收失败：${failures.map(item => `${item.name}：${item.error}`).join('；')}。未输出 LIVE_VERIFIED。`);
   }
   return evidence;
 }
@@ -671,6 +1001,7 @@ function createReport(run) {
 
 async function finishVerifiedRun(run) {
   const { runtime } = run;
+  delete run.record.lastError;
   run.record.state = 'live_verified';
   run.record.liveVerifiedAt = asDate(runtime.now()).toISOString();
   run.record.events.push({ at: run.record.liveVerifiedAt, type: 'live_verified', tag: run.record.snapshot.tag, build: run.record.snapshot.build });
@@ -773,7 +1104,8 @@ async function runRelease(options = {}) {
 function printHelp(log = line => console.log(line)) {
   log('用法：node release_official.js [--resume <run目录>]');
   log('默认顺序执行 publish.js（关闭其 Cloudflare 全量部署）、Cloudflare Pages gomoku-home/master 部署和并行线上只读验收。');
-  log('--resume 仅接受本项目 .codex-diagnostics/official-release/ 下 publish 已成功且本地 manifest、APK、HTML、官网目录指纹未变化的 run。');
+  log('--resume 仅接受本项目 .codex-diagnostics/official-release/ 下 publish 已成功且本地 manifest、APK、HTML、官网目录指纹未变化的未完成 run。');
+  log('同一快照、站点地址和 ECS 地址下，10 分钟内成功的验收项可复用；未验收 ECS 不缓存。已 LIVE_VERIFIED 的 run 不接受 resume。');
   log('每次运行证据写入 .codex-diagnostics/official-release/<run-id>/；失败的 publish 不会自动重跑。');
 }
 

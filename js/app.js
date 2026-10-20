@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.152';
+    const CURRENT_VERSION_TAG = 'v1.0.153';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
     // Build 140 重绘图标，142 提供版本查询，148 集成 C++ 引擎；
     // Build 151 才包含 PackageInstaller 自更新代码；Build 153 加入匹配通知桥接。
@@ -9435,12 +9435,140 @@
       throw new Error(`更新检查失败：${failures.slice(0, 5).join('；') || '所有更新入口都无响应'}`);
     }
 
+    function resolveUpdateCheckDecision({ isAndroid, versionData, currentVersion, apkUpdateRequired }) {
+      if (!isAndroid) return { shouldUpdate: false, reason: 'browser', usableManifest: false, forceFullApk: false };
+      if (!versionData || !/^v\d+\.\d+\.\d+$/.test(String(versionData.tag || ''))) {
+        return { shouldUpdate: false, reason: 'manifest-unavailable', usableManifest: false, forceFullApk: false };
+      }
+      const versionOrder = compareVersions(versionData.tag, currentVersion);
+      if (versionOrder < 0) {
+        return { shouldUpdate: false, reason: 'stale-manifest', usableManifest: false, forceFullApk: false };
+      }
+      const forceFullApk = Boolean(apkUpdateRequired);
+      return {
+        shouldUpdate: versionOrder > 0 || forceFullApk,
+        reason: versionOrder > 0 ? 'new-version' : forceFullApk ? 'native-apk-required' : 'current',
+        usableManifest: true,
+        forceFullApk
+      };
+    }
+
+    function maybeStartAutomaticUpdateIfNeeded({
+      isAndroid, versionData, currentVersion, apkUpdateRequired, attemptKey, coordinator
+    }) {
+      const decision = resolveUpdateCheckDecision({ isAndroid, versionData, currentVersion, apkUpdateRequired });
+      return {
+        decision,
+        promise: decision.shouldUpdate ? coordinator.requestAutomatic(versionData, attemptKey) : null
+      };
+    }
+
+    function createUpdateCheckRunner(runCheck) {
+      let activePromise = null;
+      let manualRequested = false;
+      return {
+        check(isManual = false) {
+          if (activePromise) {
+            if (isManual) manualRequested = true;
+            return activePromise;
+          }
+          manualRequested = Boolean(isManual);
+          activePromise = Promise.resolve()
+            .then(() => runCheck(Boolean(isManual), () => manualRequested))
+            .finally(() => {
+              activePromise = null;
+              manualRequested = false;
+            });
+          return activePromise;
+        },
+        isRunning() { return Boolean(activePromise); }
+      };
+    }
+
+    function createAppUpdateCoordinator({ isAndroid, isBusy, startUpdate, hasAttempted, markAttempted, onDeferred }) {
+      let activeActionPromise = null;
+      let activeAttemptKey = null;
+      let pendingAutomaticUpdate = null;
+
+      function run(updateData, automatic, attemptKey) {
+        if (activeActionPromise) return activeActionPromise;
+        if (automatic) {
+          if (hasAttempted(attemptKey)) return Promise.resolve({ status: 'attempted' });
+          markAttempted(attemptKey);
+        }
+        pendingAutomaticUpdate = null;
+        const actionPromise = Promise.resolve()
+          .then(() => startUpdate(updateData, { automatic }))
+          .finally(() => {
+            if (activeActionPromise === actionPromise) {
+              activeActionPromise = null;
+              activeAttemptKey = null;
+            }
+          });
+        activeActionPromise = actionPromise;
+        activeAttemptKey = attemptKey;
+        return actionPromise;
+      }
+
+      return {
+        requestAutomatic(updateData, attemptKey) {
+          if (!isAndroid()) return Promise.resolve({ status: 'browser' });
+          if (hasAttempted(attemptKey)) return Promise.resolve({ status: 'attempted' });
+          if (activeActionPromise) {
+            if (activeAttemptKey === attemptKey) markAttempted(attemptKey);
+            pendingAutomaticUpdate = null;
+            return activeActionPromise;
+          }
+          if (isBusy()) {
+            if (pendingAutomaticUpdate?.attemptKey !== attemptKey) {
+              pendingAutomaticUpdate = { updateData, attemptKey };
+              onDeferred(updateData);
+            }
+            return Promise.resolve({ status: 'deferred' });
+          }
+          return run(updateData, true, attemptKey);
+        },
+        requestManual(updateData, attemptKey) {
+          pendingAutomaticUpdate = null;
+          return run(updateData, false, attemptKey);
+        },
+        resumeWhenIdle() {
+          if (!pendingAutomaticUpdate || isBusy()) return Promise.resolve({ status: pendingAutomaticUpdate ? 'deferred' : 'idle' });
+          const pending = pendingAutomaticUpdate;
+          return run(pending.updateData, true, pending.attemptKey);
+        },
+        hasPendingAutomaticUpdate() { return Boolean(pendingAutomaticUpdate); }
+      };
+    }
+
+    function isAppUpdateActivityBusy() {
+      try {
+        const body = document.body;
+        const gameVisible = Boolean(body?.classList?.contains('sky-game-open'));
+        if (gameVisible && (gameMode === 'ai' || gameMode === 'pvp') && !isOver && !isReplayMode) return true;
+        if (gameVisible && gameMode === 'online') return true;
+
+        const state = typeof window.getOnlineActivityState === 'function'
+          ? window.getOnlineActivityState()
+          : null;
+        if (!state) return false;
+        if (state.matching || state.phase === 'starting' || state.hasRoomBeingPrepared || state.hasOtherRoom) return true;
+        return Boolean(state.hasOnlineGame && state.phase !== 'idle');
+      } catch (_) {
+        return false;
+      }
+    }
+
     let isCheckingAppUpdate = false;
     let isAppDownloading = false;
     let updateManifestRequest = null;
     let isManualUpdateCheckInProgress = false;
     let updateCheckButtonOriginalHtml = null;
     let activeNativeUpdateFallback = null;
+    let activeUpdateActionPromise = null;
+    let pendingUpdateActivityObserver = null;
+    let pendingUpdateActivityListenerBound = false;
+    const automaticUpdateAttemptsInMemory = new Set();
 
     function startNativeApkUpdate(updateData) {
       if (typeof AndroidNativeApp === 'undefined') return false;
@@ -9475,6 +9603,13 @@
         return true;
       }
       return false;
+    }
+
+    async function recoverGithubHtmlAfterProxyFailure(updateData, serviceHtmlFallback) {
+      if (updateData?.sourceType === 'github' && startNativeApkUpdate(updateData)) {
+        return { route: 'github-apk' };
+      }
+      return { route: 'service-html', html: await serviceHtmlFallback() };
     }
 
     async function continueNativeUpdateFallback(message) {
@@ -9612,9 +9747,333 @@
         btn.style.opacity = '1';
         btn.innerHTML = '<span>🔄 重试更新</span>';
       }
+      const cancelButton = document.getElementById('btnUpdateCancel');
+      if (cancelButton) cancelButton.textContent = '关闭';
       if (progressStatus) progressStatus.textContent = message || '更新失败，可以点击上方按钮重试';
       if (message) showGameNotice(message, true);
     }
+
+    function makeAutomaticUpdateAttemptKey(updateData, forceFullApk) {
+      return `${CURRENT_VERSION_TAG}:${String(updateData?.tag || '')}:${String(updateData?.apkSha256 || '').toLowerCase()}:${forceFullApk ? 'apk' : 'html'}`;
+    }
+
+    function hasAutomaticUpdateAttempt(attemptKey) {
+      if (automaticUpdateAttemptsInMemory.has(attemptKey)) return true;
+      try { return sessionStorage.getItem(`gomoku_auto_update_attempt_${attemptKey}`) === '1'; }
+      catch (_) { return false; }
+    }
+
+    function markAutomaticUpdateAttempt(attemptKey) {
+      automaticUpdateAttemptsInMemory.add(attemptKey);
+      try { sessionStorage.setItem(`gomoku_auto_update_attempt_${attemptKey}`, '1'); } catch (_) {}
+    }
+
+    function removePendingUpdateActivityListeners() {
+      if (pendingUpdateActivityListenerBound) {
+        document.removeEventListener('gomoku-online-activity-change', resumePendingAutomaticUpdate);
+        pendingUpdateActivityListenerBound = false;
+      }
+      if (pendingUpdateActivityObserver) {
+        pendingUpdateActivityObserver.disconnect();
+        pendingUpdateActivityObserver = null;
+      }
+    }
+
+    function resumePendingAutomaticUpdate() {
+      if (!appUpdateCoordinator?.hasPendingAutomaticUpdate()) {
+        removePendingUpdateActivityListeners();
+        return;
+      }
+      if (isAppUpdateActivityBusy()) return;
+      removePendingUpdateActivityListeners();
+      void appUpdateCoordinator.resumeWhenIdle().catch(error => {
+        resetUpdateDownloadUI(error?.message ? `自动更新失败：${error.message}` : '自动更新失败，请手动重试');
+      });
+    }
+
+    function watchPendingAutomaticUpdateActivity() {
+      if (!pendingUpdateActivityListenerBound) {
+        document.addEventListener('gomoku-online-activity-change', resumePendingAutomaticUpdate);
+        pendingUpdateActivityListenerBound = true;
+      }
+      if (!pendingUpdateActivityObserver && typeof MutationObserver === 'function' && document.body) {
+        pendingUpdateActivityObserver = new MutationObserver(resumePendingAutomaticUpdate);
+        pendingUpdateActivityObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      }
+    }
+
+    function showAutomaticUpdateProgress(updateData, forceFullApk) {
+      const modalIcon = document.getElementById('updateModalIcon');
+      const modalTitle = document.getElementById('updateModalTitle');
+      const tagEl = document.getElementById('updateTagText');
+      const notesTitle = document.getElementById('updateNotesTitle');
+      const notesEl = document.getElementById('updateNotesContent');
+      const btnFast = document.getElementById('btnFastDownload');
+      const btnCancel = document.getElementById('btnUpdateCancel');
+      if (modalIcon) modalIcon.textContent = forceFullApk ? '📦' : '🚀';
+      if (modalTitle) modalTitle.textContent = forceFullApk ? '正在更新 Android 完整应用' : '正在自动更新';
+      if (tagEl) {
+        tagEl.textContent = `${DISPLAY_VERSION_TAG} ➔ ${formatDisplayVersionTag(updateData.tag)}`;
+        tagEl.style.background = forceFullApk ? '#fff7ed' : '#e0f2fe';
+        tagEl.style.color = forceFullApk ? '#c2410c' : '#0369a1';
+      }
+      if (notesTitle) notesTitle.textContent = forceFullApk ? '📦 安装说明：' : '🚀 更新内容：';
+      if (notesEl) notesEl.textContent = forceFullApk
+        ? '检测到本机 Android 原生组件需要更新，正在获取并校验完整 APK。下载完成后由 Android 系统继续处理安装权限与确认。'
+        : '正在获取更新文件并校验完整性；热更新不可用时会继续尝试已校验的完整 APK。';
+      if (btnFast) {
+        btnFast.style.display = 'flex';
+        btnFast.disabled = true;
+        btnFast.style.opacity = '0.8';
+        btnFast.innerHTML = '<span>⏳ 正在获取并校验更新…</span>';
+      }
+      if (btnCancel) {
+        btnCancel.textContent = '关闭进度';
+        btnCancel.style.background = '#f1f5f9';
+        btnCancel.style.color = '#64748b';
+      }
+      openUpdateModal();
+    }
+
+    function installManualUpdateAction(updateData, forceFullApk) {
+      const btnFast = document.getElementById('btnFastDownload');
+      if (!btnFast) return;
+      btnFast.onclick = event => {
+        event.preventDefault();
+        if (btnFast.disabled) return;
+        const attemptKey = makeAutomaticUpdateAttemptKey(updateData, forceFullApk);
+        removePendingUpdateActivityListeners();
+        void appUpdateCoordinator.requestManual(updateData, attemptKey);
+      };
+    }
+
+    async function performAppUpdateAction(updateData, { automatic = false } = {}) {
+      const btnFast = document.getElementById('btnFastDownload');
+      const btnCancel = document.getElementById('btnUpdateCancel');
+      const progressWrap = document.getElementById('updateProgressBarWrap');
+      const progressInner = document.getElementById('updateProgressBarInner');
+      const progressPercent = document.getElementById('updateProgressPercentText');
+      const progressStatus = document.getElementById('updateProgressStatusText');
+      const setVisualProgress = (percent, text) => {
+        if (progressWrap) progressWrap.style.display = 'block';
+        if (progressInner) progressInner.style.width = `${percent}%`;
+        if (progressPercent) progressPercent.textContent = `${percent}%`;
+        if (progressStatus) progressStatus.textContent = text;
+      };
+
+      if (isAppDownloading) return { status: 'already-downloading' };
+      if (automatic) showAutomaticUpdateProgress(updateData, isAndroidApkUpdateRequired());
+      if (btnFast) {
+        btnFast.disabled = true;
+        btnFast.style.opacity = '0.8';
+        btnFast.innerHTML = '<span>⏳ 正在刷新安全下载授权...</span>';
+      }
+      if (btnCancel && automatic) btnCancel.textContent = '关闭进度';
+      setVisualProgress(12, '🔐 正在连接更新服务并刷新下载授权...');
+      isAppDownloading = true;
+      let handedOffToNative = false;
+      let incompatibleHotUpdate = false;
+      let fallbackEligible = false;
+      let clickVersionData = null;
+
+      try {
+        clickVersionData = await fetchUpdateManifest();
+        const forceFullApk = isAndroidApkUpdateRequired();
+        const decision = resolveUpdateCheckDecision({
+          isAndroid: Boolean(window.AndroidNativeApp),
+          versionData: clickVersionData,
+          currentVersion: CURRENT_VERSION_TAG,
+          apkUpdateRequired: forceFullApk
+        });
+        if (!decision.usableManifest) {
+          throw new Error(decision.reason === 'stale-manifest'
+            ? '更新服务返回的版本早于当前页面，已阻止安装旧版本；请重新检查'
+            : '无法取得有效更新清单，请检查网络后重试');
+        }
+        if (!decision.shouldUpdate) {
+          isAppDownloading = false;
+          if (progressWrap) progressWrap.style.display = 'none';
+          if (btnFast) {
+            btnFast.disabled = false;
+            btnFast.style.opacity = '1';
+            btnFast.innerHTML = '<span>✅ 当前已是最新版</span>';
+          }
+          if (progressStatus) progressStatus.textContent = '当前已是最新版';
+          showGameNotice('当前已是最新版本', false);
+          return { status: 'current' };
+        }
+        if (!clickVersionData.apkTicket && clickVersionData.sourceType !== 'github') {
+          throw new Error('更新服务未签发有效下载授权');
+        }
+        fallbackEligible = true;
+
+        if (forceFullApk) {
+          setVisualProgress(32, '📦 检测到 Android 原生核心待更新，正在下载完整 APK...');
+        } else if (typeof AndroidNativeApp !== 'undefined'
+            && typeof AndroidNativeApp.saveHotUpdateFile === 'function') {
+          setVisualProgress(24, '🧩 正在查找与本机版本匹配的增量包...');
+          if (await downloadAndApplyHtmlDelta(clickVersionData)) {
+            setVisualProgress(100, '🎉 增量更新完成，正在重载进入新版...');
+            showGameNotice('🎉 少量数据已更新完成，即将进入最新版', false);
+            setTimeout(() => window.location.reload(), 800);
+            return { status: 'hot-update-applied' };
+          }
+
+          const rawHotUrls = clickVersionData.sourceType === 'github'
+            ? clickVersionData.htmlUrls
+            : (clickVersionData.htmlUrl ? [clickVersionData.htmlUrl] : []);
+          const hotUrls = rawHotUrls.map(url => url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now());
+          const fetchCandidate = (sourceData, url, timeoutMs = 20000) => {
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            let timeoutId = null;
+            const timeoutPromise = new Promise((_, reject) => {
+              timeoutId = setTimeout(() => {
+                if (controller) controller.abort();
+                reject(new Error('更新文件下载超时'));
+              }, timeoutMs);
+            });
+            const downloadPromise = (async () => {
+              const requestOptions = {
+                cache: 'no-store',
+                ...(sourceData.htmlTicket ? { headers: getUpdateHeaders(sourceData.htmlTicket) } : {})
+              };
+              if (controller) requestOptions.signal = controller.signal;
+              const response = await fetch(url, requestOptions);
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              const html = await readLimitedResponseText(response, 20 * 1024 * 1024);
+              if (!html || html.length < 50000 || !html.includes('五子棋')) throw new Error('更新文件内容无效');
+              if (!sourceData.htmlSha256) throw new Error('更新文件缺少完整性摘要');
+              const actualHash = await sha256Hex(html);
+              if (actualHash !== sourceData.htmlSha256) throw new Error('更新文件完整性校验失败');
+              return html;
+            })();
+            return Promise.race([downloadPromise, timeoutPromise]).finally(() => {
+              if (timeoutId) clearTimeout(timeoutId);
+            });
+          };
+
+          setVisualProgress(30, '📥 正在接收并校验完整备用更新...');
+          if (!clickVersionData.htmlSha256
+              || (clickVersionData.sourceType !== 'github' && (hotUrls.length === 0 || !clickVersionData.htmlTicket))) {
+            throw new Error('更新清单未提供完整热更新文件、摘要或下载授权');
+          }
+          let newHtml = '';
+          try {
+            newHtml = await Promise.any(hotUrls.map(url => fetchCandidate(clickVersionData, url)));
+          } catch (githubHtmlError) {
+            if (clickVersionData.sourceType !== 'github') throw githubHtmlError;
+            const recovery = await recoverGithubHtmlAfterProxyFailure(clickVersionData, async () => {
+              setVisualProgress(42, '🔁 GitHub 完整文件暂不可用，正在切换 ECS 更新服务...');
+              const serviceManifests = await fetchTicketedUpdateManifests(clickVersionData.tag, clickVersionData.apkSha256);
+              const serviceCandidates = serviceManifests
+                .filter(item => item.htmlUrl && item.htmlSha256 === clickVersionData.htmlSha256 && item.htmlTicket)
+                .map(item => fetchCandidate(item, `${item.htmlUrl}?_t=${Date.now()}`));
+              if (!serviceCandidates.length) throw new Error('GitHub HTML 代理不可用，ECS 未提供匹配版本的完整更新文件');
+              return await Promise.any(serviceCandidates);
+            });
+            if (recovery.route === 'github-apk') {
+              handedOffToNative = true;
+              setVisualProgress(42, '🔁 GitHub HTML 代理不可用，正在尝试反向代理 APK 更新...');
+              showGameNotice(`正在通过反向代理下载完整 APK (${clickVersionData.tag})；安装权限与确认由 Android 系统处理。`, false);
+              return { status: 'native-apk-started', route: 'github-proxy' };
+            }
+            newHtml = recovery.html;
+          }
+
+          const startupScriptBlocks = newHtml.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
+          const hasSafeStartupBootstrap = startupScriptBlocks.some(script =>
+            script.includes('GOMOKU_STARTUP_SPLASH_BOOTSTRAP_V1')
+            && /function\s+hasNativeBridge/.test(script)
+            && script.includes('DOMContentLoaded')
+          );
+          if (!hasSafeStartupBootstrap) {
+            incompatibleHotUpdate = true;
+            throw new Error('云端更新页缺少安全开屏初始化，已阻止覆盖');
+          }
+
+          setVisualProgress(80, '💾 正在安全写入本地更新...');
+          const writeSucceeded = AndroidNativeApp.saveHotUpdateFile('index.html', newHtml);
+          if (!writeSucceeded) throw new Error('沙盒写入失败');
+          setVisualProgress(100, '🎉 免安装秒更成功！正在重载进入新版...');
+          showGameNotice('🎉 更新成功！即将无缝重载进入最新版', false);
+          setTimeout(() => window.location.reload(), 800);
+          return { status: 'hot-update-applied' };
+        }
+
+        if (typeof AndroidNativeApp !== 'undefined' && await startNativeApkUpdateWithFallback(clickVersionData)) {
+          handedOffToNative = true;
+          if (btnFast) btnFast.innerHTML = '<span>⏳ 正在下载安装包...</span>';
+          setVisualProgress(30, '⏳ 已交给 Android 下载完整 APK，正在等待下载进度...');
+          showGameNotice(forceFullApk
+            ? `正在下载完整 APK (${clickVersionData.tag})；下载后由 Android 系统处理安装权限与确认。`
+            : `正在自动下载最新版 (${clickVersionData.tag})；下载后由 Android 系统处理安装权限与确认。`, false);
+          if (btnCancel) btnCancel.textContent = '关闭进度';
+          return { status: 'native-apk-started', route: 'native' };
+        }
+
+        if (!clickVersionData.fastUrl && !clickVersionData.apkUrls?.length) {
+          throw new Error('更新服务未提供安装包地址');
+        }
+        if (btnFast) btnFast.innerHTML = '<span>⏳ 正在下载安装包...</span>';
+        setVisualProgress(30, '⏳ 正在下载并校验安装包...');
+        await downloadProtectedApk(clickVersionData);
+        isAppDownloading = false;
+        if (btnFast) {
+          btnFast.disabled = false;
+          btnFast.style.opacity = '1';
+          btnFast.innerHTML = '<span>✅ 安装包已下载</span>';
+        }
+        if (progressStatus) progressStatus.textContent = '安装包已下载，请从系统下载通知中继续安装';
+        showGameNotice('✅ 安装包已下载，请从系统下载通知中继续安装', false);
+        return { status: 'apk-downloaded' };
+      } catch (error) {
+        console.warn('[AppUpdate]', error?.message || error);
+        if (!incompatibleHotUpdate && fallbackEligible && clickVersionData
+            && !handedOffToNative && await startNativeApkUpdateWithFallback(clickVersionData)) {
+          handedOffToNative = true;
+          setVisualProgress(50, '🔄 热更新暂不可用，正在通过安全安装包通道继续...');
+          if (btnFast) btnFast.innerHTML = '<span>⏳ 正在下载安装包...</span>';
+          showGameNotice('热更新暂不可用，正在切换已校验的完整 APK。', true);
+          return { status: 'native-apk-started', route: 'fallback' };
+        }
+        const failureText = error?.message ? `更新失败：${error.message}` : '更新失败，请检查网络后重试';
+        resetUpdateDownloadUI(failureText);
+        return { status: 'failed', error: failureText };
+      } finally {
+        if (!handedOffToNative && isAppDownloading) isAppDownloading = false;
+      }
+    }
+
+    function startAppUpdate(updateData, options = {}) {
+      if (activeUpdateActionPromise) return activeUpdateActionPromise;
+      if (isAppDownloading) return Promise.resolve({ status: 'already-downloading' });
+      const actionPromise = Promise.resolve()
+        .then(() => performAppUpdateAction(updateData, options))
+        .finally(() => {
+          if (activeUpdateActionPromise === actionPromise) activeUpdateActionPromise = null;
+        });
+      activeUpdateActionPromise = actionPromise;
+      return actionPromise;
+    }
+
+    const appUpdateCoordinator = createAppUpdateCoordinator({
+      isAndroid: () => Boolean(window.AndroidNativeApp),
+      isBusy: isAppUpdateActivityBusy,
+      startUpdate: startAppUpdate,
+      hasAttempted: hasAutomaticUpdateAttempt,
+      markAttempted: markAutomaticUpdateAttempt,
+      onDeferred: updateData => {
+        window.GOMOKU_UPDATE_BADGE_TEXT = '更新将在返回大厅后开始';
+        window.GOMOKU_UPDATE_BADGE_TITLE = `已发现 ${formatDisplayVersionTag(updateData?.tag)}；当前对局、匹配或房间准备结束后会自动更新`;
+        const versionEl = document.getElementById('appVersionDisplay');
+        if (versionEl) {
+          versionEl.textContent = window.GOMOKU_UPDATE_BADGE_TEXT;
+          versionEl.title = window.GOMOKU_UPDATE_BADGE_TITLE;
+        }
+        showGameNotice('已发现新版本；为避免打断当前对局或联机活动，返回大厅且空闲后会自动开始更新。', false);
+        watchPendingAutomaticUpdateActivity();
+      }
+    });
 
     // 原生下载进度实时通知
         window.onApkDownloadProgress = function(percent, status) {
@@ -9633,7 +10092,12 @@
         if (progressInner) progressInner.style.width = '100%';
         if (progressPercent) progressPercent.textContent = '100%';
         if (progressStatus) progressStatus.textContent = '正在安装更新，如系统提示请确认';
-        if (btn) btn.innerHTML = '<span>正在安装更新，如系统提示请确认</span>';
+        if (btn) {
+          btn.disabled = true;
+          btn.innerHTML = '<span>正在安装更新，如系统提示请确认</span>';
+        }
+        const cancelButton = document.getElementById('btnUpdateCancel');
+        if (cancelButton) cancelButton.textContent = '关闭进度';
         setTimeout(() => closeUpdateModal(), 2500);
       } else if (Number(percent) < 0) {
         isAppDownloading = true;
@@ -9658,19 +10122,8 @@
       void continueNativeUpdateFallback(String(message || '安装包下载失败，请重试更新').slice(0, 160));
     };
 
-    async function checkAppUpdate(isManual = false) {
-      // 网页版不再运行客户端更新器；Android APK 仍由原生桥完成差分与安装。
-      if (!window.AndroidNativeApp) return false;
-      if (isAppDownloading) {
-        if (isManual) showGameNotice('🚀 正在全自动下载最新安装包中，请稍候...');
-        return;
-      }
-      if (isManual && isManualUpdateCheckInProgress) {
-        showGameNotice('🔍 正在检查更新，请稍候…');
-        return;
-      }
-      if (isCheckingAppUpdate && !isManual) return;
-
+    async function runAppUpdateCheck(initialManual = false, isManualRequested = () => false) {
+      let isManual = Boolean(initialManual);
       if (isManual) {
         isManualUpdateCheckInProgress = true;
         setManualUpdateCheckBusy(true);
@@ -9679,37 +10132,64 @@
       }
 
       let versionData = null;
-
-      // 0. 版本清单走无预检 GET；首次冷启动较慢时自动重试一次，避免旧版常见的静默漏检。
       try {
         versionData = await getUpdateManifest();
-      } catch(error) {
+      } catch (error) {
         console.warn('[UpdateCheck] 无法获取版本清单:', error?.message || error);
       }
 
-      // 检查当前应用版本
-      // 当前加载的 HTML 才是实际运行版本；旧版遗留的本地标记不能把新版本误判为已安装。
+      isManual = isManual || Boolean(isManualRequested());
+      if (isManual && !isManualUpdateCheckInProgress) {
+        isManualUpdateCheckInProgress = true;
+        setManualUpdateCheckBusy(true);
+        showUpdateCheckPendingState();
+      }
+
       const effectiveVersion = CURRENT_VERSION_TAG;
       const androidApkUpdateRequired = isAndroidApkUpdateRequired();
-      const hasNewVersion = versionData
-        ? (compareVersions(versionData.tag, effectiveVersion) > 0 || androidApkUpdateRequired)
-        : androidApkUpdateRequired;
+      const decision = resolveUpdateCheckDecision({
+        isAndroid: Boolean(window.AndroidNativeApp),
+        versionData,
+        currentVersion: effectiveVersion,
+        apkUpdateRequired: androidApkUpdateRequired
+      });
+      const hasNewVersion = decision.shouldUpdate;
+      const queueAutomaticUpdate = () => {
+        const attemptKey = makeAutomaticUpdateAttemptKey(versionData, decision.forceFullApk);
+        const queued = maybeStartAutomaticUpdateIfNeeded({
+          isAndroid: Boolean(window.AndroidNativeApp),
+          versionData,
+          currentVersion: effectiveVersion,
+          apkUpdateRequired: androidApkUpdateRequired,
+          attemptKey,
+          coordinator: appUpdateCoordinator
+        });
+        if (queued.promise) {
+          void queued.promise.catch(error => {
+            resetUpdateDownloadUI(error?.message ? '自动更新失败：' + error.message : '自动更新失败，请手动重试');
+          });
+        }
+        return queued;
+      };
+
       if (isManual) {
         finishManualUpdateCheck();
-        const badgeText = !versionData
+        const badgeText = !decision.usableManifest
           ? '检查失败，点此重试'
           : androidApkUpdateRequired
-          ? '需要安装完整 APK'
-          : hasNewVersion
-          ? '发现新版本'
-          : '已是最新';
-        const badgeTitle = !versionData
-          ? '无法连接更新服务，点击重试'
-          : androidApkUpdateRequired
-          ? '网页版本已更新，但 Android 原生引擎/组件仍旧；需安装完整 APK 获得原生加速与完整功能'
-          : hasNewVersion
-          ? `发现 ${formatDisplayVersionTag(versionData.tag)}`
-          : '当前已是最新版本';
+            ? '需要安装完整 APK'
+            : hasNewVersion
+              ? '发现新版本'
+              : '已是最新';
+        const badgeTitle = decision.reason === 'stale-manifest'
+          ? '更新服务返回了早于当前页面的版本，已阻止安装旧版本；点击重新检查'
+          : !decision.usableManifest
+            ? '无法连接更新服务，点击重试'
+            : androidApkUpdateRequired
+              ? 'Android 原生引擎/组件仍旧；需安装完整 APK'
+              : hasNewVersion
+                ? '发现 ' + formatDisplayVersionTag(versionData.tag)
+                : '当前已是最新版本';
         window.GOMOKU_UPDATE_BADGE_TEXT = badgeText;
         window.GOMOKU_UPDATE_BADGE_TITLE = badgeTitle;
         const versionEl = document.getElementById('appVersionDisplay');
@@ -9719,322 +10199,177 @@
         }
       }
 
-      // 静默后台检查分支：有新版本仅做静默提示
       if (!isManual) {
-        if (hasNewVersion && versionData) {
-          const sessKey = androidApkUpdateRequired
-            ? `notified_native_apk_refresh_${Math.max(MINIMUM_APK_BUILD_FOR_CURRENT_ICON, MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK, MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE, MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION)}`
-            : "notified_update_" + versionData.tag;
-          if (!sessionStorage.getItem(sessKey)) {
-            sessionStorage.setItem(sessKey, "1");
-            showGameNotice(androidApkUpdateRequired
-              ? '📦 游戏页面已更新，但 Android 原生核心引擎仍是旧版；打开“我的 → 检查更新”安装完整 APK。'
-              : `🔔 发现新版本 ${formatDisplayVersionTag(versionData.tag)}，可随时在个人中心点击更新`, false);
+        if (!decision.usableManifest) {
+          if (androidApkUpdateRequired) {
+            const message = decision.reason === 'stale-manifest'
+              ? 'Android 原生底包需要更新，但更新服务返回了旧版本清单；为防止降级，暂不启动安装，请重新检查。'
+              : 'Android 原生底包需要更新，但暂时无法取得有效版本清单；请检查网络后重试。';
+            window.GOMOKU_UPDATE_BADGE_TEXT = '需重新检查 APK 更新';
+            window.GOMOKU_UPDATE_BADGE_TITLE = message;
+            const versionEl = document.getElementById('appVersionDisplay');
+            if (versionEl) {
+              versionEl.textContent = window.GOMOKU_UPDATE_BADGE_TEXT;
+              versionEl.title = message;
+            }
+            showGameNotice(message, true);
           }
-          const badgeText = androidApkUpdateRequired ? '需安装完整 APK' : `有新版本 ${formatDisplayVersionTag(versionData.tag)}`;
-          const badgeTitle = androidApkUpdateRequired
-            ? '网页热更新不会替换 Android 原生引擎或桌面图标，点击检查更新安装完整 APK'
-            : `发现 ${formatDisplayVersionTag(versionData.tag)}，点击检查更新`;
-          window.GOMOKU_UPDATE_BADGE_TEXT = badgeText;
-          window.GOMOKU_UPDATE_BADGE_TITLE = badgeTitle;
+          return { status: decision.reason };
+        }
+
+        if (!hasNewVersion) {
+          window.GOMOKU_UPDATE_BADGE_TEXT = '已是最新';
+          window.GOMOKU_UPDATE_BADGE_TITLE = '当前运行页面已是最新版本';
           const versionEl = document.getElementById('appVersionDisplay');
           if (versionEl) {
-            versionEl.textContent = badgeText;
-            versionEl.title = badgeTitle;
+            versionEl.textContent = window.GOMOKU_UPDATE_BADGE_TEXT;
+            versionEl.title = window.GOMOKU_UPDATE_BADGE_TITLE;
           }
+          return { status: 'current' };
         }
-        return;
+
+        const badgeText = androidApkUpdateRequired
+          ? '需安装完整 APK'
+          : '有新版本 ' + formatDisplayVersionTag(versionData.tag);
+        const badgeTitle = androidApkUpdateRequired
+          ? 'Android 原生组件需要更新；正在自动获取完整 APK'
+          : '发现 ' + formatDisplayVersionTag(versionData.tag) + '；正在自动获取并校验更新';
+        window.GOMOKU_UPDATE_BADGE_TEXT = badgeText;
+        window.GOMOKU_UPDATE_BADGE_TITLE = badgeTitle;
+        const versionEl = document.getElementById('appVersionDisplay');
+        if (versionEl) {
+          versionEl.textContent = badgeText;
+          versionEl.title = badgeTitle;
+        }
+
+        installManualUpdateAction(versionData, decision.forceFullApk);
+        const queued = queueAutomaticUpdate();
+        return { status: queued.decision.reason };
       }
 
-      // 手动检查分支：展示清晰美观的确认弹窗
-      const updateModal = document.getElementById("appUpdateModal");
-      const modalIcon = document.getElementById("updateModalIcon");
-      const modalTitle = document.getElementById("updateModalTitle");
-      const tagEl = document.getElementById("updateTagText");
-      const notesTitle = document.getElementById("updateNotesTitle");
-      const notesEl = document.getElementById("updateNotesContent");
-      const btnFast = document.getElementById("btnFastDownload");
-      const btnCancel = document.getElementById("btnUpdateCancel");
-      const progressWrap = document.getElementById("updateProgressBarWrap");
-      const progressInner = document.getElementById("updateProgressBarInner");
-      const progressPercent = document.getElementById("updateProgressPercentText");
-      const progressStatus = document.getElementById("updateProgressStatusText");
+      const modalIcon = document.getElementById('updateModalIcon');
+      const modalTitle = document.getElementById('updateModalTitle');
+      const tagEl = document.getElementById('updateTagText');
+      const notesTitle = document.getElementById('updateNotesTitle');
+      const notesEl = document.getElementById('updateNotesContent');
+      const btnFast = document.getElementById('btnFastDownload');
+      const btnCancel = document.getElementById('btnUpdateCancel');
+      const progressWrap = document.getElementById('updateProgressBarWrap');
+      if (progressWrap) progressWrap.style.display = 'none';
 
-      if (progressWrap) progressWrap.style.display = "none";
-
-      const setVisualProgress = (pct, text) => {
-        if (progressWrap) progressWrap.style.display = "block";
-        if (progressInner) progressInner.style.width = pct + "%";
-        if (progressPercent) progressPercent.textContent = pct + "%";
-        if (progressStatus) progressStatus.textContent = text;
-      };
-
-      if (!versionData) {
-        // 网络超时/异常兜底展示
-        if (modalIcon) modalIcon.textContent = "📶";
-        if (modalTitle) modalTitle.textContent = "暂时无法检查更新";
+      if (!decision.usableManifest) {
+        const stale = decision.reason === 'stale-manifest';
+        if (modalIcon) modalIcon.textContent = '📶';
+        if (modalTitle) modalTitle.textContent = stale ? '更新清单版本异常' : '暂时无法检查更新';
         if (tagEl) {
-          tagEl.textContent = `${effectiveVersion} (当前运行版本)`;
-          tagEl.style.background = "#f1f5f9";
-          tagEl.style.color = "#475569";
+          tagEl.textContent = effectiveVersion + ' (当前运行版本)';
+          tagEl.style.background = '#f1f5f9';
+          tagEl.style.color = '#475569';
         }
-        if (notesTitle) notesTitle.textContent = "运行状态：";
-        if (notesEl) notesEl.textContent = `GitHub 反向代理、ECS 更新服务和 Cloudflare 应急入口都未能提供有效版本清单，无法确认是否有新版本。\n\n请检查网络后点击下方按钮重试；这不会影响当前版本 (${effectiveVersion}) 的正常对弈。`;
+        if (notesTitle) notesTitle.textContent = '运行状态：';
+        if (notesEl) notesEl.textContent = stale
+          ? '更新服务返回的版本早于当前运行页面。为防止降级，客户端没有启动自动下载或安装。\n\n请重新检查更新；这不会影响当前版本的正常对弈。'
+          : 'GitHub 反向代理、ECS 更新服务和 Cloudflare 应急入口都未能提供有效版本清单，无法确认是否有新版本。\n\n请检查网络后点击下方按钮重试；这不会影响当前版本 (' + effectiveVersion + ') 的正常对弈。';
         if (btnFast) {
-          btnFast.style.display = "flex";
-          btnFast.innerHTML = "<span>🔄 重新尝试获取更新</span>";
-          btnFast.onclick = (e) => {
-            e.preventDefault();
-            checkAppUpdate(true);
+          btnFast.style.display = 'flex';
+          btnFast.disabled = false;
+          btnFast.innerHTML = '<span>🔄 重新尝试获取更新</span>';
+          btnFast.onclick = event => {
+            event.preventDefault();
+            void checkAppUpdate(true);
           };
         }
         if (btnCancel) {
-          btnCancel.textContent = "关闭";
-          btnCancel.style.background = "#f1f5f9";
-          btnCancel.style.color = "#64748b";
-          btnCancel.style.padding = "8px 0";
+          btnCancel.textContent = '关闭';
+          btnCancel.style.background = '#f1f5f9';
+          btnCancel.style.color = '#64748b';
+          btnCancel.style.padding = '8px 0';
         }
-        showGameNotice('暂时无法获取更新，请检查网络后重试', true);
+        showGameNotice(stale ? '更新服务版本落后于当前页面，已阻止安装旧版本；请重新检查' : '暂时无法获取更新，请检查网络后重试', true);
         openUpdateModal();
-        return;
+        return { status: decision.reason };
       }
 
       if (hasNewVersion) {
-        // 发现新版本！
-        if (modalIcon) modalIcon.textContent = androidApkUpdateRequired ? "📦" : "🚀";
-        if (modalTitle) modalTitle.textContent = androidApkUpdateRequired ? "需要安装完整 APK" : "发现新版本！";
+        if (modalIcon) modalIcon.textContent = androidApkUpdateRequired ? '📦' : '🚀';
+        if (modalTitle) modalTitle.textContent = androidApkUpdateRequired ? '需要安装完整 APK' : '发现新版本！';
         if (tagEl) {
           tagEl.textContent = androidApkUpdateRequired
-            ? `${formatDisplayVersionTag(versionData.tag)} · 原生核心引擎待更新`
-            : `${DISPLAY_VERSION_TAG} ➔ ${formatDisplayVersionTag(versionData.tag)}`;
-          tagEl.style.background = androidApkUpdateRequired ? "#fff7ed" : "#e0f2fe";
-          tagEl.style.color = androidApkUpdateRequired ? "#c2410c" : "#0369a1";
+            ? formatDisplayVersionTag(versionData.tag) + ' · 原生核心引擎待更新'
+            : DISPLAY_VERSION_TAG + ' ➔ ' + formatDisplayVersionTag(versionData.tag);
+          tagEl.style.background = androidApkUpdateRequired ? '#fff7ed' : '#e0f2fe';
+          tagEl.style.color = androidApkUpdateRequired ? '#c2410c' : '#0369a1';
         }
-        if (notesTitle) notesTitle.textContent = androidApkUpdateRequired ? "📦 安装说明：" : "🚀 本次更新内容说明：";
-        const incomingNotes = versionData.updateLog || versionData.notes || CURRENT_UPDATE_NOTES.join("\n\n");
+        if (notesTitle) notesTitle.textContent = androidApkUpdateRequired ? '📦 安装说明：' : '🚀 本次更新内容说明：';
+        const incomingNotes = versionData.updateLog || versionData.notes || CURRENT_UPDATE_NOTES.join('\n\n');
         if (notesEl) notesEl.textContent = androidApkUpdateRequired
-          ? `当前游戏页面已更新，但本机 Android 应用底包仍为旧版。网页热更新无法更新 C++ NDK 原生 AI 引擎、启动动画与桌面图标；请安装完整 APK，安装后个人资料和对局存档会由系统完整保留。\n\n${incomingNotes}`
+          ? '当前游戏页面已更新，但本机 Android 应用底包仍为旧版。网页热更新无法更新 C++ NDK 原生 AI 引擎、启动动画与桌面图标；完整 APK 下载后由 Android 系统处理安装权限与确认，安装后个人资料和对局存档会由系统完整保留。\n\n' + incomingNotes
           : incomingNotes;
 
         if (btnFast) {
-          btnFast.style.display = "flex";
-          // 🌟 核心革新：如果处于原生 App 环境，且底包无需强更，首推免安装秒级在线热更新！
-          if (typeof AndroidNativeApp !== "undefined" && AndroidNativeApp.saveHotUpdateFile && !androidApkUpdateRequired) {
-            btnFast.innerHTML = "<span>⚡ 小流量免安装更新 (推荐)</span>";
-            btnFast.onclick = async (e) => {
-              e.preventDefault();
-              if (btnFast.disabled) return;
-              let clickVersionData = null;
-              let incompatibleHotUpdate = false;
-              btnFast.disabled = true;
-              btnFast.style.opacity = "0.8";
-              btnFast.innerHTML = "<span>⏳ 正在刷新安全下载授权...</span>";
-              setVisualProgress(12, "🔐 正在连接更新服务并刷新下载授权...");
-              isAppDownloading = true;
-
-              try {
-                // 更新票据只有短时有效；用户确认更新时重新取一张，避免继续用过期授权。
-                clickVersionData = await fetchUpdateManifest();
-                const requireFullApk = isAndroidApkUpdateRequired();
-                if (compareVersions(clickVersionData.tag, effectiveVersion) <= 0 && !requireFullApk) {
-                  isAppDownloading = false;
-                  btnFast.disabled = false;
-                  btnFast.style.opacity = "1";
-                  showGameNotice('当前已是最新版本，更新列表已刷新', false);
-                  checkAppUpdate(true);
-                  return;
-                }
-                if (!clickVersionData.apkTicket && clickVersionData.sourceType !== 'github') throw new Error('更新服务未签发有效下载授权');
-
-                if (requireFullApk) {
-                  setVisualProgress(32, "📦 检测到 Android 原生核心待更新，正在下载完整 APK...");
-                  if (await startNativeApkUpdateWithFallback(clickVersionData)) {
-                    showGameNotice('📦 完整 APK 已开始下载；安装完成后，C++ 原生引擎和组件会一起更新。', false);
-                    return;
-                  }
-                  throw new Error('未能启动完整 APK 安装，请检查权限后重试');
-                }
-
-                setVisualProgress(24, "🧩 正在查找与本机版本匹配的增量包...");
-                if (await downloadAndApplyHtmlDelta(clickVersionData)) {
-                  setVisualProgress(100, "🎉 增量更新完成，正在重载进入新版...");
-                  showGameNotice("🎉 少量数据已更新完成，即将进入最新版", false);
-                  setTimeout(() => window.location.reload(), 800);
-                  return;
-                }
-
-                const rawHotUrls = clickVersionData.sourceType === 'github'
-                  ? clickVersionData.htmlUrls
-                  : (clickVersionData.htmlUrl ? [clickVersionData.htmlUrl] : []);
-                const hotUrls = rawHotUrls.map(url => url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now());
-
-                const fetchCandidate = (sourceData, url, timeoutMs = 20000) => {
-                  const controller = typeof AbortController === 'function' ? new AbortController() : null;
-                  let timeoutId = null;
-                  const timeoutPromise = new Promise((_, reject) => {
-                    timeoutId = setTimeout(() => {
-                      if (controller) controller.abort();
-                      reject(new Error('更新文件下载超时'));
-                    }, timeoutMs);
-                  });
-                  const downloadPromise = (async () => {
-                    const requestOptions = {
-                      cache: 'no-store',
-                      ...(sourceData.htmlTicket ? { headers: getUpdateHeaders(sourceData.htmlTicket) } : {})
-                    };
-                    if (controller) requestOptions.signal = controller.signal;
-                    const res = await fetch(url, requestOptions);
-                    if (!res.ok) throw new Error("HTTP " + res.status);
-                    const txt = await readLimitedResponseText(res, 20 * 1024 * 1024);
-                    if (!txt || txt.length < 50000 || !txt.includes("五子棋")) {
-                      throw new Error("更新文件内容无效");
-                    }
-                    if (!sourceData.htmlSha256) throw new Error("更新文件缺少完整性摘要");
-                    const actualHash = await sha256Hex(txt);
-                    if (actualHash !== sourceData.htmlSha256) {
-                      throw new Error("更新文件完整性校验失败");
-                    }
-                    return txt;
-                  })();
-                  return Promise.race([downloadPromise, timeoutPromise]).finally(() => {
-                    if (timeoutId) clearTimeout(timeoutId);
-                  });
-                };
-
-                setVisualProgress(30, "📥 正在接收并校验完整备用更新...");
-                if (!clickVersionData.htmlSha256 ||
-                    (clickVersionData.sourceType !== 'github' && (hotUrls.length === 0 || !clickVersionData.htmlTicket))) {
-                  throw new Error('更新清单未提供完整热更新文件、摘要或下载授权');
-                }
-                let newHtml = '';
-                try {
-                  newHtml = await Promise.any(hotUrls.map(url => fetchCandidate(clickVersionData, url)));
-                } catch (githubHtmlError) {
-                  if (clickVersionData.sourceType !== 'github') throw githubHtmlError;
-                  setVisualProgress(42, "🔁 GitHub 完整文件暂不可用，正在切换 ECS 更新服务...");
-                  const serviceManifests = await fetchTicketedUpdateManifests(clickVersionData.tag, clickVersionData.apkSha256);
-                  const serviceCandidates = serviceManifests
-                    .filter(item => item.htmlUrl && item.htmlSha256 === clickVersionData.htmlSha256 && item.htmlTicket)
-                    .map(item => fetchCandidate(item, `${item.htmlUrl}?_t=${Date.now()}`));
-                  if (!serviceCandidates.length) throw new Error('GitHub HTML 代理不可用，ECS 未提供匹配版本的完整更新文件');
-                  newHtml = await Promise.any(serviceCandidates);
-                }
-
-                const startupScriptBlocks = newHtml.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
-                const hasSafeStartupBootstrap = startupScriptBlocks.some(script =>
-                  script.includes('GOMOKU_STARTUP_SPLASH_BOOTSTRAP_V1')
-                  && /function\s+hasNativeBridge/.test(script)
-                  && script.includes('DOMContentLoaded')
-                );
-                if (!hasSafeStartupBootstrap) {
-                  incompatibleHotUpdate = true;
-                  throw new Error('云端更新页缺少安全开屏初始化，已阻止覆盖');
-                }
-
-                setVisualProgress(80, "💾 正在安全写入本地更新...");
-                const ok = AndroidNativeApp.saveHotUpdateFile("index.html", newHtml);
-                if (ok) {
-                  setVisualProgress(100, "🎉 免安装秒更成功！正在重载进入新版...");
-                  showGameNotice("🎉 更新成功！即将无缝重载进入最新版", false);
-                  setTimeout(() => {
-                    window.location.reload();
-                  }, 800);
-                  return;
-                }
-                throw new Error("沙盒写入失败");
-              } catch(err) {
-                console.warn('[HotUpdate Fallback]', err?.message || err);
-                if (!incompatibleHotUpdate && clickVersionData && await startNativeApkUpdateWithFallback(clickVersionData)) {
-                  setVisualProgress(50, "🔄 热更新暂不可用，正在通过安全安装包通道继续...");
-                  return;
-                }
-                const failureText = err?.message ? `更新失败：${err.message}` : '更新失败，请检查网络后重试';
-                resetUpdateDownloadUI(failureText);
-              }
-            };
-          } else {
-            btnFast.innerHTML = androidApkUpdateRequired
-              ? "<span>📦 下载完整 APK (覆盖升级，保留数据)</span>"
-              : "<span>⚡ 极速全自动下载更新 (推荐)</span>";
-            btnFast.onclick = async (e) => {
-              e.preventDefault();
-              if (btnFast.disabled) return;
-              btnFast.disabled = true;
-              btnFast.style.opacity = "0.8";
-              btnFast.innerHTML = "<span>⏳ 正在获取更新信息...</span>";
-              setVisualProgress(5, androidApkUpdateRequired
-                ? "📦 正在获取完整安装包以更新原生核心..."
-                : "🚀 正在启动全自动极速下载...");
-              isAppDownloading = true;
-              let handedOffToNative = false;
-              try {
-                const freshData = await fetchUpdateManifest();
-                const requireFullApk = isAndroidApkUpdateRequired();
-                if (compareVersions(freshData.tag, effectiveVersion) <= 0 && !requireFullApk) {
-                  showGameNotice('当前已是最新版本', false);
-                  btnFast.disabled = false;
-                  btnFast.style.opacity = "1";
-                  btnFast.innerHTML = "<span>✅ 当前已是最新版</span>";
-                  return;
-                }
-                if (!freshData.apkTicket && freshData.sourceType !== 'github') throw new Error('更新服务未签发有效下载授权');
-                if (typeof AndroidNativeApp !== "undefined" && await startNativeApkUpdateWithFallback(freshData)) {
-                  handedOffToNative = true;
-                  btnFast.innerHTML = "<span>⏳ 正在下载安装包...</span>";
-                  showGameNotice(requireFullApk
-                    ? `📦 正在全自动下载最新安装包 (${freshData.tag})，随后开始安装更新，如系统提示请确认`
-                    : `🚀 正在全自动下载最新版 (${freshData.tag})，随后开始安装更新，如系统提示请确认`, true);
-                  return;
-                }
-                if (!freshData.fastUrl && !freshData.apkUrls?.length) throw new Error('更新服务未提供安装包地址');
-                btnFast.innerHTML = "<span>⏳ 正在下载安装包...</span>";
-                await downloadProtectedApk(freshData);
-                btnFast.disabled = false;
-                btnFast.style.opacity = "1";
-                btnFast.innerHTML = "<span>✅ 安装包已下载</span>";
-                showGameNotice('✅ 安装包已下载，请从浏览器下载列表中安装', false);
-              } catch (error) {
-                resetUpdateDownloadUI(error?.message ? `更新失败：${error.message}` : '更新失败，请重试');
-              } finally {
-                if (!handedOffToNative) isAppDownloading = false;
-              }
-            };
-          }
+          btnFast.style.display = 'flex';
+          btnFast.disabled = false;
+          btnFast.style.opacity = '1';
+          btnFast.innerHTML = androidApkUpdateRequired
+            ? '<span>📦 下载完整 APK (覆盖升级，保留数据)</span>'
+            : typeof AndroidNativeApp !== 'undefined' && AndroidNativeApp.saveHotUpdateFile
+              ? '<span>⚡ 小流量免安装更新 (推荐)</span>'
+              : '<span>⚡ 极速全自动下载更新 (推荐)</span>';
+          installManualUpdateAction(versionData, decision.forceFullApk);
         }
         if (btnCancel) {
-          btnCancel.textContent = "稍后再说";
-          btnCancel.style.background = "#f1f5f9";
-          btnCancel.style.color = "#64748b";
-          btnCancel.style.padding = "6px 0";
+          btnCancel.textContent = '稍后再说';
+          btnCancel.style.background = '#f1f5f9';
+          btnCancel.style.color = '#64748b';
+          btnCancel.style.padding = '6px 0';
         }
       } else {
-        // 当前已是最新正式版！清晰直观反馈
-        if (modalIcon) modalIcon.textContent = "✅";
-        if (modalTitle) modalTitle.textContent = "当前已是最新正式版！";
+        if (modalIcon) modalIcon.textContent = '✅';
+        if (modalTitle) modalTitle.textContent = '当前已是最新正式版！';
         if (tagEl) {
-          tagEl.textContent = `${DISPLAY_VERSION_TAG} (最新正式版)`;
-          tagEl.style.background = "#dcfce7";
-          tagEl.style.color = "#15803d";
+          tagEl.textContent = DISPLAY_VERSION_TAG + ' (最新正式版)';
+          tagEl.style.background = '#dcfce7';
+          tagEl.style.color = '#15803d';
         }
-        if (notesTitle) notesTitle.textContent = "📜 当前版本更新说明：";
-        if (notesEl) notesEl.textContent = `恭喜！您的游戏已处于最新正式版本 (${DISPLAY_VERSION_TAG})。\n\n` + CURRENT_UPDATE_NOTES.join("\n\n");
-
-        if (btnFast) btnFast.style.display = "none";
+        if (notesTitle) notesTitle.textContent = '📜 当前版本更新说明：';
+        if (notesEl) notesEl.textContent = '恭喜！您的游戏已处于最新正式版本 (' + DISPLAY_VERSION_TAG + ')。\n\n' + CURRENT_UPDATE_NOTES.join('\n\n');
+        if (btnFast) btnFast.style.display = 'none';
         if (btnCancel) {
-          btnCancel.textContent = "✅ 我知道了 (当前已是最新)";
-          btnCancel.style.background = "#10b981";
-          btnCancel.style.color = "#fff";
-          btnCancel.style.fontWeight = "900";
-          btnCancel.style.padding = "10px 0";
-          btnCancel.style.fontSize = "13px";
+          btnCancel.textContent = '✅ 我知道了 (当前已是最新)';
+          btnCancel.style.background = '#10b981';
+          btnCancel.style.color = '#fff';
+          btnCancel.style.fontWeight = '900';
+          btnCancel.style.padding = '10px 0';
+          btnCancel.style.fontSize = '13px';
         }
-        showGameNotice(`🎉 检查完成！当前已是最新正式版 (${DISPLAY_VERSION_TAG})！`, false);
+        showGameNotice('🎉 检查完成！当前已是最新正式版 (' + DISPLAY_VERSION_TAG + ')！', false);
       }
 
       openUpdateModal();
+      if (isManual && hasNewVersion) queueAutomaticUpdate();
+      return { status: hasNewVersion ? 'update-available' : 'current' };
     }
 
-    // Sky Island 的独立“我的”页通过 window 调用手动检查，显式导出以避免加载器/打包方式改变后变成静默无响应。
+    const updateCheckRunner = createUpdateCheckRunner(runAppUpdateCheck);
+
+    function checkAppUpdate(isManual = false) {
+      if (!window.AndroidNativeApp) return Promise.resolve(false);
+      if (isAppDownloading) {
+        if (isManual) showGameNotice('🚀 正在自动更新中，请稍候…');
+        return Promise.resolve({ status: 'downloading' });
+      }
+      if (isManual && isManualUpdateCheckInProgress) {
+        showGameNotice('🔍 正在检查更新，请稍候…');
+        return updateCheckRunner.check(true);
+      }
+      if (updateCheckRunner.isRunning() && isManual) {
+        isManualUpdateCheckInProgress = true;
+        setManualUpdateCheckBusy(true);
+        showUpdateCheckPendingState();
+        showGameNotice('🔍 正在检查更新，请稍候…');
+      }
+      return updateCheckRunner.check(isManual);
+    }
     window.checkAppUpdate = checkAppUpdate;
 
     // 🌟 自动检查：如果是刚更新后的首次打开，主动弹出新版本更新内容公告
@@ -10043,6 +10378,14 @@
         const lastSeen = localStorage.getItem('gomoku_last_seen_version');
         if (lastSeen !== CURRENT_VERSION_TAG) {
           setTimeout(() => {
+            const updateFlowActive = isAppDownloading
+              || Boolean(activeUpdateActionPromise)
+              || Boolean(updateManifestRequest)
+              || isCheckingAppUpdate
+              || updateCheckRunner.isRunning()
+              || appUpdateCoordinator.hasPendingAutomaticUpdate();
+            if (updateFlowActive) return;
+
             const modalIcon = document.getElementById("updateModalIcon");
             const modalTitle = document.getElementById("updateModalTitle");
             const tagEl = document.getElementById("updateTagText");

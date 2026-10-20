@@ -363,8 +363,29 @@ adb install .\五子棋.apk
 
 ## 本机正式发布入口
 
-在仓库根目录运行 `node release_official.js`。入口先运行 `publish.js` 完成现有本地校验、构建、Git 推送和 GitHub Release；它会为该子进程明确设置 `GOMOKU_DEPLOY_CLOUDFLARE=0`、`GOMOKU_SKIP_VERSION_BUMP=0`、`GOMOKU_ALLOW_RELEASE_OVERWRITE=0`，随后只部署 Cloudflare Pages 项目 `gomoku-home` 的 `master` 分支。
+当前公开版本为 **v1.0.152 / Android Build 153**。在仓库根目录运行 `node release_official.js` 会执行正式发布：先由 `publish.js` 校验、构建、提交并推送 GitHub Release，再部署 Cloudflare Pages 项目 `gomoku-home` 的 `master` 分支，最后进行线上只读验收。入口为 publish 子进程固定设置 `GOMOKU_DEPLOY_CLOUDFLARE=0`、`GOMOKU_SKIP_VERSION_BUMP=0`、`GOMOKU_ALLOW_RELEASE_OVERWRITE=0`，因此 Cloudflare 全量部署不会由 `publish.js` 重复执行。
 
-Pages 成功后，入口并行读取 GitHub Release 附件 digest、官网 `/api/site-version`、`/download/apk` 实际文件及 `/play/js/app.min.js` 字节。全部通过时会立即输出 `LIVE_VERIFIED`、tag、Build 和下载地址；随后生成 `report.md`。每阶段的开始、结束、耗时和退出码，以及发布快照和验收 JSON，保存在 `.codex-diagnostics/official-release/<run-id>/`。匿名 HTTP 请求使用 Mozilla User-Agent 和明确超时；ECS 接口仅在标准 HTTPS 证书校验下完成时纳入验收，否则报告未自动验收边界。若从 `ANDROID_SDK_ROOT`/`ANDROID_HOME` 和 `PATH` 能安全定位 Android SDK 工具，会校验 APK 的签名证书 SHA-256 是否为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，并检查 16 KiB 对齐；工具不可用时报告会明确写明未检查，不会将其表述为通过。
+发布前必须先在 `RELEASE_NOTES.md` 写入本次真实更新说明。门禁会拒绝空说明、模板占位文字和与当前版本说明相同的内容；同时检查本机构建环境、Android 工具、版本源一致性及原生 APK 最低 Build 门槛。`GOMOKU_SKIP_VERSION_BUMP=1` 只适用于明确恢复同一版本的发布，并允许说明与当前版本相同；正式入口会强制改回 `0`。可单独运行 `node release_preflight.js` 检查，但它不是完全离线命令：会调用 `gh auth status` 做 GitHub 登录状态检查；该检查及其余门禁只读，不会构建或发布。
 
-若 Pages 部署或线上验收失败，但 `publish.js` 已成功，可用 `node release_official.js --resume ".codex-diagnostics/official-release/<run-id>"` 继续。恢复目录必须是项目内该诊断目录的直接子目录；入口会核对 `version.json`、APK、单文件 HTML 及整个 `official-site/` 目录指纹，只有与成功 publish 时完全一致才会跳过 publish。之前 Pages 部署失败时会重试部署；之前 Pages 已成功但线上验收失败时，只重试验收，不重复部署。`publish.js` 失败或快照未能保存的 run 不能恢复；先检查该目录、Git 分支及 GitHub Release，人工确认当前版本后再决定下一步，入口不会自动重跑或再次递增版本。`node release_official.js --help` 只显示用法，不触碰发布环境。
+Pages 部署后，入口并行执行 GitHub Release 附件 digest、官网 `/api/site-version`、APK 下载内容、`/play/js/app.min.js` 字节及可用 ECS `/api/version` 的只读验收。每个验收请求超时为 30 秒；仅对可重试的网络错误及 HTTP 408、429、5xx 最多执行 3 次（首次加最多 2 次），退避分别为 250ms、750ms。认证/TLS 证书错误、无效 JSON 和完整性不匹配不重试。成功验收项可在 10 分钟内按发布快照、官网地址和 ECS 地址一致性复用；旧 run 没有匹配缓存时会重新检查，未验收 ECS 不缓存。验收仍失败会显示精确错误、尝试次数及恢复命令；每阶段耗时、重试记录、快照和验收结果保存在 `.codex-diagnostics/official-release/<run-id>/`。全部通过才输出 `LIVE_VERIFIED`，随后生成报告。APK 签名证书 SHA-256 与 16 KiB 对齐检查仅在安全定位到 SDK 工具时执行，工具不可用会明确记为未检查。
+
+若 Pages 部署或线上验收失败，但 `publish.js` 已成功且快照已保存，可用 `node release_official.js --resume ".codex-diagnostics/official-release/<run-id>"` 恢复。恢复目录必须是该诊断目录的直接子目录，且 `version.json`、APK、单文件 HTML、整个 `official-site/` 目录指纹必须与成功 publish 时相同。恢复过程不会重复 build、publish 或 deploy：Pages 失败只补部署，Pages 成功而验收失败只重验收；验收缓存命中时跳过对应成功检查。已 `LIVE_VERIFIED` 的 run 明确拒绝 resume；publish 失败或快照保存失败也不可恢复，需先人工核对目录、Git 分支及 GitHub Release。`node release_official.js --help` 只显示用法，不触碰发布环境。
+
+## 2026-10-21 Android 更新回退顺序本地修复（未发布）
+
+- GitHub HTML 代理全部失败后，旧流程先尝试服务端 HTML，服务端 HTML 也失败后才启动 GitHub 代理 APK。本地修复页面在原生 GitHub APK 桥可用时，改为先启动代理 APK；该下载失败后沿用 ECS/Cloudflare 票据 APK 回退。旧版原生桥缺少 GitHub APK 方法时，仍先尝试票据服务 HTML，之后沿用原有完整 APK 兜底。
+- 修改位于 `js/app.js`，回归扩展到 `tests/update_manifest_race_regression.js`，覆盖原生代理启动、桥接同步抛错、旧桥缺少方法、服务端 HTML 失败上抛，以及 APK 元数据校验失败时保留服务 HTML 回退。
+- 本地回归 `node tests/update_manifest_race_regression.js`、`node --check js/app.js` 和 `git diff --check` 通过。未在手机或模拟器复现用户现象；未更新生产页面、GitHub Release 或 ECS。当前公开版本仍为 v1.0.152 / Android Build 153；本地改动尚未构建或发布。
+
+
+## 2026-10-21 Android 检查到更新后自动更新（本地未发布）
+
+- Android 启动静默检查发现版本清单不早于当前页面，且有新页面版本或本机原生 APK 低于最低 Build 门槛时，直接启动共享更新入口；手动按钮也调用同一入口。完整 APK 的系统安装权限和确认仍由 Android 处理。
+- 自动更新会在未结束的本地 AI/PVP 棋局、联机对局、匹配或房间准备期间暂挂，检测到回到大厅且在线状态空闲后继续。使用 Sky Island body class 观察及 gomoku-online-activity-change 事件；没有常驻轮询，也不把保存的本地 AI 棋局快照视为正在对局。
+- 同一版本自动尝试在当前会话只启动一次；下载失败或用户关闭进度后不会自动风暴，更新按钮仍可手动重试。检查 Promise 和进行中的更新 action 都有并发去重。自动下载/安装进度文案没有在启动时误报“已下载”。
+- 版本清单早于当前页面时禁止自动或手动启动旧 APK。GitHub HTML 代理全部失败时，新桥优先启动 GitHub 反向代理 APK，再按现有回调切换 ECS/Cloudflare 票据 APK；旧桥缺少 GitHub APK 方法时仍先尝试服务 HTML，再沿用服务 APK 兜底。HTML 写入前的版本、摘要和启动脚本校验保持有效。
+- 回归扩展至 tests/update_manifest_race_regression.js，覆盖更新判定、APK 门槛、浏览器不自动下载、检查/action 去重、失败后的手动重试、忙时暂挂与 idle 恢复、保存 AI 快照不阻塞，以及生产 startAppUpdate 遇到过期清单不调用 APK/HTML 写入。
+- 本地验证：node tests/update_manifest_race_regression.js、node --check js/app.js、node --check tests/update_manifest_race_regression.js、git diff --check 通过。未构建 APK、未升级版本、未发布或推送；未在模拟器/真机验证，也未更新生产站点或 ECS。
+
+- 手动检查发现新版本或发现当前 APK 低于门槛时，同样会在显示更新详情后自动启动共享更新流程，无需再点下载按钮；若仍在对局、匹配或准备房间，则按相同规则暂挂至大厅空闲。
+- Android 自动更新候选的四项手机尺寸浏览器场景记录于 `.codex-diagnostics/auto-update-20261021/verification-report.md`；忙时页面场景未覆盖，协调器局部 VM 回归覆盖了忙时到空闲恢复。候选未做真机、APK 下载/安装、APK 重建或发布。

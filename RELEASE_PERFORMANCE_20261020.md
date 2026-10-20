@@ -44,3 +44,13 @@ Pages 部署用了 20.752 秒。日志显示 58 个资源中上传 7 个、已�
 - `.codex-diagnostics/release-v151/pages.log:4-14`、`.codex-diagnostics/release-v151/live.json:2-38`：Pages 部署与 HTTP 验收。
 - v1.0.151 发布提交 `28cef94` 中的 `publish.js:556-626`、`build_apk.js:245-295,341-520`：当次 Release 和 APK 构建顺序。
 - `.codex-diagnostics/release-build-efficiency-20261020/measurements.md:5-26`：重复压缩、指纹复用、官网同步和本地 APK 校验结果；明确记录未运行完整发布或设备安装。
+
+## 2026-10-20 发布后验收恢复优化
+
+`release_official.js` 的只读线上验收现在对可重试网络故障和 HTTP 408、429、5xx 最多尝试 3 次（含首次请求），额外最多 2 次，间隔 250ms 和 750ms；每个请求超时 30 秒。认证/TLS 证书错误、无效 JSON 和完整性不匹配直接失败，不重试。失败记录保留具体原因、失败类型、耗时和下次退避时间，并给出可复制的恢复命令。验收项成功后按发布快照、站点地址及 ECS 地址绑定，10 分钟内可复用；未验收 ECS 结果不进入缓存。
+
+恢复只处理已成功 publish 且已保存快照的未完成 run，并验证 manifest、APK、HTML 和 `official-site/` 指纹不变。它只补做失败的 Pages 部署或线上验收，不重复构建、Git 推送、GitHub Release 或已成功的部署；没有有效缓存的旧 run 会重新进行相关只读检查。已 `LIVE_VERIFIED` 的 run 拒绝恢复，避免将历史验收当作新一轮状态。分项日志记录阶段耗时、重试和精确错误。
+
+独立的 `node release_preflight.js` 会检查发布说明、工具环境、版本源和 Android 原生 Build 门槛，不写版本或产物；不过它会调用 `gh auth status` 验证 GitHub 登录，因此不是完全离线检查。说明门禁拒绝空文案、占位内容或沿用当前版本说明。`GOMOKU_SKIP_VERSION_BUMP=1` 仅在显式设置时允许相同说明和不递增版本；正式入口会强制升版配置。
+
+本轮冻结验证为 `node --test tests/release_official.test.js` 44/44 通过，preflight fixtures 和真实只读检查通过。以上结果验证逻辑与模拟场景，不代表真实发布中已实测耗时下降；当前公开仍为 v1.0.152 / Build 153。本轮没有启动正式发布入口，没有升版、构建、推送或更改当前产物及其 hash。

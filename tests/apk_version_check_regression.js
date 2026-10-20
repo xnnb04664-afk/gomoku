@@ -14,7 +14,10 @@ function runTest() {
   assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 151'), 'Native optimization requires APK Build 151 or newer');
   assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION = 153'), 'Match notifications require APK Build 153 or newer');
   assert.ok(appJsSource.includes('const androidApkUpdateRequired = isAndroidApkUpdateRequired();'), 'checkAppUpdate must check isAndroidApkUpdateRequired');
-  assert.ok(appJsSource.includes('requireFullApk'), 'btnFast click must check requireFullApk');
+  assert.ok(appJsSource.includes('const forceFullApk = isAndroidApkUpdateRequired();'),
+    'the shared update action must honor the installed Android APK build floor');
+  assert.ok(appJsSource.includes('function startAppUpdate(updateData, options = {})'),
+    'automatic and manual update entry points must use the shared action');
 
   const start = appJsSource.indexOf('    const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;');
   assert.notStrictEqual(start, -1, 'MINIMUM_APK_BUILD_FOR_CURRENT_ICON start exists');
