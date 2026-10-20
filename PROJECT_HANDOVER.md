@@ -1,5 +1,11 @@
 # 五子棋项目交接手册：从零启动
 
+2026-10-20 Android 自更新本地候选（尚未发布）：Android 原生自更新改为 PackageInstaller Session，下载后先校验 SHA-256，再校验 APK 签名证书和包名，安装状态由非导出 receiver 回传。当前已安装的旧版不含 Session 逻辑，需先正常覆盖安装这份候选 APK 一次，后续自更新才会尝试请求免确认；能否免确认取决于 Android 版本与系统策略，仍可能要求用户确认。本地候选仍为 `1.0.149 / Build 150`，APK SHA-256 为 `e6f08d062ac6568784f6b14a4440637e1b907e488d1b2efd31b84aa7e30a975f`（3,887,503 bytes）。正式签名证书 SHA-256 为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，v1/v2/v3 验签通过，`zipalign -c -P 16 -v 4` 通过。APK Manifest 已包含 `UPDATE_PACKAGES_WITHOUT_USER_ACTION` 和 `exported=false` 的 `ApkInstallStatusReceiver`。`js/app.min.js`、Android 资源、官网游戏副本和 APK 内副本 SHA-256 均为 `0c29380771ba1c0bc5e58f5f5f9eaa0c0803a043d8bf91b7a6759403a67c6746`。`python tests/android_self_update_jvm_smoke.py` 通过，覆盖 Session 提交/失败回收、重复抑制、待确认及旧回执隔离、签名/包名门禁和权限拒绝重试；这是 JVM Android stub 验收，不代表真实 PackageInstaller 或手机验收。没有安装设备、没有发布 GitHub/ECS/Cloudflare；完整证据见 `.codex-diagnostics/self-update-build-20261020/`。
+
+此前棋盘裁切候选快照（已由上方更新的本地候选 APK 替代，2026-10-20）：对局棋台在 Canvas 绘制时按原图石框轮廓裁切，去除框外云朵、方块白边及青色杂边；首页与启动动画保留原素材，网格与落子几何不变。图片工具候选仍有杂点，未接入项目。网页、单文件、Android 资源与当时本地 APK 已同步，版本号为 1.0.149 / Build 150。该快照 APK SHA-256 为 `49948a353811980a1cd698a5aa6298706b73359d8178a74f08b09d09496ba2d7`。360/390/412/1366 宽度浏览器检查及角落/中心落子通过，APK 正式签名和 16 KiB 对齐校验通过；无 ADB 设备，未做手机验收。证据在 `.codex-diagnostics/board-cutout-20261020/`，原已发布 APK 与棋盘素材已留存于该目录。旧诊断脚本依赖启动网格逐帧重绘，已不适用于缓存绘制；当时只在诊断副本中移除这项无关断言，对局几何/实际点击断言保留。
+
+此前静默安装调研记录（已由上方本轮实现取代）：当时 Android 安装流程使用 ACTION_VIEW，自动下载/校验后仍需确认。Android API 31+ 的 PackageInstaller 可在满足自更新、target SDK 等条件且声明 UPDATE_PACKAGES_WITHOUT_USER_ACTION 时请求免确认安装，仍必须处理 STATUS_PENDING_USER_ACTION。当时仅答复能力与现状，尚未改安装流程。
+
 2026-10-20 已发布 [v1.0.149 / Build 150](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.149)：原生库去除未用代码和符号元数据，保留四种 ABI、O3 与匹配符号副本；启动页去除冗余备用海报/底色绘制。APK 约 3.70 MiB，较此前减少 7.6%。旧 Build 148 及更早即使更新了网页，也会被引导安装完整 APK。GitHub 附件及 ECS 版本接口摘要一致，无需重启 ECS。签名及针对性检查通过，无设备实测；发行提交与最终摘要见 `APK_OPTIMIZATION_20261020.md`。
 
 更新日期：2026-10-19

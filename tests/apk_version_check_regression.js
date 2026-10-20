@@ -11,7 +11,7 @@ function runTest() {
   // Verify functions and constants exist in source
   assert.ok(appJsSource.includes('function isAndroidApkUpdateRequired'), 'isAndroidApkUpdateRequired must be defined');
   assert.ok(appJsSource.includes('function getInstalledAndroidBuildCode'), 'getInstalledAndroidBuildCode must be defined');
-  assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 149'), 'Native optimization requires APK Build 149 or newer');
+  assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 151'), 'Native optimization requires APK Build 151 or newer');
   assert.ok(appJsSource.includes('const androidApkUpdateRequired = isAndroidApkUpdateRequired();'), 'checkAppUpdate must check isAndroidApkUpdateRequired');
   assert.ok(appJsSource.includes('requireFullApk'), 'btnFast click must check requireFullApk');
 
@@ -67,15 +67,23 @@ function runTest() {
     assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 148 must require the optimized full APK even after HTML updates');
   }
 
-  // Test 5: Android APK with future build 149
+  // Test 5: Build 150 must install the full APK to receive Build 151 native update code.
   {
-    const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 149 } });
+    const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 150 } });
     vm.runInNewContext(targetCode, env);
-    assert.strictEqual(env.window.getInstalledAndroidBuildCode(), 149, 'Must read installed build code 149');
-    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), false, 'Build 149 must NOT require APK update');
+    assert.strictEqual(env.window.getInstalledAndroidBuildCode(), 150, 'Must read installed build code 150');
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 150 must require the full APK for Build 151 native update code');
   }
 
-  // Test 6: Verify checkAppUpdate UI & download routing
+  // Test 6: Build 151 contains the new native update code.
+  {
+    const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 151 } });
+    vm.runInNewContext(targetCode, env);
+    assert.strictEqual(env.window.getInstalledAndroidBuildCode(), 151, 'Must read installed build code 151');
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), false, 'Build 151 must NOT require another full APK');
+  }
+
+  // Test 7: Verify checkAppUpdate UI & download routing
   assert.ok(appJsSource.includes('需要安装完整 APK'), 'Modal must guide user to full APK');
   assert.ok(appJsSource.includes('startNativeApkUpdateWithFallback(clickVersionData)'), 'Hot update button must route to native APK download');
   assert.ok(appJsSource.includes('window.GOMOKU_UPDATE_BADGE_TEXT = badgeText;'), 'app.js must persist badge text');

@@ -244,6 +244,8 @@ public class MainActivity extends Activity {
     private volatile ConnectivityManager mConnectivityManager;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
     private boolean mNetworkMonitorRegistered;
+    private BroadcastReceiver mPendingInstallActionReceiver;
+    private boolean mPendingInstallActionReceiverRegistered;
     private volatile boolean mUsingDefaultNetworkCallback;
     private volatile boolean mActivityResumed;
     private volatile boolean mDestroyed;
@@ -1065,14 +1067,16 @@ public class MainActivity extends Activity {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                 packageInfo = getPackageManager().getPackageArchiveInfo(apkFile.getAbsolutePath(),
                         android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
-                if (packageInfo != null && packageInfo.signingInfo != null) {
+                if (packageInfo != null && getPackageName().equals(packageInfo.packageName)
+                        && packageInfo.signingInfo != null) {
                     android.content.pm.Signature[] signers = packageInfo.signingInfo.getApkContentsSigners();
                     return signers != null && signers.length > 0 && checkSignatureHash(signers[0]);
                 }
             } else {
                 packageInfo = getPackageManager().getPackageArchiveInfo(apkFile.getAbsolutePath(),
                         android.content.pm.PackageManager.GET_SIGNATURES);
-                return packageInfo != null && packageInfo.signatures != null && packageInfo.signatures.length > 0
+                return packageInfo != null && getPackageName().equals(packageInfo.packageName)
+                        && packageInfo.signatures != null && packageInfo.signatures.length > 0
                         && checkSignatureHash(packageInfo.signatures[0]);
             }
         } catch (Exception error) {
@@ -1509,6 +1513,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         mActivityResumed = true;
+        registerPendingInstallActionReceiver();
         scheduleNativeAiWarmUp();
         mWebMusicLifecycleGeneration++;
         if (mSplashView != null) {
@@ -1523,13 +1528,27 @@ public class MainActivity extends Activity {
             }
         }
         // 如果是从系统授权页面返回且已获得安装权限，立即呼起安装已下载好的安装包
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sLastDownloadedFile != null && sLastDownloadedFile.exists()) {
-            if (getPackageManager().canRequestPackageInstalls()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sWaitingForInstallPermission) {
+            if (sLastDownloadedFile != null && sLastDownloadedFile.exists()
+                    && getPackageManager().canRequestPackageInstalls()) {
                 File toInstall = sLastDownloadedFile;
                 sLastDownloadedFile = null;
+                sWaitingForInstallPermission = false;
+                setInstallInProgress(false);
                 installDownloadedApk(toInstall);
+            } else {
+                // Returning without granting the permission must release the update lock so a
+                // later user-initiated retry remains available.
+                sLastDownloadedFile = null;
+                sWaitingForInstallPermission = false;
+                setInstallInProgress(false);
+                Toast.makeText(this, "未获得安装权限；如需更新，请授权后重新检查", Toast.LENGTH_LONG).show();
             }
+        } else if (sWaitingForInstallerReturn) {
+            sWaitingForInstallerReturn = false;
+            setInstallInProgress(false);
         }
+        ApkInstallStatusReceiver.launchPendingUserAction(this);
     }
 
     @Override
@@ -1558,6 +1577,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         mActivityResumed = false;
+        unregisterPendingInstallActionReceiver();
         final int generation = ++mWebMusicLifecycleGeneration;
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mPendingNetworkReason = null;
@@ -1605,7 +1625,40 @@ public class MainActivity extends Activity {
 
     private static final Object sDownloadLock = new Object();
     private static volatile boolean sIsDownloading = false;
+    private static volatile boolean sIsInstalling = false;
+    private static volatile boolean sWaitingForInstallPermission = false;
+    private static volatile boolean sWaitingForInstallerReturn = false;
     private static File sLastDownloadedFile = null;
+
+    private void registerPendingInstallActionReceiver() {
+        if (mPendingInstallActionReceiverRegistered) return;
+        if (mPendingInstallActionReceiver == null) {
+            mPendingInstallActionReceiver = new BroadcastReceiver() {
+                @Override public void onReceive(Context context, Intent intent) {
+                    ApkInstallStatusReceiver.launchPendingUserAction(MainActivity.this);
+                }
+            };
+        }
+        IntentFilter filter = new IntentFilter(ApkSessionInstaller.ACTION_RESUME_USER_ACTION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(mPendingInstallActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(mPendingInstallActionReceiver, filter);
+        }
+        mPendingInstallActionReceiverRegistered = true;
+    }
+
+    private void unregisterPendingInstallActionReceiver() {
+        if (!mPendingInstallActionReceiverRegistered || mPendingInstallActionReceiver == null) return;
+        try { unregisterReceiver(mPendingInstallActionReceiver); } catch (IllegalArgumentException ignored) {}
+        mPendingInstallActionReceiverRegistered = false;
+    }
+
+    private static void setInstallInProgress(boolean installing) {
+        synchronized (sDownloadLock) {
+            sIsInstalling = installing;
+        }
+    }
 
     private void notifyWebProgress(final int percent, final String status) {
         runOnUiThread(() -> {
@@ -1664,7 +1717,7 @@ public class MainActivity extends Activity {
         // 原生桥可能在 WebView 后台线程被快速连续调用；检查和置位必须原子完成，
         // 并且要先于删除旧文件，避免两个下载同时写入同一路径。
         synchronized (sDownloadLock) {
-            if (sIsDownloading) {
+            if (sIsDownloading || sIsInstalling) {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "🚀 正在全自动下载更新中，请稍候...", Toast.LENGTH_SHORT).show());
                 return;
             }
@@ -1693,7 +1746,7 @@ public class MainActivity extends Activity {
         }
 
         runOnUiThread(() -> {
-            Toast.makeText(MainActivity.this, "🚀 正在全自动下载最新版，完成后将自动弹出安装...", Toast.LENGTH_LONG).show();
+            Toast.makeText(MainActivity.this, "正在下载更新，下载完成后将开始安装", Toast.LENGTH_LONG).show();
             notifyWebProgress(5, "downloading");
         });
 
@@ -1837,7 +1890,7 @@ public class MainActivity extends Activity {
             return;
         }
         synchronized (sDownloadLock) {
-            if (sIsDownloading) {
+            if (sIsDownloading || sIsInstalling) {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "正在下载更新，请稍候…", Toast.LENGTH_SHORT).show());
                 return;
             }
@@ -1929,9 +1982,17 @@ public class MainActivity extends Activity {
     }
 
     private void installDownloadedApk(File apkFile) {
+        synchronized (sDownloadLock) {
+            if (sIsInstalling) {
+                Toast.makeText(this, "更新安装正在处理中，请稍候", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            sIsInstalling = true;
+        }
         try {
             if (!isVerifiedApk(apkFile, sExpectedApkSha256)) {
                 if (apkFile != null && apkFile.exists()) apkFile.delete();
+                setInstallInProgress(false);
                 Toast.makeText(MainActivity.this, "更新包完整性校验失败，已拒绝安装", Toast.LENGTH_LONG).show();
                 notifyWebDownloadFailure("更新包校验失败，已停止安装");
                 return;
@@ -1940,12 +2001,47 @@ public class MainActivity extends Activity {
                 if (!getPackageManager().canRequestPackageInstalls()) {
                     Toast.makeText(MainActivity.this, "请在系统设置中允许五子棋安装应用，以完成全自动更新", Toast.LENGTH_LONG).show();
                     sLastDownloadedFile = apkFile;
+                    sWaitingForInstallPermission = true;
                     Intent permIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
                     startActivity(permIntent);
                     return;
                 }
             }
 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                Toast.makeText(this, "正在安装更新，如系统提示请确认", Toast.LENGTH_LONG).show();
+                new Thread(() -> {
+                    try {
+                        ApkSessionInstaller.Result result = ApkSessionInstaller.install(getApplicationContext(), apkFile);
+                        runOnUiThread(() -> {
+                            setInstallInProgress(false);
+                            if (result == ApkSessionInstaller.Result.ALREADY_PENDING) {
+                                Toast.makeText(MainActivity.this, "更新正在由系统处理", Toast.LENGTH_LONG).show();
+                            } else {
+                                Toast.makeText(MainActivity.this, "正在安装更新，如系统提示请确认", Toast.LENGTH_LONG).show();
+                            }
+                            notifyWebProgress(100, "正在安装更新，如系统提示请确认");
+                        });
+                    } catch (Exception error) {
+                        android.util.Log.w("MainActivity", "PackageInstaller session failed; using system installer", error);
+                        runOnUiThread(() -> launchLegacyApkInstaller(apkFile));
+                    }
+                }, "gomoku-apk-session").start();
+                return;
+            }
+
+            launchLegacyApkInstaller(apkFile);
+        } catch (Exception e) {
+            sLastDownloadedFile = null;
+            sWaitingForInstallPermission = false;
+            setInstallInProgress(false);
+            Toast.makeText(MainActivity.this, "自动呼起安装失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            notifyWebDownloadFailure("无法启动系统安装，请重试更新");
+        }
+    }
+
+    private void launchLegacyApkInstaller(File apkFile) {
+        try {
             // 跨进程安全授权：使用 ContentProvider 生成 content:// 链接，彻底杜绝系统级【安装包不存在】报错
             Uri contentUri = Uri.parse("content://" + getPackageName() + ".fileprovider/download/gomoku_latest.apk");
             Intent installIntent = new Intent(Intent.ACTION_VIEW);
@@ -1953,8 +2049,11 @@ public class MainActivity extends Activity {
             installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(installIntent);
-            Toast.makeText(MainActivity.this, "🎉 正在唤起系统安装更新，请点击确认！", Toast.LENGTH_LONG).show();
+            sWaitingForInstallerReturn = true;
+            Toast.makeText(MainActivity.this, "正在安装更新，如系统提示请确认", Toast.LENGTH_LONG).show();
+            notifyWebProgress(100, "正在安装更新，如系统提示请确认");
         } catch (Exception e) {
+            setInstallInProgress(false);
             Toast.makeText(MainActivity.this, "自动呼起安装失败，已停止安装: " + e.getMessage(), Toast.LENGTH_SHORT).show();
             notifyWebDownloadFailure("无法启动系统安装，请重试更新");
         }

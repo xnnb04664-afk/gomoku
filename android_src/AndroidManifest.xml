@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gomoku.master"
-    android:versionCode="150"
-    android:versionName="1.0.149">
+    android:versionCode="151"
+    android:versionName="1.0.150">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="35" />
 
@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <application
         android:label="@string/app_name"
@@ -32,6 +33,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver
+            android:name="com.gomoku.master.ApkInstallStatusReceiver"
+            android:exported="false" />
             <provider
             android:name="com.gomoku.master.GenericFileProvider"
             android:authorities="com.gomoku.master.fileprovider"

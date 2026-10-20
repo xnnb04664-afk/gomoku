@@ -306,10 +306,9 @@ if (fs.existsSync(appSourcePath)) {
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
-  `📦 【安装包精简】清理原生库未使用代码和符号元数据，包体约减少 7.6%，继续支持四种 CPU 架构；图片画质与 AI 搜索参数保持不变。`,
-  `🎬 【启动绘制优化】素材准备完成后停止绘制重复备用海报和整屏底色，保留异步解码、纹理预热、13 黑 13 白落子与平滑切换。`,
-  `📱 【完整安装更新】本次包含 Android 原生库与启动页优化，请安装完整 APK；网页热更新无法替换原生组件。`,
-  `🔔 【旧底包更新修复】Build 148 及更早的底包，即使网页已更新，也会引导安装完整 APK，以获得原生库瘦身和启动绘制优化；更新角标与下载防重复点击处理保留。`
+  `🎨 【棋盘边缘清理】对局棋台按原素材石框轮廓裁切，清理框外云朵、方块白边和青色杂边；首页与启动动画素材、网格及落子几何保持原样。`,
+  `📲 【Android 自更新优化】Build 151 加入 PackageInstaller Session；Android 12（API 31）及以上在系统条件允许时请求免确认安装，并处理系统要求用户确认的情况。`,
+  `📦 【首次更新说明】Build 150 及更早版本需先正常覆盖安装完整 APK，获取这次新增的原生安装代码；之后的自更新才可尝试免确认，系统策略仍可能要求确认。`
 ];
 const releaseUpdateLog = [
   `五子棋云屿晴光 v${newName} 官方正式版更新说明：`,
@@ -416,6 +415,8 @@ try {
     'android_src/res/values/styles.xml',
     'android_src/src/com/gomoku/master/GomokuSplashView.java',
     'android_src/src/com/gomoku/master/MainActivity.java',
+    'android_src/src/com/gomoku/master/ApkInstallStatusReceiver.java',
+    'android_src/src/com/gomoku/master/ApkSessionInstaller.java',
     'android_src/src/com/gomoku/master/NativeGomokuAI.java',
     'backend/worker.js',
     'backend/ecs-host/README.md',
@@ -477,6 +478,7 @@ try {
     'tests/api_failover_policy_regression.js',
     'tests/apk_asset_manifest_smoke.py',
     'tests/apk_version_check_regression.js',
+    'tests/android_self_update_jvm_smoke.py',
     'tests/auth_refresh_unit.js',
     'tests/card_touch_safety_browser_smoke.py',
     'tests/game_checkpoint_skills_browser_smoke.py',

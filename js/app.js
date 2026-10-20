@@ -41,13 +41,13 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.149';
+    const CURRENT_VERSION_TAG = 'v1.0.150';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
     // Build 140 重绘图标，142 提供版本查询，148 集成 C++ 引擎；
-    // Build 149 才包含原生库瘦身与启动绘制优化，旧底包需完整安装才能获得。
+    // Build 151 才包含 PackageInstaller 自更新代码，旧底包需完整安装才能获得。
     const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;
     const MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK = 142;
-    const MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 149;
+    const MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 151;
 
     function getInstalledAndroidBuildCode() {
       if (typeof AndroidNativeApp === 'undefined' || typeof AndroidNativeApp.getAppVersionCode !== 'function') return 0;
@@ -6331,6 +6331,19 @@
     };
     skyBoardArtwork.src = 'img/game/sky-board-cloudstone.webp';
 
+    // 原图外围含有白色方块、青色杂边和云朵；按石框内沿附近的连续轮廓裁切。
+    // 使用原始 1254 px 坐标，不改变底图尺寸或草坪/落子几何。
+    const skyBoardFrameContour = new Path2D('M 78 109 L 114 80 L 204 81 L 228 104 L 494 104 L 625 65 L 714 104 L 1037 104 L 1062 81 L 1153 81 L 1178 111 L 1178 186 L 1148 213 L 1148 513 L 1214 575 L 1148 641 L 1148 947 L 1177 976 L 1177 1045 L 1150 1071 L 1066 1071 L 1037 1057 L 760 1057 L 704 1093 L 704 1134 L 626 1201 L 552 1133 L 552 1094 L 493 1057 L 234 1057 L 205 1071 L 116 1071 L 80 1044 L 80 977 L 100 948 L 100 642 L 38 575 L 100 512 L 100 214 L 78 187 Z');
+
+    function drawCleanSkyBoardArtwork(artwork) {
+      ctx.save();
+      ctx.translate(artwork.x, artwork.y);
+      ctx.scale(artwork.width / 1254, artwork.height / 1254);
+      ctx.clip(skyBoardFrameContour);
+      ctx.drawImage(skyBoardArtwork, 0, 0, 1254, 1254);
+      ctx.restore();
+    }
+
     function drawHandmadeGrassBoard(options = {}) {
       const scale = Math.max(0.72, Math.min(1.5, Math.min(cWidth, cHeight) / 380));
       const fieldX = paddingX, fieldY = paddingY;
@@ -6339,7 +6352,11 @@
       const artwork = geometry.artwork;
 
       if (skyBoardArtwork.complete && skyBoardArtwork.naturalWidth > 0) {
-        ctx.drawImage(skyBoardArtwork, artwork.x, artwork.y, artwork.width, artwork.height);
+        if (options.preview === true) {
+          ctx.drawImage(skyBoardArtwork, artwork.x, artwork.y, artwork.width, artwork.height);
+        } else {
+          drawCleanSkyBoardArtwork(artwork);
+        }
 
         const firstX = fieldX + 0.5 * gridX;
         const firstY = fieldY + 0.5 * gridY;
@@ -9587,8 +9604,8 @@
         if (progressWrap) progressWrap.classList.remove('update-download-indeterminate');
         if (progressInner) progressInner.style.width = '100%';
         if (progressPercent) progressPercent.textContent = '100%';
-        if (progressStatus) progressStatus.textContent = '✅ 下载完成，正在调起安装...';
-        if (btn) btn.innerHTML = '<span>✅ 下载完成，请在手机上确认安装</span>';
+        if (progressStatus) progressStatus.textContent = '正在安装更新，如系统提示请确认';
+        if (btn) btn.innerHTML = '<span>正在安装更新，如系统提示请确认</span>';
         setTimeout(() => closeUpdateModal(), 2500);
       } else if (Number(percent) < 0) {
         isAppDownloading = true;
@@ -9937,8 +9954,8 @@
                   handedOffToNative = true;
                   btnFast.innerHTML = "<span>⏳ 正在下载安装包...</span>";
                   showGameNotice(requireFullApk
-                    ? `📦 正在全自动下载最新安装包 (${freshData.tag})，下载完成后将弹出安装确认覆盖更新`
-                    : `🚀 正在全自动下载最新版 (${freshData.tag})，下载完成后将弹出安装确认`, true);
+                    ? `📦 正在全自动下载最新安装包 (${freshData.tag})，随后开始安装更新，如系统提示请确认`
+                    : `🚀 正在全自动下载最新版 (${freshData.tag})，随后开始安装更新，如系统提示请确认`, true);
                   return;
                 }
                 if (!freshData.fastUrl && !freshData.apkUrls?.length) throw new Error('更新服务未提供安装包地址');
