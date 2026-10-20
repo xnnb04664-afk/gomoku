@@ -1,9 +1,9 @@
 {
-  "versionName": "1.0.151",
-  "versionCode": 152,
-  "releaseTag": "v1.0.151",
+  "versionName": "1.0.152",
+  "versionCode": 153,
+  "releaseTag": "v1.0.152",
   "publishTime": "2026-10-20",
-  "updateLog": "五子棋云屿晴光 v1.0.151 官方正式版更新说明：\n\n🚀 【更新查询代理优先】先并行查询两个 GitHub 反向代理，有效代理响应返回后不再请求直连；代理全部失败后才尝试 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。\n\n📦 【下载与安装】APK 文件继续优先使用反向代理，下载后校验摘要、官方签名与包名；保留棋盘边缘清理和 Android 12 及以上有条件免确认自更新。",
-  "notes": "五子棋云屿晴光 v1.0.151 官方正式版更新说明：\n\n🚀 【更新查询代理优先】先并行查询两个 GitHub 反向代理，有效代理响应返回后不再请求直连；代理全部失败后才尝试 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。\n\n📦 【下载与安装】APK 文件继续优先使用反向代理，下载后校验摘要、官方签名与包名；保留棋盘边缘清理和 Android 12 及以上有条件免确认自更新。",
+  "updateLog": "五子棋云屿晴光 v1.0.152 官方正式版更新说明：\n\n🚀 【更新查询代理优先】先并行查询两个 GitHub 反向代理，有效代理响应返回后不再请求直连；代理全部失败后才尝试 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。\n\n📦 【下载与安装】APK 文件继续优先使用反向代理，下载后校验摘要、官方签名与包名；保留棋盘边缘清理和 Android 12 及以上有条件免确认自更新。",
+  "notes": "五子棋云屿晴光 v1.0.152 官方正式版更新说明：\n\n🚀 【更新查询代理优先】先并行查询两个 GitHub 反向代理，有效代理响应返回后不再请求直连；代理全部失败后才尝试 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。\n\n📦 【下载与安装】APK 文件继续优先使用反向代理，下载后校验摘要、官方签名与包名；保留棋盘边缘清理和 Android 12 及以上有条件免确认自更新。",
   "updateTransport": "github-proxies-then-ecs-then-cloudflare-emergency"
 }

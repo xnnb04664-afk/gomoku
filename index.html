@@ -2425,11 +2425,11 @@
   </div>
 
     <!-- ⚡ 匹配挂起胶囊浮窗 (退出匹配弹窗后不打断匹配，持续全服挂起搜寻) -->
-  <div id="matchingFloatingBar" style="display:none; position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:9999; background:linear-gradient(135deg, #1e293b, #0f172a); color:#fff; border:1.5px solid #f59e0b; border-radius:30px; padding:6px 14px; box-shadow:0 6px 20px rgba(0,0,0,0.35); font-size:12.5px; font-weight:800; display:none; align-items:center; gap:8px; backdrop-filter:blur(8px);">
-    <span style="font-size:14px; animation:spinRadar 2s linear infinite; display:inline-block;">⚡</span>
-    <span id="matchingFloatingTimer">正在全服匹配：00:00</span>
-    <button onclick="openOnlineModal('match')" style="background:#f59e0b; color:#fff; border:none; border-radius:12px; padding:3px 8px; font-size:11px; font-weight:900; cursor:pointer;">展开</button>
-    <button onclick="cancelQuickMatch()" style="background:rgba(255,255,255,0.15); color:#cbd5e1; border:none; border-radius:12px; padding:3px 7px; font-size:11px; font-weight:900; cursor:pointer;">✕ 取消</button>
+  <div id="matchingFloatingBar" class="sky-online-activity" aria-label="房间与匹配状态" data-phase="idle">
+    <span class="sky-online-activity-dot" aria-hidden="true"></span>
+    <span class="sky-online-activity-copy"><span id="matchingFloatingTimer" role="status">未在房间</span><small id="onlineActivityNotificationHint" hidden></small></span>
+    <button id="onlineActivityPrimary" type="button" onclick="window.returnToOnlineActivity ? window.returnToOnlineActivity() : openOnlineModal('match')">去匹配</button>
+    <button id="onlineActivitySecondary" type="button" onclick="window.leaveOnlineActivity?.()" hidden>取消</button>
   </div>
 
     <!-- 🌐 联机对战常驻房间状态条 (含一键退出房间按键) -->
@@ -2510,7 +2510,7 @@
   </div>
 
   <!-- 👥 游戏功能八宫格：好友中心包含亲密关系，活动包含每日签到，设置固定在最后。 -->
-  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.151" data-collapsed="false" aria-label="社交、签到与活动入口">
+  <section class="game-social-dock" id="gameSocialDock" data-build-version="v1.0.152" data-collapsed="false" aria-label="社交、签到与活动入口">
     <div class="game-social-dock-head">
       <span class="game-social-dock-title">游戏功能</span>
       <button type="button" class="game-social-dock-public-announcement" id="btnGameAnnouncementsPublic" onclick="openPublicGameAnnouncements()" aria-controls="announcementCenterPanel" aria-label="打开公告中心">📣 公告<span id="gameAnnouncementUnreadBadge" class="game-social-unread-badge" aria-hidden="true"></span></button>
@@ -3275,7 +3275,7 @@
       <input type="text" id="feedbackContact" maxlength="50" placeholder="微信号 / QQ / 手机号 / 邮箱" style="width:100%; padding:8px 10px; border-radius:10px; border:2px solid var(--border-dark, #5a3818); font-size:12.5px; font-family:inherit; outline:none; box-sizing:border-box; background:#fff; color:#1e293b;" />
 
       <div style="font-size:10.5px; color:#94a3b8; font-weight:700; margin-top:8px; display:flex; align-items:center; gap:4px;">
-        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.5.1</span></span>
+        <span>📱 自动附带客户端版本: <span id="feedbackAppVer">v1.5.2</span></span>
       </div>
 
       <div style="display:flex; gap:8px; margin-top:12px; padding-top:8px; border-top:1.5px solid rgba(0,0,0,0.08);">

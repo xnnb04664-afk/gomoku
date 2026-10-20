@@ -239,8 +239,18 @@ public class MainActivity extends Activity {
     private static final String SOCIAL_NOTIFICATION_CHANNEL_ID = "social_events";
     private static final String SOCIAL_NOTIFICATION_OPEN_ACTION = "com.gomoku.master.OPEN_FRIENDS";
     private static final String SOCIAL_NOTIFICATION_OPEN_EXTRA = "open_friends";
+    private static final int MATCH_NOTIFICATION_PERMISSION_REQUEST_CODE = 1004;
+    private static final int MATCH_NOTIFICATION_ID = 4102;
+    private static final String MATCH_NOTIFICATION_CHANNEL_ID = "matchmaking_status";
+    private static final String MATCH_NOTIFICATION_OPEN_ACTION = "com.gomoku.master.OPEN_MATCH_STATUS";
+    private static final String MATCH_NOTIFICATION_OPEN_EXTRA = "open_match_status";
+    private static final String MATCH_NOTIFICATION_PREFS = "matchmaking_notification";
+    private static final String MATCH_NOTIFICATION_ACTIVE = "active";
+    private static final String MATCH_NOTIFICATION_STARTED_AT = "started_at";
+    private final MatchmakingNotificationState mMatchmakingNotificationState = new MatchmakingNotificationState();
     private String mPendingChatExportContent;
     private boolean mOpenFriendsAfterNotification;
+    private boolean mOpenMatchStatusAfterNotification;
     private volatile ConnectivityManager mConnectivityManager;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
     private boolean mNetworkMonitorRegistered;
@@ -257,6 +267,13 @@ public class MainActivity extends Activity {
         if (mDestroyed || mWebView == null) return;
         mWebView.evaluateJavascript(
                 "if (typeof window.openFriendsModal === 'function') window.openFriendsModal();",
+                null
+        );
+    };
+    private final Runnable mOpenMatchStatusAfterNotificationTask = () -> {
+        if (mDestroyed || mWebView == null) return;
+        mWebView.evaluateJavascript(
+                "window.__gomokuPendingOpenMatchStatus=true;window.dispatchEvent(new Event('gomoku-open-match-status'));",
                 null
         );
     };
@@ -470,6 +487,7 @@ public class MainActivity extends Activity {
             requestNativeSplashDismiss();
         }
         openFriendsAfterNotificationIfReady();
+        openMatchStatusAfterNotificationIfReady();
     }
 
     private void ensureSocialNotificationChannel() {
@@ -484,6 +502,135 @@ public class MainActivity extends Activity {
         channel.setDescription("五子棋好友申请、私聊和邀战提醒");
         channel.setShowBadge(true);
         manager.createNotificationChannel(channel);
+    }
+
+    private void ensureMatchmakingNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null || manager.getNotificationChannel(MATCH_NOTIFICATION_CHANNEL_ID) != null) return;
+        NotificationChannel channel = new NotificationChannel(
+                MATCH_NOTIFICATION_CHANNEL_ID,
+                "在线匹配状态",
+                NotificationManager.IMPORTANCE_LOW
+        );
+        channel.setDescription("显示当前在线匹配状态；应用进入后台后仅提示匹配已挂起");
+        channel.setShowBadge(false);
+        channel.enableVibration(false);
+        channel.setSound(null, null);
+        manager.createNotificationChannel(channel);
+    }
+
+    private String getMatchmakingNotificationPermissionStateOnUiThread() {
+        ensureMatchmakingNotificationChannel();
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        boolean runtimeGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        boolean notificationsEnabled = manager != null
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || manager.areNotificationsEnabled());
+        boolean channelEnabled = true;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = manager == null ? null : manager.getNotificationChannel(MATCH_NOTIFICATION_CHANNEL_ID);
+            channelEnabled = manager != null && channel != null
+                    && channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+        }
+        return MatchmakingNotificationState.permissionState(
+                Build.VERSION.SDK_INT, runtimeGranted, notificationsEnabled, channelEnabled);
+    }
+
+    private void updateMatchmakingNotificationOnUiThread(boolean active, long startedAt, boolean userInitiated) {
+        ensureMatchmakingNotificationChannel();
+        long now = System.currentTimeMillis();
+        mMatchmakingNotificationState.update(active, startedAt, now);
+        persistMatchmakingNotificationState();
+
+        if (MatchmakingNotificationState.shouldRequestPermission(mMatchmakingNotificationState.isActive(), userInitiated)
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            try {
+                requestPermissions(
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                        MATCH_NOTIFICATION_PERMISSION_REQUEST_CODE
+                );
+            } catch (RuntimeException ignored) {
+                // Permission UI failures must never block matching.
+            }
+        }
+        reconcileMatchmakingNotification(now);
+    }
+
+    private void persistMatchmakingNotificationState() {
+        getSharedPreferences(MATCH_NOTIFICATION_PREFS, MODE_PRIVATE).edit()
+                .putBoolean(MATCH_NOTIFICATION_ACTIVE, mMatchmakingNotificationState.isActive())
+                .putLong(MATCH_NOTIFICATION_STARTED_AT, mMatchmakingNotificationState.getStartedAt())
+                .apply();
+    }
+
+    private void restoreMatchmakingNotificationState() {
+        SharedPreferences preferences = getSharedPreferences(MATCH_NOTIFICATION_PREFS, MODE_PRIVATE);
+        mMatchmakingNotificationState.restore(
+                preferences.getBoolean(MATCH_NOTIFICATION_ACTIVE, false),
+                preferences.getLong(MATCH_NOTIFICATION_STARTED_AT, 0L)
+        );
+    }
+
+    private void reconcileMatchmakingNotification(long now) {
+        MatchmakingNotificationState.Update update = mMatchmakingNotificationState.reconcile(now);
+        if (!mMatchmakingNotificationState.isActive()) persistMatchmakingNotificationState();
+        if (update.action == MatchmakingNotificationState.Action.NONE) return;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) {
+            mMatchmakingNotificationState.invalidatePostedState();
+            return;
+        }
+        if (update.action == MatchmakingNotificationState.Action.CANCEL) {
+            manager.cancel(MATCH_NOTIFICATION_ID);
+            return;
+        }
+        ensureMatchmakingNotificationChannel();
+        if (!"granted".equals(getMatchmakingNotificationPermissionStateOnUiThread())) {
+            mMatchmakingNotificationState.invalidatePostedState();
+            return;
+        }
+
+        Intent intent = new Intent(this, MainActivity.class)
+                .setAction(MATCH_NOTIFICATION_OPEN_ACTION)
+                .putExtra(MATCH_NOTIFICATION_OPEN_EXTRA, true)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        int pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) pendingIntentFlags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, MATCH_NOTIFICATION_ID, intent, pendingIntentFlags);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, MATCH_NOTIFICATION_CHANNEL_ID)
+                : new Notification.Builder(this);
+        builder.setSmallIcon(R.drawable.ic_stat_gomoku)
+                .setContentTitle("五子棋 · 在线匹配")
+                .setContentText(update.text)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(pendingIntent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) builder.setTimeoutAfter(update.timeoutAfterMs);
+        try {
+            manager.notify(MATCH_NOTIFICATION_ID, builder.build());
+        } catch (SecurityException ignored) {
+            // Notification permission or device policy can change between checking and posting.
+            mMatchmakingNotificationState.invalidatePostedState();
+        }
+    }
+
+    private void consumeMatchmakingNotificationIntent(Intent intent) {
+        if (intent == null || !MatchmakingNotificationState.shouldOpenMatchStatus(
+                intent.getBooleanExtra(MATCH_NOTIFICATION_OPEN_EXTRA, false))) return;
+        mOpenMatchStatusAfterNotification = true;
+        intent.removeExtra(MATCH_NOTIFICATION_OPEN_EXTRA);
+    }
+
+    private void openMatchStatusAfterNotificationIfReady() {
+        if (!mOpenMatchStatusAfterNotification || mWebView == null || !mHasVisibleWebContent) return;
+        mOpenMatchStatusAfterNotification = false;
+        mMainHandler.removeCallbacks(mOpenMatchStatusAfterNotificationTask);
+        mMainHandler.postDelayed(mOpenMatchStatusAfterNotificationTask, 180L);
     }
 
     private void requestSocialNotificationPermissionOnUiThread() {
@@ -685,6 +832,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         consumeSocialNotificationIntent(getIntent());
+        consumeMatchmakingNotificationIntent(getIntent());
+        restoreMatchmakingNotificationState();
 
         // 1. 无标题栏 + Window 硬件加速
         requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -811,7 +960,9 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         consumeSocialNotificationIntent(intent);
+        consumeMatchmakingNotificationIntent(intent);
         openFriendsAfterNotificationIfReady();
+        openMatchStatusAfterNotificationIfReady();
     }
 
     private void applyImmersiveSticky() {
@@ -1246,6 +1397,10 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void saveUserLogin(String uid, String username, String token, String nickname, String avatar) {
                 try {
+                    String previousUid = getSharedPreferences("app_user_login", MODE_PRIVATE).getString("uid", "");
+                    if (!previousUid.isEmpty() && uid != null && !previousUid.equals(uid)) {
+                        runOnUiThread(() -> updateMatchmakingNotificationOnUiThread(false, 0L, false));
+                    }
                     getSharedPreferences("app_user_login", MODE_PRIVATE).edit()
                         .putString("uid", uid != null ? uid : "")
                         .putString("username", username != null ? username : "")
@@ -1294,6 +1449,7 @@ public class MainActivity extends Activity {
                 try {
                     getSharedPreferences("app_user_login", MODE_PRIVATE).edit().clear().apply();
                 } catch (Exception ignored) {}
+                runOnUiThread(() -> updateMatchmakingNotificationOnUiThread(false, 0L, false));
             }
 
             // 社交通知只由用户主动开启；通知内容不接收聊天正文、UID 或登录令牌。
@@ -1305,6 +1461,16 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void showSocialNotification() {
                 runOnUiThread(MainActivity.this::showSocialNotificationOnUiThread);
+            }
+
+            @android.webkit.JavascriptInterface
+            public void updateMatchmakingNotification(boolean active, long startedAt, boolean userInitiated) {
+                runOnUiThread(() -> updateMatchmakingNotificationOnUiThread(active, startedAt, userInitiated));
+            }
+
+            @android.webkit.JavascriptInterface
+            public String getMatchmakingNotificationPermissionState() {
+                return getMatchmakingNotificationPermissionStateOnUiThread();
             }
         }, "AndroidNativeApp");
 
@@ -1513,6 +1679,10 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         mActivityResumed = true;
+        mMatchmakingNotificationState.setForeground(true);
+        ensureMatchmakingNotificationChannel();
+        reconcileMatchmakingNotification(System.currentTimeMillis());
+        openMatchStatusAfterNotificationIfReady();
         registerPendingInstallActionReceiver();
         scheduleNativeAiWarmUp();
         mWebMusicLifecycleGeneration++;
@@ -1575,8 +1745,25 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == MATCH_NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            mMatchmakingNotificationState.invalidatePostedState();
+            reconcileMatchmakingNotification(System.currentTimeMillis());
+            if (mWebView != null) {
+                mWebView.evaluateJavascript(
+                        "window.dispatchEvent(new Event('gomoku-match-notification-permission-change'));",
+                        null
+                );
+            }
+        }
+    }
+
+    @Override
     protected void onPause() {
         mActivityResumed = false;
+        mMatchmakingNotificationState.setForeground(false);
+        reconcileMatchmakingNotification(System.currentTimeMillis());
         unregisterPendingInstallActionReceiver();
         final int generation = ++mWebMusicLifecycleGeneration;
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
@@ -2124,6 +2311,7 @@ public class MainActivity extends Activity {
         mMainHandler.removeCallbacks(mSplashContentDismiss);
         mMainHandler.removeCallbacks(mDispatchNetworkChange);
         mMainHandler.removeCallbacks(mOpenFriendsAfterNotificationTask);
+        mMainHandler.removeCallbacks(mOpenMatchStatusAfterNotificationTask);
         if (mSplashView != null) {
             mSplashView.animate().cancel();
             mSplashView.stopAnimation();

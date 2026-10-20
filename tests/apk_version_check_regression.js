@@ -12,6 +12,7 @@ function runTest() {
   assert.ok(appJsSource.includes('function isAndroidApkUpdateRequired'), 'isAndroidApkUpdateRequired must be defined');
   assert.ok(appJsSource.includes('function getInstalledAndroidBuildCode'), 'getInstalledAndroidBuildCode must be defined');
   assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 151'), 'Native optimization requires APK Build 151 or newer');
+  assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION = 153'), 'Match notifications require APK Build 153 or newer');
   assert.ok(appJsSource.includes('const androidApkUpdateRequired = isAndroidApkUpdateRequired();'), 'checkAppUpdate must check isAndroidApkUpdateRequired');
   assert.ok(appJsSource.includes('requireFullApk'), 'btnFast click must check requireFullApk');
 
@@ -75,12 +76,26 @@ function runTest() {
     assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 150 must require the full APK for Build 151 native update code');
   }
 
-  // Test 6: Build 151 contains the new native update code.
+  // Test 6: Build 151 contains the native update code but needs Build 153 for match notifications.
   {
     const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 151 } });
     vm.runInNewContext(targetCode, env);
     assert.strictEqual(env.window.getInstalledAndroidBuildCode(), 151, 'Must read installed build code 151');
-    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), false, 'Build 151 must NOT require another full APK');
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 151 must require the full APK for match notifications');
+  }
+
+  // Build 152 remains below the matchmaking notification bridge requirement.
+  {
+    const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 152 } });
+    vm.runInNewContext(targetCode, env);
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 152 must require the full APK for match notifications');
+  }
+
+  // Build 153 contains the matchmaking notification bridge.
+  {
+    const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 153 } });
+    vm.runInNewContext(targetCode, env);
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), false, 'Build 153 must satisfy the match notification requirement');
   }
 
   // Test 7: Verify checkAppUpdate UI & download routing

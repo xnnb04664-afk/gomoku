@@ -4,6 +4,7 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 const { loadSecretIntoEnv } = require('./local_secret_store');
 const { injectAiWorkerSource } = require('./build_ai_worker');
+const { ensureAppBuild, readReuseFingerprintArg } = require('./app_build_state');
 
 function run(cmd, args, options = {}) {
   console.log(`> [EXEC] ${path.basename(cmd)} ${args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
@@ -291,7 +292,7 @@ function compileNativeAi() {
   return outputs;
 }
 
-run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:app'], { cwd: ROOT_DIR });
+ensureAppBuild({ reuseFingerprint: readReuseFingerprintArg() });
 const SRC_DIR = path.join(ROOT_DIR, 'android_src');
 const OUTPUT_APK = path.join(ROOT_DIR, '五子棋.apk');
 const SYNC_ONLY = process.argv.includes('--sync-only');

@@ -1,13 +1,13 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { createInlineAiWorkerTag, injectAiWorkerSource } = require('./build_ai_worker');
+const { ensureAppBuild, readReuseFingerprintArg } = require('./app_build_state');
 
 const ROOT_DIR = __dirname;
 const SOURCE_HTML = path.join(ROOT_DIR, 'index.html');
 const OUTPUT_FILE = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
 
-execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
+ensureAppBuild({ reuseFingerprint: readReuseFingerprintArg() });
 
 console.log('>>> [1/3] 读取当前最新 index.html 母本代码...');
 let html = fs.readFileSync(SOURCE_HTML, 'utf8');

@@ -2,6 +2,8 @@
 
 2026-10-20 当前正式发布：[v1.0.151 / Android Build 152](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.151)，发行提交 `28cef94ff0974f2685300b87aa1e01ea81ed667c`。版本查询先并行请求两个 GitHub 反向代理；全部失败后才请求 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。代理胜出时不发起直连。APK 文件继续代理优先，既有摘要、签名、包名校验和有条件免确认安装保留。APK 3,887,503 bytes，SHA-256 `4c5e19216a95f094a9769dc17cd58f690acca92484e8304bb465d1ca3865f26b`；HTML SHA-256 `09b52df110325553914407a2388953b86970b7e8073e587eefaea4c6014780f8`。GitHub 附件摘要、官网实际 APK 下载、官网游戏 JS 与 ECS 版本接口均核验一致；官网返回 v1.0.151 / Build 152。代理优先回归及 APK 版本门槛测试通过，正式签名及 16 KiB 对齐通过；未做真机安装验证。
 
+**2026-10-20 本地匹配状态与 Android 通知候选（未发布）：**本地仍使用 `1.0.151 / Build 152` 标识；APK SHA-256 `214f778e381652f0c5c065ee7e02e1b0882baa21d4d0d1203d9dccc96849ca03`。浏览器以 Playwright 在 360×800、390×844 实际页面检查游戏/好友/棋谱/我的四页：匹配中关闭弹窗、切换页面后状态条仍显示；查看可返回匹配大厅，取消可结束匹配；状态条与底部导航不重叠，未见页面脚本异常。匹配 API 响应由本地浏览器路由模拟，原生通知仅观测到注入桥接探针收到的窗口调用；未连接 ECS 实际房间接口、未验证 Android 系统通知栏，也无 ADB 设备，未实机安装验收。截图及 `browser-results.json` 位于 `.codex-diagnostics/online-activity-20261020/`。本地官网、单文件 HTML、Android 资源均已按同一源码构建同步；没有发布、推送或升版本。下次正式发布必须将 `js/app.js` 的最低原生 APK Build 门槛从 151 提高到新 Build 153，保证现有 APK 用户先安装包含通知能力的完整原生包；本候选不改该门槛。
+
 本次计时（UTC）：正式发布脚本 08:42:17.865–08:43:34.225，共 76.36 秒，其中 APK 构建及构建后官网同步约 22.89 秒、Git 提交推送约 9.92 秒、发行附件准备与上传约 34.28 秒；官网部署 08:43:34.226–08:43:54.978，共 20.75 秒；公开下载和版本验收约 7.56 秒。前置准备/测试与文档收尾未单独计时，不能把这些数字当作整轮总耗时。无发布失败或重复升版本。详细计时及线上证据在本机 `.codex-diagnostics/release-v151/`。线上验收通过后已先通知用户，再进行文档收尾。
 
 历史本地候选（2026-10-20，现由上方 v1.0.151 正式版替代）：当时版本为 v1.0.150 / Android Build 151，候选 APK SHA-256 `0ae63d49ba5bc63da19f6c42a55d2eedf2f3da06361bc25142e9c91c8d609a52`，已包含版本查询代理优先修复，但此摘要未作为正式版本发布。
@@ -358,3 +360,11 @@ adb install .\五子棋.apk
   - 检查更新弹窗与角标明确提示“需要安装完整 APK”（📦），并详细说明数据与存档会完整保留。
   - “小流量免安装更新”自动切换为直接下载并调用系统安装器覆盖安装完整 APK，避免在底层缺失 C++ 原生库的情况下重复应用网页热更新。
 - 新增单元回归测试 `tests/apk_version_check_regression.js`，已注册到 `publish.js`。
+
+## 本机正式发布入口
+
+在仓库根目录运行 `node release_official.js`。入口先运行 `publish.js` 完成现有本地校验、构建、Git 推送和 GitHub Release；它会为该子进程明确设置 `GOMOKU_DEPLOY_CLOUDFLARE=0`、`GOMOKU_SKIP_VERSION_BUMP=0`、`GOMOKU_ALLOW_RELEASE_OVERWRITE=0`，随后只部署 Cloudflare Pages 项目 `gomoku-home` 的 `master` 分支。
+
+Pages 成功后，入口并行读取 GitHub Release 附件 digest、官网 `/api/site-version`、`/download/apk` 实际文件及 `/play/js/app.min.js` 字节。全部通过时会立即输出 `LIVE_VERIFIED`、tag、Build 和下载地址；随后生成 `report.md`。每阶段的开始、结束、耗时和退出码，以及发布快照和验收 JSON，保存在 `.codex-diagnostics/official-release/<run-id>/`。匿名 HTTP 请求使用 Mozilla User-Agent 和明确超时；ECS 接口仅在标准 HTTPS 证书校验下完成时纳入验收，否则报告未自动验收边界。若从 `ANDROID_SDK_ROOT`/`ANDROID_HOME` 和 `PATH` 能安全定位 Android SDK 工具，会校验 APK 的签名证书 SHA-256 是否为 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`，并检查 16 KiB 对齐；工具不可用时报告会明确写明未检查，不会将其表述为通过。
+
+若 Pages 部署或线上验收失败，但 `publish.js` 已成功，可用 `node release_official.js --resume ".codex-diagnostics/official-release/<run-id>"` 继续。恢复目录必须是项目内该诊断目录的直接子目录；入口会核对 `version.json`、APK、单文件 HTML 及整个 `official-site/` 目录指纹，只有与成功 publish 时完全一致才会跳过 publish。之前 Pages 部署失败时会重试部署；之前 Pages 已成功但线上验收失败时，只重试验收，不重复部署。`publish.js` 失败或快照未能保存的 run 不能恢复；先检查该目录、Git 分支及 GitHub Release，人工确认当前版本后再决定下一步，入口不会自动重跑或再次递增版本。`node release_official.js --help` 只显示用法，不触碰发布环境。

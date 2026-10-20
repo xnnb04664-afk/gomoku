@@ -51,6 +51,7 @@
       else button.removeAttribute('aria-current');
     });
     if (lobby) lobby.dataset.activePage = next;
+    window.publishOnlineActivityState?.();
     refreshCurrentGameEntry();
     const pages = document.getElementById('skyLobbyPages');
     if (pages) pages.scrollTop = 0;
@@ -280,6 +281,10 @@
     lobby.setAttribute('aria-label', '五子棋云屿晴光大厅');
     lobby.innerHTML = lobbyMarkup();
     document.body.appendChild(lobby);
+    // One shared status element remains outside the four independently switched pages.
+    const activity = document.getElementById('matchingFloatingBar');
+    if (activity) lobby.querySelector('.sky-lobby-top')?.appendChild(activity);
+    window.publishOnlineActivityState?.();
 
     lobby.addEventListener('click', event => {
       const action = event.target.closest('[data-sky-action]')?.dataset.skyAction;
@@ -449,6 +454,7 @@
     document.body.classList.add('sky-lobby-open');
     if (lobby) lobby.hidden = false;
     refreshCurrentGameEntry();
+    window.publishOnlineActivityState?.();
   }
 
   function startStandardMode(mode) {
@@ -633,10 +639,12 @@
   function resumePendingMatchOnLaunch() {
     let hasPendingMatch = false;
     try { hasPendingMatch = Boolean(localStorage.getItem('gomoku_pending_match_v1')); } catch (_) {}
-    if (!hasPendingMatch || typeof window.ensureGomokuFeature !== 'function') return;
+    const hasSavedOnlineRoom = window.getCurrentGameSummary?.()?.gameMode === 'online';
+    if ((!hasPendingMatch && !hasSavedOnlineRoom) || typeof window.ensureGomokuFeature !== 'function') return;
 
     window.setTimeout(() => {
       window.ensureGomokuFeature('online').then(() => {
+        window.publishOnlineActivityState?.();
         if (typeof window.resumePendingQuickMatch === 'function') {
           return window.resumePendingQuickMatch();
         }

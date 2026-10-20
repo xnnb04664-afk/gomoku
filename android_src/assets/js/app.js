@@ -41,13 +41,14 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.151';
+    const CURRENT_VERSION_TAG = 'v1.0.152';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
     // Build 140 重绘图标，142 提供版本查询，148 集成 C++ 引擎；
-    // Build 151 才包含 PackageInstaller 自更新代码，旧底包需完整安装才能获得。
+    // Build 151 才包含 PackageInstaller 自更新代码；Build 153 加入匹配通知桥接。
     const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;
     const MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK = 142;
     const MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 151;
+    const MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION = 153;
 
     function getInstalledAndroidBuildCode() {
       if (typeof AndroidNativeApp === 'undefined' || typeof AndroidNativeApp.getAppVersionCode !== 'function') return 0;
@@ -65,7 +66,8 @@
       return installedCode < Math.max(
         MINIMUM_APK_BUILD_FOR_CURRENT_ICON,
         MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK,
-        MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE
+        MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE,
+        MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION
       );
     }
     window.getInstalledAndroidBuildCode = getInstalledAndroidBuildCode;
@@ -609,6 +611,7 @@
         p2Label.textContent = fullP2Text;
         p2Label.title = p2DisplayName + (getLocalPlayerColor() === WHITE ? ' (●黑子)' : ' (○白子)');
       }
+      window.publishOnlineActivityState?.();
     }
 
     function setOnlineColor(color) {
@@ -2609,6 +2612,20 @@
     function ensureOnlineFeature() {
       return window.ensureGomokuFeature('online');
     }
+    let openingNativeMatchStatus = null;
+    function openNativeMatchStatus() {
+      window.__gomokuPendingOpenMatchStatus = true;
+      if (openingNativeMatchStatus) return openingNativeMatchStatus;
+      openingNativeMatchStatus = ensureOnlineFeature().then(async () => {
+        await window.resumePendingQuickMatch?.();
+        window.returnToOnlineActivity?.();
+        window.__gomokuPendingOpenMatchStatus = false;
+      }).catch(error => showGameNotice(error.message || '匹配详情暂时无法打开，请重试', true))
+        .finally(() => { openingNativeMatchStatus = null; });
+      return openingNativeMatchStatus;
+    }
+    window.addEventListener('gomoku-open-match-status', openNativeMatchStatus);
+    if (window.__gomokuPendingOpenMatchStatus) void openNativeMatchStatus();
     function openOnlineModal(tab = 'match') {
       const proxy = openOnlineModal;
       return ensureOnlineFeature().then(() => {
@@ -7721,6 +7738,8 @@
       }
       closeOnlineModal();
       if (hadActiveRoom) showGameNotice("🚪 您已退出联机房间，已切回人机对弈模式~", false);
+      if (typeof isHostConnecting !== 'undefined') isHostConnecting = false;
+      window.publishOnlineActivityState?.();
     }
 
     // 👤 退出当前账号功能
@@ -9704,7 +9723,7 @@
       if (!isManual) {
         if (hasNewVersion && versionData) {
           const sessKey = androidApkUpdateRequired
-            ? `notified_native_apk_refresh_${Math.max(MINIMUM_APK_BUILD_FOR_CURRENT_ICON, MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK, MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE)}`
+            ? `notified_native_apk_refresh_${Math.max(MINIMUM_APK_BUILD_FOR_CURRENT_ICON, MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK, MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE, MINIMUM_APK_BUILD_FOR_MATCH_NOTIFICATION)}`
             : "notified_update_" + versionData.tag;
           if (!sessionStorage.getItem(sessKey)) {
             sessionStorage.setItem(sessKey, "1");

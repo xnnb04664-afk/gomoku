@@ -4,6 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { execSync, execFileSync } = require('child_process');
 const { loadSecretIntoEnv } = require('./local_secret_store');
+const { ensureAppBuild } = require('./app_build_state');
 
 const ROOT_DIR = __dirname;
 const MANIFEST_PATH = path.join(ROOT_DIR, 'android_src', 'AndroidManifest.xml');
@@ -21,6 +22,81 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log('已有 Release 不会自动覆盖；确需补传时追加 --allow-release-overwrite。');
   process.exit(0);
 }
+
+const timingStartedAt = new Date();
+const timingStartedHr = process.hrtime.bigint();
+const timingRunId = `${timingStartedAt.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
+const timingPath = path.join(ROOT_DIR, '.codex-diagnostics', 'publish-runs', timingRunId, 'timings.json');
+const timingRecords = [];
+const activeTimers = new Set();
+let timingWriteWarned = false;
+
+function persistTimings(finalExitCode) {
+  try {
+    if (finalExitCode !== undefined) {
+      for (const timer of activeTimers) finishTiming(timer, finalExitCode, false);
+      activeTimers.clear();
+    }
+    const timings = [...timingRecords];
+    if (finalExitCode !== undefined) {
+      const endedAt = new Date();
+      timings.push({
+        label: 'publish.total',
+        startedAt: timingStartedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        durationMs: Number(process.hrtime.bigint() - timingStartedHr) / 1e6,
+        exitCode: finalExitCode
+      });
+    }
+    fs.mkdirSync(path.dirname(timingPath), { recursive: true });
+    fs.writeFileSync(timingPath, JSON.stringify({ startedAt: timingStartedAt.toISOString(), timings }, null, 2), 'utf8');
+  } catch (error) {
+    if (!timingWriteWarned) {
+      timingWriteWarned = true;
+      console.warn(`⚠️ 计时诊断文件写入失败：${error.message}`);
+    }
+  }
+}
+
+function startTiming(label) {
+  const timer = {
+    record: { label, startedAt: new Date().toISOString(), endedAt: null, durationMs: null, exitCode: null },
+    startedHr: process.hrtime.bigint()
+  };
+  timingRecords.push(timer.record);
+  activeTimers.add(timer);
+  persistTimings();
+  return timer;
+}
+
+function finishTiming(timer, exitCode = 0, shouldPersist = true) {
+  const endedAt = new Date();
+  const durationMs = Number(process.hrtime.bigint() - timer.startedHr) / 1e6;
+  timer.record.endedAt = endedAt.toISOString();
+  timer.record.durationMs = durationMs;
+  timer.record.exitCode = exitCode;
+  activeTimers.delete(timer);
+  if (shouldPersist) {
+    console.log(`⏱ ${timer.record.label}: ${(durationMs / 1000).toFixed(2)}s exit=${exitCode}`);
+    persistTimings();
+  }
+}
+
+function timed(label, action) {
+  const timer = startTiming(label);
+  let exitCode = 0;
+  try {
+    return action();
+  } catch (error) {
+    exitCode = Number.isInteger(error.status) ? error.status : (Number.isInteger(error.exitCode) ? error.exitCode : 1);
+    throw error;
+  } finally {
+    finishTiming(timer, exitCode);
+  }
+}
+
+process.once('exit', exitCode => persistTimings(exitCode));
+
 const SHOULD_DEPLOY_CLOUDFLARE = process.argv.includes('--deploy-cloudflare')
   || String(process.env.GOMOKU_DEPLOY_CLOUDFLARE || '').trim() === '1';
 const currentBranch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
@@ -37,8 +113,6 @@ if (currentBranch !== TARGET_BRANCH && !allowNonMasterRelease) {
 // A failed artifact build may leave the already-prepared version in the tree.
 // This flag lets a resumed publish finish that exact version without bumping twice.
 const SKIP_VERSION_BUMP = String(process.env.GOMOKU_SKIP_VERSION_BUMP || '').trim() === '1';
-
-execSync('npm run build:app', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 const vm = require('vm');
 
@@ -143,7 +217,7 @@ function runPreflightChecks() {
   console.log('✅ 静态语法与核心完整性校验 100% 通过，允许继续发包！');
 }
 
-runPreflightChecks();
+timed('preflight.static_checks', runPreflightChecks);
 
 // 发布前阻断签名密钥、凭据文件误入仓库；密码/令牌只允许通过环境变量、本机 DPAPI 或云端 Secret 注入。
 function runSecretFileGuard() {
@@ -198,7 +272,7 @@ function runSecretFileGuard() {
   console.log('✅ 发布安全门禁通过：未发现可提交的签名密钥或凭据文件。');
 }
 
-runSecretFileGuard();
+timed('preflight.secret_file_guard', runSecretFileGuard);
 
 if (SHOULD_DEPLOY_CLOUDFLARE) {
   console.log('>>> [安全前置] 正在将生产 D1 完整备份到仓库外目录...');
@@ -227,7 +301,7 @@ function runAllThemeSyntaxChecks() {
 }
 
 try {
-  runAllThemeSyntaxChecks();
+  timed('preflight.theme_and_script_syntax', runAllThemeSyntaxChecks);
 } catch (error) {
   console.error(`\n❌ [发布致命拦截] 官方页面/发布链路语法校验失败：${error.message}`);
   process.exit(1);
@@ -235,6 +309,7 @@ try {
 
 // 1. 自动解析并递增 Android 版本号
 console.log('>>> [1/8] 读取并递增应用版本号...');
+const versionSourcesTimer = startTiming('version.prepare_client_sources');
 let manifestContent = fs.readFileSync(MANIFEST_PATH, 'utf8');
 const codeMatch = manifestContent.match(/android:versionCode="(\d+)"/);
 const nameMatch = manifestContent.match(/android:versionName="([\d\.]+)"/);
@@ -301,6 +376,7 @@ if (fs.existsSync(appSourcePath)) {
   appSource = appSource.replace(/const CURRENT_VERSION_TAG = 'v[\d\.]+';/, `const CURRENT_VERSION_TAG = 'v${newName}';`);
   fs.writeFileSync(appSourcePath, appSource, 'utf8');
 }
+finishTiming(versionSourcesTimer);
 
 // 同步更新 version.json（兼容旧客户端；新客户端依次尝试 GitHub 代理、ECS 与 Cloudflare 应急备用）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
@@ -322,54 +398,64 @@ const vJson = {
   notes: releaseUpdateLog,
   updateTransport: 'github-proxies-then-ecs-then-cloudflare-emergency'
 };
-fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8');
+timed('version.write_json', () => fs.writeFileSync(versionJsonPath, JSON.stringify(vJson, null, 2), 'utf8'));
 console.log('📌 已同步更新 version.json (GitHub 多节点优先，ECS 与 Cloudflare 票据备用)');
-
-// 官网游戏页与版本回退文本必须和本次客户端发布保持一致；这里只生成仓库产物，
-// 是否部署 Cloudflare 仍由显式 --deploy-cloudflare 选项控制。
-execSync('node build_official_site.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 同步更新 backend/worker.js 中的版本号与更新日志
 const workerJsPath = path.join(ROOT_DIR, 'backend', 'worker.js');
 if (fs.existsSync(workerJsPath)) {
-  let wCode = fs.readFileSync(workerJsPath, 'utf8');
-  wCode = wCode.replace(/tag:\s*["']v[\d\.]+["']/, `tag: "v${newName}"`);
-  wCode = wCode.replace(/updateLog:\s*["'`][\s\S]*?["'`]\s*,/, `updateLog: ${JSON.stringify(vJson.updateLog)},`);
-  fs.writeFileSync(workerJsPath, wCode, 'utf8');
-  console.log(`📌 已同步更新 backend/worker.js 版本与精准更新日志为 v${newName}`);
+  timed('version.sync_backend_worker', () => {
+    let wCode = fs.readFileSync(workerJsPath, 'utf8');
+    wCode = wCode.replace(/tag:\s*["']v[\d\.]+["']/, `tag: "v${newName}"`);
+    wCode = wCode.replace(/updateLog:\s*["'`][\s\S]*?["'`]\s*,/, `updateLog: ${JSON.stringify(vJson.updateLog)},`);
+    fs.writeFileSync(workerJsPath, wCode, 'utf8');
+    console.log(`📌 已同步更新 backend/worker.js 版本与精准更新日志为 v${newName}`);
 
-  // Pages Worker 是 backend/worker.js 的派生副本。即使本次不部署生产环境，
-  // 也保持仓库内派生文件与源文件一致，避免下次显式部署时带入旧代码。
-  const pagesBuildDir = path.join(ROOT_DIR, 'pages_build');
-  fs.mkdirSync(pagesBuildDir, { recursive: true });
-  fs.writeFileSync(path.join(pagesBuildDir, '_worker.js'), wCode, 'utf8');
+    // Pages Worker 是 backend/worker.js 的派生副本。即使本次不部署生产环境，
+    // 也保持仓库内派生文件与源文件一致，避免下次显式部署时带入旧代码。
+    const pagesBuildDir = path.join(ROOT_DIR, 'pages_build');
+    fs.mkdirSync(pagesBuildDir, { recursive: true });
+    fs.writeFileSync(path.join(pagesBuildDir, '_worker.js'), wCode, 'utf8');
+  });
 }
+
+// Build the version-stamped JS once, then reuse only if every source, tool/config,
+// runtime and minified output still matches this exact build fingerprint.
+const appBuildFingerprint = timed('build.app_min_js', () => ensureAppBuild());
+
+// 官网版本文件和游戏副本都依赖 version.json；同步只在最终 min.js 已生成后进行。
+timed('build.official_site_sync', () => execFileSync(process.execPath, ['build_official_site.js'], {
+  cwd: ROOT_DIR,
+  stdio: 'inherit'
+}));
 
 // 3. 打包单文件离线网页版
 console.log('>>> [3/8] 正在构建最新单文件离线旗舰版...');
-execSync('node bundle_single_file.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+timed('build.single_file_html', () => execFileSync(process.execPath, [
+  'bundle_single_file.js', `--reuse-app-build=${appBuildFingerprint}`
+], { cwd: ROOT_DIR, stdio: 'inherit' }));
 
 // 4. 构建原生 Android APK (持久密钥签名)
 console.log('>>> [4/8] 正在调用 Android 原生 SDK 编译并持久化签名 APK...');
-execSync('node build_apk.js', { cwd: ROOT_DIR, stdio: 'inherit' });
-// Version changes above are compiled by the HTML/APK builders. Refresh the
-// public game copy afterwards so it cannot retain the previous minified JS.
-execSync('node build_official_site.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+timed('build.android_apk', () => execFileSync(process.execPath, [
+  'build_apk.js', `--reuse-app-build=${appBuildFingerprint}`
+], { cwd: ROOT_DIR, stdio: 'inherit' }));
 
 // 5. 校验产物
 const apkPath = path.join(ROOT_DIR, '五子棋.apk');
 const singleHtmlPath = path.join(ROOT_DIR, '五子棋大师_单文件版.html');
 const gomokuHtmlPath = path.join(ROOT_DIR, 'gomoku.html');
-fs.copyFileSync(singleHtmlPath, gomokuHtmlPath);
-
-if (!fs.existsSync(apkPath) || !fs.existsSync(singleHtmlPath)) {
-  console.error('❌ 打包校验未通过，产物缺失！');
-  process.exit(1);
-}
-
-const apkSize = (fs.statSync(apkPath).size / (1024 * 1024)).toFixed(2);
-const htmlSize = (fs.statSync(singleHtmlPath).size / 1024).toFixed(2);
-console.log(`>>> [5/8] 交付物产物校验通过: APK ${apkSize} MB | HTML ${htmlSize} KB (v${newName})`);
+let apkSize = '';
+let htmlSize = '';
+timed('artifact.copy_and_verify', () => {
+  fs.copyFileSync(singleHtmlPath, gomokuHtmlPath);
+  if (!fs.existsSync(apkPath) || !fs.existsSync(singleHtmlPath) || !fs.existsSync(gomokuHtmlPath)) {
+    throw new Error('APK、单文件版或发布 HTML 副本缺失。');
+  }
+  apkSize = (fs.statSync(apkPath).size / (1024 * 1024)).toFixed(2);
+  htmlSize = (fs.statSync(singleHtmlPath).size / 1024).toFixed(2);
+  console.log(`>>> [5/8] 交付物产物校验通过: APK ${apkSize} MB | HTML ${htmlSize} KB (v${newName})`);
+});
 
 // 6. 执行 Git 本地提交并推送到 GitHub。发布时只暂存明确的发布文件，
 // 不允许用 git add . 把截图、临时诊断文件或其他工作树内容带入提交。
@@ -384,11 +470,15 @@ try {
     throw new Error(`发布安全门禁拦截：提交前发现已有暂存文件，请先清理暂存区：${alreadyStaged}`);
   }
   const explicitFiles = [
+    'app_build_state.js',
+    'release_official.js',
+    'RELEASE_PERFORMANCE_20261020.md',
     'AI_PERFORMANCE_20261019.md',
     'BOARD_TURN_FIXES_20261019.md',
     'MOBILE_ICON_PROMPT.md',
     'PROJECT_HANDOVER.md',
     'README.md',
+    'tests/release_official.test.js',
     'REVIEW_20261019.md',
     'favicon.png',
     'design_assets/gomoku-app-icon-master.png',
@@ -414,6 +504,7 @@ try {
     'android_src/res/values/styles.xml',
     'android_src/src/com/gomoku/master/GomokuSplashView.java',
     'android_src/src/com/gomoku/master/MainActivity.java',
+    'android_src/src/com/gomoku/master/MatchmakingNotificationState.java',
     'android_src/src/com/gomoku/master/ApkInstallStatusReceiver.java',
     'android_src/src/com/gomoku/master/ApkSessionInstaller.java',
     'android_src/src/com/gomoku/master/NativeGomokuAI.java',
@@ -478,6 +569,9 @@ try {
     'tests/apk_asset_manifest_smoke.py',
     'tests/apk_version_check_regression.js',
     'tests/android_self_update_jvm_smoke.py',
+    'tests/android_match_notification_jvm_smoke.py',
+    'tests/app_build_state.test.js',
+    'tests/online_activity_state.test.js',
     'tests/auth_refresh_unit.js',
     'tests/card_touch_safety_browser_smoke.py',
     'tests/game_checkpoint_skills_browser_smoke.py',
@@ -513,7 +607,10 @@ try {
   ];
   const trackedFiles = new Set(execFileSync('git', ['ls-files'], { cwd: ROOT_DIR, encoding: 'utf8' }).split(/\r?\n/));
   const selectedExplicitFiles = explicitFiles.filter(file => fs.existsSync(path.join(ROOT_DIR, file)) || trackedFiles.has(file));
-  execFileSync('git', ['add', '--all', '--', ...selectedExplicitFiles], { cwd: ROOT_DIR, stdio: 'inherit' });
+  timed('git.stage_explicit_files', () => execFileSync('git', ['add', '--all', '--', ...selectedExplicitFiles], {
+    cwd: ROOT_DIR,
+    stdio: 'inherit'
+  }));
   // Generated trees are scoped to tracked files only; untracked screenshots/diagnostics stay out.
   for (const generatedPath of ['android_src/assets', 'official-site/play']) {
     const trackedGeneratedFiles = execFileSync('git', ['ls-files', '--', generatedPath], {
@@ -535,7 +632,7 @@ try {
     throw new Error(`发布安全门禁拦截：发现未授权暂存文件：${unexpectedFiles.join(', ')}`);
   }
   console.log(`✅ 显式暂存文件检查通过，共 ${stagedFiles.length} 个文件。`);
-  execFileSync('git', ['commit', '-m', commitMsg], { cwd: ROOT_DIR, stdio: 'inherit' });
+  timed('git.commit', () => execFileSync('git', ['commit', '-m', commitMsg], { cwd: ROOT_DIR, stdio: 'inherit' }));
   console.log(`🎉 Git 本地提交成功: ${commitMsg}`);
    // 只允许把本次刚提交的精确 HEAD 推到显式目标分支，并在推送前拒绝覆盖远端新提交。
    const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
@@ -546,7 +643,10 @@ try {
    } catch (_) {
      throw new Error(`发布安全门禁拦截：origin/${TARGET_BRANCH} 含有当前提交未包含的历史，请先 fetch/merge 后再发布。`);
    }
-   execFileSync('git', ['push', 'origin', `${releaseCommit}:refs/heads/${TARGET_BRANCH}`], { cwd: ROOT_DIR, stdio: 'inherit' });
+   timed('git.push', () => execFileSync('git', ['push', 'origin', `${releaseCommit}:refs/heads/${TARGET_BRANCH}`], {
+     cwd: ROOT_DIR,
+     stdio: 'inherit'
+   }));
    console.log('🎉 GitHub 仓库同步推送成功！');
 } catch(e) {
   console.error('❌ Git 提交或推送失败，已停止后续发版与部署：' + e.message);
@@ -558,33 +658,35 @@ console.log('>>> [7/8] 正在将最新 APK 发布到 GitHub Releases...');
 const releaseTag = `v${newName}`;
 const releaseApk = path.join(ROOT_DIR, 'gomoku.apk');
 const releaseHtml = path.join(ROOT_DIR, 'gomoku.html');
-fs.copyFileSync(apkPath, releaseApk);
-fs.copyFileSync(singleHtmlPath, releaseHtml);
+timed('release.prepare_assets', () => {
+  fs.copyFileSync(apkPath, releaseApk);
+  fs.copyFileSync(singleHtmlPath, releaseHtml);
+});
 
 let deltaTempDir = '';
 let deltaAssetPath = '';
 try {
-  const previousTag = execFileSync('gh', ['release', 'view', '--json', 'tagName', '--jq', '.tagName'], {
+  const previousTag = timed('release.lookup_previous_tag', () => execFileSync('gh', ['release', 'view', '--json', 'tagName', '--jq', '.tagName'], {
     cwd: ROOT_DIR,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe']
-  }).trim();
+  })).trim();
   if (previousTag && previousTag !== releaseTag) {
     deltaTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gomoku-html-delta-'));
-    execFileSync('gh', ['release', 'download', previousTag, '--pattern', 'gomoku.html', '--dir', deltaTempDir], {
+    timed('release.download_previous_html', () => execFileSync('gh', ['release', 'download', previousTag, '--pattern', 'gomoku.html', '--dir', deltaTempDir], {
       cwd: ROOT_DIR,
       stdio: 'pipe'
-    });
+    }));
     const previousHtml = path.join(deltaTempDir, 'gomoku.html');
     if (fs.existsSync(previousHtml)) {
       const baseSha256 = crypto.createHash('sha256').update(fs.readFileSync(previousHtml)).digest('hex');
       const candidatePath = path.join(deltaTempDir, `gomoku-html-${baseSha256}.gmd`);
       try {
-        const summary = execFileSync(process.execPath, [path.join(ROOT_DIR, 'create_html_delta.js'), previousHtml, releaseHtml, candidatePath], {
+        const summary = timed('release.generate_html_delta', () => execFileSync(process.execPath, [path.join(ROOT_DIR, 'create_html_delta.js'), previousHtml, releaseHtml, candidatePath], {
           cwd: ROOT_DIR,
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe']
-        }).trim();
+        })).trim();
         deltaAssetPath = candidatePath;
         console.log(`🧩 已生成按上一版精确摘要匹配的 HTML 增量包：${summary}`);
       } catch (error) {
@@ -609,7 +711,10 @@ try {
 
    const releaseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
    const releaseAssets = ['gomoku.apk', 'gomoku.html', ...(deltaAssetPath ? [deltaAssetPath] : [])];
-   execFileSync('gh', ['release', 'create', releaseTag, ...releaseAssets, '--target', releaseCommit, '--title', releaseTitle, '--notes-file', releaseNotesPath], { cwd: ROOT_DIR, stdio: 'inherit' });
+   timed('release.create_and_upload_assets', () => execFileSync('gh', [
+     'release', 'create', releaseTag, ...releaseAssets, '--target', releaseCommit,
+     '--title', releaseTitle, '--notes-file', releaseNotesPath
+   ], { cwd: ROOT_DIR, stdio: 'inherit' }));
   console.log(`🎉 GitHub Releases 发布成功 (双产物 APK + HTML): ${releaseTag}`);
 } catch(err) {
   if (!ALLOW_RELEASE_OVERWRITE) {
@@ -617,7 +722,9 @@ try {
   }
   console.log('⚠️ 已显式允许覆盖，尝试补传当前 Release 资产。');
   const releaseAssets = ['gomoku.apk', 'gomoku.html', ...(deltaAssetPath ? [deltaAssetPath] : [])];
-  execFileSync('gh', ['release', 'upload', releaseTag, ...releaseAssets, '--clobber'], { cwd: ROOT_DIR, stdio: 'inherit' });
+  timed('release.upload_assets_clobber', () => execFileSync('gh', [
+    'release', 'upload', releaseTag, ...releaseAssets, '--clobber'
+  ], { cwd: ROOT_DIR, stdio: 'inherit' }));
 } finally {
   if (fs.existsSync(releaseApk)) fs.unlinkSync(releaseApk);
   if (fs.existsSync(releaseHtml)) fs.unlinkSync(releaseHtml);
@@ -630,12 +737,15 @@ try {
 if (SHOULD_DEPLOY_CLOUDFLARE) {
   console.log('>>> 正在同步部署 Cloudflare Pages & Worker 官方安全中枢...');
   try {
-    execSync('node deploy_worker.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+    timed('deploy.worker', () => execFileSync(process.execPath, ['deploy_worker.js'], { cwd: ROOT_DIR, stdio: 'inherit' }));
     console.log('>>> 正在部署天空棋岛官方站（gomoku-home）...');
     // Pages is configured with `master` as the production branch. Supplying
     // the branch is required; omitting it creates a preview deployment even
     // when the release itself was pushed to master.
-    execSync('npx wrangler pages deploy official-site --project-name gomoku-home --branch master --commit-dirty=true', { cwd: ROOT_DIR, stdio: 'inherit' });
+    timed('deploy.official_site_pages', () => execSync('npx wrangler pages deploy official-site --project-name gomoku-home --branch master --commit-dirty=true', {
+      cwd: ROOT_DIR,
+      stdio: 'inherit'
+    }));
     console.log('🎉 官方站 gomoku-home 部署成功！');
   } catch(e) {
     console.error('❌ Worker/Pages 部署失败，发布流程未完成：', e.message);

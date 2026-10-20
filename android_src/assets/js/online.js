@@ -2097,6 +2097,7 @@
     // sessionId 负责隔离整局；joinTicket 再作为一次进房确认的短期能力票据，
     // 防止仅知道 6 位房间码的第三方伪造 join_ready/confirmed。
     let isHostConnecting = false;
+    let hostConnectionRequestId = 0;
     let hostInviteBinding = null;
 
     function hasReadyFriendRoom() {
@@ -2141,7 +2142,22 @@
     }
 
     async function initHostMqttPeer(targetCode = null, forceNew = false) {
-      if (!(await ensurePrivateGameAccountSession())) return false;
+      const requestId = ++hostConnectionRequestId;
+      const startingGeneration = onlineTransportGeneration;
+      isHostConnecting = true;
+      publishOnlineActivityState();
+      let authorized = false;
+      try { authorized = await ensurePrivateGameAccountSession(); }
+      catch (error) {
+        if (requestId === hostConnectionRequestId) isHostConnecting = false;
+        publishOnlineActivityState();
+        throw error;
+      }
+      if (!authorized || requestId !== hostConnectionRequestId || startingGeneration !== onlineTransportGeneration) {
+        if (requestId === hostConnectionRequestId) isHostConnecting = false;
+        publishOnlineActivityState();
+        return false;
+      }
       const isDifferentRoom = targetCode && String(targetCode) !== String(currentRoomCode);
       // 手动刷新房间/新匹配要换会话；断线重连沿用原会话，保证旧棋局可以恢复。
       if (isDifferentRoom || !onlineSessionId || (forceNew && !isReconnecting)) {
@@ -2175,6 +2191,8 @@
           badgeEl.innerHTML = '🟢 房间已就绪，等待好友加入...';
           badgeEl.style.color = '#10b981';
         }
+        isHostConnecting = false;
+        publishOnlineActivityState();
         return true;
       }
 
@@ -2190,6 +2208,7 @@
       }
 
       const roomCode = currentRoomCode;
+      publishOnlineActivityState();
 
       try {
         const client = await getOrCreateOnlineTransport(roomCode, 'host', sessionId);
@@ -2450,6 +2469,9 @@
         // otherwise the retry loop treats the swallowed error as success.
         if (isReconnecting) throw err;
         return false;
+      } finally {
+        if (requestId === hostConnectionRequestId) isHostConnecting = false;
+        publishOnlineActivityState();
       }
     }
 
@@ -2502,6 +2524,7 @@
 
       lastActiveRoomCode = currentRoomCode;
       isReconnecting = true;
+      window.publishOnlineActivityState?.();
       reconnectAttempts = 0;
       reconnectMetricStartedAt = performance.now ? performance.now() : Date.now();
       reconnectMetricFinished = false;
@@ -2594,6 +2617,7 @@
 
     function manualTriggerReconnect() {
       isReconnecting = true;
+      window.publishOnlineActivityState?.();
       reconnectAttempts = 0;
       reconnectMetricStartedAt = performance.now ? performance.now() : Date.now();
       reconnectMetricFinished = false;
@@ -2646,6 +2670,7 @@
     function onReconnectSuccess() {
       const wasReconnecting = isReconnecting;
       isReconnecting = false;
+      window.publishOnlineActivityState?.();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       stopReconnectHandshakeLoop();
       showReconnectOverlay(false);
@@ -4085,6 +4110,7 @@
       else if (hint && !pending && activeRoomJoinAttempt === null) {
         hint.textContent = '输错可清空重输；连接中可以取消，或返回联机大厅。';
       }
+      publishOnlineActivityState();
     }
 
     function handleJoinRoomCancel() {
@@ -4107,6 +4133,7 @@
       if (!attempt) return false;
       const silent = options === true || Boolean(options && options.silent);
       attempt.cancelled = true;
+      if (activeRoomJoinAttempt === attempt) activeRoomJoinAttempt = null;
       if (attempt.generation === onlineTransportGeneration) onlineTransportGeneration++;
       if (onlineTransportPromise && onlineTransportPromiseKey === attempt.transportKey) {
         // 让进行中的 Promise 在完成时关闭新建的 socket，避免取消后连接仍留在后台。
@@ -4521,13 +4548,12 @@
     // ⚡ 全服极速匹配系统 (实时信令 + 人机即时保底双引擎)
     // ══════════════════════════════════════════════════════════════════
     function showMatchingFloatingBar() {
-      const bar = document.getElementById("matchingFloatingBar");
-      if (bar) bar.style.display = "flex";
+      publishOnlineActivityState();
     }
 
     function hideMatchingFloatingBar() {
-      const bar = document.getElementById("matchingFloatingBar");
-      if (bar) bar.style.display = "none";
+      // Visibility follows the live room/queue state, never a modal's lifetime.
+      publishOnlineActivityState();
     }
 
     let isMatchmaking = false;
@@ -4538,6 +4564,107 @@
     let currentActiveMatchId = "";
     let matchStartPending = false;
     let matchAttemptGeneration = 0;
+
+    let lastNativeMatchNotificationState = '';
+    let lastMatchPermissionStateKey = '';
+    let cachedMatchNotificationPermission = '';
+    function getOnlineActivityState() {
+      let savedOnlineGame = false;
+      try { savedOnlineGame = window.getCurrentGameSummary?.()?.gameMode === 'online'; } catch (_) {}
+      let savedRoomCode = '';
+      if (savedOnlineGame && typeof readCurrentOnlineRoomSnapshot === 'function') {
+        try { savedRoomCode = readCurrentOnlineRoomSnapshot()?.roomCode || ''; } catch (_) {}
+      }
+      const roomCode = String(currentRoomCode || activeRoomJoinAttempt?.code || activeMatchRoomKey.split(':')[1] || savedRoomCode);
+      const liveGame = gameMode === 'online' && Boolean(roomCode && (onlineSessionId || (conn && conn.open)));
+      const hasOnlineGame = liveGame || savedOnlineGame;
+      const hasOtherRoom = Boolean(hasReadyFriendRoom() || hostInviteBinding || (conn && conn.open));
+      const hasRoomBeingPrepared = Boolean(isHostConnecting || activeRoomJoinAttempt || activeMatchRoomKey && !hasOnlineGame);
+      const matching = Boolean(isMatchmaking && currentActiveMatchId && currentActiveMatchUid === String(currentUserUid || ''));
+      const phase = matching ? 'matching' : hasOnlineGame
+        ? (isReconnecting || !(conn && conn.open && conn.ready) ? 'reconnecting' : isOver ? 'finished' : 'playing')
+        : activeRoomJoinAttempt ? 'joining' : hasRoomBeingPrepared ? 'connecting' : hasOtherRoom ? 'ready' : matchStartPending ? 'starting' : 'idle';
+      return { phase, roomCode, matching, startedAt: matching ? matchStartTime : 0,
+        elapsedSeconds: matching ? Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000)) : 0,
+        hasOnlineGame, hasRoomBeingPrepared, hasOtherRoom,
+        hasRoom: hasOnlineGame || hasRoomBeingPrepared || hasOtherRoom };
+    }
+
+    function publishOnlineActivityState(userInitiated = false, refreshPermission = false) {
+      if (isMatchmaking && currentActiveMatchUid !== String(currentUserUid || '')) void cancelQuickMatch();
+      const state = getOnlineActivityState();
+      const timer = document.getElementById('matchingFloatingTimer');
+      const primary = document.getElementById('onlineActivityPrimary');
+      const secondary = document.getElementById('onlineActivitySecondary');
+      const bar = document.getElementById('matchingFloatingBar');
+      const notificationHint = document.getElementById('onlineActivityNotificationHint');
+      const descriptions = { idle: '未在房间', starting: '正在验证账号…', ready: '等待好友加入',
+        joining: '正在加入房间…', connecting: '正在连接房间…', playing: '对局中',
+        reconnecting: '正在重连 · 棋局已保留', finished: '本局已结束' };
+      const minutes = String(Math.floor(state.elapsedSeconds / 60)).padStart(2, '0');
+      const seconds = String(state.elapsedSeconds % 60).padStart(2, '0');
+      if (timer) timer.textContent = state.matching ? `匹配中 ${minutes}:${seconds}`
+        : `${state.roomCode && state.hasRoom ? `房间 ${state.roomCode} · ` : ''}${descriptions[state.phase]}`;
+      if (bar) { bar.dataset.phase = state.phase; bar.style.display = 'flex'; }
+      if (primary) primary.textContent = state.matching ? '查看' : state.hasRoom ? '返回房间' : '去匹配';
+      if (secondary) { secondary.hidden = !(state.matching || state.hasRoom || matchStartPending); secondary.textContent = state.hasRoom ? '退出房间' : '取消'; }
+      const nativeState = `${state.matching}:${state.startedAt}`;
+      if (nativeState !== lastMatchPermissionStateKey || refreshPermission) {
+        lastMatchPermissionStateKey = nativeState;
+        cachedMatchNotificationPermission = '';
+        if (state.matching) {
+          try {
+            const bridge = window.AndroidNativeApp;
+            if (typeof bridge?.getMatchmakingNotificationPermissionState === 'function') {
+              cachedMatchNotificationPermission = String(bridge.getMatchmakingNotificationPermissionState());
+            }
+          } catch (_) {}
+        }
+      }
+      if (notificationHint) {
+        notificationHint.hidden = !(state.matching && cachedMatchNotificationPermission === 'denied');
+        notificationHint.textContent = notificationHint.hidden ? '' : '通知未开启，应用内可查看';
+      }
+      if (nativeState !== lastNativeMatchNotificationState || userInitiated && state.matching) {
+        try {
+          const bridge = window.AndroidNativeApp;
+          if (typeof bridge?.updateMatchmakingNotification === 'function') {
+            bridge.updateMatchmakingNotification(state.matching, state.startedAt, Boolean(userInitiated && state.matching));
+            lastNativeMatchNotificationState = nativeState;
+          }
+        } catch (error) { console.warn('[match notification]', error?.message || error); }
+      }
+      document.dispatchEvent(new CustomEvent('gomoku-online-activity-change', { detail: state }));
+      return state;
+    }
+
+    function returnToOnlineActivity() {
+      const state = getOnlineActivityState();
+      if (state.hasOnlineGame) {
+        closeOnlineModal();
+        let resumed = false;
+        if (gameMode !== 'online') { try { resumed = Boolean(window.resumeSavedGame?.()); } catch (_) {} }
+        if (!resumed) {
+          window.SkyIslandUI?.showGame?.();
+          if (state.phase === 'reconnecting' && !isReconnecting) void triggerOnlineReconnect('返回已有房间');
+        }
+      } else if (state.hasRoom) {
+        // Opening the existing room must never create a replacement transport.
+        document.getElementById('onlineModal')?.classList.add('show');
+        switchOnlineTab(activeRoomJoinAttempt ? 'join' : activeMatchRoomKey ? 'match' : 'create', true);
+      } else openOnlineModal('match');
+      publishOnlineActivityState();
+    }
+
+    function leaveOnlineActivity() {
+      const state = getOnlineActivityState();
+      if (!state.hasRoom) return cancelQuickMatch();
+      showCustomConfirm('退出当前房间后才能开始新匹配，确定退出？', () => {
+        if (activeRoomJoinAttempt) cancelRoomJoin({ silent: true });
+        leaveOnlineRoom(true);
+        publishOnlineActivityState();
+      }, null, { title: '退出房间', icon: '🚪', okText: '确认退出', cancelText: '留在房间' });
+    }
 
     function isMatchAuthFailure(response, data) {
       const status = Number(response && response.status);
@@ -4726,6 +4853,7 @@
       if (timerEl) timerEl.textContent = '全国百万棋友实时联网对战';
       if (vsCard) vsCard.style.display = 'none';
       updateQuickMatchQueueHint(false);
+      publishOnlineActivityState();
     }
 
     function updateQuickMatchQueueHint(active = isMatchmaking) {
@@ -4800,13 +4928,7 @@
     }
 
     function getExistingOnlineSessionState() {
-      let savedOnlineGame = false;
-      try { savedOnlineGame = window.getCurrentGameSummary?.()?.gameMode === 'online'; } catch (_) {}
-      return {
-        hasOnlineGame: gameMode === 'online' || savedOnlineGame,
-        hasRoomBeingPrepared: Boolean(activeMatchRoomKey),
-        hasOtherRoom: Boolean(currentRoomCode || window.hasReadyFriendRoom?.())
-      };
+      return getOnlineActivityState();
     }
 
     function hasExistingOnlineSessionState() {
@@ -4977,6 +5099,7 @@
         if (attemptGeneration !== matchAttemptGeneration || !matchStartPending) return false;
         if (!authorized || String(currentUserUid || '').trim() !== record.uid) {
           matchStartPending = false;
+          finishMatchAuthenticationFailure(record);
           return false;
         }
 
@@ -5010,23 +5133,8 @@
       const { hasOnlineGame, hasRoomBeingPrepared, hasOtherRoom } = getExistingOnlineSessionState();
       if (!hasOnlineGame && !hasRoomBeingPrepared && !hasOtherRoom) return false;
 
-      // 完成的旧局可以在开始下一次匹配时正常收尾；未完成的联机局始终先恢复，
-      // 避免第二个房间覆盖同一份棋盘、session 和重连快照。
-      if (gameMode === 'online' && isOver && typeof leaveOnlineRoom === 'function') {
-        leaveOnlineRoom(false);
-        return false;
-      }
-
       if (hasOnlineGame) {
-        closeOnlineModal();
-        let resumed = false;
-        try { resumed = Boolean(window.resumeSavedGame?.()); } catch (_) {}
-        if (!resumed) {
-          window.SkyIslandUI?.showGame?.();
-          if (gameMode === 'online' && typeof triggerOnlineReconnect === 'function' && !(conn && conn.open)) {
-            void triggerOnlineReconnect('恢复已有联机对局');
-          }
-        }
+        returnToOnlineActivity();
         showGameNotice('你有一场进行中的联机对局，已为你恢复。请先退出当前房间，再开始新匹配。', true);
         return true;
       }
@@ -5034,14 +5142,16 @@
       showGameNotice(hasRoomBeingPrepared
         ? '上一场已匹配成功，正在连接房间，请稍候；连接完成或退出后再开始新匹配。'
         : '当前已有一个好友房间，请先关闭房间后再开始全服匹配。', true);
+      returnToOnlineActivity();
       return true;
     }
 
     async function startQuickMatch() {
-      if (isMatchmaking || matchStartPending) return;
+      if (isMatchmaking || matchStartPending) { returnToOnlineActivity(); return; }
       if (guardQuickMatchAgainstExistingRoom()) return;
       const attemptGeneration = ++matchAttemptGeneration;
       matchStartPending = true;
+      publishOnlineActivityState();
       let authorized = false;
       try {
         authorized = await ensurePrivateGameAccountSession();
@@ -5051,13 +5161,20 @@
       }
       if (!authorized) {
         if (attemptGeneration === matchAttemptGeneration) matchStartPending = false;
+        publishOnlineActivityState();
         return;
       }
       if (attemptGeneration !== matchAttemptGeneration || !matchStartPending) return;
+      if (guardQuickMatchAgainstExistingRoom()) {
+        matchStartPending = false;
+        publishOnlineActivityState();
+        return;
+      }
 
       const matchUid = String(getOrCreateMatchUid() || '').trim();
       if (!isPersistableMatchUid(matchUid) || matchUid !== String(currentUserUid || '').trim()) {
         matchStartPending = false;
+        publishOnlineActivityState();
         showGameNotice('🔒 当前账号无法加入全服匹配，请重新登录后再试', true);
         return;
       }
@@ -5081,6 +5198,7 @@
       matchStartTime = matchRecord.startedAt;
       currentActiveMatchUid = matchRecord.uid;
       currentActiveMatchId = matchRecord.matchId;
+      publishOnlineActivityState(true);
       clearInterval(matchPollInterval);
       clearInterval(matchTimerInterval);
       renderQuickMatchState(false);
@@ -5091,6 +5209,7 @@
     let activeMatchRoomKey = '';
 
     function onMatchFound(data) {
+      if (!isMatchmaking) return;
       const roomCode = String(data?.roomCode || '');
       const matchRole = String(data?.role || '').toLowerCase();
       const matchKey = `${matchRole}:${roomCode}:${data?.opponent?.uid || ''}`;
@@ -5275,7 +5394,7 @@
       return true;
     }
 
-    function switchOnlineTab(tab) {
+    function switchOnlineTab(tab, returningToRoom = false) {
       const onlineModal = document.getElementById('onlineModal');
       const tabMatch = document.getElementById('tabMatch');
       const tabCreate = document.getElementById('tabCreateRoom');
@@ -5303,11 +5422,10 @@
       const prevAvatar = document.getElementById('matchMyAvatarPreview');
       if (prevAvatar) prevAvatar.innerHTML = renderAvatarElement(p1Avatar);
 
-      if (tab === 'create') {
+      if (tab === 'create' && !returningToRoom && !isMatchmaking && !getOnlineActivityState().hasRoom) {
         initPeer();
-      } else if (tab !== 'match') {
-        if (isMatchmaking || matchStartPending) cancelQuickMatch();
       }
+      publishOnlineActivityState();
     }
 
     async function copyRoomCode() {
@@ -5372,8 +5490,8 @@
       }
       if (isMatchmaking) {
         showMatchingFloatingBar();
-        showGameNotice("⚡ 匹配已挂起在后台持续搜寻中...", false);
       }
+      publishOnlineActivityState();
     }
 
     function setMode(mode, silent = false) {
@@ -5426,7 +5544,14 @@
 
 window.resumePendingQuickMatch = resumePendingQuickMatch;
 window.hasReadyFriendRoom = hasReadyFriendRoom;
-window.hasActiveOnlineRoom = () => Boolean(
-  gameMode === 'online' || currentRoomCode || onlineSessionId || (conn && conn.open) || hasReadyFriendRoom()
-);
+window.getOnlineActivityState = getOnlineActivityState;
+window.publishOnlineActivityState = publishOnlineActivityState;
+window.returnToOnlineActivity = returnToOnlineActivity;
+window.leaveOnlineActivity = leaveOnlineActivity;
+window.hasActiveOnlineRoom = () => getOnlineActivityState().hasRoom;
+window.addEventListener('gomoku-match-notification-permission-change', () => publishOnlineActivityState(false, true));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) publishOnlineActivityState(false, true);
+});
+publishOnlineActivityState();
 window.__GOMOKU_ONLINE_READY__ = true;
