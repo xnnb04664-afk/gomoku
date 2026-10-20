@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.150';
+    const CURRENT_VERSION_TAG = 'v1.0.151';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
     // Build 140 重绘图标，142 提供版本查询，148 集成 C++ 引擎；
     // Build 151 才包含 PackageInstaller 自更新代码，旧底包需完整安装才能获得。
@@ -8914,8 +8914,7 @@
     const GITHUB_LATEST_RELEASE_API = 'https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest';
     const GITHUB_RELEASE_API_MIRRORS = [
       'https://gh-proxy.com/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest',
-      'https://gh-proxy.org/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest',
-      GITHUB_LATEST_RELEASE_API
+      'https://gh-proxy.org/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest'
     ];
     // APK/HTML release files are public; every downloaded file is SHA-256 checked,
     // and Android also checks the original signing certificate before install.
@@ -9370,7 +9369,7 @@
         const githubRace = new Promise((resolve, reject) => {
           const mirrorErrors = [];
           GITHUB_RELEASE_API_MIRRORS.forEach((url, index) => {
-            const label = index === 0 ? 'GitHub 代理节点 A' : index === 1 ? 'GitHub 代理节点 B' : 'GitHub 官方接口';
+            const label = index === 0 ? 'GitHub 代理节点 A' : 'GitHub 代理节点 B';
             const timeout = UPDATE_MANIFEST_TIMEOUTS_MS[Math.min(index, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)];
             fetchUpdateJson(url, timeout, controllers[index]?.signal)
               .then(release => normalizeGithubReleaseManifest(release, label))
@@ -9393,6 +9392,16 @@
         } catch (mirrorErrors) {
           controllers.forEach(controller => controller?.abort());
           failures.push(...(Array.isArray(mirrorErrors) ? mirrorErrors.filter(Boolean) : ['GitHub 更新入口全部失败']));
+        }
+
+        try {
+          const officialTimeout = UPDATE_MANIFEST_TIMEOUTS_MS[
+            Math.min(GITHUB_RELEASE_API_MIRRORS.length, UPDATE_MANIFEST_TIMEOUTS_MS.length - 1)
+          ];
+          const release = await fetchUpdateJson(GITHUB_LATEST_RELEASE_API, officialTimeout);
+          return normalizeGithubReleaseManifest(release, 'GitHub 官方接口');
+        } catch (error) {
+          failures.push(`GitHub 官方接口：${String(error?.message || '连接失败').slice(0, 90)}`);
         }
       }
       for (const [index, sourceOrigin] of UPDATE_SERVICE_ORIGINS.entries()) {

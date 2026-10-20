@@ -306,9 +306,8 @@ if (fs.existsSync(appSourcePath)) {
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
 const releaseHighlights = [
-  `🎨 【棋盘边缘清理】对局棋台按原素材石框轮廓裁切，清理框外云朵、方块白边和青色杂边；首页与启动动画素材、网格及落子几何保持原样。`,
-  `📲 【Android 自更新优化】Build 151 加入 PackageInstaller Session；Android 12（API 31）及以上在系统条件允许时请求免确认安装，并处理系统要求用户确认的情况。`,
-  `📦 【首次更新说明】Build 150 及更早版本需先正常覆盖安装完整 APK，获取这次新增的原生安装代码；之后的自更新才可尝试免确认，系统策略仍可能要求确认。`
+  `🚀 【更新查询代理优先】先并行查询两个 GitHub 反向代理，有效代理响应返回后不再请求直连；代理全部失败后才尝试 GitHub 官方 API，再按 ECS、Cloudflare 顺序回退。`,
+  `📦 【下载与安装】APK 文件继续优先使用反向代理，下载后校验摘要、官方签名与包名；保留棋盘边缘清理和 Android 12 及以上有条件免确认自更新。`
 ];
 const releaseUpdateLog = [
   `五子棋云屿晴光 v${newName} 官方正式版更新说明：`,

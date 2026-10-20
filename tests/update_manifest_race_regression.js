@@ -5,20 +5,18 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const appSource = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
-const start = appSource.indexOf('    async function fetchUpdateJson(url, timeoutMs, externalSignal = null) {');
-const end = appSource.indexOf('\n    let isCheckingAppUpdate', start);
-assert.notEqual(start, -1, 'update JSON helper exists');
-assert.notEqual(end, -1, 'update manifest section end exists');
-const updateSource = appSource.slice(start, end);
+const constantsStart = appSource.indexOf('    const UPDATE_CLOUDFLARE_PAGES_ORIGIN = ');
+const constantsEnd = appSource.indexOf('    function isTrustedUpdatePath', constantsStart);
+const helpersStart = appSource.indexOf('    async function fetchUpdateJson(url, timeoutMs, externalSignal = null) {');
+const helpersEnd = appSource.indexOf('\n    let isCheckingAppUpdate', helpersStart);
+assert.notEqual(constantsStart, -1, 'update endpoint constants exist');
+assert.notEqual(constantsEnd, -1, 'update endpoint constants end exists');
+assert.notEqual(helpersStart, -1, 'update fetch helpers exist');
+assert.notEqual(helpersEnd, -1, 'update manifest section end exists');
+const constantsSource = appSource.slice(constantsStart, constantsEnd);
+const updateSource = appSource.slice(helpersStart, helpersEnd);
 
-const mirrors = [
-  'https://gh-proxy.com/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest',
-  'https://gh-proxy.org/https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest',
-  'https://api.github.com/repos/xnnb04664-afk/gomoku/releases/latest'
-];
 const ecs = 'https://ecs.test/gomoku-api';
-const pages = 'https://pages.test/gomoku-api';
-const worker = 'https://worker.test/gomoku-api';
 
 function makeHarness(fetchImpl) {
   const requests = [];
@@ -26,18 +24,13 @@ function makeHarness(fetchImpl) {
     AbortController,
     URL,
     Date,
-    setTimeout,
-    clearTimeout,
     console: { warn() {} },
     ECS_API_HOST: ecs,
-    UPDATE_CLOUDFLARE_PAGES_ORIGIN: pages,
-    UPDATE_CLOUDFLARE_WORKER_ORIGIN: worker,
-    UPDATE_SERVICE_ORIGINS: [ecs, pages, worker],
-    UPDATE_MANIFEST_TIMEOUTS_MS: [300, 300],
-    GITHUB_RELEASE_API_MIRRORS: mirrors,
+    setTimeout: (callback, timeoutMs) => setTimeout(callback, Math.max(2, Math.ceil(timeoutMs / 500) * 2)),
+    clearTimeout,
     fetch: (url, options) => {
       requests.push({ url, options });
-      return fetchImpl(url, options);
+      return fetchImpl(url, options, requests);
     },
     normalizeGithubReleaseManifest(release, sourceLabel) {
       if (!/^v\d+\.\d+\.\d+$/.test(String(release?.tag_name || ''))) throw new Error('invalid GitHub manifest');
@@ -48,54 +41,127 @@ function makeHarness(fetchImpl) {
       return { type: 'ticketed', tag: data.tag, sourceOrigin, sourceLabel };
     }
   };
-  vm.runInNewContext(`${updateSource}\nthis.fetchUpdateManifestForTest = fetchUpdateManifest;`, context);
-  return { fetch: context.fetchUpdateManifestForTest, requests };
+  vm.runInNewContext(
+    `${constantsSource}\n${updateSource}\n` +
+      'this.fetchUpdateManifestForTest = fetchUpdateManifest;\n' +
+      'this.proxyUrlsForTest = GITHUB_RELEASE_API_MIRRORS;\n' +
+      'this.officialUrlForTest = GITHUB_LATEST_RELEASE_API;\n' +
+      'this.serviceOriginsForTest = UPDATE_SERVICE_ORIGINS;',
+    context
+  );
+  return {
+    fetch: context.fetchUpdateManifestForTest,
+    requests,
+    proxyUrls: Array.from(context.proxyUrlsForTest),
+    officialUrl: context.officialUrlForTest,
+    serviceOrigins: Array.from(context.serviceOriginsForTest)
+  };
 }
 
 function response(status, body) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
+function abortablePending(signal) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const error = new Error('request aborted');
+      error.name = 'AbortError';
+      reject(error);
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function delay(timeoutMs) {
+  return new Promise(resolve => setTimeout(resolve, timeoutMs));
+}
+
+function cleanUrl(url) {
+  return url.split('?')[0];
+}
+
 async function run() {
   {
     const harness = makeHarness((url, options) => {
-      if (url.includes('gh-proxy.com')) {
+      if (url.startsWith('https://gh-proxy.com/')) return abortablePending(options.signal);
+      if (url.startsWith('https://gh-proxy.org/')) {
         return new Promise((resolve, reject) => {
-          options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          const timer = setTimeout(() => resolve(response(200, { tag_name: 'v1.0.200' })), 15);
+          options.signal.addEventListener('abort', () => {
+            clearTimeout(timer);
+            const error = new Error('request aborted');
+            error.name = 'AbortError';
+            reject(error);
+          }, { once: true });
         });
       }
-      if (url.includes('gh-proxy.org')) return new Promise(resolve => setTimeout(() => resolve(response(200, { tag_name: 'v1.0.200' })), 15));
-      if (url.includes('api.github.com')) return Promise.resolve(response(503, { message: 'unavailable' }));
-      throw new Error(`unexpected fallback request ${url}`);
+      throw new Error(`unexpected request while a proxy is pending: ${url}`);
     });
-    const manifest = await harness.fetch();
-    await new Promise(resolve => setTimeout(resolve, 10));
+    const manifestRequest = harness.fetch();
+    await delay(5);
+    assert.equal(harness.requests.length, 2, 'both proxy requests start together');
+    assert.equal(harness.requests.some(request => cleanUrl(request.url) === harness.officialUrl), false,
+      'the official API is not started while either proxy is pending');
+
+    const manifest = await manifestRequest;
     assert.equal(manifest.tag, 'v1.0.200');
     assert.equal(manifest.sourceLabel, 'GitHub 代理节点 B');
-    assert.equal(harness.requests.length, 3, 'GitHub mirrors are started concurrently');
-    assert.equal(harness.requests.some(request => request.url.startsWith(ecs)), false, 'ECS is used only after every GitHub mirror fails');
-    assert.equal(harness.requests.find(request => request.url.includes('gh-proxy.com')).options.signal.aborted, true,
-      'the slower mirror is cancelled after a valid manifest wins');
+    assert.equal(harness.requests.some(request => cleanUrl(request.url) === harness.officialUrl), false,
+      'a proxy success avoids the direct GitHub API request');
+    assert.equal(harness.requests.find(request => request.url.startsWith(harness.proxyUrls[0])).options.signal.aborted, true,
+      'the pending proxy request is cancelled after the other proxy succeeds');
+    assert.deepEqual(harness.proxyUrls.map(url => new URL(url).hostname), ['gh-proxy.com', 'gh-proxy.org']);
   }
 
   {
-    const harness = makeHarness(async url => {
-      if (url.startsWith('https://gh-proxy.com') || url.startsWith('https://gh-proxy.org') || url.startsWith('https://api.github.com')) {
-        return response(503, { message: 'unavailable' });
+    const harness = makeHarness((url, options, requests) => {
+      if (harness.proxyUrls.includes(cleanUrl(url))) return abortablePending(options.signal);
+      if (cleanUrl(url) === harness.officialUrl) {
+        assert.equal(requests.slice(0, 2).every(request => request.options.signal.aborted), true,
+          'the direct request starts only after both proxy requests time out');
+        return Promise.resolve(response(200, { tag_name: 'v1.0.201' }));
       }
-      if (url.startsWith(ecs)) return response(200, { code: 0, tag: 'v1.0.201' });
       throw new Error(`unexpected fallback request ${url}`);
+    });
+    // The fetch closure is called after the harness has been initialized.
+    const manifest = await harness.fetch();
+    assert.equal(manifest.tag, 'v1.0.201');
+    assert.equal(manifest.sourceLabel, 'GitHub 官方接口');
+    assert.equal(harness.requests.length, 3, 'all timed-out proxies are followed by one official request');
+    assert.equal(harness.requests[0].options.signal.aborted, true);
+    assert.equal(harness.requests[1].options.signal.aborted, true);
+    assert.equal(cleanUrl(harness.requests[2].url), harness.officialUrl);
+  }
+
+  {
+    let harness;
+    harness = makeHarness(async (url, options) => {
+      const requestUrl = cleanUrl(url);
+      if (harness.proxyUrls.includes(requestUrl)) return response(503, { message: 'proxy unavailable' });
+      if (requestUrl === harness.officialUrl) return response(503, { message: 'GitHub unavailable' });
+      if (requestUrl === `${ecs}/api/version`) return response(503, { msg: 'ECS unavailable' });
+      if (requestUrl === `${harness.serviceOrigins[1]}/api/version`) {
+        return response(200, { code: 0, tag: 'v1.0.202' });
+      }
+      throw new Error(`unexpected request ${url}`);
     });
     const manifest = await harness.fetch();
     assert.equal(manifest.type, 'ticketed');
-    assert.equal(manifest.tag, 'v1.0.201');
-    assert.equal(manifest.sourceOrigin, ecs, 'ECS remains first fallback after all GitHub mirrors fail');
-    assert.equal(harness.requests.filter(request => request.url.startsWith(pages) || request.url.startsWith(worker)).length, 0,
-      'Cloudflare remains a last resort');
+    assert.equal(manifest.tag, 'v1.0.202');
+    assert.equal(manifest.sourceOrigin, harness.serviceOrigins[1]);
+    assert.deepEqual(harness.requests.slice(-3).map(request => cleanUrl(request.url)), [
+      harness.officialUrl,
+      `${ecs}/api/version`,
+      `${harness.serviceOrigins[1]}/api/version`
+    ], 'official failure falls through to ECS and then the first Cloudflare service');
+    assert.equal(harness.requests.some(request => cleanUrl(request.url) === `${harness.serviceOrigins[2]}/api/version`), false,
+      'later Cloudflare fallback is not contacted after an earlier one succeeds');
   }
 }
 
-run().then(() => console.log('Update manifest race regression checks passed.')).catch(error => {
+run().then(() => console.log('Update manifest proxy-priority regression checks passed.')).catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
