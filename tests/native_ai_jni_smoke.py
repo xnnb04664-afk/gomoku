@@ -83,6 +83,8 @@ for directory in (lib_dir, empty_dir, classes):
 platform = "win32" if os.name == "nt" else "linux"
 library = lib_dir / ("gomoku_ai.dll" if os.name == "nt" else "libgomoku_ai.so")
 run([compiler, "-std=c++17", "-O3", "-shared", "-static-libstdc++", "-static-libgcc",
+     "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+     *([] if os.name == "nt" else ["-Wl,--exclude-libs,ALL"]),  # ELF-only; APK exports are checked separately.
      *([] if os.name == "nt" else ["-fPIC"]),
      "-I", str(JDK / "include"), "-I", str(JDK / "include" / platform),
      str(ROOT / "android_src/cpp/gomoku_ai.cpp"), "-o", str(library)])

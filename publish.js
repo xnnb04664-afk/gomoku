@@ -305,23 +305,11 @@ if (fs.existsSync(appSourcePath)) {
 // 同步更新 version.json（兼容旧客户端；新客户端依次尝试 GitHub 代理、ECS 与 Cloudflare 应急备用）
 const versionJsonPath = path.join(ROOT_DIR, 'version.json');
 const todayStr = new Date().toISOString().split('T')[0];
-const previousReleaseHighlights = (() => {
-  try {
-    const previousLog = JSON.parse(fs.readFileSync(versionJsonPath, 'utf8')).updateLog || '';
-    return previousLog.split(/\r?\n\r?\n/).slice(1).map(line => line.trim()).filter(Boolean);
-  } catch (_) {
-    return [];
-  }
-})();
 const releaseHighlights = [
-  `📱 【手机棋台放大】手机实战底图放大并占满可用宽度，左右装饰适度裁切，上下保留金边，网格对齐草坪内沿并保留触摸命中`,
-  `🖥️ 【大屏布局优化】网页版针对电脑大屏扩大大厅、对局棋盘和操作区；Android APK 保持触控优先布局`,
-  `⚡ 【人机 C++ NDK 引擎】Android 大师 AI 迁移至 C++ NDK 引擎，优化增量棋型与搜索效率，保留 Java 与网页 Worker 回退`,
-  `🎲 【人机随机先手】人机对局随机分配玩家黑白，AI 执黑时自动先手开局，状态与悔棋完整跟随`,
-  `🔮 【预言回合修复】预言封锁命中后取消该次落子机会并立即换手，正确记录特殊事件与回放同步`,
-  `🃏 【卡牌操作体验】进入对局卡牌默认展开，支持手指滑入防误触拦截与顶部快捷收起`,
-  `🎬 【启动动画与流畅度】启动棋子首帧保持实体不透明度，统一 13 黑 13 白心形布局；网页端启用网格离屏缓存，Android 端异步预备绘制纹理与平滑淡出`,
-  ...previousReleaseHighlights
+  `📦 【安装包精简】清理原生库未使用代码和符号元数据，包体约减少 7.6%，继续支持四种 CPU 架构；图片画质与 AI 搜索参数保持不变。`,
+  `🎬 【启动绘制优化】素材准备完成后停止绘制重复备用海报和整屏底色，保留异步解码、纹理预热、13 黑 13 白落子与平滑切换。`,
+  `📱 【完整安装更新】本次包含 Android 原生库与启动页优化，请安装完整 APK；网页热更新无法替换原生组件。`,
+  `🔔 【更新引导修复】保留旧底包检测、更新角标持久化与下载防重复点击处理。`
 ];
 const releaseUpdateLog = [
   `五子棋云屿晴光 v${newName} 官方正式版更新说明：`,
@@ -495,6 +483,8 @@ try {
     'tests/github_update_proxy_browser_smoke.py',
     'tests/native_ai_equivalence.py',
     'tests/native_ai_jni_smoke.py',
+    'tests/native_apk_packaging_smoke.py',
+    'APK_OPTIMIZATION_20261020.md',
     'tests/native_ai_lifecycle_smoke.py',
     'tests/official_site_live_audit.py',
     'tests/official_site_smoke.py',

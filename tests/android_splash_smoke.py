@@ -55,6 +55,10 @@ def main():
     assert "artworkFailed = true;" in failed_load
     assert "showLoadingHint = true;" in failed_load and "sceneLayer.invalidate();" in failed_load
     assert "artworkReady = true" not in failed_load
+    assert "setBackground(null)" not in failed_load
+    successful_load = splash.split("skyBitmap = finalSky", 1)[1].split("if (!posted)", 1)[0]
+    assert successful_load.index("artworkReady = true;") < successful_load.index("setBackground(null);")
+    assert "if (skyBitmap == null || skyBitmap.isRecycled()) canvas.drawColor(backgroundColor);" in splash
     assert "if (animationRequested && !paused) beginAnimation();" in failed_load
     assert animation.index("animationStartedListener.onAnimationStarted(") < animation.index("if (artworkFailed) return;")
     start_animation = splash.split("public void startAnimation()", 1)[1].split("private void beginAnimation()", 1)[0]

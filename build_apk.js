@@ -250,6 +250,8 @@ function compileNativeAi() {
       ? (process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x86_64')
       : 'linux-x86_64';
   const compilerDir = path.join(ndkDir, 'toolchains', 'llvm', 'prebuilt', hostTag, 'bin');
+  const stripTool = path.join(compilerDir, process.platform === 'win32' ? 'llvm-strip.exe' : 'llvm-strip');
+  if (!fs.existsSync(stripTool)) throw new Error(`NDK 缺少 llvm-strip：${stripTool}`);
   const source = path.join(SRC_DIR, 'cpp', 'gomoku_ai.cpp');
   if (!fs.existsSync(source)) throw new Error(`Android C++ AI 源文件缺失：${source}`);
 
@@ -260,6 +262,8 @@ function compileNativeAi() {
     ['x86_64', 'x86_64-linux-android21-clang++']
   ];
   const outputs = [];
+  const symbolsDir = path.join(ROOT_DIR, '.codex-diagnostics', 'native-symbols',
+    new Date().toISOString().replace(/[:.]/g, '-') + '-' + process.pid);
   for (const [abi, compilerName] of targets) {
     const suffix = process.platform === 'win32' ? '.cmd' : '';
     const compiler = path.join(compilerDir, compilerName + suffix);
@@ -269,12 +273,21 @@ function compileNativeAi() {
     fs.mkdirSync(outputDir, { recursive: true });
     run(compiler, [
       '-std=c++17', '-O3', '-fPIC', '-shared', '-fvisibility=hidden',
+      '-ffunction-sections', '-fdata-sections',
       '-Wl,-z,max-page-size=16384', '-Wl,-soname,libgomoku_ai.so',
+      '-Wl,--gc-sections', '-Wl,--exclude-libs,ALL', '-Wl,--build-id=sha1',
       '-Wl,--no-undefined', '-static-libstdc++', '-o', output, source
     ], { cwd: ROOT_DIR });
+    // Keep the matching symbol-bearing library outside the APK for crash
+    // diagnosis. Only remove metadata/dead sections, retaining O3 and JNI ABI.
+    const abiSymbols = path.join(symbolsDir, abi);
+    fs.mkdirSync(abiSymbols, { recursive: true });
+    fs.copyFileSync(output, path.join(abiSymbols, 'libgomoku_ai.so'));
+    run(stripTool, ['--strip-unneeded', output], { cwd: ROOT_DIR });
     outputs.push({ abi, output, apkPath: `lib/${abi}/libgomoku_ai.so` });
   }
   console.log(`>>> [NDK] 已为 ${outputs.map(item => item.abi).join(', ')} 编译 C++ AI`);
+  console.log(`>>> [NDK] 未裁剪符号副本保留于 ${symbolsDir}`);
   return outputs;
 }
 

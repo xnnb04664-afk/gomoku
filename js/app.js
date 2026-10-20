@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.147';
+    const CURRENT_VERSION_TAG = 'v1.0.148';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
     // Build 140 首次重绘晴空图标；Build 142 首次提供原生版本查询；Build 148 首次集成 C++ NDK 原生 AI 引擎与启动纹理优化。
     const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;

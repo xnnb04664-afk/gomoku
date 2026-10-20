@@ -222,7 +222,9 @@ public final class GomokuSplashView extends FrameLayout {
             drawFooter(canvas, width, height, density);
             return;
         }
-        canvas.drawColor(backgroundColor);
+        // The opaque sky covers the full viewport, including its small drift.
+        // Avoid an extra full-screen fill underneath every animation frame.
+        if (skyBitmap == null || skyBitmap.isRecycled()) canvas.drawColor(backgroundColor);
         drawSky(canvas, width, height);
         drawAtmosphere(canvas, width, height);
         drawBrand(canvas, width, height, density, 1f);
@@ -559,6 +561,10 @@ public final class GomokuSplashView extends FrameLayout {
                 blackStoneBitmap = finalBlack;
                 whiteStoneBitmap = finalWhite;
                 artworkReady = true;
+                // The scene now paints an opaque sky. Retaining the initial
+                // poster underneath it wastes a full-screen texture pass.
+                // Failed loads return above and keep that poster as fallback.
+                setBackground(null);
                 if (animationRequested && !paused) beginAnimation();
                 sceneLayer.invalidate();
                 heartLayer.invalidate();
