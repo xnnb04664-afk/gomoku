@@ -309,7 +309,7 @@ const releaseHighlights = [
   `📦 【安装包精简】清理原生库未使用代码和符号元数据，包体约减少 7.6%，继续支持四种 CPU 架构；图片画质与 AI 搜索参数保持不变。`,
   `🎬 【启动绘制优化】素材准备完成后停止绘制重复备用海报和整屏底色，保留异步解码、纹理预热、13 黑 13 白落子与平滑切换。`,
   `📱 【完整安装更新】本次包含 Android 原生库与启动页优化，请安装完整 APK；网页热更新无法替换原生组件。`,
-  `🔔 【更新引导修复】保留旧底包检测、更新角标持久化与下载防重复点击处理。`
+  `🔔 【旧底包更新修复】Build 148 及更早的底包，即使网页已更新，也会引导安装完整 APK，以获得原生库瘦身和启动绘制优化；更新角标与下载防重复点击处理保留。`
 ];
 const releaseUpdateLog = [
   `五子棋云屿晴光 v${newName} 官方正式版更新说明：`,
@@ -354,6 +354,9 @@ execSync('node bundle_single_file.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 // 4. 构建原生 Android APK (持久密钥签名)
 console.log('>>> [4/8] 正在调用 Android 原生 SDK 编译并持久化签名 APK...');
 execSync('node build_apk.js', { cwd: ROOT_DIR, stdio: 'inherit' });
+// Version changes above are compiled by the HTML/APK builders. Refresh the
+// public game copy afterwards so it cannot retain the previous minified JS.
+execSync('node build_official_site.js', { cwd: ROOT_DIR, stdio: 'inherit' });
 
 // 5. 校验产物
 const apkPath = path.join(ROOT_DIR, '五子棋.apk');

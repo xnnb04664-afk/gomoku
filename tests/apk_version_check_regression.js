@@ -11,7 +11,7 @@ function runTest() {
   // Verify functions and constants exist in source
   assert.ok(appJsSource.includes('function isAndroidApkUpdateRequired'), 'isAndroidApkUpdateRequired must be defined');
   assert.ok(appJsSource.includes('function getInstalledAndroidBuildCode'), 'getInstalledAndroidBuildCode must be defined');
-  assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 148'), 'MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE must be 148');
+  assert.ok(appJsSource.includes('MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 149'), 'Native optimization requires APK Build 149 or newer');
   assert.ok(appJsSource.includes('const androidApkUpdateRequired = isAndroidApkUpdateRequired();'), 'checkAppUpdate must check isAndroidApkUpdateRequired');
   assert.ok(appJsSource.includes('requireFullApk'), 'btnFast click must check requireFullApk');
 
@@ -56,15 +56,15 @@ function runTest() {
     const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 147 } });
     vm.runInNewContext(targetCode, env);
     assert.strictEqual(env.window.getInstalledAndroidBuildCode(), 147, 'Must read installed build code 147');
-    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 147 must require APK update to 148');
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 147 must require full APK update');
   }
 
-  // Test 4: Android APK with current build 148
+  // Test 4: The original C++ APK still needs the native optimization update.
   {
     const env = createEnv({ nativeBridge: { isNativeApp: () => true, getAppVersionCode: () => 148 } });
     vm.runInNewContext(targetCode, env);
     assert.strictEqual(env.window.getInstalledAndroidBuildCode(), 148, 'Must read installed build code 148');
-    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), false, 'Build 148 must NOT require APK update');
+    assert.strictEqual(env.window.isAndroidApkUpdateRequired(), true, 'Build 148 must require the optimized full APK even after HTML updates');
   }
 
   // Test 5: Android APK with future build 149

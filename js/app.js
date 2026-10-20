@@ -41,12 +41,13 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.148';
+    const CURRENT_VERSION_TAG = 'v1.0.149';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
-    // Build 140 首次重绘晴空图标；Build 142 首次提供原生版本查询；Build 148 首次集成 C++ NDK 原生 AI 引擎与启动纹理优化。
+    // Build 140 重绘图标，142 提供版本查询，148 集成 C++ 引擎；
+    // Build 149 才包含原生库瘦身与启动绘制优化，旧底包需完整安装才能获得。
     const MINIMUM_APK_BUILD_FOR_CURRENT_ICON = 140;
     const MINIMUM_APK_BUILD_FOR_NATIVE_VERSION_CHECK = 142;
-    const MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 148;
+    const MINIMUM_APK_BUILD_FOR_NATIVE_AI_ENGINE = 149;
 
     function getInstalledAndroidBuildCode() {
       if (typeof AndroidNativeApp === 'undefined' || typeof AndroidNativeApp.getAppVersionCode !== 'function') return 0;
