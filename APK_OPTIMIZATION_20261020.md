@@ -1,6 +1,6 @@
 # APK 启动与包体优化候选
 
-日期：2026-10-20。基于当前 `master` 的 `0f5caa8`，保留已有更新引导、棋盘与 AI 功能。GitHub v1.0.147 已于此前发布；本轮形成新的本地优化候选，没有覆盖现有 Release 附件或重新部署生产。
+日期：2026-10-20。最初基于 `master` 的 `0f5caa8` 制作本地优化候选，保留已有更新引导、棋盘与 AI 功能。后续已正式发布为 v1.0.149 / Build 150；以下候选对照保留，最终发行摘要见文末。
 
 ## 改动
 
@@ -33,3 +33,14 @@
 - 相对备份减少 319,488 bytes，约 7.6%。包内 20 个 PNG/WebP/JPEG 图片文件逐字节一致，未降低画质。C++ 搜索源码 SHA-256 保持 `63696a09cfa13767b7b781b312cacc69c24c5274bb0d09d1a709569556a4e231`。
 - 正式 v1/v2/v3 签名与 ZIP 16 KiB 对齐验证通过；签名证书 SHA-256 保持 `9895769979e7cf5a91243968464872dbd7320d8ff4b1448b382e5d02e676940e`。
 - 四种 ABI 的实际包检查、原生 JNI 与 Java 回退、16 项 AI 战术/路由、资源清单、启动回退/淡出、13 黑/13 白早期像素、网页缓存及底包版本引导检查通过。没有设备可做实际启动耗时或帧率对照。
+
+## 2026-10-20 正式发布核验
+
+- 最终发行：[v1.0.149](https://github.com/xnnb04664-afk/gomoku/releases/tag/v1.0.149)，Build 150；发行提交 `2c7b6e26a176470bffdbbe4e81163ae502cbd4c1`。
+- 本次先发布了 v1.0.148 / Build 149；验收补查发现旧 Build 148 热更新网页后可能跳过原生优化，随后把完整 APK 门槛提升到 Build 149，以 v1.0.149 向前修正。Build 149 已包含原生优化，可继续接受网页更新；Build 148 及更早会被引导完整安装。没有替换旧 Release 附件。
+- APK：3,883,407 bytes，SHA-256 `f6514f3e973d2cff2cf74d8ef183c8cf4a740153ab33b31fe9fd154fd9671e0b`。
+- HTML：13,079,415 bytes，SHA-256 `a3c191d72175ed0560e1eee3832c206f7a437f2985a6cb4e03203ef234ea44c4`；另附 43,149-byte HTML 增量包，仅匹配上一版 HTML 摘要。
+- GitHub 非草稿发行的资产摘要与本地文件相同；ECS `/api/version` 返回 v1.0.149 且摘要一致，`/healthz` 正常。本次无需重启 ECS、修改生产数据库或部署备用游戏 Worker。
+- 最终 APK 四种 ABI/JNI 导出、16 KiB ELF 与 ZIP 对齐、v1/v2/v3 正式签名通过。旧底包引导与更新 manifest 竞态检查通过。实际手机帧率和完整安装尚未验收。
+- 发布脚本已调整为在 HTML/APK 构建后再次同步官网副本，避免官网保留上一版压缩脚本。
+- 官网 Pages 已部署到 `gomoku-home` 的 `master` Production（`6351ba6e.gomoku-home.pages.dev`）；生产首页 HTTP 200，`/api/site-version` 返回 v1.0.149 / Build 150。`/download/apk` 实际下载 3,883,407 bytes，SHA-256 与最终 Release 一致。初次顺序核验有一次请求超时，独立重试的 APK 下载已通过。
