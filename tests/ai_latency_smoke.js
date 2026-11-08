@@ -5,6 +5,7 @@ const vm = require('node:vm');
 
 const root = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'js/app.js'), 'utf8');
+const onlineSource = fs.readFileSync(path.join(root, 'js/online.js'), 'utf8');
 function between(text, start, end) {
   const a = text.indexOf(start), b = text.indexOf(end, a + start.length);
   assert.ok(a >= 0 && b > a, `missing source section: ${start}`);
@@ -77,6 +78,19 @@ stale.run('makeMove(7, 7, BLACK); aiTurnSeq++;');
 stale.frames.shift()();
 [...stale.timers.values()].forEach(t => t.fn());
 assert.deepEqual(stale.events, ['draw'], 'restart or replay invalidates the scheduled search');
+const joinFreezeStart = onlineSource.indexOf('      // 加入过程完成前冻结旧的人机搜索');
+const joinFreezeEnd = onlineSource.indexOf('      if (currentRoomCode', joinFreezeStart);
+assert.ok(joinFreezeStart >= 0 && joinFreezeEnd > joinFreezeStart, 'join must invalidate the old AI turn before transport setup');
+const joinFreezeBlock = onlineSource.slice(joinFreezeStart, joinFreezeEnd);
+let joinCancelCalls = 0;
+const joinContext = { window: { __gomokuInvalidateAiTurn() { joinCancelCalls++; } }, aiTurnSeq: 4, aiThinking: true };
+vm.runInNewContext(joinFreezeBlock, joinContext);
+assert.equal(joinCancelCalls, 1, 'starting a room join delegates cancellation to the AI lifecycle hook exactly once');
+assert.equal(joinContext.aiTurnSeq, 4, 'the join path does not bypass Worker cancellation with a raw generation increment');
+const legacyJoinContext = { window: {}, aiTurnSeq: 4, aiThinking: true };
+vm.runInNewContext(joinFreezeBlock, legacyJoinContext);
+assert.equal(legacyJoinContext.aiTurnSeq, 5, 'older app shells retain the raw generation fallback');
+assert.equal(legacyJoinContext.aiThinking, false);
 const skill = fixture();
 skill.context.isProphecied = () => true;
 skill.run('makeMove(7, 7, WHITE);');
@@ -122,10 +136,73 @@ const workerFunction = between(source, '    function getAiWorker() {', '    func
 const workerScope = {
   aiWorker: null, aiWorkerBlobUrl: '', aiWorkerPending: new Map(), window: {},
   Worker: function () {}, document: { getElementById() { return null; } }, clearTimeout() {},
+  console: { warn() {} }, disposeAiWorkerCalls: 0,
+  disposeAiWorker() { this.disposeAiWorkerCalls++; },
 };
 vm.runInNewContext(workerFunction, workerScope);
 workerScope.getAiWorker();
 workerScope.aiWorkerPending.set(1, { timeoutId: 1, resolve() {}, reject(error) { throw error; } });
 workerScope.aiWorker.onmessage({ data: { requestId: 1, ok: true, move: { r: 1, c: 2 }, elapsedMs: 12, nodes: 10, depth: 3 } });
 assert.equal(workerScope.window.gomokuLastAiStats.engine, 'worker');
-console.log('AI latency smoke passed: actual entry hooks, scheduling, skill delay, stale turns, and native/worker diagnostics');
+const oldWorker = workerScope.aiWorker;
+const replacementWorker = {};
+workerScope.aiWorker = replacementWorker;
+oldWorker.onerror({ message: 'late error from terminated Worker' });
+oldWorker.onmessage({ data: { requestId: 999, ok: false, error: 'stale' } });
+assert.equal(workerScope.aiWorker, replacementWorker, 'late callbacks from an old Worker cannot dispose its replacement');
+assert.equal(workerScope.disposeAiWorkerCalls, 0);
+
+const invalidateFunction = between(source, '    function invalidatePendingAiTurn()', '    window.__gomokuInvalidateAiTurn = invalidatePendingAiTurn;');
+let invalidatedNativeError = null;
+let invalidatedWorkerCalls = 0;
+const invalidationScope = {
+  aiTurnSeq: 7, aiThinking: true,
+  nativeAiPending: new Map([['native', {
+    turnId: 7, timeoutId: 11,
+    reject(error) { invalidatedNativeError = error; },
+  }]]),
+  aiWorkerPending: new Map([[1, { turnId: 7 }]]),
+  clearTimeout(id) { assert.equal(id, 11); },
+  disposeAiWorker(reason) { invalidatedWorkerCalls++; assert.equal(reason, 'AI 回合已失效'); },
+};
+vm.runInNewContext(invalidateFunction, invalidationScope);
+invalidationScope.invalidatePendingAiTurn();
+assert.equal(invalidationScope.aiTurnSeq, 8);
+assert.equal(invalidationScope.aiThinking, false);
+assert.equal(invalidatedNativeError.message, 'AI 回合已失效');
+assert.equal(invalidatedWorkerCalls, 1, 'invalidating a busy turn terminates its Worker');
+assert.equal(invalidationScope.nativeAiPending.size, 0);
+invalidationScope.nativeAiPending.clear();
+invalidationScope.aiWorkerPending.clear();
+invalidationScope.aiTurnSeq = 8;
+invalidationScope.invalidatePendingAiTurn();
+assert.equal(invalidatedWorkerCalls, 1, 'idle invalidation preserves the warm Worker');
+
+async function checkStaleFallbackResourceLoad() {
+  const fallbackFunction = between(source, '    async function getFastAiFallback(', '    // 🚀 最强大师人机主落子决策函数');
+  let releaseAiResource;
+  let fallbackSearchCalls = 0;
+  let currentTurn = 1;
+  const fallbackContext = {
+    window: {
+      ensureGomokuResource() { return new Promise(resolve => { releaseAiResource = resolve; }); },
+      GomokuFastAI: null,
+    },
+    isCurrentAiTurn(turnId) { return turnId === currentTurn; },
+    navigator: { userAgent: 'desktop' },
+  };
+  const fallback = vm.runInNewContext(`${fallbackFunction}\ngetFastAiFallback`, fallbackContext);
+  const staleFallback = fallback([], [], 1);
+  currentTurn = 2;
+  fallbackContext.window.GomokuFastAI = { getBestMove() { fallbackSearchCalls++; return { r: 0, c: 0 }; } };
+  releaseAiResource();
+  assert.equal(await staleFallback, null);
+  assert.equal(fallbackSearchCalls, 0, 'a resource load that finishes after invalidation never starts main-thread search');
+}
+
+checkStaleFallbackResourceLoad().then(() => {
+  console.log('AI latency smoke passed: scheduling, stale native/worker turns, fallback cancellation, and Worker identity');
+}).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

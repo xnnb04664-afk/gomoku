@@ -41,7 +41,7 @@
       return false;
     };
 
-    const CURRENT_VERSION_TAG = 'v1.0.153';
+    const CURRENT_VERSION_TAG = 'v1.0.154';
     // 完整 APK 才能更新 Android 启动器图标、原生桥以及 C++ NDK AI 引擎。
     // Build 140 重绘图标，142 提供版本查询，148 集成 C++ 引擎；
     // Build 151 才包含 PackageInstaller 自更新代码；Build 153 加入匹配通知桥接。
@@ -1621,6 +1621,30 @@
       }
     }
 
+    function isCurrentAiTurn(turnId) {
+      return turnId === undefined || turnId === aiTurnSeq;
+    }
+
+    function invalidatePendingAiTurn() {
+      const invalidTurnId = aiTurnSeq++;
+      aiThinking = false;
+
+      let workerHasInvalidRequest = false;
+      for (const [requestId, pending] of nativeAiPending) {
+        if (pending.turnId !== invalidTurnId) continue;
+        nativeAiPending.delete(requestId);
+        clearTimeout(pending.timeoutId);
+        pending.reject(new Error('AI 回合已失效'));
+      }
+      for (const pending of aiWorkerPending.values()) {
+        if (pending.turnId === invalidTurnId) workerHasInvalidRequest = true;
+      }
+      // Terminate synchronous search only when it belongs to the invalidated
+      // turn. A normal reset with no active search keeps the warm Worker.
+      if (workerHasInvalidRequest) disposeAiWorker('AI 回合已失效');
+    }
+    window.__gomokuInvalidateAiTurn = invalidatePendingAiTurn;
+
     function getAiWorker() {
       if (aiWorker) return aiWorker;
       if (typeof Worker !== 'function') return null;
@@ -1633,7 +1657,9 @@
         } else {
           aiWorker = new Worker('js/ai_worker.js');
         }
-        aiWorker.onmessage = (event) => {
+        const worker = aiWorker;
+        worker.onmessage = (event) => {
+          if (aiWorker !== worker) return;
           const data = event && event.data ? event.data : {};
           const pending = aiWorkerPending.get(data.requestId);
           if (!pending) return;
@@ -1651,7 +1677,8 @@
             pending.reject(new Error(data.error || 'AI Worker 计算失败'));
           }
         };
-        aiWorker.onerror = (event) => {
+        worker.onerror = (event) => {
+          if (aiWorker !== worker) return;
           console.warn('[AI Worker] 后台计算线程异常:', event && event.message ? event.message : 'unknown error');
           disposeAiWorker('AI Worker 异常退出');
         };
@@ -1693,12 +1720,6 @@
       return null;
     }
 
-    function invalidatePendingAiTurn() {
-      aiTurnSeq++;
-      aiThinking = false;
-    }
-    window.__gomokuInvalidateAiTurn = invalidatePendingAiTurn;
-
     window.__gomokuNativeAiResult = function handleNativeAiResult(requestId, responseJson) {
       const key = String(requestId || '');
       const pending = nativeAiPending.get(key);
@@ -1730,7 +1751,7 @@
       }
     };
 
-    function requestNativeAiMove(boardState, forbiddenPoints = []) {
+    function requestNativeAiMove(boardState, forbiddenPoints = [], turnId = aiTurnSeq) {
       const bridge = window.AndroidNativeApp;
       if (!bridge || typeof bridge.requestNativeAiMove !== 'function') {
         return Promise.reject(new Error('当前 Android 版本没有原生 AI 接口'));
@@ -1745,7 +1766,7 @@
           nativeAiPending.delete(requestId);
           reject(new Error('Android 原生 AI 响应超时'));
         }, 2000);
-        nativeAiPending.set(requestId, { resolve, reject, timeoutId, startedAt: Date.now() });
+        nativeAiPending.set(requestId, { resolve, reject, timeoutId, startedAt: Date.now(), turnId });
 
         try {
           const accepted = bridge.requestNativeAiMove(
@@ -1767,25 +1788,29 @@
       });
     }
 
-    async function requestBestAiMove(boardState, forbiddenPoints = []) {
+    async function requestBestAiMove(boardState, forbiddenPoints = [], turnId = aiTurnSeq) {
       const bridge = window.AndroidNativeApp;
       if (bridge && typeof bridge.requestNativeAiMove === 'function') {
         try {
-          const nativeMove = await requestNativeAiMove(boardState, forbiddenPoints);
+          const nativeMove = await requestNativeAiMove(boardState, forbiddenPoints, turnId);
+          if (!isCurrentAiTurn(turnId)) throw new Error('AI 回合已失效');
           if (isLegalAiMove(nativeMove, boardState, forbiddenPoints)) return nativeMove;
           throw new Error('原生 AI 返回的落点已占用或被禁用');
         } catch (nativeError) {
+          if (!isCurrentAiTurn(turnId)) throw nativeError;
           console.warn('[Native AI] 原生计算不可用，切回 Worker:', nativeError && nativeError.message ? nativeError.message : nativeError);
         }
       }
-      const workerMove = await requestFastAiMove(boardState, forbiddenPoints);
+      if (!isCurrentAiTurn(turnId)) throw new Error('AI 回合已失效');
+      const workerMove = await requestFastAiMove(boardState, forbiddenPoints, turnId);
+      if (!isCurrentAiTurn(turnId)) throw new Error('AI 回合已失效');
       if (!isLegalAiMove(workerMove, boardState, forbiddenPoints)) {
         throw new Error('AI Worker 返回的落点已占用或被禁用');
       }
       return workerMove;
     }
 
-    function requestFastAiMove(boardState, forbiddenPoints = []) {
+    function requestFastAiMove(boardState, forbiddenPoints = [], turnId = aiTurnSeq) {
       const worker = getAiWorker();
       if (!worker) return Promise.reject(new Error('当前环境不支持 AI Worker'));
       const flat = flattenAiBoard(boardState);
@@ -1798,7 +1823,7 @@
           disposeAiWorker('AI Worker 计算超时');
           reject(new Error('AI Worker 计算超时'));
         }, mobile ? 9000 : 12000);
-        aiWorkerPending.set(requestId, { resolve, reject, timeoutId });
+        aiWorkerPending.set(requestId, { resolve, reject, timeoutId, turnId });
         try {
           worker.postMessage({
             type: 'best_move',
@@ -1826,11 +1851,13 @@
       });
     }
 
-    async function getFastAiFallback(boardState, forbiddenPoints = []) {
+    async function getFastAiFallback(boardState, forbiddenPoints = [], turnId = aiTurnSeq) {
       if (!window.GomokuFastAI || typeof window.GomokuFastAI.getBestMove !== 'function') {
         if (typeof window.ensureGomokuResource === 'function') await window.ensureGomokuResource('aiFast');
+        if (!isCurrentAiTurn(turnId)) return null;
       }
       if (!window.GomokuFastAI || typeof window.GomokuFastAI.getBestMove !== 'function') return null;
+      if (!isCurrentAiTurn(turnId)) return null;
       const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
       return window.GomokuFastAI.getBestMove(
         boardState,
@@ -1858,15 +1885,18 @@
       const boardSnapshot = board.map(row => row.slice());
       let bestMove = null;
       try {
-        bestMove = await requestBestAiMove(boardSnapshot, forbiddenPoints);
+        bestMove = await requestBestAiMove(boardSnapshot, forbiddenPoints, turnId);
       } catch (workerError) {
+        if (turnId !== aiTurnSeq) return;
         window.gomokuLastAiStats = { engine: 'js-fallback' };
         console.warn('[AI] 使用快速 JavaScript 回退:', workerError && workerError.message ? workerError.message : workerError);
         try {
-          bestMove = await getFastAiFallback(boardSnapshot, forbiddenPoints);
+          bestMove = await getFastAiFallback(boardSnapshot, forbiddenPoints, turnId);
+          if (turnId !== aiTurnSeq) return;
           if (!bestMove && (!window.GomokuAI || typeof window.GomokuAI.getBestMove !== 'function') &&
               typeof window.ensureGomokuResource === 'function') {
             try { await window.ensureGomokuResource('aiCore'); } catch (_) {}
+            if (turnId !== aiTurnSeq) return;
           }
           if (!bestMove && window.GomokuAI && window.GomokuAI.getBestMove) {
             bestMove = window.GomokuAI.getBestMove(boardSnapshot, getAiColor(), 'master', false, forbiddenPoints);
@@ -7687,6 +7717,13 @@
         try { conn.send({ type: "leave_room", name: p1Name }); } catch(_) {}
       }
       if (conn) {
+        // The connection is cleared before setMode('ai') runs below, so the
+        // mode-change listener cannot notify voice cleanup after this point.
+        try {
+          if (typeof notifyGomokuOnlineConnection === 'function') {
+            notifyGomokuOnlineConnection('close', conn);
+          }
+        } catch (_) {}
         try { conn.close(true); } catch(_) {}
         conn = null;
       }
@@ -7822,8 +7859,7 @@
         assignRandomAiOpponent();
         updatePlayerHeaderUI();
       }
-      aiTurnSeq++;
-      aiThinking = false;
+      invalidatePendingAiTurn();
       activeSkill = null;
       const skillPromptBar = document.getElementById('skillPromptBar');
       if (skillPromptBar) skillPromptBar.style.display = 'none';
@@ -8141,8 +8177,6 @@
       if (undoSuccess && wasGameOver) {
         const wasCommitted = pendingRecordCommitted;
         discardPendingMatchRecord();
-        aiTurnSeq++;
-        aiThinking = false;
         activeSkill = null;
         isOver = false;
         gameWinnerColor = 0;
@@ -8749,8 +8783,7 @@
       undoStack = Array.isArray(snapshot.undoStack) ? snapshot.undoStack.slice(-30) : [];
       activeSkill = null;
       activeVFX = [];
-      aiTurnSeq++;
-      aiThinking = false;
+      invalidatePendingAiTurn();
       activeGameCheckpointOwner = ownerUid;
       isReplayMode = false;
       winningLine = null;

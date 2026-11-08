@@ -209,6 +209,7 @@ async function checkNativeRouting() {
     const route = vm.runInNewContext(`(${routingBody})`, {
       window: scenario.noBridge ? {} : { AndroidNativeApp: { requestNativeAiMove() {} } },
       console: { warn() {} },
+      aiTurnSeq: 1,
       requestNativeAiMove: async (receivedBoard, receivedForbidden) => {
         nativeCalls++;
         assert.equal(receivedBoard, board);
@@ -225,12 +226,34 @@ async function checkNativeRouting() {
       isLegalAiMove: (move, receivedBoard, receivedForbidden) => move &&
         Number.isInteger(move.r) && Number.isInteger(move.c) && isValid(move.r, move.c) &&
         receivedBoard[move.r][move.c] === 0 &&
-        !receivedForbidden.some(point => point.r === move.r && point.c === move.c)
+        !receivedForbidden.some(point => point.r === move.r && point.c === move.c),
+      isCurrentAiTurn: turnId => turnId === undefined || turnId === 1
     });
     if (scenario.rejects) await assert.rejects(route(board, forbidden), /Worker/);
     else assert.equal(await route(board, forbidden), scenario.expected);
     tests.push({ name: scenario.name, ok: nativeCalls === scenario.nativeCalls && workerCalls === scenario.workerCalls, nativeCalls, workerCalls });
   }
+
+  let currentTurn = 1;
+  let rejectNative;
+  let staleWorkerCalls = 0;
+  const staleRoute = vm.runInNewContext(`(${routingBody})`, {
+    window: { AndroidNativeApp: { requestNativeAiMove() {} } },
+    console: { warn() {} },
+    aiTurnSeq: 1,
+    requestNativeAiMove: () => new Promise((_, reject) => { rejectNative = reject; }),
+    requestFastAiMove: async () => { staleWorkerCalls++; return workerMove; },
+    isCurrentAiTurn: turnId => turnId === currentTurn,
+    isLegalAiMove: (move, receivedBoard, receivedForbidden) => move &&
+      Number.isInteger(move.r) && Number.isInteger(move.c) && isValid(move.r, move.c) &&
+      receivedBoard[move.r][move.c] === 0 &&
+      !receivedForbidden.some(point => point.r === move.r && point.c === move.c)
+  });
+  const staleRequest = staleRoute(board, forbidden, 1);
+  currentTurn = 2;
+  rejectNative(new Error('AI 回合已失效'));
+  await assert.rejects(staleRequest, /失效/);
+  tests.push({ name: 'invalidated native request never starts stale Worker fallback', ok: staleWorkerCalls === 0, workerCalls: staleWorkerCalls });
 }
 
 checkNativeRouting().then(() => {

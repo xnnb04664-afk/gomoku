@@ -989,13 +989,14 @@
     if (state.refreshPromise) return state.refreshPromise;
     const quiet = options && options.quiet;
     const lifecycle = state.lifecycle;
+    const accountUid = uid();
     const previousUnreadTotal = state.lastUnreadTotal;
     const request = Promise.all([
       api('/api/friends'),
       api('/api/recent-opponents'),
       api('/api/blocks')
     ]).then(([friendsResult, recentResult, blocksResult]) => {
-      if (lifecycle !== state.lifecycle || state.stopping || !state.started) return false;
+      if (lifecycle !== state.lifecycle || uid() !== accountUid || state.stopping || !state.started) return false;
       const social = friendsResult.data || {};
       const previousInviteIds = new Set(state.pendingInvites.keys());
       const previousIncomingRequestIds = new Set(state.requests
@@ -1028,7 +1029,9 @@
       notifyUnreadSnapshot(state.lastUnreadTotal, previousUnreadTotal);
       return true;
     }).catch(error => {
-      if (!quiet) notice(error.message || '好友列表加载失败', true);
+      if (lifecycle === state.lifecycle && uid() === accountUid && !quiet) {
+        notice(error.message || '好友列表加载失败', true);
+      }
       return false;
     });
     state.refreshPromise = request;
@@ -1592,11 +1595,14 @@
     if (!state.started || state.stopping || !isRegistered()) return;
     if (state.socketConnecting) return;
     if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) return;
+    const lifecycle = state.lifecycle;
+    const accountUid = uid();
+    if (!accountUid) return;
     state.socketConnecting = true;
     let ticketResponseUrl = '';
     try {
       const result = await api('/api/social/socket-ticket', { method: 'POST' });
-      if (!state.started || state.stopping) return;
+      if (!state.started || state.stopping || lifecycle !== state.lifecycle || uid() !== accountUid) return;
       ticketResponseUrl = result.response && result.response.url ? result.response.url : '';
       const routing = window.GomokuBackendRouting;
       const origin = (routing && ticketResponseUrl && routing.getHostForUrl(ticketResponseUrl))
@@ -1607,18 +1613,27 @@
       const socket = new WebSocket(socketUrl(ticketResponseUrl, ticket));
       state.socket = socket;
       socket.onopen = () => {
-        if (state.socket !== socket) return;
+        if (lifecycle !== state.lifecycle || uid() !== accountUid || state.socket !== socket) return;
         state.socketRetry = 0;
         setConnectionStatus('好友状态已实时连接', true);
         if (state.currentChat) loadChat({ incremental: true, quiet: true });
+        if (state.socketPingTimer) clearInterval(state.socketPingTimer);
         state.socketPingTimer = setInterval(() => {
-          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping', sentAt: Date.now() }));
+          if (lifecycle === state.lifecycle && uid() === accountUid
+              && state.socket === socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ping', sentAt: Date.now() }));
+          }
         }, 20000);
       };
-      socket.onmessage = event => handleSocketMessage(event.data);
+      socket.onmessage = event => {
+        if (lifecycle === state.lifecycle && uid() === accountUid && state.socket === socket) {
+          handleSocketMessage(event.data);
+        }
+      };
       socket.onerror = () => {};
       socket.onclose = event => {
-        if (state.socket === socket) state.socket = null;
+        if (lifecycle !== state.lifecycle || uid() !== accountUid || state.socket !== socket) return;
+        state.socket = null;
         if (state.socketPingTimer) clearInterval(state.socketPingTimer);
         state.socketPingTimer = null;
         const intentionalClose = state.stopping || Number(event?.code) === 1000 || Number(event?.code) === 1001;
@@ -1628,10 +1643,11 @@
         scheduleSocketReconnect();
       };
     } catch (_) {
+      if (lifecycle !== state.lifecycle || uid() !== accountUid) return;
       setConnectionStatus('好友实时连接暂不可用，列表仍可使用', false);
       scheduleSocketReconnect();
     } finally {
-      state.socketConnecting = false;
+      if (lifecycle === state.lifecycle && uid() === accountUid) state.socketConnecting = false;
     }
   }
 
@@ -1901,6 +1917,9 @@
     state.stopping = true;
     state.started = false;
     state.lifecycle += 1;
+    // Let a new account refresh immediately. The old Promise's cleanup only
+    // clears this slot if it still owns it, so it cannot erase a newer request.
+    state.refreshPromise = null;
     invalidateSearch();
     clearSocketTimers();
     if (state.refreshTimer) clearInterval(state.refreshTimer);

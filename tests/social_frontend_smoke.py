@@ -31,6 +31,7 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
 
     test_url = os.environ.get("GOMOKU_TEST_URL", "http://127.0.0.1:3000/index.html")
+    use_source_module = os.environ.get("GOMOKU_TEST_SOCIAL_SOURCE") == "1"
     source = (Path(__file__).resolve().parents[1] / "js" / "social.js").read_text(encoding="utf-8")
     assert "[0, 1000, 2000, 4000, 8000, 12000]" in source, "社交重连退避表不完整"
     assert "SEARCH_DEBOUNCE_MS = 320" in source, "好友搜索没有稳定的输入防抖"
@@ -193,6 +194,10 @@ def main():
 
         # 游客必须被正式账号门槛拦截并引导登录。
         guest = browser.new_page(viewport={"width": 390, "height": 844})
+        if use_source_module:
+            guest.route("**/js/social.min.js*", lambda route: route.fulfill(
+                status=200, content_type="text/javascript; charset=utf-8", body=source
+            ))
         guest.route("**/api/**", api_handler)
         guest.goto(test_url, wait_until="domcontentloaded", timeout=30_000)
         guest.wait_for_selector("#skyLobby", state="visible", timeout=15_000)
@@ -210,6 +215,10 @@ def main():
         page = browser.new_page(viewport={"width": 390, "height": 844})
         page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
         page.on("pageerror", lambda error: page_errors.append(str(error)))
+        if use_source_module:
+            page.route("**/js/social.min.js*", lambda route: route.fulfill(
+                status=200, content_type="text/javascript; charset=utf-8", body=source
+            ))
         page.route("**/api/**", api_handler)
         page.add_init_script(
             f"""
@@ -271,19 +280,19 @@ def main():
         # whole friend row into a competing click target.
         profile_opener = page.locator('#socialFriendsList [data-social-action="profile"]').first
         profile_opener.click()
-        page.wait_for_selector("#socialProfileModal.show")
+        page.wait_for_selector("#socialFriendProfileModal.show")
         profile_card = page.evaluate("""() => ({
-          name: document.querySelector('#socialProfileName')?.textContent || '',
-          text: document.querySelector('#socialProfileModal')?.textContent || '',
-          modal: document.querySelector('#socialProfileModal [role=dialog]')?.getAttribute('aria-modal') || ''
+          name: document.querySelector('#socialFriendProfileModal .sky-friend-profile-identity > strong')?.textContent || '',
+          text: document.querySelector('#socialFriendProfileModal')?.textContent || '',
+          modal: document.querySelector('#socialFriendProfileModal [role=dialog]')?.getAttribute('aria-modal') || ''
         })""")
         assert profile_card["name"] == "云端棋友" and "1,320" in profile_card["text"] and profile_card["modal"] == "true", profile_card
         page.keyboard.press("Shift+Tab")
-        assert page.evaluate("() => document.activeElement?.textContent?.trim()") == "邀请对战"
+        assert page.evaluate("() => document.activeElement?.dataset?.profileAction") == "invite"
         page.keyboard.press("Tab")
         assert page.evaluate("() => document.activeElement?.hasAttribute('data-profile-close')")
         page.keyboard.press("Escape")
-        page.wait_for_function("!document.querySelector('#socialProfileModal')?.classList.contains('show')")
+        page.wait_for_function("!document.querySelector('#socialFriendProfileModal')?.classList.contains('show')")
         focus_restored = page.evaluate("() => document.activeElement?.dataset?.socialAction === 'profile'")
         assert focus_restored, "Closing the friend profile should return focus to the friend's avatar"
 
@@ -389,7 +398,7 @@ def main():
         page.wait_for_function("window.__GOMOKU_ONLINE_READY__ === true")
         page.evaluate("""() => {
           window.__joinedInviteRoom = '';
-          window.initHostPeer = async () => { currentRoomCode = '123456'; };
+          window.initHostPeer = async () => { currentRoomCode = '123456'; return true; };
           window.openOnlineModal = () => {};
           window.joinOnlineRoom = async code => { window.__joinedInviteRoom = code; };
           return true;

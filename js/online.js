@@ -341,11 +341,10 @@
               this.end(true);
               return;
             }
-            this._emit('offline');
-            this._emit('close');
-            // 对端离开时主动释放本地 WebSocket；否则旧 relay 仍可能保持
-            // connected=true，重连逻辑会误把它复用成“假在线”连接。
-            this.end(true);
+            // 对端掉线不代表本地中继损坏。保留健康 socket 和入房监听，
+            // 让对方重连后直接握手；双方互相关闭会形成断线通知反馈循环。
+            // 真正的本地断线仍由 socket close/error 和业务心跳检测。
+            this._emit('peer_offline', message);
             return;
           }
           if (message.type === 'relay_error') {
@@ -1190,6 +1189,12 @@
             sessionId: message.sessionId
           }), false, 'relay');
         };
+        this.peerRecoveryUntil = 0;
+        this.relayPeerOfflineHandler = () => {
+          // 房主重建后只监听入房信道；健康客方需要补同会话握手，
+          // 而不是为了唤醒房主也先关闭自己的健康中继。
+          this.peerRecoveryUntil = Date.now() + 18000;
+        };
         this.mqttCloseHandler = () => this._markTransportClosed(new Error('信令连接已断开'));
         this.mqttOfflineHandler = () => this._markTransportClosed(new Error('信令连接已离线'));
         this.mqttErrorHandler = (err) => {
@@ -1197,7 +1202,10 @@
         };
 
         this.client.on('message', this.messageHandler);
-        if (typeof this.client.on === 'function') this.client.on('peer_leave', this.relayPeerLeaveHandler);
+        if (typeof this.client.on === 'function') {
+          this.client.on('peer_leave', this.relayPeerLeaveHandler);
+          this.client.on('peer_offline', this.relayPeerOfflineHandler);
+        }
         this.client.on('close', this.mqttCloseHandler);
         this.client.on('offline', this.mqttOfflineHandler);
         this.client.on('error', this.mqttErrorHandler);
@@ -1388,13 +1396,18 @@
 
       _scheduleP2PRecovery(reason = 'P2P 通道异常', delayOverride = null) {
         if (this.closed || !this.open || !this.ready) return;
-        if ((this.isP2pReady || this.p2pRoute !== 'unknown') && typeof resetOnlineLatencyTelemetryForTransport === 'function') {
-          resetOnlineLatencyTelemetryForTransport();
+        const transientDisconnect = /暂时断开/.test(String(reason)) &&
+          this.dc && this.dc.readyState === 'open';
+        // ICE 短暂 disconnected 时继续保留可用通道，宽限期结束仍未恢复才重建。
+        if (!transientDisconnect) {
+          if ((this.isP2pReady || this.p2pRoute !== 'unknown') && typeof resetOnlineLatencyTelemetryForTransport === 'function') {
+            resetOnlineLatencyTelemetryForTransport();
+          }
+          this.isP2pReady = false;
+          this.p2pRoute = 'unknown';
+          updateOnlineNetworkUI();
         }
-        this.isP2pReady = false;
-        this.p2pRoute = 'unknown';
         this.p2pHighRttStreak = 0;
-        updateOnlineNetworkUI();
         if (this.p2pRecoveryTimer) return;
 
         const attempt = this.p2pRecoveryAttempts++;
@@ -1406,6 +1419,14 @@
         this.p2pRecoveryTimer = setTimeout(() => {
           this.p2pRecoveryTimer = null;
           if (this.closed || !this.open || !this.ready) return;
+          if (transientDisconnect && this.dc?.readyState === 'open' &&
+              (this.pc?.connectionState === 'connected' ||
+               ['connected', 'completed'].includes(this.pc?.iceConnectionState))) return;
+          if (transientDisconnect) {
+            this.isP2pReady = false;
+            this.p2pRoute = 'unknown';
+            updateOnlineNetworkUI();
+          }
           void this._attemptIceRestart(reason).then((restarted) => {
             if (!restarted && !this.closed && this.open && this.ready) {
               this._restartP2PProbe(reason);
@@ -1476,8 +1497,9 @@
 
       async _restartP2PProbe(reason = 'P2P 通道异常') {
         if (this.closed || !this.open || !this.ready) return;
+        const generation = this.p2pGeneration;
         const iceServers = await getWebRtcIceServersForRecovery();
-        if (this.closed || !this.open || !this.ready) return;
+        if (this.closed || !this.open || !this.ready || this.p2pGeneration !== generation || this.isP2pReady) return;
         this._disposeP2P();
         this.p2pProbeStarted = false;
         this._resetP2PSession();
@@ -1708,7 +1730,6 @@
           this.signalRetryTimer = null;
           this._startP2PStatsPolling();
           console.info('🎉 [P2P Dual-Track] WebRTC 数据通道成功建立，正在检测直连或 TURN 中继线路');
-          showGameNotice('⚡ 已无感激活 WebRTC 低延迟通道，正在检测线路', false);
           updateOnlineNetworkUI();
         };
         dc.onmessage = (e) => {
@@ -1806,26 +1827,9 @@
       }
 
       _maybeReoptimizeP2P(rttMs) {
-        if (!this.isP2pReady || (this.p2pRoute !== 'direct' && this.p2pRoute !== 'relay') ||
-            !Number.isFinite(rttMs)) {
-          this.p2pHighRttStreak = 0;
-          return;
-        }
-        if (rttMs <= ONLINE_P2P_HIGH_RTT_THRESHOLD_MS) {
-          this.p2pHighRttStreak = 0;
-          return;
-        }
-        this.p2pHighRttStreak++;
-        if (this.p2pHighRttStreak < ONLINE_P2P_HIGH_RTT_SAMPLE_COUNT ||
-            this.p2pReoptimizationCount >= ONLINE_P2P_MAX_REOPTIMIZE_ATTEMPTS ||
-            this.p2pRecoveryTimer) return;
-        const now = Date.now();
-        if (now - this.p2pLastReoptimizationAt < ONLINE_P2P_REOPTIMIZE_COOLDOWN_MS) return;
-        this.p2pReoptimizationCount++;
-        this.p2pLastReoptimizationAt = now;
+        // RTT 偏高并不等于连接失效。拆掉正在工作的通道会放大移动网络抖动，
+        // 并让两端反复重选线路。保留当前通道及可靠中继，实际失败再走恢复。
         this.p2pHighRttStreak = 0;
-        showGameNotice(`📡 检测到 ${this.p2pRoute === 'relay' ? 'TURN中继' : 'P2P'} 延迟偏高，正在尝试重选线路…`, true);
-        this._scheduleP2PRecovery('P2P 高延迟，自动重选线路', 0);
       }
 
       _disposeP2P() {
@@ -1898,6 +1902,7 @@
         if (!this.client) return;
         try { this.client.removeListener('message', this.messageHandler); } catch(_) {}
         try { this.client.removeListener('peer_leave', this.relayPeerLeaveHandler); } catch(_) {}
+        try { this.client.removeListener('peer_offline', this.relayPeerOfflineHandler); } catch(_) {}
         try { this.client.removeListener('close', this.mqttCloseHandler); } catch(_) {}
         try { this.client.removeListener('offline', this.mqttOfflineHandler); } catch(_) {}
         try { this.client.removeListener('error', this.mqttErrorHandler); } catch(_) {}
@@ -2106,6 +2111,7 @@
     }
 
     function rotateOnlineSessionId() {
+      onlineNetworkTelemetry.remoteState = '等待对方';
       onlineSessionId = generateSecureId(18, 'room_').slice(0, 96);
       onlineJoinTicket = generateSecureId(24, 'join_').slice(0, 96);
       onlineTransportGeneration++;
@@ -2512,6 +2518,7 @@
       // A finished board still belongs to the room: keep its transport alive so
       // both players can negotiate the next round without leaving the room.
       if (gameMode !== 'online') return;
+      if (typeof onlineNetworkTelemetry !== 'undefined' && onlineNetworkTelemetry.remoteState === '已退出') return;
       if (isReconnecting) return;
 
       if (!currentRoomCode && lastActiveRoomCode) {
@@ -2616,6 +2623,7 @@
     }
 
     function manualTriggerReconnect() {
+      onlineNetworkTelemetry.remoteState = '等待对方';
       isReconnecting = true;
       window.publishOnlineActivityState?.();
       reconnectAttempts = 0;
@@ -2840,8 +2848,24 @@
       }, { title: '重开对局申请', icon: '🔄', okText: '✅ 同意重开', cancelText: '❌ 拒绝' });
     }
 
-    function fallbackToAiGame() {
+    function leaveInterruptedOnlineRoom() {
       isReconnecting = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      stopReconnectHandshakeLoop();
+      showReconnectOverlay(false);
+      leaveOnlineRoom();
+    }
+
+    function fallbackToAiGame() {
+      if (gameMode !== 'online') return;
+      // 主动转人机必须先通知对端；leave_room 属于立即双路镜像消息，
+      // 不能静默关闭后让好友一直等待重连。
+      if (conn && conn.open) {
+        try { conn.send({ type: 'leave_room', name: p1Name }); } catch (_) {}
+      }
+      isReconnecting = false;
+      if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+      onlineHeartbeatTimer = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       stopReconnectHandshakeLoop();
       showReconnectOverlay(false);
@@ -2867,7 +2891,9 @@
       if (typeof closeUndoModal === 'function') closeUndoModal();
       if (typeof closeGameResultModal === 'function') closeGameResultModal();
       
+      removeCurrentOnlineRoomSnapshot();
       gameMode = 'ai';
+      window.publishOnlineActivityState?.();
       aiPlayerColor = myOnlineColor;
       const aiProfile = window.getRandomAiOpponentProfile?.() || { name: '云岫', avatar: 'ai_cloud_fox' };
       p2Name = aiProfile.name;
@@ -2999,7 +3025,8 @@
       const localState = getLocalOnlineNetworkState();
       const peerFresh = onlineNetworkTelemetry.remoteLastSeenAt > 0 &&
         Date.now() - onlineNetworkTelemetry.remoteLastSeenAt <= ONLINE_PEER_TIMEOUT_MS;
-      const peerState = peerFresh ? onlineNetworkTelemetry.remoteState :
+      const peerState = onlineNetworkTelemetry.remoteState === '已退出' ? '已退出' :
+        peerFresh ? onlineNetworkTelemetry.remoteState :
         (onlineNetworkTelemetry.remoteLastSeenAt > 0 ? '连接超时' : '等待对方');
       const localEl = document.getElementById('myNetworkStatusLabel');
       const peerEl = document.getElementById('peerNetworkStatusLabel');
@@ -3356,6 +3383,7 @@
       updateOnlineNetworkUI();
 
       let missedPings = 0;
+      let probingRelay = false;
       const connection = conn;
       // `open` 可能在 setupConn 之后才触发；按需语音模块通过此事件绑定当前连接。
       // 不在这里主动加载语音，也不请求任何媒体权限。
@@ -3367,14 +3395,30 @@
       const sendHeartbeat = (countMiss = true) => {
         if (conn !== connection) return;
         if (conn && conn.open && gameMode === 'online') {
+          if (myOnlineColor === WHITE && connection.peerRecoveryUntil > Date.now()) {
+            try {
+              connection.client.publish(`gomoku/v3/${currentRoomCode}/c2h`, JSON.stringify({
+                type: 'reconnect_handshake', role: 'client', uid: getOrCreateMatchUid(),
+                name: normalizeNetworkName(p1Name, '棋友'), avatar: getNetworkAvatarValue(p1Avatar),
+                sessionId: onlineSessionId || undefined, roundId: onlineRoundId || undefined
+              }), { qos: MQTT_ROOM_DATA_QOS, retain: false });
+            } catch (_) {}
+          }
           if (countMiss) missedPings++;
-          // WebSocket 中继 close/offline 会立即触发重连；只有半开连接才走心跳兜底。
+          // P2P 心跳失联先测健康中继。只在中继也无响应时重建房间，
+          // 避免 DataChannel 半开把可用 WebSocket 一并拆掉。
           if (countMiss && missedPings >= 3) {
-            triggerOnlineReconnect("心跳无响应");
-            return;
+            if (!probingRelay && getLocalOnlineTransportPath() === 'p2p' && isMqttPoolUsable(connection.client)) {
+              probingRelay = true;
+              missedPings = 0;
+              connection._scheduleP2PRecovery('DataChannel 心跳无响应');
+            } else {
+              triggerOnlineReconnect("心跳无响应");
+              return;
+            }
           }
           const pingId = generateSecureId(10, 'hb_');
-          const heartbeatTransport = getLocalOnlineTransportPath();
+          const heartbeatTransport = probingRelay ? 'mqtt' : getLocalOnlineTransportPath();
           const sentAt = Date.now();
           pendingOnlinePings.set(pingId, { sentAt, transport: heartbeatTransport });
           for (const [id, pending] of pendingOnlinePings) {
@@ -3508,21 +3552,32 @@
           markOnlinePeerSeen(data.networkState || data.peerState || '在线', undefined, data.peerTransportRttMs);
         }
         if (data.type === "leave_room") {
-          if (data.senderRole && data.senderRole === (myOnlineColor === BLACK ? 'host' : 'client')) return;
-          showGameNotice(`⚠️ 对手【${normalizeNetworkName(data.name, p2Name)}】已退出房间，已自动切回人机对弈模式~`, false);
+          const pendingJoin = typeof activeRoomJoinAttempt !== 'undefined' ? activeRoomJoinAttempt : null;
+          if (pendingJoin && pendingJoin.connection === connection &&
+              pendingJoin.generation === onlineTransportGeneration &&
+              String(pendingJoin.code) === String(currentRoomCode)) {
+            // accepted 后、confirmed 前仍可能停留在旧 AI 模式。终止当前入房
+            // 重试但保留已接纳的会话身份，且禁止取消回调重新启动旧 AI。
+            pendingJoin.completed = true;
+            pendingJoin.preserveRoomState = true;
+            cancelRoomJoin({ silent: true });
+            if (gameMode !== 'online') setMode('online');
+          }
+          // 已确认的联机棋盘保持不变，明确退出后只由玩家选择后续操作。
+          isReconnecting = false;
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          stopReconnectHandshakeLoop();
           if (onlineHeartbeatTimer) clearInterval(onlineHeartbeatTimer);
+          onlineHeartbeatTimer = null;
           detachHostInviteListener();
-          if (conn) { try { conn.close(true); } catch(_) {} conn = null; }
+          notifyGomokuOnlineConnection('close', connection);
+          if (conn) { try { conn.close(true); } catch (_) {} conn = null; }
           closeMqttClientPool();
-          if (p2pChannel) { try { p2pChannel.close(); } catch(_) {} p2pChannel = null; }
-          activeOnlineGuestUid = '';
-          activeOnlineOpponentUid = '';
-          currentRoomCode = null;
-          onlineSessionId = '';
-          onlineJoinTicket = '';
+          onlineNetworkTelemetry.remoteState = '已退出';
+          // 保留房间身份供手动恢复，但废弃正在等待中的旧异步建连任务。
           onlineTransportGeneration++;
+          pendingOnlinePings.clear();
           clearOnlineReliableOutbox();
-          onlineRoundId = '';
           clearPendingOnlineUndo();
           clearActiveOnlineUndo();
           pendingOnlineRestartId = '';
@@ -3531,11 +3586,18 @@
           activeOnlineRestartState = null;
           if (typeof closeUndoModal === 'function') closeUndoModal();
           if (typeof closeGameResultModal === 'function') closeGameResultModal();
-          setMode("ai", false);
-          // 清掉已匹配的服务端配对行，避免下一次匹配重试时复用这场旧房间。
+          persistGameState();
+          updateOnlineNetworkUI();
+          window.publishOnlineActivityState?.();
+          showReconnectOverlay(true, '对手已退出房间，棋盘已保留。您可以退出房间，或手动选择转为人机继续。');
+          document.getElementById('reconnectTitle').textContent = '对手已退出房间';
+          showGameNotice('对手已退出房间，棋局已暂停。', true);
           void cancelQuickMatch();
           return;
         }
+        // 等待入房确认期间仍可能收到房主的首步；不能在旧 AI 棋盘中
+        // 应用联机落子并触发 AI，进入 online 后由权威快照补齐。
+        if (gameMode !== 'online') return;
         if (data.type === 'ping') {
           try {
             conn.send({
@@ -3566,6 +3628,7 @@
             return;
           }
           missedPings = 0;
+          probingRelay = false;
           if (data.pingId && pendingOnlinePings.has(data.pingId)) {
             const startedAt = typeof pending === 'number' ? pending : pending?.sentAt;
             pendingOnlinePings.delete(data.pingId);
@@ -4250,8 +4313,12 @@
       // 客户端仍沿用默认 BLACK，出现“双方都是黑子”并在首步互相拦截的假联机状态。
       setOnlineColor(WHITE);
       // 加入过程完成前冻结旧的人机搜索，避免用户已经点击加入房间却继续看见旧棋局中的 AI 落子。
-      aiTurnSeq++;
-      aiThinking = false;
+      if (typeof window.__gomokuInvalidateAiTurn === 'function') {
+        window.__gomokuInvalidateAiTurn();
+      } else {
+        aiTurnSeq++;
+        aiThinking = false;
+      }
 
       if (currentRoomCode && String(currentRoomCode) !== String(code)) {
         clearOnlineReliableOutbox();
@@ -4441,16 +4508,19 @@
                   startJoinReadyRetry(nextConn);
                   clearJoinConfirmTimeout();
                   joinConfirmTimeout = setTimeout(() => {
-                    if (hasJoined || joiningConnection !== nextConn) return;
+                    if (hasJoined || joinCancelled || attempt.cancelled ||
+                        transportGeneration !== onlineTransportGeneration || currentRoomCode !== code ||
+                        joiningConnection !== nextConn || conn !== nextConn) return;
+                    // 房主可能已收到 ready 并开局，只是 confirmed 丢失。
+                    // 此时不能恢复旧 AI：保留会话，转入同局重连并取房主权威快照。
                     joinCancelled = true;
                     clearJoinReadyRetry();
-                    try { nextConn.close(true); } catch (_) {}
-                    if (conn === nextConn) conn = null;
-                    joiningConnection = null;
-                    attempt.connection = null;
                     detachJoinSignals();
+                    attempt.completed = true;
                     restoreBtn();
-                    showGameNotice('❌ 已连入房间信道，但房主未在时限内确认开局。请确认好友仍在房间；可取消后重新输入房间号再试。', true);
+                    if (gameMode !== 'online') setMode('online');
+                    persistGameState();
+                    triggerOnlineReconnect('入房确认超时');
                   }, ONLINE_JOIN_CONFIRM_TIMEOUT_MS);
                   attempt.joinConfirmTimeout = joinConfirmTimeout;
                   try { nextConn.send({ type: 'profile_sync', name: p1Name, avatar: getNetworkAvatarValue(p1Avatar) }); } catch (_) {}
