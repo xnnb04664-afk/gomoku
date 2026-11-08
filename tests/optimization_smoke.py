@@ -439,8 +439,11 @@ def main():
                 reliableRetryOk,
                 reliableAckCleared,
                 relayRouteDetected: statsProbe.p2pRoute === 'relay' && statsProbe.p2pStatsRttMs === 120,
-                highRttReoptimizeOk: reoptProbe.p2pReoptimizationCount === 1 &&
-                  reoptProbe.reoptReason === 'P2P 高延迟，自动重选线路',
+                highRttReoptimizeOk: reoptProbe.isP2pReady === true &&
+                  reoptProbe.p2pRoute === 'relay' &&
+                  reoptProbe.p2pReoptimizationCount === 0 &&
+                  reoptProbe.p2pRecoveryTimer === null &&
+                  !Object.prototype.hasOwnProperty.call(reoptProbe, 'reoptReason'),
                 localLabel: document.querySelector('#myNetworkStatusLabel')?.textContent || '',
                 peerLabel: document.querySelector('#peerNetworkStatusLabel')?.textContent || '',
                 statusBarVisible: getComputedStyle(document.querySelector('#onlineNetworkStatusBar')).display !== 'none',
